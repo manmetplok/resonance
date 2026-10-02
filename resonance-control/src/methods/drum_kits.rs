@@ -31,6 +31,7 @@ pub const METHODS: &[&str] = &[LIST, SET_MARKS];
 /// Params for `drum_kits.list`. Every filter is optional and they AND.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ListParams {
     /// Search text, the same syntax as the drums' Library overlay: tokens
     /// are ANDed and matched (case- and accent-insensitively) against the
@@ -144,6 +145,7 @@ pub struct DrumKitEntry {
 /// Params for `drum_kits.set_marks`. At least one of `favorite` / `tags`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetMarksParams {
     /// The kit's content id from `drum_kits.list` (a unique prefix of at
     /// least 8 characters also works).

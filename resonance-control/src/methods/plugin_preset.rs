@@ -117,6 +117,7 @@ pub enum PresetSort {
 /// within one facet OR.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PresetFilter {
     /// Search text, the same syntax as the preset browsers: tokens are
     /// ANDed and matched (case- and accent-insensitively) against name,
@@ -189,6 +190,7 @@ pub struct PresetFacets {
 /// preset on a save).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PresetMetaInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,

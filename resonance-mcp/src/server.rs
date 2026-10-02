@@ -291,6 +291,12 @@ fn normalize_schemas(router: &mut ToolRouter<ResonanceMcp>) {
         let mut input = (*tool.input_schema).clone();
         inline_defs(&mut input);
         strip_nonstandard_formats(&mut input);
+        // Say what `check_arguments` enforces: the typed params already
+        // publish `additionalProperties: false`; a tool without params
+        // gets it here.
+        if input.contains_key("properties") && !input.contains_key("additionalProperties") {
+            input.insert("additionalProperties".into(), Value::Bool(false));
+        }
         tool.input_schema = Arc::new(input);
         if let Some(output) = tool.output_schema.take() {
             let mut out = (*output).clone();
@@ -396,8 +402,90 @@ fn strip_formats_in_value(value: &mut Value) {
     }
 }
 
+/// Refuse arguments `tool` does not declare (code review ARCH2-06).
+///
+/// A tool's published input schema lists every key it reads under
+/// `properties`; the typed params behind it are
+/// `#[serde(deny_unknown_fields)]`, but a tool without params never
+/// parses its arguments at all, and rmcp reports a params parse failure
+/// as a protocol error the model may never see. So the check runs here,
+/// before dispatch, for every tool: a key not in `properties` (unless the
+/// schema opens `additionalProperties`) is a tool error naming the key
+/// and the accepted ones, never a success that ignored it.
+pub fn check_arguments(
+    tool: &rmcp::model::Tool,
+    arguments: Option<&serde_json::Map<String, Value>>,
+) -> Result<(), CallToolResult> {
+    let Some(arguments) = arguments else {
+        return Ok(());
+    };
+    let schema = &tool.input_schema;
+    let Some(Value::Object(properties)) = schema.get("properties") else {
+        return Ok(());
+    };
+    if schema
+        .get("additionalProperties")
+        .is_some_and(|open| open != &Value::Bool(false))
+    {
+        return Ok(());
+    }
+    let unknown: Vec<&str> = arguments
+        .keys()
+        .filter(|k| !properties.contains_key(k.as_str()))
+        .map(String::as_str)
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let quoted = |keys: &mut dyn Iterator<Item = &str>| {
+        keys.map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", ")
+    };
+    let accepted = if properties.is_empty() {
+        "it takes no arguments".to_string()
+    } else {
+        format!("it accepts {}", quoted(&mut properties.keys().map(String::as_str)))
+    };
+    let noun = if unknown.len() == 1 { "argument" } else { "arguments" };
+    Err(CallToolResult::error(vec![ContentBlock::text(format!(
+        "{} does not take the {noun} {}; {accepted}. Nothing was done: fix the call and retry.",
+        tool.name,
+        quoted(&mut unknown.into_iter()),
+    ))]))
+}
+
 #[rmcp::tool_handler(router = Self::combined_router())]
 impl ServerHandler for ResonanceMcp {
+    /// Dispatch a tool call after [`check_arguments`]. A params parse
+    /// failure (a wrong type, an unknown field nested in an object) comes
+    /// back from rmcp as an `invalid_params` protocol error, which clients
+    /// tend to render opaquely; it is reported as a tool error instead so
+    /// the model reads serde's message and can correct the call.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        let router = Self::combined_router();
+        if let Some(tool) = router.get(&request.name) {
+            if let Err(refused) = check_arguments(tool, request.arguments.as_ref()) {
+                return Ok(rmcp::model::CallToolResponse::Complete(refused));
+            }
+        }
+        let name = request.name.clone();
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        match router.call(tcc).await {
+            Err(e) if e.code == rmcp::model::ErrorCode::INVALID_PARAMS => {
+                Ok(rmcp::model::CallToolResponse::Complete(CallToolResult::error(vec![
+                    ContentBlock::text(format!(
+                        "{name}: {}. Nothing was done: fix the call and retry.",
+                        e.message
+                    )),
+                ])))
+            }
+            other => other,
+        }
+    }
+
     fn get_info(&self) -> ServerInfo {
         // Report OUR crate name/version, not rmcp's: `from_build_env`
         // reads env! at the rmcp crate's compile site.

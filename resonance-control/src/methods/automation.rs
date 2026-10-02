@@ -103,6 +103,7 @@ pub const MAX_POINTS_PER_LANE: usize = 10_000;
 /// `{"track_id": 3, "param": "Filter Cutoff"}`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AutomationTargetSpec {
     /// Owner: a track (ids from `song_summary`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,6 +183,7 @@ pub enum AutomationCurve {
 /// An input point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PointSpec {
     /// `{bar, beat}` (1-based, meter-aware) or `{sample}`.
     pub position: PositionSpec,
@@ -302,6 +304,7 @@ pub struct LaneSummary {
 /// last point.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PointRange {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<PositionSpec>,
@@ -319,6 +322,7 @@ pub struct PointRange {
 /// bus hosting the instance).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct LanesParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,
@@ -340,6 +344,7 @@ pub struct LanesResult {
 /// Params for `automation.set_lane`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetLaneParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,
@@ -359,6 +364,7 @@ pub struct SetLaneParams {
 /// Params for `automation.add_points`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AddPointsParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,
@@ -379,6 +385,7 @@ pub struct AddPointsParams {
 /// usual target spec cannot name it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct DeletePointsParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,
@@ -401,6 +408,7 @@ pub struct DeletePointsParams {
 /// Params for `automation.set_enabled`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetEnabledParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,
@@ -412,6 +420,7 @@ pub struct SetEnabledParams {
 /// target (see [`DeletePointsParams`] for why `lane_id` exists).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RemoveLaneParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,
@@ -450,6 +459,7 @@ pub enum ShapeKind {
 /// Params for `automation.shape`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ShapeParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,

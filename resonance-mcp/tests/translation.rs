@@ -472,3 +472,52 @@ async fn master_assist_round_trips_params_and_result() {
     assert_eq!(writes, vec![("tone_b0_on", 1.0), ("tone_b0_gain", -2.0)]);
     assert_eq!(serde_json::to_value(&assist).unwrap(), result_payload);
 }
+
+/// ARCH2-06: an argument a tool does not declare is a tool error naming
+/// it, before anything reaches the app; a tool with no params refuses
+/// every argument; the declared ones pass.
+#[test]
+fn an_unknown_tool_argument_is_a_tool_error_naming_it() {
+    let router = ResonanceMcp::combined_router();
+    let check = |tool: &str, args: Value| {
+        let tool = router.get(tool).expect("tool exists");
+        resonance_mcp::server::check_arguments(tool, args.as_object())
+    };
+
+    let refused = check("transport_seek", json!({"bar": 3, "beats": 2})).unwrap_err();
+    assert!(is_error(&refused));
+    let message = text(&refused);
+    assert!(message.contains("`beats`"), "{message}");
+    assert!(message.contains("`beat`") && message.contains("`bar`"), "{message}");
+
+    let refused = check("transport_play", json!({"bar": 5})).unwrap_err();
+    assert!(text(&refused).contains("takes no arguments"), "{}", text(&refused));
+
+    assert!(check("transport_seek", json!({"bar": 3, "beat": 2.0})).is_ok());
+    assert!(check("transport_play", json!({})).is_ok());
+    // Flattened params publish their parts' keys, so those pass too.
+    assert!(check("automation_lanes", json!({"track_id": 1, "param": "Cutoff"})).is_ok());
+    assert!(check("presets_search", json!({"plugin_id": "a.b", "favorites_only": true})).is_ok());
+}
+
+/// Every published input schema closes `additionalProperties`, so a
+/// client sees the contract `check_arguments` holds it to, and every
+/// tool refuses an unknown argument.
+#[test]
+fn every_input_schema_closes_additional_properties() {
+    for tool in ResonanceMcp::combined_router().list_all() {
+        let schema = &tool.input_schema;
+        if !schema.contains_key("properties") {
+            continue;
+        }
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&Value::Bool(false)),
+            "{}: input schema does not close additionalProperties",
+            tool.name
+        );
+        let refused =
+            resonance_mcp::server::check_arguments(&tool, json!({"__unknown": 1}).as_object());
+        assert!(refused.is_err(), "{} accepted an unknown argument", tool.name);
+    }
+}

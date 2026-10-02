@@ -39,6 +39,7 @@ pub const METHODS: &[&str] = &[CATALOG, RESCAN];
 /// instance came from would take the audio thread with it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RescanParams {}
 
 /// Result of `plugins.catalog`: the built-in plugin catalog.

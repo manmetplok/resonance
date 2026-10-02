@@ -20,8 +20,26 @@
 //!   can never disagree on where the socket lives.
 //!
 //! Protocol evolution is additive within a major version; renaming or
-//! removing methods/fields bumps [`PROTOCOL_VERSION`]. Deserialization is
-//! tolerant of unknown fields so newer peers can talk to older ones.
+//! removing methods/fields bumps [`PROTOCOL_VERSION`].
+//!
+//! **A change of meaning is a breaking change too.** When a field keeps
+//! its name but is read differently (CTL-01 changed what `beat` in
+//! [`PositionSpec`] counts in 6/8), bump [`PROTOCOL_VERSION`] or add a
+//! capability the client checks for, so a peer built against the old
+//! meaning refuses to talk instead of silently doing the wrong thing.
+//!
+//! **Requests are strict, results are tolerant.** Every request `*Params`
+//! type, and the request-only specs nested in them (`PositionSpec`,
+//! `AutomationTargetSpec`, `PresetFilter`, …), is
+//! `#[serde(deny_unknown_fields)]`: a misspelled or wrong-surface field
+//! (`beats` for `beat`) is `invalid_params` naming the field, never a
+//! success that did nothing (code review ARCH2-06;
+//! `tests/unknown_fields.rs` holds every `*Params` to it). This works
+//! through `#[serde(flatten)]` because every flattened part is a plain
+//! struct, which takes its own keys before the outer type checks what
+//! is left; do not flatten an enum or a map into params. Result and view
+//! types stay tolerant of unknown fields, so an older client still reads
+//! a newer app's replies.
 //!
 //! **One exception, and it is deliberate: retiring a method that was
 //! already published as deprecated does not bump the version.** A rename

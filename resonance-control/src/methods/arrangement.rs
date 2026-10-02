@@ -43,6 +43,7 @@ pub const METHODS: &[&str] = &[INSERT_BARS, REMOVE_BARS];
 /// Params for `arrangement.insert_bars`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct InsertBarsParams {
     /// 1-based bar the gap opens at. Everything starting at or after
     /// this bar moves later; anything that starts before it stays, even
@@ -57,6 +58,7 @@ pub struct InsertBarsParams {
 /// Params for `arrangement.remove_bars`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RemoveBarsParams {
     /// 1-based first bar to remove.
     pub at_bar: u32,

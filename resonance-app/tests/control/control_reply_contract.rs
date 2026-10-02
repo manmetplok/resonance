@@ -132,7 +132,7 @@ fn a_missing_track_id_reads_the_same_in_every_namespace() {
         ),
         (
             "notes.create_clip",
-            serde_json::json!({ "track_id": MISSING, "start_bar": 1, "length_bars": 1 }),
+            serde_json::json!({ "track_id": MISSING, "start_bar": 1, "length_beats": 4.0 }),
         ),
         (
             "external.enable",

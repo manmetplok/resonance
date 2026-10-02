@@ -53,6 +53,7 @@ pub const METHODS: &[&str] = &[
 /// Params for `section.create`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct CreateParams {
     pub name: String,
     /// Length in bars, 1..=100000 ([`crate::MAX_BARS`]).
@@ -83,6 +84,7 @@ pub struct CreateResult {
 /// Params for `section.rename`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RenameParams {
     pub section_id: SectionDefinitionId,
     pub name: String,
@@ -91,6 +93,7 @@ pub struct RenameParams {
 /// Params for `section.resize`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ResizeParams {
     pub section_id: SectionDefinitionId,
     /// New length in bars, 1..=100000 ([`crate::MAX_BARS`]).
@@ -100,6 +103,7 @@ pub struct ResizeParams {
 /// Params for `section.delete`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct DeleteParams {
     pub section_id: SectionDefinitionId,
     /// Required (`true`); the error otherwise summarizes what would be lost.
@@ -110,6 +114,7 @@ pub struct DeleteParams {
 /// Params for `section.place`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PlaceParams {
     pub definition_id: SectionDefinitionId,
     /// 1-based bar to place the section at, at most 100000
@@ -128,6 +133,7 @@ pub struct PlaceResult {
 /// Params for `section.remove_placement`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RemovePlacementParams {
     pub placement_id: SectionPlacementId,
 }
@@ -135,6 +141,7 @@ pub struct RemovePlacementParams {
 /// Params for `section.set_scale`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetScaleParams {
     pub section_id: SectionDefinitionId,
     pub scale: KeyScale,
@@ -170,6 +177,7 @@ pub enum LaneKind {
 /// `vocal.render`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetLaneGeneratorParams {
     pub section_id: SectionDefinitionId,
     pub track_id: TrackId,

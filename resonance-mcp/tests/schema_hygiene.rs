@@ -12,6 +12,14 @@
 //!
 //! These assert every published tool schema (input and output) is free of
 //! both, so the surface stays standard-compliant in strict clients.
+//!
+//! A third (b109a46c, "mcp fix"; code review STATE2-09): some clients (the
+//! Claude desktop bridge) forward a tool's schema without its `$defs`, so
+//! a field typed only by a dangling `$ref` has no known type and its
+//! value arrives as a string, `"42"` for an id, which serde refuses.
+//! `server::inline_defs` inlines every ref; the tests below pin that no
+//! input schema carries a `$ref`/`$defs` and that the id newtypes inline
+//! to `"type": "integer"`.
 
 use resonance_mcp::ResonanceMcp;
 use serde_json::Value;
@@ -101,4 +109,94 @@ fn no_boolean_subschemas_under_properties_or_defs() {
             }
         });
     }
+}
+
+/// Input schemas allowed to keep a `$ref` because their type is
+/// recursive (`inline_defs` leaves a self-reference and restores
+/// `$defs`). None today; a new entry needs a reason next to it.
+const RECURSIVE_INPUT_SCHEMAS: &[&str] = &[];
+
+#[test]
+fn no_input_schema_depends_on_ref_or_defs() {
+    for (label, schema) in published_schemas() {
+        let Some(tool) = label.strip_suffix(".inputSchema") else {
+            continue;
+        };
+        if RECURSIVE_INPUT_SCHEMAS.contains(&tool) {
+            continue;
+        }
+        walk(&schema, &label, &mut |path, node| {
+            if let Value::Object(map) = node {
+                for key in ["$ref", "$defs", "definitions"] {
+                    assert!(
+                        !map.contains_key(key),
+                        "{path} has `{key}`: clients that drop `$defs` lose the field's type \
+                         (ids then arrive as strings); server::inline_defs should inline it"
+                    );
+                }
+            }
+        });
+    }
+}
+
+/// Whether a property schema admits a JSON integer: `"type": "integer"`,
+/// a type list holding it (an `Option`), or an `anyOf`/`oneOf` branch
+/// that does.
+fn admits_integer(schema: &Value) -> bool {
+    match schema.get("type") {
+        Some(Value::String(t)) if t == "integer" => return true,
+        Some(Value::Array(ts)) if ts.iter().any(|t| t == "integer") => return true,
+        _ => {}
+    }
+    ["anyOf", "oneOf"].iter().any(|k| {
+        schema
+            .get(*k)
+            .and_then(Value::as_array)
+            .is_some_and(|branches| branches.iter().any(admits_integer))
+    })
+}
+
+/// Fields typed by an id newtype (`resonance_control::ids`), which
+/// serialize as plain JSON numbers.
+const ID_FIELDS: &[&str] = &[
+    "track_id",
+    "bus_id",
+    "clip_id",
+    "job_id",
+    "section_id",
+    "definition_id",
+    "placement_id",
+    "chord_id",
+    "send_id",
+    "asset_id",
+    "reference_id",
+    "source_bus_id",
+    "source_track_id",
+];
+
+#[test]
+fn id_newtypes_inline_to_integer() {
+    let mut checked = 0;
+    for (label, schema) in published_schemas() {
+        if !label.ends_with(".inputSchema") {
+            continue;
+        }
+        walk(&schema, &label, &mut |path, node| {
+            let Some(Value::Object(props)) = node.get("properties") else {
+                return;
+            };
+            for (key, sub) in props {
+                if !ID_FIELDS.contains(&key.as_str()) {
+                    continue;
+                }
+                checked += 1;
+                assert!(
+                    admits_integer(sub),
+                    "{path}/properties/{key} does not say it is an integer ({sub}); a client \
+                     that cannot see its type sends the id as a string"
+                );
+            }
+        });
+    }
+    assert!(checked >= 50, "only {checked} id fields found: the check is vacuous");
 }

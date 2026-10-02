@@ -26,6 +26,7 @@ pub const METHODS: &[&str] = &[LOAD];
 /// Params for `reference.load`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct LoadParams {
     /// The reference's media-pool asset id, from `pool.list` (import the
     /// file with `pool.import` first).

@@ -27,6 +27,7 @@ pub enum GenerateRole {
 /// Params for `generate.part`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PartParams {
     pub section_id: SectionDefinitionId,
     pub track_id: TrackId,
@@ -55,6 +56,7 @@ pub struct PartParams {
 /// Params for `generate.drums`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct DrumsParams {
     /// The section to generate for. Only this section's drum material
     /// changes; sections sharing its pattern keep theirs.

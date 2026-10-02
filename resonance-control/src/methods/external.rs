@@ -113,6 +113,7 @@ pub const METHODS: &[&str] = &[
 /// `external.disable`, `external.detect_latency`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct TrackParams {
     pub track_id: TrackId,
 }
@@ -121,6 +122,7 @@ pub struct TrackParams {
 /// track.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct StatusParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,
@@ -241,6 +243,7 @@ pub struct ExternalTrackView {
 /// omitted field is left as it is, an explicit `null` device disconnects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetMidiOutParams {
     pub track_id: TrackId,
     /// A name from `external.devices`' `midi_outputs`. Explicit `null`
@@ -259,6 +262,7 @@ pub struct SetMidiOutParams {
 /// Params for `external.set_return`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetReturnParams {
     pub track_id: TrackId,
     /// A name from `external.devices`' `audio_inputs`. Explicit `null`
@@ -278,6 +282,7 @@ pub struct SetReturnParams {
 /// explicit `null` clears that half of the selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetPatchParams {
     pub track_id: TrackId,
     /// Combined 14-bit bank (`MSB << 7 | LSB`), `0..=16383`.
@@ -299,6 +304,7 @@ pub struct SetPatchParams {
 /// Params for `external.set_latency`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetLatencyParams {
     pub track_id: TrackId,
     /// Samples to delay the return by so it lines up with the timeline.
@@ -309,6 +315,7 @@ pub struct SetLatencyParams {
 /// Params for `external.set_monitor`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetMonitorParams {
     pub track_id: TrackId,
     pub enabled: bool,
@@ -317,6 +324,7 @@ pub struct SetMonitorParams {
 /// Params for `external.set_record_arm`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetRecordArmParams {
     pub track_id: TrackId,
     pub armed: bool,
@@ -325,6 +333,7 @@ pub struct SetRecordArmParams {
 /// Params for `external.set_playback_source`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetPlaybackSourceParams {
     pub track_id: TrackId,
     pub source: PlaybackSource,
@@ -333,6 +342,7 @@ pub struct SetPlaybackSourceParams {
 /// Params for `external.bounce`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct BounceParams {
     pub track_id: TrackId,
     /// Audio input to capture from. Defaults to the track's configured

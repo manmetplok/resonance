@@ -45,6 +45,7 @@ pub const METHODS: &[&str] = &[
 /// Params for `vocal.set_lyrics`: bulk text, one line per lyric line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetLyricsParams {
     pub track_id: TrackId,
     /// Which of the track's vocal lanes to write (`definition_id` from
@@ -81,6 +82,7 @@ fn default_syllabify() -> bool {
 /// Params for `vocal.set_line`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetLineParams {
     pub track_id: TrackId,
     /// Which of the track's vocal lanes to write (`definition_id` from
@@ -103,6 +105,7 @@ pub struct SetLineParams {
 /// project-wide, not per lane, so this takes no `section_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetPronunciationParams {
     /// The word being overridden (case-insensitive).
     pub word: String,
@@ -114,6 +117,7 @@ pub struct SetPronunciationParams {
 /// [`SetPronunciationParams`] — no `section_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ClearPronunciationParams {
     pub word: String,
 }
@@ -128,6 +132,7 @@ pub struct ClearPronunciationParams {
 /// generates or rewrites them (`vocal.generate` does that).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RenderParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,
@@ -154,6 +159,7 @@ pub struct RenderParams {
 /// no notes and `vocal.render` had nothing to sing (doc #269 FR-2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct GenerateParams {
     pub track_id: TrackId,
     /// Which of the track's vocal lanes to generate. Omitted resolves

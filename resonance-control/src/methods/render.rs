@@ -35,6 +35,7 @@ pub const METHODS: &[&str] = &[MIXDOWN];
 /// A render time range; omitted ends default to song start/end.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RangeSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<PositionSpec>,
@@ -45,6 +46,7 @@ pub struct RangeSpec {
 /// Params for `render.mixdown`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct MixdownParams {
     /// Absolute path of the WAV file to write; must end in `.wav`.
     pub path: String,
@@ -70,6 +72,7 @@ pub struct MixdownParams {
 /// §7.7).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct NormalizeParams {
     /// Integrated loudness to reach, LUFS, -40..-5.
     pub target_lufs: f64,
@@ -162,6 +165,7 @@ pub struct MixdownResult {
 /// Params for `render.stems`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct StemsParams {
     /// Absolute path of the directory to write stem WAVs into.
     pub dir: String,

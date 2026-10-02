@@ -143,6 +143,7 @@ shape depends on the job kind (e.g. a mixdown/save path or a rendered clip id)."
 /// Params for `job.status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct StatusParams {
     pub job_id: JobId,
 }
@@ -150,6 +151,7 @@ pub struct StatusParams {
 /// Params for `job.wait`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct WaitParams {
     pub job_id: JobId,
     /// Maximum time to block, in ms. The app caps every wait at 600000
