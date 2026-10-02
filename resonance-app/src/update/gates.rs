@@ -366,6 +366,10 @@ fn plugin_edit_target(
     use crate::message::PluginMessage::*;
     match m {
         SetPluginParam(instance_id, ..) => r.track_of_plugin(*instance_id),
+        // Already done, in the plugin: there is no edit left to refuse,
+        // only a mirror to keep honest (the freeze fingerprint, which
+        // hashes the mirror, notices the change).
+        ParamEditedByPlugin { .. } => None,
         // A preset recall moves parameters, so it changes the rendered
         // signal exactly as the individual writes it replaces would.
         LoadPluginPreset { instance_id, .. } => r.track_of_plugin(*instance_id),

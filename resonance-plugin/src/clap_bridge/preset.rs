@@ -77,7 +77,14 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
         let mut doc: serde_json::Value = serde_json::from_slice(data)
             .map_err(|_| PluginError::Message("Preset is not JSON"))?;
         let identity = doc.get(PRESET_STATE_KEY).cloned();
-        crate::state::migrate(&mut doc, self.shared.param_renames);
+        // Upgraded before the overlay, so an old preset's values are laid
+        // over the current state in today's terms (`load_bytes` upgrades
+        // the result again, which an upgrade must take as a no-op).
+        crate::state::migrate_and_upgrade(
+            &mut doc,
+            self.shared.param_renames,
+            self.shared.state_upgrade,
+        );
         if let (Some(identity), Some(obj)) = (identity, doc.as_object_mut()) {
             obj.entry(PRESET_STATE_KEY.to_string()).or_insert(identity);
         }

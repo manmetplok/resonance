@@ -507,10 +507,18 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             instance_id,
             params,
         } => plugins::params_refreshed(r, instance_id, params),
+        E::PluginParamValuesChanged {
+            instance_id,
+            values,
+        } => plugins::param_values_changed(r, instance_id, values),
+        E::PluginParamEdited { instance_id, edit } => {
+            return plugins::param_edited(r, instance_id, edit)
+        }
         E::PluginPresetIdentity {
             instance_id,
             identity,
         } => plugins::preset_identity(r, instance_id, identity),
+        E::PluginKitInfo { instance_id, info } => plugins::kit_info(r, instance_id, info),
         E::PluginStateSaved { instance_id, data } => {
             plugins::state_saved(r, instance_id, data)
         }

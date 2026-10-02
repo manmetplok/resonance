@@ -1,4 +1,4 @@
-//! Per-pad parameter declick: volume / pan / OH blend / balance are
+//! Per-pad parameter declick: level / pan / mute / per-mic trims are
 //! snapshotted per block but must be linearly ramped across the block
 //! (mirroring the master volume ramp), so a param jump between blocks
 //! produces a continuous gain trajectory instead of a step.
@@ -19,12 +19,7 @@ fn make_sampler() -> DrumSampler {
 /// A long constant-1.0 stereo sample, so the rendered output *is* the
 /// effective gain trajectory.
 fn dc_layer(frames: usize) -> VelocityLayer {
-    VelocityLayer {
-        round_robins: vec![LoadedSample {
-            data: vec![1.0; frames * 2],
-            frames,
-        }],
-    }
+    VelocityLayer::new(vec![LoadedSample::from_data(vec![1.0; frames * 2])])
 }
 
 /// Build a kit where every pad has exactly one close mic playing DC 1.0
@@ -41,6 +36,7 @@ fn dc_pads(sample_frames: usize) -> Vec<LoadedPad> {
                 setup_key: String::new(),
                 layers: vec![dc_layer(sample_frames)],
             }],
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect()
@@ -71,9 +67,9 @@ fn tom_setup() -> (DrumSampler, DrumParams, usize, usize) {
     let pad_index = drum_map::pad_index_for_note(drum_map::TOM_LOW).unwrap();
     let port = PAD_MAPPINGS[pad_index].output_group.index();
     // Pin master + pad volume to unity so the rendered DC *is* the
-    // pad-param gain trajectory (defaults are 0.8 / 0.8).
-    params.master_volume.set_value(1.0);
-    params.pads[pad_index].volume.set_value(1.0);
+    // pad-param gain trajectory (the level params are dB, unity = 0 dB).
+    params.master_volume.set_value(0.0); // 0 dB: unity
+    params.pads[pad_index].volume.set_value(0.0); // 0 dB: unity
     sampler.note_on(drum_map::TOM_LOW, 1.0);
     (sampler, params, pad_index, port)
 }
@@ -93,7 +89,9 @@ fn pad_volume_jump_ramps_without_step_discontinuity() {
     // Jump the pad volume, then render block 2: the output must ramp
     // from 1.0 toward 0.25 with no step bigger than one ramp increment.
     let target = 0.25_f32;
-    params.pads[pad_index].volume.set_value(target);
+    params.pads[pad_index]
+        .volume
+        .set_value(resonance_drums::level::gain_to_db(target));
     let block2 = render_block(&mut sampler, &params);
     let out = &block2[port].0;
     let step = (target - 1.0) / FRAMES as f32;
@@ -195,8 +193,10 @@ fn first_block_does_not_ramp_in_from_defaults() {
     let params = DrumParams::default();
     let pad_index = drum_map::pad_index_for_note(drum_map::TOM_LOW).unwrap();
     let port = PAD_MAPPINGS[pad_index].output_group.index();
-    params.master_volume.set_value(1.0);
-    params.pads[pad_index].volume.set_value(0.5);
+    params.master_volume.set_value(0.0); // 0 dB: unity
+    params.pads[pad_index]
+        .volume
+        .set_value(resonance_drums::level::gain_to_db(0.5));
     sampler.note_on(drum_map::TOM_LOW, 1.0);
 
     let block = render_block(&mut sampler, &params);

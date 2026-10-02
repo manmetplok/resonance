@@ -5,7 +5,7 @@ when_to_use: >-
   Triggers on requests like "write a drum part", "the drums are boring", "add a
   fill", "make it a shuffle", "jazz drums", "swing this", "a 7/8 groove", "give
   the chorus bigger drums", "program a beat", "double-time the bridge".
-allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_sections mcp__resonance__song_tracks mcp__resonance__song_notes mcp__resonance__global_list_events
+allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_sections mcp__resonance__song_tracks mcp__resonance__song_notes mcp__resonance__global_list_events mcp__resonance__drum_kits_list
 ---
 
 # Drum programming in resonance
@@ -26,6 +26,15 @@ running app is older than this plugin — say so and stop.
 
 `mcp__resonance__song_tracks` for a drums track — `generate_drums` rejects any
 other kind, and `track_add {kind: "drums"}` makes one.
+
+The track plays whatever kit its Resonance Drums has loaded, and a pad the kit
+has no piece for is silent. `mcp__resonance__drum_kits_list` lists the
+installed kits with their piece names and which tracks use each: check it
+before writing for a china or a second crash. Picking and loading a kit is in
+the description of `mcp__resonance__track_set_plugin_param`. If `drum_kits.list`
+is missing from the capabilities, the running app is older than the kit
+library — say so, and write for the General MIDI kit without assuming any
+piece beyond it.
 
 For odd-metre work (step 3) also check `global.list_events` and
 `global.add_signature_event`. They are newer than the rest of the surface; if

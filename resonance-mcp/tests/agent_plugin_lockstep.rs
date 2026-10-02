@@ -243,6 +243,12 @@ fn bare_tool_like_tokens(text: &str, namespaces: &BTreeSet<String>) -> BTreeSet<
         if token.starts_with("mcp__") || token.contains("__") {
             continue;
         }
+        // The namespace of a control method a preflight quotes
+        // (`drum_kits.list`), not a tool name; `preflights_name_real_
+        // capabilities` checks the method itself.
+        if text[i..].starts_with('.') && method_namespaces().contains(token) {
+            continue;
+        }
         let Some((head, tail)) = token.split_once('_') else {
             continue;
         };
@@ -454,6 +460,14 @@ fn capabilities() -> BTreeSet<String> {
     resonance_control::methods::capabilities()
         .into_iter()
         .map(str::to_owned)
+        .collect()
+}
+
+/// The namespaces of the control methods (`drum_kits` of `drum_kits.list`).
+fn method_namespaces() -> BTreeSet<String> {
+    capabilities()
+        .iter()
+        .filter_map(|m| m.split_once('.').map(|(ns, _)| ns.to_owned()))
         .collect()
 }
 

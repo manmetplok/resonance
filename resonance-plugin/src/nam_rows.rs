@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use resonance_common::library_marks::{Marks, MarksStore};
 use resonance_common::nam_library::{self, Entry, EntryStatus, Library, Source};
 
-use crate::library_view::{BrowserModel, LibraryRows, SortKey, SortValue, SOURCE_FACET};
+use crate::library_view::{self, BrowserModel, LibraryRows, SortKey, SortValue, SOURCE_FACET};
 
 /// The facets the Installed tab offers, as `(facet, label)`.
 pub const FACETS: &[(&str, &str)] = &[
@@ -230,27 +230,16 @@ pub fn step_in_view(
     loaded_id: Option<&str>,
     delta: i32,
 ) -> Option<u32> {
-    let mut current = loaded_id.map(nam_library::mark_key);
-    loop {
-        let row = model.step_from(current.as_deref(), delta)?;
-        let r = &rows.rows[row];
-        if let Some(slot) = r.entry.slot {
-            return Some(slot);
-        }
-        // Skip a row with no slot (a duplicate) and keep going.
-        current = Some(r.key.clone());
-    }
+    let current = loaded_id.map(nam_library::mark_key);
+    // A row with no slot (a duplicate) is stepped over.
+    library_view::step_loadable(model, rows, current.as_deref(), delta, |row| {
+        rows.rows[row].entry.slot
+    })
 }
 
 /// The header's counter: "3 / 41 in view", or "– / 41 in view" when the
 /// loaded model is not in the view.
 pub fn view_counter(model: &BrowserModel, loaded_id: Option<&str>) -> String {
-    let n = model.view_len();
-    if n == 0 {
-        return String::new();
-    }
-    match loaded_id.and_then(|id| model.position_in_view(&nam_library::mark_key(id))) {
-        Some(p) => format!("{} / {n} in view", p + 1),
-        None => format!("– / {n} in view"),
-    }
+    let current = loaded_id.map(nam_library::mark_key);
+    library_view::view_counter(model, current.as_deref())
 }

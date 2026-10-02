@@ -121,15 +121,26 @@ def check_non_test(crates: list[str]) -> None:
 def plugin_cdylibs() -> list[str]:
     """The plugin crates the resonance-audio tests load by binary.
 
-    Derived from the `plugin_binary("<crate>")` calls in its tests rather
-    than kept as a list here, so a new test cannot name a plugin this
-    script forgets to build.
+    Derived from the tests rather than kept as a list here, so a new test
+    cannot name a plugin this script forgets to build: every
+    `plugin_binary("<crate>")` call, plus — in a file that calls
+    `plugin_binary` at all — any string literal naming a crate under
+    `plugins/`, since a helper may take the crate name and pass it on
+    (`harness_with("resonance-drums", ...)`).
     """
     found: set[str] = set()
-    pattern = re.compile(r'plugin_binary\("([a-z0-9_-]+)"\)')
+    direct = re.compile(r'plugin_binary\("([a-z0-9_-]+)"\)')
+    literal = re.compile(r'"([a-z0-9_-]+)"')
+    plugin_crates = {
+        os.path.basename(os.path.dirname(c))
+        for c in glob.glob(os.path.join(ROOT, "plugins/*/Cargo.toml"))
+    }
     for path in glob.glob(os.path.join(ROOT, "resonance-audio/tests/**/*.rs"), recursive=True):
         with open(path, encoding="utf-8") as f:
-            found.update(pattern.findall(f.read()))
+            text = f.read()
+        found.update(direct.findall(text))
+        if "plugin_binary(" in text:
+            found.update(n for n in literal.findall(text) if n in plugin_crates)
     return sorted(found)
 
 

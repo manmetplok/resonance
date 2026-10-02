@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use resonance_drums::articulation::{
     ARTICULATION_ALT, ARTICULATION_LABELS, ARTICULATION_PRIMARY,
 };
-use resonance_drums::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
+use resonance_drums::drum_map::{self, NUM_PADS};
 use resonance_drums::kit_loader::KitStatus;
-use resonance_drums::params::DrumParams;
+use resonance_drums::params::{DrumParams, OUTPUT_MODE_MULTI};
 use resonance_drums::reload::reload_kit;
 use resonance_drums::ResonanceDrums;
 use resonance_plugin::param::Param;
@@ -34,8 +34,8 @@ const BLOCK: usize = 128;
 const SAMPLE_FRAMES: usize = 256;
 const KICK_PORT: usize = 1;
 const NUM_PORTS: usize = 7;
-/// Level the loaded piece is rendered at: pad volume (0.8) × master (0.8).
-const CHAIN_GAIN: f32 = 0.64;
+/// Level the loaded piece is rendered at: pad volume (0 dB) × master (0 dB).
+const CHAIN_GAIN: f32 = 1.0;
 
 // ---------------------------------------------------------------------------
 // Synthetic kit
@@ -99,9 +99,9 @@ fn build_temp_kit(tag: &str, primary: f32, alt: f32) -> TempKit {
     write_flat_wav(&dir.join("kick_primary.wav"), primary, SAMPLE_FRAMES);
     write_flat_wav(&dir.join("kick_alt.wav"), alt, SAMPLE_FRAMES);
 
-    // Only the kick is described; every other pad falls back to the
-    // plugin's embedded sample, which is what a partial kit does in
-    // production too.
+    // Only the kick is described; every other pad is silent, which is
+    // what a partial kit does in production too (D7). No `_meta`: the
+    // pair comes from the Drummica table.
     let manifest = format!(
         r#"{{
   "SD Kick mit Teppich": {{
@@ -231,6 +231,8 @@ fn a_param_write_changes_what_the_sampler_plays() {
     let kit = build_temp_kit("param-write", 0.5, 0.25);
 
     let mut plugin = ResonanceDrums::new();
+    // Multi output (E11): this test reads the kick's own port.
+    plugin.bridge.params.output_mode.set_value(OUTPUT_MODE_MULTI);
     assert!(plugin.initialize(SAMPLE_RATE, BLOCK as u32));
 
     // Load the kit at its default articulation, the way the editor's
@@ -315,15 +317,17 @@ fn articulation_params_display_and_parse_their_labels() {
     let params = DrumParams::default();
     let param = &params.pads[0].articulation;
 
-    assert_eq!(param.display(ARTICULATION_PRIMARY as f64), "mit Teppich");
-    assert_eq!(param.display(ARTICULATION_ALT as f64), "ohne Teppich");
+    // Without a kit the values read generically (the kit's own labels are
+    // `pad_map.rs`'s, tested in `tests/kit_pads.rs`).
+    assert_eq!(param.display(ARTICULATION_PRIMARY as f64), "Primary");
+    assert_eq!(param.display(ARTICULATION_ALT as f64), "Alternate");
     assert_eq!(param.labels(), ARTICULATION_LABELS);
 
     // Parsing takes the label (case-insensitively) or the raw index, so
     // automation written against the number keeps working.
-    assert_eq!(param.parse("ohne Teppich"), Some(1.0));
-    assert_eq!(param.parse("OHNE TEPPICH"), Some(1.0));
-    assert_eq!(param.parse("mit Teppich"), Some(0.0));
+    assert_eq!(param.parse("Alternate"), Some(1.0));
+    assert_eq!(param.parse("ALTERNATE"), Some(1.0));
+    assert_eq!(param.parse("primary"), Some(0.0));
     assert_eq!(param.parse("1"), Some(1.0));
     assert_eq!(param.parse("nonsense"), None);
 
@@ -334,18 +338,17 @@ fn articulation_params_display_and_parse_their_labels() {
     }
 }
 
-/// Every pad that offers the control is a pad the kit has a second
-/// recording of; the rest keep the id (so nothing saved breaks) but are
-/// not advertised as a control that does something.
+/// Every pad offers the control, whatever the kit: which pads a kit pairs
+/// is the kit's (an IT Techno kit pairs its kick and snare, a Drummica kit
+/// its kick, snare and toms), and a hidden parameter does not exist for
+/// the host at all — no lane, no `set_plugin_param` — so hiding it by a
+/// static table would take the control away from kits that have it.
 #[test]
-fn only_pads_with_an_alternate_recording_expose_the_choice() {
+fn every_pad_exposes_the_choice() {
     let params = DrumParams::default();
     for (index, pad) in params.pads.iter().enumerate() {
-        assert_eq!(
-            pad.articulation.is_hidden(),
-            !PAD_MAPPINGS[index].has_articulation,
-            "pad {index}: exposure must match whether it has an articulation"
-        );
+        assert!(!pad.articulation.is_hidden(), "pad {index} is hidden");
+        assert!(pad.articulation.is_automatable(), "pad {index}");
         assert_eq!(pad.articulation.id(), format!("pad_{index}_articulation"));
     }
 }

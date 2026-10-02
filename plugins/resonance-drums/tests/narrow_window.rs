@@ -25,8 +25,12 @@
 //!   inspector's own pad head and knob grid push `available_width` back
 //!   out to ~264px before the articulations card is ever reached. Neither
 //!   a 0px window nor a 0px `allocate_ui` column gets underneath that.
-//!   Whatever produced a genuinely starved Ui in the live editor is not
-//!   reproduced here.
+//!   What starved the live editor was, in all likelihood, its body laid
+//!   out sideways: `app.rs` drew each column with `allocate_ui`, which
+//!   inherits the parent row's left-to-right layout, so every card ran
+//!   its contents horizontally and the inspector's cards each got what
+//!   the previous one left over. `editor_layout.rs` measures that now,
+//!   against the full editor rather than the inspector alone.
 //!
 //! Severity, stated accurately: `debug_assert!` compiles out under
 //! `--release`, and `scripts/bundle.sh` builds `--release` with the
@@ -44,7 +48,7 @@ use resonance_plugin::ResonancePlugin;
 /// across.
 ///
 /// The column matters more than the window. `app.rs` draws the inspector
-/// inside `ui.allocate_ui(vec2(right_w, ..))`, and an allocated child Ui
+/// inside a fixed-width top-down column (`app::column`), and an allocated child Ui
 /// is CLIPPED to its allocation — unlike a free-standing one, whose
 /// content can push `available_width` back out. Drawn free-standing at a
 /// 0px window the inspector reports 264px available and never goes
@@ -66,9 +70,11 @@ fn draw_at(plugin: &ResonanceDrums, pad: usize, width: f32) -> usize {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show_inside(ui, |ui| {
-                ui.allocate_ui(egui::vec2(width, 700.0), |ui| {
-                    resonance_drums::test_draw_pad_inspector(ui, &plugin.bridge, pad);
-                });
+                ui.allocate_ui_with_layout(
+                    egui::vec2(width, 700.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| resonance_drums::test_draw_pad_inspector(ui, &plugin.bridge, pad),
+                );
             });
     });
     ctx.tessellate(output.shapes, output.pixels_per_point).len()
@@ -127,6 +133,13 @@ fn no_editor_source_subtracts_from_the_available_width_unfloored() {
             include_str!("../src/editor/pad_inspector.rs"),
         ),
         ("kit_browser.rs", include_str!("../src/editor/kit_browser.rs")),
+        ("controls.rs", include_str!("../src/editor/controls.rs")),
+        ("pads_tab.rs", include_str!("../src/editor/pads_tab.rs")),
+        ("mix_tab.rs", include_str!("../src/editor/mix_tab.rs")),
+        ("setup_tab.rs", include_str!("../src/editor/setup_tab.rs")),
+        ("library_panel.rs", include_str!("../src/editor/library_panel.rs")),
+        ("plok_panel.rs", include_str!("../src/editor/plok_panel.rs")),
+        ("missing_kit.rs", include_str!("../src/editor/missing_kit.rs")),
     ];
 
     for (name, src) in SOURCES {

@@ -15,16 +15,20 @@ editor = [
     "dep:plugin-gui-core",
     "dep:rfd",
     "dep:ureq",
-    "dep:zip",
-    "dep:dirs",
+    "dep:sha2",
     # the shared preset bar (ba todo #1358) lives behind this feature
     "resonance-plugin/editor-widgets",
 ]
+# Makes the process-isolation hooks (`library::isolate_for_tests`,
+# `library::override_default_roots`) public. Only this crate's own tests
+# turn it on (the dev-dependency on itself below).
+test-hooks = []
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common", default-features = false, features = [
     "decode",
+    "drumkit-zip",
 ] }
 resonance-dsp = { path = "../../resonance-dsp" }
 
@@ -32,6 +36,7 @@ serde.workspace = true
 serde_json.workspace = true
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
+tracing.workspace = true
 
 # Editor dependencies — only pulled in when the `editor` feature is on.
 # Only the platform-neutral half of the editor stack is named here. The
@@ -45,12 +50,24 @@ rfd = { workspace = true, optional = true }
 # Drumkit download — gated behind the `editor` feature so headless builds
 # stay lean.
 ureq = { version = "3", features = ["json"], optional = true }
-zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
-dirs = { workspace = true, optional = true }
+# The sha256 of a download, hashed as it streams in (and seeded from the
+# kept bytes on a resume) — never by re-reading the zip. Extraction is the
+# kit library's (`resonance-common`, `drumkit-zip`).
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
+# The tests reach the isolation hooks (feature `test-hooks`).
+resonance-drums = { path = ".", features = ["test-hooks"] }
+# The download and library tests build kit zips.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 criterion.workspace = true
 resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
+# `tests/state_upgrade.rs` drives the plugin through a real (in-process)
+# CLAP host: a v1 state loaded while the plugin is active takes the
+# bridge's own load path, which the plugin object never sees.
+clack-host = { workspace = true }
+clack-plugin = { workspace = true }
+clack-extensions = { workspace = true, features = ["clack-host"] }
 
 # Per-block DSP benchmark. `harness = false` hands main() to criterion.
 [[bench]]

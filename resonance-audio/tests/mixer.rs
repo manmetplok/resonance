@@ -105,6 +105,8 @@ mod stem_render;
 mod stem_sub_track_render;
 #[path = "mixer/stopped_instrument_preview.rs"]
 mod stopped_instrument_preview;
+#[path = "mixer/stopped_request_process.rs"]
+mod stopped_request_process;
 #[path = "mixer/sub_track_parent_fader.rs"]
 mod sub_track_parent_fader;
 #[path = "mixer/take_comp_render.rs"]

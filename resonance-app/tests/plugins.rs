@@ -35,6 +35,8 @@ mod external_instrument_patch_picker_snapshot;
 mod external_instrument_persistence;
 #[path = "plugins/external_instrument_state.rs"]
 mod external_instrument_state;
+#[path = "plugins/drums_output_mode_subtracks.rs"]
+mod drums_output_mode_subtracks;
 #[path = "plugins/freeze_banner_render.rs"]
 mod freeze_banner_render;
 #[path = "plugins/freeze_event_mirror.rs"]
@@ -55,8 +57,12 @@ mod frozen_track_render;
 mod missing_plugin_slot;
 #[path = "plugins/missing_plugin_state_preserved.rs"]
 mod missing_plugin_state_preserved;
+#[path = "plugins/plugin_edited_by_plugin.rs"]
+mod plugin_edited_by_plugin;
 #[path = "plugins/plugin_param_undo.rs"]
 mod plugin_param_undo;
+#[path = "plugins/plugin_state_excluded_params.rs"]
+mod plugin_state_excluded_params;
 #[path = "plugins/settings_plugin_rescan_button.rs"]
 mod settings_plugin_rescan_button;
 #[path = "plugins/track_freeze_menu.rs"]

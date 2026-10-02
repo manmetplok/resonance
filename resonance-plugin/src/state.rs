@@ -53,10 +53,11 @@ pub struct ParamRename {
     pub to: &'static str,
 }
 
-/// Serialize all parameters to a JSON value.
+/// Serialize all parameters to a JSON value — every one that is not
+/// [`Param::state_excluded`].
 pub fn params_to_json(params: &[&dyn Param]) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    for p in params {
+    for p in params.iter().filter(|p| !p.state_excluded()) {
         map.insert(p.id().to_string(), serde_json::json!(p.get_plain()));
     }
     serde_json::json!({ VERSION_KEY: STATE_VERSION, "params": map })
@@ -129,6 +130,39 @@ pub fn migrate(state: &mut serde_json::Value, renames: &[ParamRename]) -> u32 {
     from_version
 }
 
+/// A plugin's own state upgrade: brings a state document written by an
+/// older build of the plugin up to what it reads today, in place —
+/// anything a [`ParamRename`] cannot say (a value whose unit changed, a
+/// param split in two, a default that differs for old states). Declared
+/// through `ResonancePlugin::STATE_UPGRADE`.
+///
+/// It runs on **every** load path, after the rename migration and before
+/// a single param is read: the plugin's own `load_state` (the default
+/// one), both of the CLAP bridge's (`state.load` while active, the
+/// preset and state-context loads) and the preset bank's
+/// ([`crate::presets::apply_with`], `PresetBank::apply`,
+/// `PresetSession::load_preset`). It may run more than once on one
+/// document (a preset is upgraded, laid over the current state, and that
+/// is upgraded again), so it must be **idempotent**: a document it has
+/// upgraded already must come out unchanged. Main thread only, never the
+/// audio thread.
+pub type StateUpgrade = fn(&mut serde_json::Value);
+
+/// [`migrate`], then the plugin's own `upgrade` if it declares one: what
+/// every load path runs on a document before reading it. Returns the
+/// version the document was written with.
+pub fn migrate_and_upgrade(
+    state: &mut serde_json::Value,
+    renames: &[ParamRename],
+    upgrade: Option<StateUpgrade>,
+) -> u32 {
+    let from_version = migrate(state, renames);
+    if let Some(upgrade) = upgrade {
+        upgrade(state);
+    }
+    from_version
+}
+
 /// Load parameter values from a JSON value.
 ///
 /// Matches by string id, so a blob written by an older build loads only
@@ -139,7 +173,9 @@ pub fn load_params_from_json(params: &[&dyn Param], state: &serde_json::Value) -
     let Some(param_map) = state.get("params").and_then(|v| v.as_object()) else {
         return false;
     };
-    for p in params {
+    // A state-excluded param is never recalled, even from a file that
+    // (written before it was excluded) carries it.
+    for p in params.iter().filter(|p| !p.state_excluded()) {
         if let Some(val) = param_map.get(p.id()).and_then(|v| v.as_f64()) {
             p.set_plain(val);
         }
@@ -193,6 +229,9 @@ pub(crate) fn load_params_from_shared_json(
         return false;
     };
     for (i, meta) in param_metas.iter().enumerate() {
+        if meta.state_excluded {
+            continue;
+        }
         if let Some(val) = param_map.get(&meta.str_id).and_then(|v| v.as_f64()) {
             if i < param_values.len() {
                 if !val.is_finite() {

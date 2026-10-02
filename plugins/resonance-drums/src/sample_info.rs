@@ -6,8 +6,10 @@
 //! bridge. Everything in here is measured from the decoded samples — the
 //! inspector never draws a shape it did not get from a real take.
 
-use crate::kit::{LoadedMicBank, LoadedPad};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use crate::kit::{BankKind, LoadedMicBank, LoadedPad, LoadedSample, SampleData};
 
 /// Number of min/max buckets in the published waveform envelope. Sized for
 /// the ~500 px inspector canvas: enough detail to read the transient, small
@@ -35,9 +37,87 @@ pub struct PadSampleInfo {
     /// Frames in the displayed take, and the rate it was decoded to.
     pub frames: usize,
     pub sample_rate: f32,
-    /// Min/max pairs of the displayed take, `ENVELOPE_BUCKETS` long
-    /// (shorter only when the take has fewer frames than buckets).
-    pub envelope: Vec<(f32, f32)>,
+    /// Frames of the displayed take held in memory — `frames` unless disk
+    /// streaming (E14) keeps only its head; `envelope` covers these.
+    pub resident_frames: usize,
+    /// Min/max pairs of the displayed take's resident frames,
+    /// `ENVELOPE_BUCKETS` long (shorter only when it has fewer frames
+    /// than buckets).
+    pub envelope: Envelope,
+    /// Every take of the bank, `[layer][take]` (soft → loud, take order),
+    /// so the inspector can draw the take a pad **last played** (K5,
+    /// [`crate::last_hit`]) rather than the fixed one above. Measured from
+    /// what is in memory: a streamed take's envelope covers its head.
+    pub takes: Vec<Vec<TakeShape>>,
+    /// Which banks the pad holds — what the inspector offers a trim for,
+    /// so it never draws a control for a mic the pad does not have.
+    pub banks: PadBanks,
+}
+
+/// A take's min/max envelope, shared: a reload that keeps a take (the
+/// same decoded `SampleData`, from the kit cache) keeps its envelope too,
+/// rather than measuring every take of every pad again ([`envelope_of`]).
+pub type Envelope = Arc<Vec<(f32, f32)>>;
+
+/// One take's length and waveform envelope.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TakeShape {
+    /// Frames in the take (the whole take, streamed or not).
+    pub frames: usize,
+    /// Frames of it held in memory: `frames`, or the head of a streamed
+    /// take. The envelope covers these — a waveform drawn across the full
+    /// width would stretch the head over the take's whole length.
+    pub resident_frames: usize,
+    /// Min/max pairs of the resident frames, as
+    /// [`PadSampleInfo::envelope`].
+    pub envelope: Envelope,
+}
+
+impl TakeShape {
+    /// The fraction of the take the envelope covers (`resident_frames /
+    /// frames`), `1.0` for a take held whole.
+    pub fn resident_fraction(&self) -> f32 {
+        resident_fraction(self.resident_frames, self.frames)
+    }
+}
+
+fn resident_fraction(resident: usize, frames: usize) -> f32 {
+    if frames == 0 {
+        1.0
+    } else {
+        (resident as f32 / frames as f32).clamp(0.0, 1.0)
+    }
+}
+
+/// The banks one loaded pad holds.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PadBanks {
+    /// The close-mic banks, in bank order: (position, setup key).
+    /// Bank 0 is trimmed by `pad_N_mic1_trim`, bank 1 by `pad_N_mic2_trim`.
+    pub close: Vec<(String, String)>,
+    /// Any overhead bank (slot 1, 2 or 3): `pad_N_oh_trim` applies.
+    pub overhead: bool,
+    /// A bleed bank (E15): `pad_N_bleed_trim` applies.
+    pub bleed: bool,
+    /// A room bank (E15): `pad_N_room_trim` applies.
+    pub room: bool,
+}
+
+impl PadBanks {
+    /// What `pad` holds.
+    pub fn of(pad: &LoadedPad) -> Self {
+        let has = |kind: fn(&BankKind) -> bool| pad.extra_banks.iter().any(|e| kind(&e.kind));
+        Self {
+            close: pad
+                .close_mics
+                .iter()
+                .map(|b| (b.position.clone(), b.setup_key.clone()))
+                .collect(),
+            overhead: pad.overhead.is_some() || has(|k| matches!(k, BankKind::Overhead { .. })),
+            bleed: has(|k| matches!(k, BankKind::Bleed)),
+            room: has(|k| matches!(k, BankKind::Room)),
+        }
+    }
 }
 
 impl PadSampleInfo {
@@ -62,6 +142,16 @@ impl PadSampleInfo {
             (true, false) => self.setup_key.clone(),
             (false, false) => format!("{} · {}", self.position, self.setup_key),
         }
+    }
+
+    /// [`TakeShape::resident_fraction`] of the displayed take.
+    pub fn resident_fraction(&self) -> f32 {
+        resident_fraction(self.resident_frames, self.frames)
+    }
+
+    /// The take a hit on `layer`/`take` played, if this bank has it.
+    pub fn take(&self, layer: usize, take: usize) -> Option<&TakeShape> {
+        self.takes.get(layer)?.get(take)
     }
 
     /// Layer / take line, e.g. `layer 4/4 · take 1/3`.
@@ -89,28 +179,98 @@ pub fn info_for_bank(bank: &LoadedMicBank, sample_rate: f32) -> Option<PadSample
         layer_index,
         take_count: layer.round_robins.len(),
         take_index: 0,
-        frames: take.frames,
+        frames: take.frames(),
         sample_rate,
-        envelope: envelope(&take.data, take.frames),
+        resident_frames: take.resident_frames(),
+        envelope: envelope_of(take),
+        takes: bank
+            .layers
+            .iter()
+            .map(|layer| {
+                layer
+                    .round_robins
+                    .iter()
+                    .map(|t| TakeShape {
+                        frames: t.frames(),
+                        resident_frames: t.resident_frames(),
+                        envelope: envelope_of(t),
+                    })
+                    .collect()
+            })
+            .collect(),
+        banks: PadBanks::default(),
     })
 }
 
 /// Build the info for a pad, reading the same reference bank that
 /// `DrumSampler::note_on` uses to pick the velocity layer and round robin:
-/// the first close mic, else the overhead.
+/// the first close mic, else overhead slot 1, else an overhead slot
+/// layered on it (E15) — a pad whose only bank is a slot-2 or slot-3
+/// overhead plays that bank, so the inspector shows it (and its MICS)
+/// too. Bleed and room never lead.
 pub fn info_for_pad(pad: &LoadedPad, sample_rate: f32) -> Option<PadSampleInfo> {
-    let bank = pad
-        .close_mics
-        .first()
-        .or(pad.overhead.as_ref())?;
-    info_for_bank(bank, sample_rate)
+    let bank = pad.close_mics.first().or(pad.overhead.as_ref()).or_else(|| {
+        pad.extra_banks
+            .iter()
+            .find(|extra| matches!(extra.kind, BankKind::Overhead { .. }))
+            .map(|extra| &extra.bank)
+    })?;
+    let mut info = info_for_bank(bank, sample_rate)?;
+    info.banks = PadBanks::of(pad);
+    Some(info)
 }
 
 /// Build one entry per pad, in pad order.
 pub fn infos_for_pads(pads: &[LoadedPad], sample_rate: f32) -> Vec<Option<PadSampleInfo>> {
-    pads.iter()
+    let infos = pads
+        .iter()
         .map(|pad| info_for_pad(pad, sample_rate))
-        .collect()
+        .collect();
+    prune_envelopes();
+    infos
+}
+
+/// Envelopes measured so far, by the address of the take's shared
+/// `SampleData`, with a weak handle that tells a live take from a freed
+/// one whose address was reused.
+type EnvelopeCache = HashMap<usize, (Weak<SampleData>, Envelope)>;
+
+fn envelope_cache() -> &'static Mutex<EnvelopeCache> {
+    static CACHE: OnceLock<Mutex<EnvelopeCache>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// The envelope of `take`'s resident frames, measured once per decoded
+/// take: a mic change reloads one pad, but the infos are rebuilt for all
+/// thirty — every other pad's takes are the same `Arc<SampleData>` (the
+/// kit cache's), so their envelopes come back from here instead of being
+/// measured again.
+pub fn envelope_of(take: &LoadedSample) -> Envelope {
+    let shared = take.shared();
+    let key = Arc::as_ptr(shared) as usize;
+    let mut cache = envelope_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((weak, envelope)) = cache.get(&key) {
+        if weak.upgrade().is_some_and(|live| Arc::ptr_eq(&live, shared)) {
+            return envelope.clone();
+        }
+    }
+    let envelope = Arc::new(envelope_channels(
+        take.samples(),
+        take.resident_frames(),
+        take.channels(),
+    ));
+    cache.insert(key, (Arc::downgrade(shared), envelope.clone()));
+    envelope
+}
+
+/// Forget the envelopes of takes no kit holds any more.
+fn prune_envelopes() {
+    envelope_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retain(|_, (weak, _)| weak.strong_count() > 0);
 }
 
 /// Bytes of decoded sample data a kit holds, counting every mic bank,
@@ -121,13 +281,12 @@ pub fn total_sample_bytes(pads: &[LoadedPad]) -> usize {
         bank.layers
             .iter()
             .flat_map(|layer| layer.round_robins.iter())
-            .map(|take| take.data.len() * std::mem::size_of::<f32>())
+            .map(|take| take.bytes())
             .sum()
     };
     pads.iter()
         .map(|pad| {
-            pad.close_mics.iter().map(bank_bytes).sum::<usize>()
-                + pad.overhead.as_ref().map(bank_bytes).unwrap_or(0)
+            pad.banks().map(bank_bytes).sum::<usize>()
         })
         .sum()
 }
@@ -153,6 +312,12 @@ pub fn format_bytes(bytes: u64) -> String {
 /// over both channels. Takes shorter than the bucket count yield one
 /// bucket per frame rather than padding with invented zeroes.
 pub fn envelope(data: &[f32], frames: usize) -> Vec<(f32, f32)> {
+    envelope_channels(data, frames, 2)
+}
+
+/// [`envelope`] of a take interleaved `channels` (1 or 2) per frame.
+pub fn envelope_channels(data: &[f32], frames: usize, channels: usize) -> Vec<(f32, f32)> {
+    let channels = channels.max(1);
     if frames == 0 || data.is_empty() {
         return Vec::new();
     }
@@ -164,8 +329,8 @@ pub fn envelope(data: &[f32], frames: usize) -> Vec<(f32, f32)> {
         let mut lo = f32::MAX;
         let mut hi = f32::MIN;
         for frame in start..end {
-            let idx = frame * 2;
-            for s in [data.get(idx), data.get(idx + 1)].into_iter().flatten() {
+            let idx = frame * channels;
+            for s in data.iter().skip(idx).take(channels) {
                 lo = lo.min(*s);
                 hi = hi.max(*s);
             }

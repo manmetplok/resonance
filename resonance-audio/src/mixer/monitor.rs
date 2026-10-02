@@ -326,6 +326,53 @@ pub(super) fn mix_monitor_passthrough(
     mixed_any
 }
 
+/// Whether `track`'s chain must run in the stopped-transport pass: its
+/// instrument has live notes waiting or still releasing, or any slot in
+/// the chain — instrument or effect — asked for a `process()` through
+/// `clap_host.request_process()` (consumed here, see
+/// `ClapInstance::take_process_request`) or is still inside the window
+/// such a request bought. Every slot is visited, so each pending request
+/// is consumed and armed in the same block.
+///
+/// Only a slot [`run_track_chain`] would actually process counts — the
+/// instrument included: under a settled chain or slot bypass (one without
+/// the plugin's own bypass param) it is skipped there, so its window
+/// would never count down and the track would run every stopped block
+/// for good. Its request stays pending until the bypass is lifted.
+///
+/// A slot whose lock is contended is skipped: its parked MIDI and its
+/// request both stay where they are for the next callback. One `try_lock`
+/// and a few atomics per slot; no allocation.
+fn chain_wants_idle_process(
+    track: &Track,
+    plugins_guard: &PluginMap,
+    midi_stash: &mut MidiStash,
+) -> bool {
+    let instrument = track.runs_internal_instrument();
+    let chain_runs = !track.fx_bypass().bypassed();
+    let mut wants = false;
+    for (i, &inst_id) in track.plugins().iter().enumerate() {
+        let Some(slot) = plugins_guard.get(&inst_id) else {
+            continue;
+        };
+        let Some(mut inst) = slot.try_lock() else {
+            continue;
+        };
+        if instrument && i == 0 {
+            // Events parked under contention go first, as on the
+            // arrangement path.
+            midi_stash.deliver(inst_id, &mut *inst);
+        }
+        let slot_runs = slot.bypass_param.is_some() || !slot.bypass.bypassed();
+        if !(chain_runs && slot_runs) {
+            continue;
+        }
+        inst.0.take_process_request();
+        wants |= inst.0.wants_idle_process();
+    }
+    wants
+}
+
 /// Stopped-transport instrument pass (code review MIX-08): process every
 /// instrument that has live notes waiting or still releasing (see
 /// `ClapInstance::wants_idle_process`), from silence, through its track's
@@ -334,6 +381,17 @@ pub(super) fn mix_monitor_passthrough(
 /// that were never processed — silent, piling up to the queue cap, then
 /// bursting on the next Play. An idle instrument is not processed at all,
 /// which bounds the cost.
+///
+/// The same pass serves `clap_host.request_process()` (see
+/// [`chain_wants_idle_process`]): any slot on a top-level track — the
+/// instrument or an effect, on an instrument, audio or external-instrument
+/// track — that asks for a `process()` gets its track's chain run from
+/// silence for `limits::IDLE_HOLD_SECS`, and asks again if it needs more.
+/// A drum kit picked while stopped is installed by the plugin's
+/// `process()`, which is why this exists. Not served while stopped:
+/// sub-track, bus and master-chain plugins, which this branch never runs
+/// at all — their request stays pending until the next `process()`,
+/// i.e. Play.
 ///
 /// `monitored` says whether [`mix_monitor_passthrough`] ran this block;
 /// a track it already processed is skipped here. Muted / solo-suppressed
@@ -361,29 +419,15 @@ pub(super) fn mix_idle_instruments(
     let frames = frames.min(track_buf_l.len()).min(track_buf_r.len());
     let mut mixed_any = false;
     for track in tracks_guard.values() {
-        if track.sub_track_of.is_some() || !track.runs_internal_instrument() {
+        if track.sub_track_of.is_some() {
             continue;
         }
         let audible = !track.muted() && (!any_solo || track.block_soloed());
         if monitored && audible && track.monitor_enabled() {
             continue;
         }
-        let Some(&inst_id) = track.plugins().first() else {
+        if !chain_wants_idle_process(track, plugins_guard, midi_stash) {
             continue;
-        };
-        let Some(slot) = plugins_guard.get(&inst_id) else {
-            continue;
-        };
-        {
-            let Some(mut inst) = slot.try_lock() else {
-                continue;
-            };
-            // Events parked under contention go first, as on the
-            // arrangement path.
-            midi_stash.deliver(inst_id, &mut *inst);
-            if !inst.0.wants_idle_process() {
-                continue;
-            }
         }
         let (buf_l, buf_r) = (&mut track_buf_l[..frames], &mut track_buf_r[..frames]);
         buf_l.fill(0.0);

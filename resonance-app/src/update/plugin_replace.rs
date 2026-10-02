@@ -173,6 +173,8 @@ fn swap(
     // same frame cannot still write a `plugin_*.bin` for a slot that no
     // longer exists (the echo repeats it, idempotently).
     r.plugin_mirror.state_cache.remove(&old_id);
+    r.plugin_mirror.kit_info.remove(&old_id);
+    r.plugin_mirror.output_ports.remove(&old_id);
     r.presets.pending_plugin_param_overrides.remove(&old_id);
     // Its automation lanes too: they are keyed by the outgoing instance
     // id, which the replacement does not inherit (automation-control-api

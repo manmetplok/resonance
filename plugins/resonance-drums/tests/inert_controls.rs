@@ -56,9 +56,9 @@ fn param_layout_is_consistent() {
     );
     for pad in 0..NUM_PADS {
         let base = GLOBAL_PARAMS + pad * PARAMS_PER_PAD;
-        assert_eq!(plugin.param(base).id(), format!("pad_{pad}_volume"));
+        assert_eq!(plugin.param(base).id(), format!("pad_{pad}_level"));
         assert_eq!(
-            plugin.param(base + 5).id(),
+            plugin.param(base + 3).id(),
             format!("pad_{pad}_articulation")
         );
     }

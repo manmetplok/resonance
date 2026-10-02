@@ -127,18 +127,90 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             crate::update::plugin_replace::replace_plugin_slot(r, instance_id, plugin);
         }
         PluginMessage::SetPluginParam(instance_id, param_id, value) => {
+            // An output only the plugin writes: it would drop the value,
+            // so neither send it nor mirror a number that never lands.
+            let read_only = r
+                .with_plugin_mut(instance_id, |p| {
+                    p.params.iter().any(|pp| pp.id == param_id && pp.read_only)
+                })
+                .unwrap_or(false);
+            if read_only {
+                return Task::none();
+            }
             let _ = r.engine.send(AudioCommand::SetPluginParam {
                 instance_id,
                 param_id,
                 value,
             });
-            r.with_plugin_mut(instance_id, |p| {
-                if let Some(param) = p.params.iter_mut().find(|pp| pp.id == param_id) {
-                    param.current_value = value;
-                }
-            });
+            let kit_select = resonance_plugin::stable_hash(crate::drums_mirror::KIT_SELECT);
+            let drums = r
+                .with_plugin_mut(instance_id, |p| {
+                    let drums = crate::drums_mirror::is_drums(p);
+                    if drums && param_id == kit_select {
+                        // Another kit: its progress starts from 0 in the
+                        // mirror too, not at the old kit's 1.0.
+                        crate::drums_mirror::mirror_kit_select(p, value);
+                    } else if let Some(param) = p.params.iter_mut().find(|pp| pp.id == param_id) {
+                        param.current_value = value;
+                    }
+                    drums
+                })
+                .unwrap_or(false);
+            // The drums' output mode decides their sub-tracks; in this
+            // same (undoable) edit, so an undo takes them back with it.
+            if drums && param_id == resonance_plugin::stable_hash(crate::drums_mirror::OUTPUT_MODE) {
+                crate::engine_events::plugins::ensure_instance_subtracks(r, instance_id);
+            }
             // A plugin that reports its own modified flag compares; for one
             // that does not, a host edit is the one edit the host sees.
+            if let Some(identity) = r.presets.plugin_preset_identity.get_mut(&instance_id) {
+                if !identity.reported {
+                    identity.modified = true;
+                }
+            }
+        }
+        PluginMessage::ParamEditedByPlugin {
+            instance_id,
+            param_id,
+            value,
+            text,
+            gesture: _,
+        } => {
+            let (state_excluded, drums) = r
+                .with_plugin_mut(instance_id, |p| {
+                    let drums = crate::drums_mirror::is_drums(p);
+                    if drums
+                        && param_id == resonance_plugin::stable_hash(crate::drums_mirror::KIT_SELECT)
+                    {
+                        // The editor picked another kit: as for a host set,
+                        // its progress starts from 0 in the mirror. (A
+                        // rescan that already carried this value — and the
+                        // progress with it — leaves nothing changed here.)
+                        crate::drums_mirror::mirror_kit_select(p, value);
+                    }
+                    let param = p.params.iter_mut().find(|pp| pp.id == param_id);
+                    let excluded = param.map(|param| {
+                        param.current_value = value;
+                        param.text = text;
+                        param.state_excluded
+                    });
+                    (excluded, drums)
+                })
+                .unwrap_or((None, false));
+            // The drums' own editor switched the output mode: as for a
+            // host set, the sub-tracks follow in the same edit.
+            if drums && param_id == resonance_plugin::stable_hash(crate::drums_mirror::OUTPUT_MODE) {
+                crate::engine_events::plugins::ensure_instance_subtracks(r, instance_id);
+            }
+            // A param the state carries in its own form (the drums'
+            // `kit_select`, recalled from the blob's kit reference) is
+            // not in the undo snapshot's param list, so the snapshot's
+            // BLOB is what an undo restores it from: refresh the cached
+            // blob now, so the entry just recorded (holding the old one)
+            // differs from the live cache and an undo pushes it.
+            if state_excluded == Some(true) {
+                let _ = r.engine.send(AudioCommand::SavePluginState { instance_id });
+            }
             if let Some(identity) = r.presets.plugin_preset_identity.get_mut(&instance_id) {
                 if !identity.reported {
                     identity.modified = true;

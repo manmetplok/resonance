@@ -21,19 +21,29 @@ pub struct PadMapping {
     pub note: u8,
     pub name: &'static str,
     pub default_sample: &'static [u8],
+    /// The choke group the built-in kit and a Drummica kit without a
+    /// `_meta.pads` hint give the pad: what `pad_N_choke` at "Kit" (its
+    /// default, E12) plays, and what a headless sampler never handed
+    /// params uses.
     pub choke_group: Option<u8>,
-    /// Which plugin output port this pad's close signal routes to. The
-    /// overhead contribution always goes to the dedicated Overhead port
-    /// regardless of this field.
+    /// The port the built-in kit and a Drummica kit without a `_meta.pads`
+    /// hint give the pad: where `pad_N_output` at "Kit" (its default,
+    /// E11) plays its close signal in Multi output mode, and where a
+    /// headless sampler never handed params routes it. A close-miked pad's overhead take
+    /// goes to the Overhead port (Multi) or Main (Stereo) regardless of
+    /// this field; a pad with no close mic plays its overhead take here
+    /// in Multi.
     pub output_group: OutputGroup,
     /// Mic positions the loader tries to load for this pad's close-mic
     /// bank. Order matters: the first position listed becomes bank 0
-    /// (the "left" side of a kick/snare balance slider), the second
-    /// becomes bank 1 (the "right" side).
+    /// (trimmed by `pad_N_mic1_trim`), the second becomes bank 1
+    /// (`pad_N_mic2_trim`).
     pub close_mic_positions: &'static [&'static str],
-    /// Whether this pad supports an articulation toggle (e.g. mit/ohne
-    /// Teppich). When true, the params system exposes a toggle and the
-    /// kit loader consults the articulation flag to pick the alt piece.
+    /// Whether the Drummica table pairs this slot with an alternate piece
+    /// (mit/ohne Teppich, [`crate::pad_map::DRUMMICA_ARTICULATION_ALT`]).
+    /// Informational only: every pad has an articulation parameter, and
+    /// whether it does anything is the loaded kit's
+    /// ([`crate::pad_map::KitPads`]).
     pub has_articulation: bool,
 }
 

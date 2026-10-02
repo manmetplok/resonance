@@ -91,7 +91,8 @@ pub use types::*;
 #[cfg(feature = "test-internals")]
 pub mod test_support {
     pub use crate::clap_host::{
-        ClapBundle, ClapInstance, PluginMap, PluginSlot, PresetHostReport, SyncClapInstance,
+        ClapBundle, ClapInstance, ParamsRefresh, PluginMap, PluginSlot, PresetHostReport,
+        SyncClapInstance,
     };
     /// Preset discovery (slice P8), for driving the indexer with a fake factory.
     pub use crate::clap_host::discovery;

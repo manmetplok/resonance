@@ -31,16 +31,11 @@ fn make_sampler() -> DrumSampler {
 }
 
 fn layer(takes: usize) -> VelocityLayer {
-    VelocityLayer {
-        round_robins: (0..takes)
-            .map(|_| LoadedSample {
-                // Long enough that a hit is still sounding when the next
-                // one lands, so the voice count is what is under test.
-                data: vec![0.5; 8192],
-                frames: 4096,
-            })
-            .collect(),
-    }
+    VelocityLayer::new((0..takes)
+            // Long enough that a hit is still sounding when the next
+            // one lands, so the voice count is what is under test.
+            .map(|_| LoadedSample::from_data(vec![0.5; 8192]))
+            .collect())
 }
 
 /// A pad with `layers` velocity layers of `takes` takes each, on a
@@ -57,6 +52,7 @@ fn pad_with(index: usize, layers: usize, takes: usize) -> LoadedPad {
             setup_key: String::new(),
             layers: (0..layers).map(|_| layer(takes)).collect(),
         }],
+        extra_banks: Vec::new(),
         overhead: None,
     }
 }
@@ -133,7 +129,8 @@ fn default_polyphony_still_reaches_every_voice() {
     sampler.update_global_settings(&DrumParams::default());
 
     let notes = unchoked_notes();
-    for _ in 0..4 {
+    // More hits than voices, whatever the cap.
+    for _ in 0..MAX_VOICES.div_ceil(notes.len()) + 1 {
         for note in &notes {
             sampler.note_on(*note, 0.9);
         }

@@ -6,6 +6,7 @@ pub mod features;
 pub mod formatters;
 pub mod gui;
 pub mod host;
+pub mod kit_rows;
 pub mod library_view;
 pub mod loader;
 mod logging;
@@ -44,10 +45,10 @@ pub use presets::{
     FactoryPreset, PresetBank, PresetEditor, PresetEvent, PresetLibrary, PresetRef, PresetSession,
     PresetSource,
 };
-pub use state::{ParamRename, STATE_VERSION};
+pub use state::{ParamRename, StateUpgrade, STATE_VERSION};
 pub use plugin::{
-    ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, NoteEvent, OutputBuffer,
-    OutputPortSpec, ParamTextSource, PluginEvent, ResonancePlugin, TempoInfo,
+    ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, KitInfoSource, NoteEvent,
+    OutputBuffer, OutputPortSpec, ParamTextSource, PluginEvent, ResonancePlugin, TempoInfo,
 };
 pub use range::{FloatRange, IntRange};
 /// The shared marks store and file-manager launcher, re-exported so a

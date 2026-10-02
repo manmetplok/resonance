@@ -698,7 +698,9 @@ impl Resonance {
         for slot in &track.plugins {
             plugin_params.extend_from_slice(slot.clap_plugin_id.as_bytes());
             plugin_params.push(0);
-            for p in &slot.params {
+            // A read-only output (a load progress, a meter) moves on its
+            // own and says nothing about the sound the cache holds.
+            for p in slot.params.iter().filter(|p| !p.read_only) {
                 plugin_params.extend_from_slice(&p.id.to_le_bytes());
                 plugin_params.extend_from_slice(&p.current_value.to_bits().to_le_bytes());
             }

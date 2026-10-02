@@ -11,14 +11,18 @@ use std::sync::Arc;
 use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, RuntimeEditorHandle};
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
 
-use crate::download::WorkerHandle;
 use crate::params::DrumParams;
 use crate::KitBridge;
 
 use super::app::DrumsEditorApp;
 
-const INITIAL_SIZE: (u32, u32) = (720, 440);
-const MIN_SIZE: (u32, u32) = (560, 360);
+// Matches the amp (drums-plugin-rework.md §6.1): at the old 720×440 the
+// body needed about 640px of height and got 302, so the GLOBAL card was
+// permanently off-screen. 960×640 gives the two-column pad body room to
+// breathe; 780×520 is the floor the layout (`app.rs`) is built to survive
+// without losing the KIT/GLOBAL row.
+const INITIAL_SIZE: (u32, u32) = (960, 640);
+const MIN_SIZE: (u32, u32) = (780, 520);
 
 // ---------------------------------------------------------------------------
 // Factory — produced by ResonanceDrums::editor_factory().
@@ -27,7 +31,6 @@ const MIN_SIZE: (u32, u32) = (560, 360);
 pub struct DrumsEditorFactory {
     params: Arc<DrumParams>,
     bridge: KitBridge,
-    download_worker: Arc<WorkerHandle>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
 }
 
@@ -35,13 +38,11 @@ impl DrumsEditorFactory {
     pub(crate) fn new(
         params: Arc<DrumParams>,
         bridge: KitBridge,
-        download_worker: Arc<WorkerHandle>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
     ) -> Self {
         Self {
             params,
             bridge,
-            download_worker,
             presets,
         }
     }
@@ -67,7 +68,12 @@ impl EditorFactory for DrumsEditorFactory {
         let app = DrumsEditorApp::new(
             self.params.clone(),
             self.bridge.clone(),
-            self.download_worker.clone(),
+            // The process-wide kit library (and its download worker), the
+            // one `kit_select` resolves against: opened by whichever comes
+            // first, this or the parameter, and held by the instance from
+            // then on — so the library and an in-flight download outlive
+            // a closed editor window, and the plugin going away drops it.
+            self.params.selection.library.shared(),
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(

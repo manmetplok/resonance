@@ -455,16 +455,22 @@ fn plugins_never_name_a_platform_runtime() {
 /// here — it moved to `resonance-dsp` (ARCH-07 A7-2).
 const PLUGIN_COMMON_ITEMS: &[&str] = &[
     "scan_directory",      // amp, ir; resonance-plugin's loader
-    "registry",            // drums: downloadable kit content
     "drum_map",            // drums: the GM pad contract shared with the app
     "decode_wav_stereo",   // drums: sample decode
+    "decode_wav_native",   // drums: sample decode that keeps mono takes mono
+    "decode_wav_split",    // drums: a resident head + an on-disk tail (E14 streaming)
+    "WavTail",             // drums: reads a streamed take's tail from its file
+    "TailScratch",         // drums: the tail reader's reusable buffers
     "decode_wav_channels", // ir: impulse-response decode
     "factory_presets",     // resonance-plugin: the factory-preset codec
     "library_marks",       // favourites/tags/recents shared by every library kind
     "nam_library",         // amp: the NAM model index, header reader and slot table
+    "drumkit_library",     // drums, resonance-plugin: the kit index, sidecars, import and slot table
     "reveal",              // show a file in the platform file manager
     "atomic_file",         // resonance-plugin: atomic replace + quarantine for preset files
     "preset_session",      // resonance-plugin: the preset-identity CLAP extension ABI
+    "param_flags",         // resonance-plugin: the state-excluded-params CLAP extension ABI
+    "kit_info",            // drums, resonance-plugin: the kit-pads CLAP extension ABI
 ];
 
 /// The plugins that declare a `resonance-common` dependency at all. The

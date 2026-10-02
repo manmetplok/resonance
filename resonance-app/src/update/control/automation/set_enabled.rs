@@ -4,7 +4,7 @@
 //! change anything for.
 
 use super::edit::current_lane;
-use super::target::resolve_write_target;
+use super::target::resolve_frozen_checked;
 use super::view::lane_view_for;
 use crate::message::{AutomationMessage, Message};
 use crate::update::control::reply::{mutation_ack, reject, success};
@@ -19,7 +19,7 @@ pub(super) fn set_enabled(app: &mut Resonance, request: &Request) -> (Response, 
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let resolved = match resolve_write_target(app, &params.target) {
+    let resolved = match resolve_frozen_checked(app, &params.target) {
         Ok(resolved) => resolved,
         Err(e) => return reject(request, e),
     };

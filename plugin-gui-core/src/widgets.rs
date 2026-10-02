@@ -26,6 +26,12 @@
 //! - [`slider_unipolar`] / [`slider_bipolar`] / [`slider_bipolar_warm`]
 //!   and the configurable [`slider`], styled by [`SliderStyle`].
 //!
+//! The configurable knob and slider each have a gesture-aware twin,
+//! [`knob_themed_edit`] / [`slider_edit`], which return a [`GestureEdit`]:
+//! the new value *and* whether the user's gesture began or ended this
+//! frame. An editor that tells its host about edits (CLAP undo) needs the
+//! end of a drag, not every frame of it — one drag is one undoable edit.
+//!
 //! Everything here is pure egui — helpers that bind these widgets to
 //! plugin parameter types live downstream in
 //! `resonance_plugin::editor_widgets`, keeping this crate free of
@@ -57,9 +63,39 @@ pub use chip::{chip_button, chip_styled, Chip, ChipColors, ChipPalette, ChipStyl
 pub use library::{star_toggle, star_toggle_sized, tag_pill, TagPillResponse};
 pub use segmented::{segmented, segmented_styled, SegmentedStyle};
 pub use slider::{
-    slider, slider_bipolar, slider_bipolar_warm, slider_unipolar, HSlider, SliderPalette,
-    SliderStyle, SliderTone,
+    slider, slider_bipolar, slider_bipolar_warm, slider_edit, slider_unipolar, HSlider,
+    SliderPalette, SliderStyle, SliderTone, KEY_GESTURE_IDLE_SECS, SLIDER_FINE,
 };
+
+/// One frame of a continuous control (a knob, a slider), gesture-aware.
+///
+/// `value` is what the plain functions ([`knob_themed`], [`slider`])
+/// return. `began` / `ended` bracket the user's gesture, so a caller can
+/// treat a whole drag as one edit — announce it to the host once, as one
+/// undoable step, at `ended`:
+///
+/// - a drag: `began` on the frame it starts, `value` on every frame it
+///   moves, `ended` on the frame the pointer lets go;
+/// - a double-click reset: one frame with `value` set and `ended` true —
+///   a discrete edit, begun and finished at once;
+/// - a run of arrow-key steps on a focused slider: `began` with the
+///   first, `value` on each, `ended` once the run goes idle or the
+///   slider loses focus (see `slider::KEY_GESTURE_IDLE_SECS`).
+///
+/// `ended` closes the gesture `began` opened, whether or not it changed
+/// anything: a drag that ends where it started, or a reset of a value
+/// already at its default, still ends. A caller that records undo steps
+/// compares the value at `ended` with the one it held at `began`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GestureEdit {
+    /// The new unit value, when the control moved this frame.
+    pub value: Option<f32>,
+    /// A gesture (a drag, a reset, a run of key steps) started this frame.
+    pub began: bool,
+    /// The user's edit finished this frame: commit it (e.g. announce it to
+    /// the host as one undoable change).
+    pub ended: bool,
+}
 
 // ---------------------------------------------------------------------------
 // Rotary knob
@@ -499,11 +535,17 @@ pub fn knob_bipolar(
 /// Draw a configured themed knob and handle its input. Returns the new
 /// unit value when the drag or a double-click changed it.
 pub fn knob_themed(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> Option<f32> {
+    knob_themed_edit(ui, knob).value
+}
+
+/// [`knob_themed`], reporting the gesture too ([`GestureEdit`]): a drag
+/// begins and ends, a double-click reset is one finished edit.
+pub fn knob_themed_edit(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> GestureEdit {
     let style = knob.style;
     let (rect, response) = ui.allocate_exact_size(style.cell(), egui::Sense::click_and_drag());
     let unit = knob.value_unit.clamp(0.0, 1.0);
     if !ui.is_rect_visible(rect) {
-        return themed_knob_input(&response, unit, knob.default_unit);
+        return themed_knob_gesture(&response, unit, knob.default_unit);
     }
 
     let center = egui::pos2(rect.center().x, rect.top() + style.diameter * 0.5 + 1.0);
@@ -606,7 +648,16 @@ pub fn knob_themed(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> Option<f32> {
         theme::TEXT_3,
     );
 
-    themed_knob_input(&response, unit, knob.default_unit)
+    themed_knob_gesture(&response, unit, knob.default_unit)
+}
+
+/// [`themed_knob_input`] with the gesture's start and end.
+fn themed_knob_gesture(response: &Response, unit: f32, default_unit: f32) -> GestureEdit {
+    GestureEdit {
+        value: themed_knob_input(response, unit, default_unit),
+        began: response.drag_started() || response.double_clicked(),
+        ended: response.drag_stopped() || response.double_clicked(),
+    }
 }
 
 /// Vertical drag / double-click handling of a themed knob, in unit

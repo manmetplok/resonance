@@ -81,6 +81,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         Ok(ClapAudioProcessor {
             plugin,
             shared,
+            host_handle: main_thread.host_handle.clone(),
             input_left: vec![0.0; max_frames],
             input_right: vec![0.0; max_frames],
             key_left: vec![0.0; key_len],
@@ -108,6 +109,14 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             return Ok(ProcessStatus::ContinueIfNotQuiet);
         }
 
+        // A render mode the host set while the plugin was in here
+        // (`render.set` is main-thread; the plugin is not): it applies
+        // from this block on.
+        if self.shared.render_mode_dirty.swap(false, Ordering::AcqRel) {
+            self.plugin
+                .set_render_mode(self.shared.render_offline.load(Ordering::Acquire));
+        }
+
         // Handle input events: param changes, note events, MIDI controllers.
         self.input_events.clear();
         for event in events.input {
@@ -117,7 +126,11 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     CoreEventSpace::ParamValue(e) => {
                         if let Some(clap_id) = e.param_id() {
                             let value = e.value();
-                            if let Some(slot) = self.shared.find_slot(clap_id.get()) {
+                            if let Some(slot) = self
+                                .shared
+                                .find_slot(clap_id.get())
+                                .filter(|&s| !self.shared.param_metas[s].is_read_only)
+                            {
                                 // Applied instantly, block-quantized — the
                                 // bridge does not smooth automation. Plugins
                                 // de-zipper by feeding their `Smoother`s from
@@ -211,7 +224,11 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         let publish_gen = self.shared.param_publish_gen();
         if publish_gen & 1 == 0 && self.shared.params_dirty.swap(false, Ordering::Acquire) {
             for i in 0..self.plugin.param_count() {
-                if i < self.shared.param_values.len() {
+                // A state-excluded param was not loaded: its atomic holds
+                // the plugin's last value, which the plugin may since have
+                // moved itself (from the very state being loaded).
+                if i < self.shared.param_values.len() && !self.shared.param_metas[i].state_excluded
+                {
                     self.plugin.param(i).set_plain(self.shared.get_value(i));
                 }
             }
@@ -337,58 +354,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // to live somewhere this loop cannot write at all: a staging
         // buffer the dirty flag hands over, which is a change to the
         // layout of `ClapShared` and to every reader of `param_values`.
-        //
-        // `gen_before` is a SeqCst (so acquire) load, which keeps every
-        // Relaxed slot read below from being hoisted above it. Odd: a
-        // load is publishing, and whatever the slots hold may be its
-        // values with no flag announcing them yet — skip the push-back.
-        let gen_before = self.shared.param_publish_gen();
-        let push_back_count = if gen_before & 1 == 1 {
-            0
-        } else {
-            self.plugin.param_count()
-        };
-        for i in 0..push_back_count {
-            if i < self.shared.param_values.len() {
-                let plugin_v = self.plugin.param(i).get_plain();
-                let shared_v = self.shared.get_value(i);
-                if shared_v.to_bits() != plugin_v.to_bits() {
-                    // Checked here rather than once before the loop so it
-                    // covers a load that lands *while* the loop is walking
-                    // the params, and inside the difference test so the
-                    // steady state (nothing changed) pays nothing for it.
-                    // Acquire pairs with the Release store in
-                    // `state::load` and keeps the exchange below from
-                    // being reordered ahead of it.
-                    if self.shared.params_dirty.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let stored = self.shared.compare_exchange_value(i, shared_v, plugin_v);
-                    // Same rule as the state-load re-sync bracket above: a
-                    // generation bracket only proves anything if nothing it
-                    // brackets can sink below the confirming re-read. The
-                    // Acquire fence pins the Relaxed `get_value` read (and
-                    // the exchange, without leaning on the exchange's own
-                    // SeqCst ordering) above the re-read, and pairs with the
-                    // Release fence in `begin_param_publish` so a slot value
-                    // taken from a mid-publish window forces the re-read to
-                    // see that window's odd generation or later.
-                    std::sync::atomic::fence(Ordering::Acquire);
-                    if self.shared.param_publish_gen() != gen_before {
-                        // A publication window opened around the exchange.
-                        // If the exchange landed it may have landed on a
-                        // loaded value, so put back what was there — the
-                        // compare-exchange makes that safe, since it can
-                        // only land while the slot still holds what we
-                        // just wrote.
-                        if stored {
-                            let _ = self.shared.compare_exchange_value(i, plugin_v, shared_v);
-                        }
-                        break;
-                    }
-                }
-            }
-        }
+        self.push_back_params();
 
         let tempo = process.transport.and_then(|t| {
             use clack_plugin::events::event_types::TransportFlags;
@@ -508,8 +474,29 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // `port_views_len` elements.
         let port_views = unsafe { port_views_arr[..port_views_len].assume_init_mut() };
 
+        self.host_handle.begin_process();
         self.plugin
             .process_with_key(port_views, key, frames, &mut event_iter, tempo);
+        // A rescan the plugin asked for during the block announces values
+        // it may have just moved: publish them first, so the host's
+        // re-read cannot overtake them (the push-back above ran before
+        // the plugin did).
+        let rescan = self.host_handle.end_process();
+        if rescan != 0 {
+            self.push_back_params();
+            self.host_handle.post_deferred_rescan(rescan);
+        }
+        // Params the plugin changed itself and announced
+        // (`HostHandle::announce_param_change`), as complete edits.
+        {
+            let plugin = &self.plugin;
+            super::param_output::report_announced(
+                &self.host_handle,
+                self.shared,
+                |slot| (slot < plugin.param_count()).then(|| plugin.param(slot)),
+                events.output,
+            );
+        }
 
         // port_views borrows end here (OutputBuffer has no Drop impl).
 
@@ -576,12 +563,77 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         reconcile_params(&self.plugin, self.shared);
 
         let mut plugin = self.plugin;
+        // A mode the host set after the last block never reached the
+        // plugin: hand it over with the plugin itself.
+        if self.shared.render_mode_dirty.swap(false, Ordering::AcqRel) {
+            plugin.set_render_mode(self.shared.render_offline.load(Ordering::Acquire));
+        }
         plugin.deactivate();
         main_thread.plugin = Some(plugin);
     }
 
     fn reset(&mut self) {
         self.plugin.reset();
+    }
+}
+
+impl<P: ResonancePlugin> ClapAudioProcessor<'_, P> {
+    /// Push the plugin's own parameter values into the shared mirror the
+    /// main thread reads — the editor push-back described at its call
+    /// site in `process()`, with the guards against a concurrent
+    /// `state::load`. Audio thread; wait-free, allocation-free.
+    fn push_back_params(&mut self) {
+        // `gen_before` is a SeqCst (so acquire) load, which keeps every
+        // Relaxed slot read below from being hoisted above it. Odd: a
+        // load is publishing, and whatever the slots hold may be its
+        // values with no flag announcing them yet — skip the push-back.
+        let gen_before = self.shared.param_publish_gen();
+        let push_back_count = if gen_before & 1 == 1 {
+            0
+        } else {
+            self.plugin.param_count()
+        };
+        for i in 0..push_back_count {
+            if i < self.shared.param_values.len() {
+                let plugin_v = self.plugin.param(i).get_plain();
+                let shared_v = self.shared.get_value(i);
+                if shared_v.to_bits() != plugin_v.to_bits() {
+                    // Checked here rather than once before the loop so it
+                    // covers a load that lands *while* the loop is walking
+                    // the params, and inside the difference test so the
+                    // steady state (nothing changed) pays nothing for it.
+                    // Acquire pairs with the Release store in
+                    // `state::load` and keeps the exchange below from
+                    // being reordered ahead of it.
+                    if self.shared.params_dirty.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let stored = self.shared.compare_exchange_value(i, shared_v, plugin_v);
+                    // Same rule as the state-load re-sync bracket above: a
+                    // generation bracket only proves anything if nothing it
+                    // brackets can sink below the confirming re-read. The
+                    // Acquire fence pins the Relaxed `get_value` read (and
+                    // the exchange, without leaning on the exchange's own
+                    // SeqCst ordering) above the re-read, and pairs with the
+                    // Release fence in `begin_param_publish` so a slot value
+                    // taken from a mid-publish window forces the re-read to
+                    // see that window's odd generation or later.
+                    std::sync::atomic::fence(Ordering::Acquire);
+                    if self.shared.param_publish_gen() != gen_before {
+                        // A publication window opened around the exchange.
+                        // If the exchange landed it may have landed on a
+                        // loaded value, so put back what was there — the
+                        // compare-exchange makes that safe, since it can
+                        // only land while the slot still holds what we
+                        // just wrote.
+                        if stored {
+                            let _ = self.shared.compare_exchange_value(i, plugin_v, shared_v);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -601,7 +653,12 @@ fn reconcile_params<P: ResonancePlugin>(plugin: &P, shared: &ClapShared<'_>) {
     let count = plugin.param_count().min(shared.param_values.len());
     if shared.params_dirty.swap(false, Ordering::AcqRel) {
         for i in 0..count {
-            plugin.param(i).set_plain(shared.get_value(i));
+            if shared.param_metas[i].state_excluded {
+                // Not part of any load: the plugin's value is the newer.
+                shared.set_value(i, plugin.param(i).get_plain());
+            } else {
+                plugin.param(i).set_plain(shared.get_value(i));
+            }
         }
     } else {
         for i in 0..count {

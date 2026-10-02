@@ -103,8 +103,8 @@ pub struct DeviceScanError {
 }
 
 /// The default user/project device-definitions folder:
-/// `$XDG_DATA_HOME/resonance/device_definitions` (alongside `installed.json`
-/// and `controller_maps.json`). `None` when no data dir can be determined.
+/// `$XDG_DATA_HOME/resonance/device_definitions` (alongside
+/// `controller_maps.json`). `None` when no data dir can be determined.
 pub fn user_definitions_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("resonance/device_definitions"))
 }

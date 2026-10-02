@@ -1,128 +1,120 @@
-//! Kit browser / loader helpers.
+//! Loading a kit from the editor.
 //!
-//! Provides the shared "load a kit" code path used by:
-//!   • The Load kit button on the left-panel kit card (`load_kit_clicked`).
-//!   • The KIT preset pill in the tab bar (`load_installed_kit`).
+//! [`load_library_kit`] is **the** entry point every kit pick in the editor
+//! goes through — the header's kit dropdown and ◀/▶, the Library overlay's
+//! Load and double-click, the missing-kit banner's relink. It writes the
+//! `kit_select` slot parameter (drums-plugin-rework.md §5.1) and acts on it
+//! at once ([`selection::select_now`]): the same path a host or the control
+//! API takes, so the pick is the parameter's value and a host can undo it.
 //!
-//! Drives the loader thread via [`crate::kit_loader::spawn_loader`]. The
-//! actual UI for selecting / loading is rendered by `pad_grid` and
-//! `chrome`; this module exposes the imperative actions and the kit-status
-//! formatter so they stay in one place.
+//! Also here: which kit the editor treats as current while a load is in
+//! flight, and the kit-status formatter.
 
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use resonance_common::registry::{self, ContentType, InstalledItem};
+use resonance_common::drumkit_library::Entry;
 
-use crate::kit_loader::{self, KitStatus};
+use crate::kit_loader::KitStatus;
+use crate::library::SharedKitLibrary;
+use crate::selection::{self, StartedLoad};
 use crate::KitBridge;
 
-/// Find the `drum_samples.json` manifest inside a kit directory. The
-/// downloaded kits have a nested subdirectory, so we search one level
-/// deep as well as the root.
-fn find_manifest(kit_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let direct = kit_dir.join("drum_samples.json");
-    if direct.exists() {
-        return Some(direct);
-    }
-    // Search one level of subdirectories.
-    if let Ok(entries) = std::fs::read_dir(kit_dir) {
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
-                let nested = entry.path().join("drum_samples.json");
-                if nested.exists() {
-                    return Some(nested);
+/// Whether a load is a user **pick** (a dropdown row, a Library Load) —
+/// which counts as a use for Recent — or **browsing** with ◀/▶, which does
+/// not: recording it would re-sort a "Recently used" view under the
+/// stepping and bounce between two kits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoadKind {
+    Pick,
+    Browse,
+}
+
+/// A kit load the editor asked for: the manifest it is loading, and the
+/// load generation it was given.
+///
+/// The bridge's `kit_path` is written when a load *succeeds*, when the
+/// built-in kit is chosen (to none), and by a state load — before that
+/// kit decodes — but never by a click; and `KitStatus::Loading` only once
+/// the loader thread gets going, so for a while after a click neither
+/// says which kit is on its way. The header
+/// steps ◀/▶ from this in that window ([`kit_path_for_stepping`]),
+/// rather than from the kit being replaced.
+#[derive(Clone, Debug)]
+pub(crate) struct RequestedKit {
+    pub(crate) path: PathBuf,
+    pub(crate) generation: u64,
+}
+
+/// The kit the editor should treat as current: the one being loaded, if
+/// any, else the one loaded.
+///
+/// In order: the manifest a `Loading` status names; else the editor's own
+/// last request, while it is still the newest load and has not failed;
+/// else the last kit that loaded successfully.
+pub(crate) fn kit_path_for_stepping(
+    bridge: &KitBridge,
+    requested: Option<&RequestedKit>,
+) -> Option<PathBuf> {
+    let status_says = match &*bridge.kit_status.lock() {
+        KitStatus::Loading { path } => Some(Some(path.clone())),
+        KitStatus::Error { .. } => Some(None),
+        _ => None,
+    };
+    match status_says {
+        Some(Some(loading)) => return Some(loading),
+        // A failed load leaves the last good kit in place.
+        Some(None) => {}
+        None => {
+            if let Some(req) = requested {
+                if bridge.load_generation.load(Ordering::Acquire) == req.generation {
+                    return Some(req.path.clone());
                 }
             }
         }
     }
-    None
+    bridge.kit_path.lock().clone()
 }
 
-/// Load a kit from an installed registry entry.
-pub(super) fn load_installed_kit(bridge: &KitBridge, item: &InstalledItem) {
-    let kit_dir = std::path::PathBuf::from(&item.path);
-    let Some(manifest_path) = find_manifest(&kit_dir) else {
-        *bridge.kit_status.lock() = KitStatus::Error {
-            message: format!("no drum_samples.json found in {}", kit_dir.display()),
-        };
-        return;
+/// Load library kit `entry` into this instance — the one load entry point
+/// (see the module docs). A pick also records a use for Recent.
+pub(crate) fn load_library_kit(
+    bridge: &KitBridge,
+    library: &SharedKitLibrary,
+    entry: &Entry,
+    kind: LoadKind,
+) -> Result<RequestedKit, String> {
+    selection::loadable(entry)?;
+    let requested = match entry.slot {
+        Some(slot) => match selection::select_now(bridge, slot as i32) {
+            Ok(Some(started)) => requested(started),
+            // The shared library has no kit in that slot any more (the
+            // row is from a snapshot the index has moved on from): load
+            // the entry by its manifest.
+            _ => spawn(bridge, entry.manifest_path.clone())?,
+        },
+        // No slot to write (the library holds every kit it lists in one;
+        // this is a row the index has not slotted yet): by manifest.
+        None => spawn(bridge, entry.manifest_path.clone())?,
     };
-    let sr_bits = bridge.sample_rate.load(Ordering::Acquire);
-    if sr_bits == 0 {
-        *bridge.kit_status.lock() = KitStatus::Error {
-            message: "plugin not yet activated by host".to_string(),
-        };
-        return;
-    }
-    let target_sr = f32::from_bits(sr_bits);
-    let overhead_key = bridge.overhead_setup_key.lock().clone();
-    let choices = bridge.pad_choices.lock().clone();
-    let articulations = bridge.articulations();
-    kit_loader::spawn_loader(
-        manifest_path,
-        target_sr,
-        bridge,
-        overhead_key,
-        choices,
-        articulations,
-    );
-}
-
-pub(super) fn load_kit_clicked(bridge: &KitBridge) {
-    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
-    // thread, or the AppKit main thread under the Cocoa runtime, where a
-    // modal panel is the supported path and the runtime's reentrancy
-    // guard skips nested paints (macos-editor-plan.md §3h). Blocks
-    // briefly while the native file picker is up; the loader thread then
-    // does all the heavy work off the UI thread.
-    let picked = rfd::FileDialog::new()
-        .add_filter("Drum kit manifest", &["json"])
-        .pick_file();
-    let Some(path) = picked else { return };
-
-    // Refuse to spawn a loader before the host has activated the
-    // plugin — without a sample rate we'd decode at the wrong pitch.
-    let sr_bits = bridge.sample_rate.load(Ordering::Acquire);
-    if sr_bits == 0 {
-        *bridge.kit_status.lock() = KitStatus::Error {
-            message: "plugin not yet activated by host".to_string(),
-        };
-        return;
-    }
-    let target_sr = f32::from_bits(sr_bits);
-    let overhead_key = bridge.overhead_setup_key.lock().clone();
-    let choices = bridge.pad_choices.lock().clone();
-    let articulations = bridge.articulations();
-    kit_loader::spawn_loader(
-        path,
-        target_sr,
-        bridge,
-        overhead_key,
-        choices,
-        articulations,
-    );
-}
-
-pub(super) fn format_kit_status(status: &KitStatus) -> String {
-    match status {
-        KitStatus::Empty => "Defaults (no kit loaded)".to_string(),
-        KitStatus::Loading { path } => format!(
-            "Loading {}...",
-            path.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "kit".to_string())
-        ),
-        KitStatus::Loaded { name, num_pads } => {
-            format!("Kit: {name} ({num_pads} pads)")
-        }
-        KitStatus::Error { message } => {
-            let short: String = message.chars().take(80).collect();
-            format!("Error: {short}")
+    if kind == LoadKind::Pick {
+        if let Err(e) = library.record_use(&entry.id) {
+            tracing::warn!("could not record the kit pick: {e}");
         }
     }
+    Ok(requested)
 }
 
-/// Refresh the installed-kits cache from the registry.
-pub fn refresh_installed_kits() -> Vec<InstalledItem> {
-    registry::list_installed(&ContentType::Drumkit)
+fn requested(started: StartedLoad) -> RequestedKit {
+    RequestedKit {
+        path: started.path,
+        generation: started.generation,
+    }
+}
+
+/// Load `manifest_path` with no slot to name it by: `kit_select` parks at
+/// "none", and the kit is loaded now — or, before the host activated the
+/// plugin, at activation.
+fn spawn(bridge: &KitBridge, manifest_path: PathBuf) -> Result<RequestedKit, String> {
+    Ok(requested(selection::load_unslotted_now(bridge, manifest_path)))
 }

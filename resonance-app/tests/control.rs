@@ -27,6 +27,8 @@ mod control_automation_shape;
 mod control_automation_edit;
 #[path = "control/control_bus.rs"]
 mod control_bus;
+#[path = "control/control_drum_kits.rs"]
+mod control_drum_kits;
 #[path = "control/control_bus_create_commit.rs"]
 mod control_bus_create_commit;
 #[path = "control/control_bus_effects.rs"]
@@ -97,6 +99,8 @@ mod control_notes_read_your_writes;
 mod control_plugin_bypass;
 #[path = "control/control_plugin_param_bounds.rs"]
 mod control_plugin_param_bounds;
+#[path = "control/control_plugin_param_flags.rs"]
+mod control_plugin_param_flags;
 #[path = "control/control_plugin_param_meta.rs"]
 mod control_plugin_param_meta;
 #[path = "control/control_amp_models.rs"]

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use resonance_drums::drum_map::{PadMapping, NUM_PADS, PAD_MAPPINGS};
 use resonance_drums::kit_loader::{
-    build_fallback_pad, load_kit_from_manifest, parse_vel_index, PadMicChoices,
+    build_fallback_pad, kit_display_name, load_kit_from_manifest, parse_vel_index, PadMicChoices,
     DEFAULT_OVERHEAD_SETUP,
 };
 
@@ -48,6 +48,7 @@ fn drummica_smoke() {
         "RESONANCE_DRUMMICA_PATH points at {}, which does not exist",
         manifest.display()
     );
+    let started = std::time::Instant::now();
     let kit = load_kit_from_manifest(
         &manifest,
         48000.0,
@@ -56,7 +57,52 @@ fn drummica_smoke() {
         &default_articulations(),
     )
     .expect("drummica kit should load cleanly");
+    let took = started.elapsed();
     assert_eq!(kit.pads.len(), NUM_PADS);
+    assert_eq!(kit.stats.unreadable, 0, "{:?}", kit.stats.unreadable_paths);
+    // What the default setup costs (E5): decoded bytes, the mono share,
+    // and the decode time on this machine's worker pool.
+    let mut mono_bytes = 0usize;
+    let mut stereo_bytes = 0usize;
+    for pad in &kit.pads {
+        for bank in pad.close_mics.iter().chain(pad.overhead.iter()) {
+            for take in bank.layers.iter().flat_map(|l| l.round_robins.iter()) {
+                if take.channels() == 1 {
+                    mono_bytes += take.bytes();
+                } else {
+                    stereo_bytes += take.bytes();
+                }
+            }
+        }
+    }
+    eprintln!(
+        "drummica default setup: {} files, {} decoded in {took:.2?} on {} workers; \
+         {} MiB decoded ({} MiB mono, {} MiB stereo; duplicated to stereo the mono \
+         takes would cost {} MiB more)",
+        kit.stats.files,
+        kit.stats.decoded,
+        resonance_drums::kit_loader::decode::decode_workers(kit.stats.files),
+        kit.stats.kit_bytes >> 20,
+        mono_bytes >> 20,
+        stereo_bytes >> 20,
+        mono_bytes >> 20,
+    );
+    // A second load of the same kit at the same rate — another instance —
+    // decodes nothing while the first holds it.
+    let again = load_kit_from_manifest(
+        &manifest,
+        48000.0,
+        DEFAULT_OVERHEAD_SETUP,
+        &default_choices(),
+        &default_articulations(),
+    )
+    .expect("second load");
+    assert_eq!(again.stats.decoded, 0, "{:?}", again.stats);
+    eprintln!(
+        "second instance: {} decoded, {} MiB shared",
+        again.stats.decoded,
+        again.stats.shared_bytes >> 20
+    );
 
     // Kick and snare each have two close mic positions (In+Out and
     // Top+Btm respectively) so they must load two banks.
@@ -205,7 +251,7 @@ fn fallback_pads_all_decode() {
         assert_eq!(pad.close_mics[0].layers.len(), 1);
         assert_eq!(pad.close_mics[0].layers[0].round_robins.len(), 1);
         assert!(
-            pad.close_mics[0].layers[0].round_robins[0].frames > 0,
+            pad.close_mics[0].layers[0].round_robins[0].frames() > 0,
             "{} sample is empty",
             mapping.name
         );
@@ -216,3 +262,40 @@ fn fallback_pads_all_decode() {
 // Avoid unused-import on PadMapping (test below only borrows from PAD_MAPPINGS).
 #[allow(dead_code)]
 fn _ensure_pad_mapping_in_scope(_: &PadMapping) {}
+
+/// A kit is named after the directory it was installed under — the one
+/// directly below the drumkits root — however deep its manifest sits. A
+/// downloaded zip extracts to `drumkits/Drummica/drummica/…`, and naming
+/// it from the manifest's parent showed "drummica" next to a picker that
+/// listed "Drummica" (drums-plugin-rework.md §10 K0).
+#[test]
+fn kit_name_comes_from_the_directory_under_the_drumkits_root() {
+    let root = std::path::Path::new("/data/resonance/drumkits");
+    let nested = root.join("Drummica/drummica/drum_samples.json");
+    assert_eq!(kit_display_name(&nested, Some(root)), "Drummica");
+    let flat = root.join("IT_Techno/drum_samples.json");
+    assert_eq!(kit_display_name(&flat, Some(root)), "IT_Techno");
+}
+
+/// D3: the loader names kits against the library's own root (the
+/// `RESONANCE_DRUMKIT_DIR` override, a test build's isolated root), not a
+/// directory derived from the retired `installed.json`.
+#[test]
+fn drumkits_root_is_the_library_root() {
+    let root = resonance_drums::kit_loader::drumkits_root().expect("a library root");
+    assert_eq!(Some(root.as_path()), resonance_drums::library::shared().root());
+    let manifest = root.join("Drummica/drummica/drum_samples.json");
+    assert_eq!(kit_display_name(&manifest, Some(&root)), "Drummica");
+}
+
+#[test]
+fn kit_name_outside_the_drumkits_root_is_the_manifest_directory() {
+    let root = std::path::Path::new("/data/resonance/drumkits");
+    let elsewhere = std::path::Path::new("/home/me/kits/Studio A/v2/drum_samples.json");
+    assert_eq!(kit_display_name(elsewhere, Some(root)), "v2");
+    assert_eq!(kit_display_name(elsewhere, None), "v2");
+    // A manifest dropped straight into the root has no kit directory of
+    // its own; it is named like any other loose manifest.
+    let loose = root.join("drum_samples.json");
+    assert_eq!(kit_display_name(&loose, Some(root)), "drumkits");
+}

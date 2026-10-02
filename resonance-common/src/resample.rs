@@ -353,3 +353,113 @@ impl StreamingResampler {
         }
     }
 }
+
+/// One process-wide [`Kernel`] per rate pair: building a table costs
+/// thousands of Bessel evaluations, and a kit load converts thousands of
+/// files at the same pair. The table is a pure function of the pair, so
+/// a shared one holds exactly the coefficients a fresh one would.
+fn shared_kernel(from: u64, to: u64) -> std::sync::Arc<Kernel> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Kernels = Mutex<HashMap<(u64, u64), Arc<Kernel>>>;
+    static KERNELS: OnceLock<Kernels> = OnceLock::new();
+    let mut kernels = KERNELS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    kernels
+        .entry((from, to))
+        .or_insert_with(|| Arc::new(Kernel::new(from, to)))
+        .clone()
+}
+
+/// The conversion [`resample_mono`] / [`resample_stereo`] apply for one
+/// rate pair, evaluable over any range of output frames on its own.
+///
+/// Output frame `n` of a one-shot conversion depends only on `n` and the
+/// input frames under the kernel around `n`'s instant (the edges
+/// extended), so a range of it can be computed from just those input
+/// frames — and comes out bit-identical to the same frames of the
+/// one-shot result, whatever range is asked for. The drum sampler's disk
+/// streaming (drums-plugin-rework.md E14) relies on that: it keeps the
+/// first frames of a converted take in memory and converts the rest from
+/// the file as it plays.
+#[derive(Clone)]
+pub struct ResampleKernel {
+    kernel: std::sync::Arc<Kernel>,
+}
+
+impl ResampleKernel {
+    /// The kernel the one-shot resamplers use from `source_rate` to
+    /// `target_rate`; `None` where they return the input unchanged (equal
+    /// or unusable rates).
+    pub fn for_rates(source_rate: f32, target_rate: f32) -> Option<Self> {
+        let (Some(from), Some(to)) = (int_rate(source_rate), int_rate(target_rate)) else {
+            return None;
+        };
+        if from == to {
+            return None;
+        }
+        Some(Self {
+            kernel: shared_kernel(from, to),
+        })
+    }
+
+    /// Output frames a conversion of `in_frames` input frames yields.
+    pub fn out_len(&self, in_frames: u64) -> u64 {
+        self.kernel.out_len(in_frames)
+    }
+
+    /// The input frames output frames `out_start..out_end` read, as an
+    /// inclusive range before edge clamping (it may reach below 0 or past
+    /// the last frame).
+    pub fn input_span(&self, out_start: u64, out_end: u64) -> (i64, i64) {
+        let half = self.kernel.half as i64;
+        let (first, _) = self.kernel.locate(out_start);
+        let (last, _) = self.kernel.locate(out_end.max(out_start + 1) - 1);
+        (first as i64 - half + 1, last as i64 + half)
+    }
+
+    /// Output frames `out_start ..` (as many as `out` holds whole frames
+    /// of `C` channels) of the conversion of a `C`-channel interleaved
+    /// stream `in_frames` long — bit-identical to the same frames of
+    /// [`resample_mono`] (`C = 1`) / [`resample_stereo`] (`C = 2`) of the
+    /// whole stream.
+    ///
+    /// `window` holds input frames `window_start..`; it must cover
+    /// [`input_span`](Self::input_span) of the range, clamped to
+    /// `0..in_frames`. `scratch` is reused between calls (grown here
+    /// once, never per frame).
+    ///
+    /// # Panics
+    ///
+    /// If `window` does not cover that span.
+    pub fn render<const C: usize>(
+        &self,
+        in_frames: u64,
+        window: &[f32],
+        window_start: u64,
+        out_start: u64,
+        out: &mut [f32],
+        scratch: &mut Vec<f32>,
+    ) {
+        if in_frames == 0 {
+            out.fill(0.0);
+            return;
+        }
+        let k = &*self.kernel;
+        if scratch.len() < k.taps() {
+            scratch.resize(k.taps(), 0.0);
+        }
+        let scratch = &mut scratch[..k.taps()];
+        let last = in_frames as i64 - 1;
+        let start = window_start as i64;
+        let fetch = |i: i64| -> [f32; C] {
+            let at = (i.clamp(0, last) - start) as usize * C;
+            std::array::from_fn(|ch| window[at + ch])
+        };
+        for (j, frame) in out.chunks_exact_mut(C).enumerate() {
+            frame.copy_from_slice(&k.eval(out_start + j as u64, scratch, fetch));
+        }
+    }
+}

@@ -112,16 +112,40 @@ where
 /// with the rename migration applied first so a preset written before a
 /// parameter was renamed still recalls it.
 pub fn apply(json: &str, params: &[&dyn Param], renames: &[ParamRename]) -> bool {
+    apply_with(json, params, renames, None)
+}
+
+/// [`apply`] with the plugin's own state upgrade
+/// ([`crate::state::StateUpgrade`]) run after the renames, so a preset
+/// written by an older build recalls what it meant.
+pub fn apply_with(
+    json: &str,
+    params: &[&dyn Param],
+    renames: &[ParamRename],
+    upgrade: Option<crate::state::StateUpgrade>,
+) -> bool {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
         return false;
     };
-    crate::state::migrate(&mut value, renames);
+    apply_doc(&mut value, params, renames, upgrade)
+}
+
+/// [`apply_with`] on a parsed document, which is left migrated and
+/// upgraded — what the extra state of the same preset should be read
+/// from.
+pub fn apply_doc(
+    value: &mut serde_json::Value,
+    params: &[&dyn Param],
+    renames: &[ParamRename],
+    upgrade: Option<crate::state::StateUpgrade>,
+) -> bool {
+    crate::state::migrate_and_upgrade(value, renames, upgrade);
     let kept: Vec<&dyn Param> = params
         .iter()
         .copied()
         .filter(|p| !p.preset_excluded())
         .collect();
-    crate::state::load_params_from_json(&kept, &value)
+    crate::state::load_params_from_json(&kept, value)
 }
 
 // ---------------------------------------------------------------------------

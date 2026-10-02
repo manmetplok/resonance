@@ -727,6 +727,8 @@ fn render_filtered(
     // track/bus stems render their source regardless of mute/solo.
     let respect_mute_solo = filter.include_master_fx;
 
+    // Offline until this render returns, whichever way it does.
+    let _render_mode = super::render::OfflineRenderMode::enter(shared);
     reset_plugins(shared);
 
     let bounce_tm = (**tempo_map.load()).clone();

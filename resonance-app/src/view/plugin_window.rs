@@ -231,6 +231,7 @@ fn ui_params(plugin: &PluginSlotState) -> Vec<crate::plugin_ui::UiParam> {
             // the plugin's editor shows.
             text: p.text.clone(),
             stepped: p.stepped,
+            read_only: p.read_only,
         })
         .collect()
 }
@@ -253,6 +254,7 @@ pub(crate) fn plugin_params_fingerprint(plugin: &PluginSlotState) -> u64 {
         p.current_value.to_bits().hash(&mut h);
         p.text.hash(&mut h);
         p.stepped.hash(&mut h);
+        p.read_only.hash(&mut h);
     }
     h.finish()
 }

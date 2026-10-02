@@ -22,6 +22,7 @@ pub(super) struct TempParamOwned {
     pub(super) max: f64,
     pub(super) clap_id: u32,
     pub(super) preset_excluded: bool,
+    pub(super) state_excluded: bool,
 }
 
 impl TempParamOwned {
@@ -39,6 +40,7 @@ impl TempParamOwned {
                 max: meta.max,
                 clap_id: meta.clap_id,
                 preset_excluded: meta.preset_excluded,
+                state_excluded: meta.state_excluded,
             })
             .collect()
     }
@@ -69,6 +71,9 @@ impl Param for TempParamOwned {
     }
     fn preset_excluded(&self) -> bool {
         self.preset_excluded
+    }
+    fn state_excluded(&self) -> bool {
+        self.state_excluded
     }
     fn display(&self, value: f64) -> String {
         format!("{:.4}", value)
@@ -206,7 +211,14 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
             // chained renames apply oldest-first, and two copies of those
             // rules is exactly how this path came to ignore renames in the
             // first place (ba todo #1360).
-            crate::state::migrate(&mut state, self.shared.param_renames);
+            // The plugin's own upgrade too (`STATE_UPGRADE`): a v1 state
+            // loaded while active must arrive as converted as one loaded
+            // inactive.
+            crate::state::migrate_and_upgrade(
+                &mut state,
+                self.shared.param_renames,
+                self.shared.state_upgrade,
+            );
 
             // Everything from here to `end_param_publish` is one
             // transition as far as the audio thread is concerned: it will

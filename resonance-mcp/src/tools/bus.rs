@@ -94,10 +94,13 @@ impl ResonanceMcp {
                        \
                        It is likewise what to reach for instead of inserting on a \
                        multi-output instrument's own track. A track's chain only sees that \
-                       track's main output, and for com.resonance.drums the main output \
-                       carries no audio at all — every pad routes to a group port and lands on \
-                       a sub-track. Route those sub-tracks into a bus with track_set_output, \
-                       then insert here. \
+                       track's main output. For com.resonance.drums that depends on its \
+                       output_mode: in Stereo (the default for a new instance) the whole kit \
+                       sums to the main output, so an effect on the drums track itself sees \
+                       every pad; in Multi each pad goes to its group port (pad_N_output) and \
+                       lands on a sub-track, and the main output carries little or nothing — \
+                       route those sub-tracks into a bus with track_set_output, then insert \
+                       here. \
                        \
                        plugin_id is a CLAP id of the form \"com.resonance.<name>\"; \
                        plugins_catalog lists them. Instruments are refused — a bus is handed \
@@ -281,8 +284,8 @@ impl ResonanceMcp {
                        plugin_id otherwise. \
                        Name the key source with EITHER \
                        source_track_id OR source_bus_id; any track, bus or SUB-TRACK works, and \
-                       a sub-track (one tap of a multi-output drum kit) is usually the only \
-                       address a single kit piece has. Sources are tapped post-FX and PRE-fader, \
+                       a sub-track (one tap of a multi-output drum kit — drums in Multi output \
+                       mode) is usually the only address a single kit piece has. Sources are tapped post-FX and PRE-fader, \
                        so a key source can sit at -inf on the mixer and still key. enabled \
                        defaults to true; false keeps the routing configured but stops delivering \
                        the key. \

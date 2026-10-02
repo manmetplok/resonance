@@ -1219,9 +1219,11 @@ what landed and where the code differs from §§4–15.
   content id (sha256), resolved through `nam_library` on load
   (`resolve_model`: relink by id, else Missing with the name kept); a
   model the library has no id for is left out. IR: `ir_path`. Wavetable:
-  `user_wavetables` (embedded frames). Drums: `kit_path`,
-  `overhead_setup_key`, `pad_mic_choices`. IR and drums stay path-only
-  until they become library kinds.
+  `user_wavetables` (embedded frames). Drums: `kit_ref` (the kit by
+  content id, name, library-relative and absolute path —
+  drums-plugin-rework.md §5.2; a v1 document's `kit_path` is read as one),
+  `overhead_setup_key`, `mic_banks`, `pad_mic_choices`. IR stays
+  path-only until it becomes a library kind.
 - `Param::preset_excluded()` (`.excluded_from_presets()` on Float/Int
   params): the amp's and the IR's `file_select` — a slot / directory
   index is this machine's layout, not the sound. **Deviation from §9.3**,
@@ -1519,10 +1521,11 @@ What the three reviews changed, where it differs from the slices above:
   means the bundle's only plugin. `loaded()` echoes of discovered presets
   keep the library's id and name; a provider favourite is seeded once.
 - **Drums / IR.** A drums load that changes the kit or its mics reloads it
-  (once a sample rate is known); a document without `kit_path` keeps the
-  kit, as one without `ir_path` keeps the IR. `ir_path: ""` fades the IR
-  out (`SwapFader::begin_clear`) and a new path moves the excluded
-  `file_select` into the new folder. **Consequence, kept:** a legacy
+  (once a sample rate is known); a document without `kit_ref` (or a v1
+  `kit_path`) keeps the kit, as one without `ir_path` keeps the IR.
+  `ir_path: ""` fades the IR out (`SwapFader::begin_clear`) and a new
+  path moves the excluded `file_select` into the new folder.
+  **Consequence, kept:** a legacy
   params-only IR preset no longer names an IR, so it recalls the params
   and keeps whatever IR is loaded — same as the amp's model.
 - **Search.** Scoped tokens match a value exactly (folded) or by slug

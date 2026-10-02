@@ -25,6 +25,10 @@ use crate::types::ParamInfo;
 
 use super::HostData;
 
+/// The most bytes [`ClapInstance::poll_kit_info`] allocates for a
+/// plugin's `com.resonance.kit-info` answer; a longer claim is dropped.
+pub const MAX_KIT_INFO_BYTES: usize = 1024 * 1024;
+
 /// Mutable reference to one stereo output port's buffer. Used by
 /// [`ClapInstance::process_multi`] to drive plugins that declare more than
 /// one output port (e.g. `resonance-drums` with its per-group outputs).
@@ -52,6 +56,29 @@ pub struct ClapInstance {
     /// re-query after a deactivate → reactivate cycle (doc #260
     /// finding #10). `None` when the plugin doesn't implement it.
     pub(super) latency_ext: Option<*const clap_plugin_latency>,
+    /// The plugin's `com.resonance.param-flags` extension, when it is one
+    /// of ours: which params its state leaves out. Read by
+    /// [`ClapInstance::query_params`]; `None` for third-party plugins.
+    pub(super) param_flags_ext: Option<*const resonance_common::param_flags::PluginParamFlags>,
+    /// The plugin's `com.resonance.kit-info` extension: the pads of the
+    /// kit it plays. The bridge exposes it only for a first-party plugin
+    /// with a kit to report (Resonance Drums); `None` for every other
+    /// plugin, third-party ones included. Read by
+    /// [`ClapInstance::poll_kit_info`].
+    pub(super) kit_info_ext: Option<*const resonance_common::kit_info::PluginKitInfo>,
+    /// The kit info last returned by [`ClapInstance::poll_kit_info`], to
+    /// report only a change; `None` until the first read.
+    last_kit_info: Option<resonance_common::kit_info::KitInfo>,
+    /// Whether [`ClapInstance::poll_kit_info`] has yet to run: the engine
+    /// reads the kit info once after creating the instance.
+    kit_info_unread: bool,
+    /// The plugin's `clap.render` extension: told OFFLINE for the length
+    /// of an offline render and REALTIME after
+    /// ([`ClapInstance::set_render_mode`]). `None` when the plugin does
+    /// not implement it.
+    pub(super) render_ext: Option<*const clap_sys::ext::render::clap_plugin_render>,
+    /// Whether the plugin was last told to render offline.
+    pub(super) render_offline: bool,
     /// True when `gui_create` has been called and `gui_destroy` hasn't yet.
     pub(super) gui_open: bool,
     /// Number of output audio ports as reported by the plugin's audio-ports
@@ -74,6 +101,20 @@ pub struct ClapInstance {
     /// and the built-in bridge serves an activation-time cached value
     /// while active (todo #1125).
     pub(super) latency: u32,
+    /// Every param id with the value the host last read for it — by
+    /// [`ClapInstance::query_params`] or [`ClapInstance::refresh_param_values`]
+    /// — so a values rescan re-reads values only and formats only the ones
+    /// that moved. Engine thread; the lock is never contended.
+    pub(super) param_value_cache: parking_lot::Mutex<Vec<(u32, f64)>>,
+    /// Output parameter events the plugin pushed during `process()` or
+    /// `params.flush` (its own edits), raw, in order, until the engine
+    /// thread folds them ([`ClapInstance::take_param_edits`]).
+    /// Pre-allocated; the audio thread never grows it — a full buffer
+    /// refuses the push, which a plugin retries later.
+    pub(super) out_param_events: Vec<super::params::OutParamEvent>,
+    /// Gestures the plugin has opened and not yet closed, with the last
+    /// value each carried: a gesture may span many blocks. Engine thread.
+    pub(super) open_gestures: Vec<(u32, Option<f64>)>,
     /// Pending parameter changes to send during next process() call.
     pub(super) pending_params: Vec<(u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
@@ -146,6 +187,12 @@ impl ClapInstance {
             audio_ports_ext,
             gui_ext,
             latency_ext,
+            param_flags_ext: None,
+            kit_info_ext: None,
+            last_kit_info: None,
+            kit_info_unread: true,
+            render_ext: None,
+            render_offline: false,
             gui_open: false,
             output_port_count,
             input_port_count,
@@ -153,6 +200,9 @@ impl ClapInstance {
             // Pre-size every event buffer at activation so the first
             // process() call after a fresh plugin add doesn't allocate
             // on the audio thread.
+            param_value_cache: parking_lot::Mutex::new(Vec::new()),
+            out_param_events: Vec::with_capacity(super::params::OUT_PARAM_EVENT_CAPACITY),
+            open_gestures: Vec::new(),
             pending_params: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
             param_event_buf: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
             pending_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
@@ -394,6 +444,11 @@ impl ClapInstance {
             // reach.
             let hidden = info.flags & clap_sys::ext::params::CLAP_PARAM_IS_HIDDEN != 0;
             let stepped = info.flags & clap_sys::ext::params::CLAP_PARAM_IS_STEPPED != 0;
+            let automatable =
+                info.flags & clap_sys::ext::params::CLAP_PARAM_IS_AUTOMATABLE != 0;
+            let read_only = info.flags & clap_sys::ext::params::CLAP_PARAM_IS_READONLY != 0;
+            // A read-only output is never the host's to persist either.
+            let state_excluded = read_only || self.param_state_excluded(info.id);
 
             // What the plugin calls this value, and the unit taken off
             // it. `value_to_text` is the only place a unit exists in
@@ -426,10 +481,189 @@ impl ClapInstance {
                 choices,
                 module,
                 hidden,
+                automatable,
+                read_only,
+                state_excluded,
             });
         }
 
+        // What the host now knows: the baseline a values rescan diffs
+        // against.
+        *self.param_value_cache.lock() = result.iter().map(|p| (p.id, p.current_value)).collect();
         result
+    }
+
+    /// The cheap re-read a values rescan asks for (CLAP
+    /// `RESCAN_VALUES` / `RESCAN_TEXT`; review finding 7): every param's
+    /// value through `get_value`, and the plugin's text only for those
+    /// whose value moved since the host last read it — or for all, with
+    /// `all_text`. Returns just those params.
+    ///
+    /// [`Self::query_params`] answers this too, but it walks `get_info`
+    /// and, per stepped param, a `value_to_text` per step for its choice
+    /// labels — under the instance lock the audio thread abandons a block
+    /// rather than wait for. A plugin that reports a load progress every
+    /// few percent asks for a rescan each time; a full query for each was
+    /// an audible dropout. This walks `get_info` once per instance (the
+    /// ids, if no query has listed them yet), and otherwise only
+    /// `get_value`, which a CLAP plugin answers from an atomic.
+    pub fn refresh_param_values(&self, all_text: bool) -> Vec<crate::types::ParamValueUpdate> {
+        let Some(params) = self.params_ext else {
+            return Vec::new();
+        };
+        let Some(get_value) = (unsafe { (*params).get_value }) else {
+            return Vec::new();
+        };
+        let mut cache = self.param_value_cache.lock();
+        if cache.is_empty() {
+            *cache = self.param_ids().into_iter().map(|id| (id, f64::NAN)).collect();
+        }
+        let mut changed = Vec::new();
+        for (id, seen) in cache.iter_mut() {
+            let mut value = 0.0f64;
+            // SAFETY: the vtable is the live plugin's; engine thread.
+            if !unsafe { get_value(self.plugin, *id, &mut value) } || !value.is_finite() {
+                continue;
+            }
+            if !all_text && value.to_bits() == seen.to_bits() {
+                continue;
+            }
+            *seen = value;
+            changed.push(crate::types::ParamValueUpdate {
+                id: *id,
+                value,
+                text: self.param_text(*id, value).unwrap_or_default(),
+            });
+        }
+        changed
+    }
+
+    /// Every param id, in the plugin's order: a `get_info` walk, nothing
+    /// formatted.
+    fn param_ids(&self) -> Vec<u32> {
+        let Some(params) = self.params_ext else {
+            return Vec::new();
+        };
+        let (Some(count_fn), Some(get_info)) = (unsafe { (*params).count }, unsafe {
+            (*params).get_info
+        }) else {
+            return Vec::new();
+        };
+        let count = unsafe { count_fn(self.plugin) };
+        (0..count)
+            .filter_map(|i| {
+                let mut info =
+                    std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
+                // SAFETY: as in `query_params`.
+                unsafe { get_info(self.plugin, i, info.as_mut_ptr()) }
+                    .then(|| unsafe { info.assume_init() }.id)
+            })
+            .collect()
+    }
+
+    /// Tell the plugin whether it is rendering offline (CLAP `render.set`):
+    /// `true` for a bounce, an export, a freeze — no realtime deadline, so
+    /// a plugin that cuts corners for time (a streaming sampler dropping a
+    /// late disk read) must not — and `false` once the render is over.
+    /// Returns whether the plugin took the mode; `false` without the
+    /// extension, or when it is already in that mode (nothing sent).
+    ///
+    /// `[main-thread]` in CLAP: call it outside any audio-thread role,
+    /// holding the instance lock (the offline renderers do, before their
+    /// first block and after their last).
+    pub fn set_render_mode(&mut self, offline: bool) -> bool {
+        use clap_sys::ext::render::{CLAP_RENDER_OFFLINE, CLAP_RENDER_REALTIME};
+        if self.render_offline == offline {
+            return false;
+        }
+        let Some(set) = self.render_ext.and_then(|ext| unsafe { (*ext).set }) else {
+            return false;
+        };
+        let mode = if offline {
+            CLAP_RENDER_OFFLINE
+        } else {
+            CLAP_RENDER_REALTIME
+        };
+        // SAFETY: the vtable is the live plugin's; the caller holds the
+        // instance exclusively.
+        let accepted = unsafe { set(self.plugin, mode) };
+        if accepted {
+            self.render_offline = offline;
+        }
+        accepted
+    }
+
+    /// Whether the plugin was last told to render offline.
+    pub fn render_offline(&self) -> bool {
+        self.render_offline
+    }
+
+    /// The pads of the kit a drum plugin plays (`com.resonance.kit-info`),
+    /// when they changed since the last call — the first call reports
+    /// whatever is there. `None` when nothing changed, when the plugin
+    /// reports nothing (or garbage, or more than [`MAX_KIT_INFO_BYTES`]),
+    /// and always for a plugin without the extension. `[main-thread]`: the
+    /// engine calls it once after creating the instance and after every
+    /// params rescan the plugin asks for, which is when the extension's
+    /// contract says the pads may have moved.
+    pub fn poll_kit_info(&mut self) -> Option<resonance_common::kit_info::KitInfo> {
+        self.kit_info_unread = false;
+        let ext = self.kit_info_ext?;
+        // SAFETY: the vtable is the plugin's, live for the instance's
+        // lifetime; this is the main thread.
+        let get = unsafe { (*ext).get }?;
+        let plugin = self.plugin as *const std::ffi::c_void;
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: `buf` holds `buf.len()` writable bytes.
+        let mut len = unsafe { get(plugin, buf.as_mut_ptr(), buf.len()) };
+        if len > buf.len() {
+            // A plugin's claimed length is not trusted with an allocation
+            // of any size: a pad list is a few kilobytes.
+            if len > MAX_KIT_INFO_BYTES {
+                return None;
+            }
+            buf.resize(len, 0);
+            // SAFETY: as above, with the size the plugin asked for.
+            len = unsafe { get(plugin, buf.as_mut_ptr(), buf.len()) };
+            if len > buf.len() {
+                return None;
+            }
+        }
+        let info = resonance_common::kit_info::KitInfo::parse(&buf[..len])?;
+        if self.last_kit_info.as_ref() == Some(&info) {
+            return None;
+        }
+        self.last_kit_info = Some(info.clone());
+        Some(info)
+    }
+
+    /// Whether the plugin exposes `com.resonance.kit-info` at all.
+    pub fn has_kit_info(&self) -> bool {
+        self.kit_info_ext.is_some()
+    }
+
+    /// Whether the engine should read the kit info now even without a
+    /// params rescan: the instance has the extension and was never read.
+    pub fn kit_info_unread(&self) -> bool {
+        self.kit_info_ext.is_some() && self.kit_info_unread
+    }
+
+    /// Whether the plugin's state leaves `param_id` out
+    /// (`com.resonance.param-flags`): `false` for a plugin without the
+    /// extension, i.e. every third-party one. Any thread; the answer is
+    /// fixed for the instance's lifetime.
+    pub fn param_state_excluded(&self, param_id: u32) -> bool {
+        let Some(ext) = self.param_flags_ext else {
+            return false;
+        };
+        // SAFETY: the vtable is the plugin's, live for the instance's
+        // lifetime; the call is `[thread-safe]`.
+        unsafe {
+            match (*ext).is_state_excluded {
+                Some(f) => f(self.plugin as *const std::ffi::c_void, param_id),
+                None => false,
+            }
+        }
     }
 
     /// One parameter's `min..=max`, without touching its formatting
@@ -577,6 +811,29 @@ impl ClapInstance {
     /// song's last voices ringing out of the speakers.
     pub fn arm_idle_hold(&mut self) {
         self.idle_hold_frames = self.sample_rate.saturating_mul(crate::limits::IDLE_HOLD_SECS);
+    }
+
+    /// Consume a pending `clap_host.request_process()` (see
+    /// `HostData::process_requested`) and, on an active instance, re-arm
+    /// the stopped-transport window with it: each request buys
+    /// `limits::IDLE_HOLD_SECS` of blocks, and a plugin that needs more
+    /// asks again. Returns whether the window was armed. A request on an
+    /// inactive instance is consumed and dropped — `process()` would not
+    /// run it, so a hold armed now would never count down.
+    ///
+    /// Audio thread, under the instance lock: one atomic swap, no
+    /// allocation. Consuming only under the lock means a block that finds
+    /// the slot contended leaves the request for the next one.
+    pub fn take_process_request(&mut self) -> bool {
+        use std::sync::atomic::Ordering;
+        if !self.host_data.process_requested.swap(false, Ordering::AcqRel) {
+            return false;
+        }
+        if !self.active {
+            return false;
+        }
+        self.arm_idle_hold();
+        true
     }
 
     /// Whether this instrument should be processed although the transport

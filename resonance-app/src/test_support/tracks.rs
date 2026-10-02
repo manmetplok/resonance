@@ -145,6 +145,12 @@ impl Resonance {
         &self.ui.interaction.selected_tracks
     }
 
+    /// Test-only: every track in the registry, sub-tracks included.
+    #[doc(hidden)]
+    pub fn test_tracks(&self) -> &[state::TrackState] {
+        &self.registry.tracks
+    }
+
     /// Test-only: borrow the track-group registry so a reducer test can
     /// assert that "Group selected" created the expected group.
     #[doc(hidden)]

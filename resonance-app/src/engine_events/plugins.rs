@@ -113,7 +113,46 @@ pub(super) fn track_added(
     let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 
-    ensure_subtracks(r, track_id, output_port_count, &output_port_names);
+    let mut port_names = output_port_names;
+    port_names.resize_with(output_port_count.max(port_names.len()), String::new);
+    port_names.truncate(output_port_count);
+    r.plugin_mirror.output_ports.insert(instance_id, port_names);
+    ensure_instance_subtracks(r, instance_id);
+}
+
+/// Run the sub-track policy ([`ensure_subtracks`]) for one track plugin,
+/// from its stored port layout — when it is added, when the drums'
+/// `output_mode` is edited, and when a rescan reports it moved Stereo ->
+/// Multi (drums-plugin-rework.md §8, E11). Never on a rescan that finds it
+/// already in Multi: that would re-create a sub-track the user deleted.
+///
+/// A Resonance Drums instance gets its per-pad sub-tracks only in **Multi**
+/// output mode: in Stereo (the default for a new instance) every pad sums
+/// to the main output and the other ports are silent, so sub-tracks would
+/// be dead faders. Switching to Multi creates the missing ones. Switching
+/// back to Stereo **keeps** the ones that exist: they are the user's
+/// tracks (fader, routing, names) and go quiet rather than vanish; delete
+/// them by hand, or undo the switch, which takes back the sub-tracks it
+/// created with it. Every other multi-output plugin gets its sub-tracks as
+/// soon as it is added, as before.
+pub(crate) fn ensure_instance_subtracks(r: &mut Resonance, instance_id: PluginInstanceId) {
+    let Some(PluginLocator::Track(track_id)) = r.plugin_mirror.index.get(&instance_id).copied()
+    else {
+        return;
+    };
+    let Some(ports) = r.plugin_mirror.output_ports.get(&instance_id).cloned() else {
+        return;
+    };
+    let routes = r
+        .registry
+        .tracks
+        .iter()
+        .find(|t| t.id == track_id)
+        .and_then(|t| t.plugins.iter().find(|s| s.instance_id == instance_id))
+        .is_some_and(crate::drums_mirror::routes_to_ports);
+    if routes {
+        ensure_subtracks(r, track_id, ports.len(), &ports);
+    }
 }
 
 /// Write a live instance's report onto the slot that was waiting for it,
@@ -210,7 +249,13 @@ fn restore_after_recovery(
 ///
 /// Ids not present on the instantiated plugin are skipped: a plugin that
 /// dropped or renumbered a parameter between versions must not have a
-/// stale id pushed at it.
+/// stale id pushed at it. So are params the host does not persist
+/// ([`ParamInfo::host_persisted`]): a project written before the plugin
+/// declared one state-excluded (the drums' `kit_select`) still carries
+/// it, and re-sending it after the blob would override the kit the blob
+/// just recalled.
+///
+/// [`ParamInfo::host_persisted`]: resonance_audio::types::ParamInfo::host_persisted
 fn apply_pending_param_overrides(r: &mut Resonance, instance_id: PluginInstanceId) {
     let Some(overrides) = r.presets.pending_plugin_param_overrides.remove(&instance_id) else {
         return;
@@ -219,7 +264,11 @@ fn apply_pending_param_overrides(r: &mut Resonance, instance_id: PluginInstanceI
         .with_plugin_mut(instance_id, |slot| {
             let mut applied = Vec::new();
             for saved in &overrides {
-                if let Some(param) = slot.params.iter_mut().find(|p| p.id == saved.id) {
+                if let Some(param) = slot
+                    .params
+                    .iter_mut()
+                    .find(|p| p.id == saved.id && p.host_persisted())
+                {
                     param.current_value = saved.value;
                     applied.push((saved.id, saved.value));
                 }
@@ -341,6 +390,8 @@ pub(crate) fn track_removed(
         track.plugins.retain(|p| p.instance_id != instance_id);
     }
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.kit_info.remove(&instance_id);
+    r.plugin_mirror.output_ports.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
@@ -879,14 +930,124 @@ pub(super) fn params_refreshed(
     instance_id: PluginInstanceId,
     params: Vec<ParamInfo>,
 ) {
-    r.with_plugin_mut(instance_id, |slot| {
-        for fresh in &params {
-            if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
-                p.current_value = fresh.current_value;
-                p.text = fresh.text.clone();
+    let (drums, to_multi) = r
+        .with_plugin_mut(instance_id, |slot| {
+            let was = crate::drums_mirror::routes_to_ports(slot);
+            for fresh in &params {
+                if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
+                    p.current_value = fresh.current_value;
+                    p.text = fresh.text.clone();
+                }
             }
+            let now = crate::drums_mirror::routes_to_ports(slot);
+            (crate::drums_mirror::is_drums(slot), !was && now)
+        })
+        .unwrap_or((false, false));
+    if drums {
+        // A state load may set the kit, and a whole state blob (a
+        // project's, an undo's) the output mode too — a plugin preset
+        // leaves `output_mode` alone. The sub-track policy runs only on
+        // the Stereo -> Multi transition (see `param_values_changed`).
+        crate::update::compose::refresh_kit_pads(r);
+        if to_multi {
+            ensure_instance_subtracks(r, instance_id);
         }
-    });
+    }
+}
+
+/// A plugin's values rescan: the params that moved, with their text (a
+/// load progress, a selection the plugin derived itself). The mirror takes
+/// them; ids it does not have are ignored.
+pub(super) fn param_values_changed(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    values: Vec<resonance_audio::types::ParamValueUpdate>,
+) {
+    let (drums, to_multi) = r
+        .with_plugin_mut(instance_id, |slot| {
+            let was = crate::drums_mirror::routes_to_ports(slot);
+            for fresh in values {
+                if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
+                    p.current_value = fresh.value;
+                    p.text = fresh.text;
+                }
+            }
+            let now = crate::drums_mirror::routes_to_ports(slot);
+            (crate::drums_mirror::is_drums(slot), !was && now)
+        })
+        .unwrap_or((false, false));
+    if drums {
+        // `kit_select`'s text names the kit the picker shows, and a state
+        // load may have moved `output_mode` (a v1 state loads as Multi).
+        crate::update::compose::refresh_kit_pads(r);
+        // The sub-track policy runs on the Stereo -> Multi transition
+        // only. A rescan that finds the instance already in Multi (a kit
+        // load's stages, a selection the plugin derived) must not bring
+        // back a sub-track the user deleted — and it would, outside undo.
+        if to_multi {
+            ensure_instance_subtracks(r, instance_id);
+        }
+    }
+}
+
+/// A Resonance Drums instance reported the pads of the kit it now plays
+/// (`com.resonance.kit-info`): mirror it, and re-derive the kit picker.
+pub(super) fn kit_info(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    info: resonance_common::kit_info::KitInfo,
+) {
+    r.plugin_mirror.kit_info.insert(instance_id, info);
+    crate::update::compose::refresh_kit_pads(r);
+}
+
+/// The plugin changed a param itself and reported it (CLAP output
+/// parameter events). An ordinary param goes through `update` as
+/// [`PluginMessage::ParamEditedByPlugin`], so it takes an undo entry, a
+/// revision and the dirty flag like any edit. A read-only output only
+/// moves the mirror (there is nothing to undo), and so does any edit a
+/// gate would refuse — no project open, a bounce running: the plugin has
+/// it either way, and the mirror must not fall behind.
+///
+/// [`PluginMessage::ParamEditedByPlugin`]: crate::message::PluginMessage::ParamEditedByPlugin
+pub(super) fn param_edited(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    edit: resonance_audio::types::PluginParamEdit,
+) -> iced::Task<crate::message::Message> {
+    let read_only = r
+        .with_plugin_mut(instance_id, |slot| {
+            slot.params
+                .iter()
+                .find(|p| p.id == edit.param_id)
+                .map(|p| p.read_only)
+        })
+        .flatten();
+    let Some(read_only) = read_only else {
+        return iced::Task::none();
+    };
+    let message = crate::message::Message::Plugin(
+        crate::message::PluginMessage::ParamEditedByPlugin {
+            instance_id,
+            param_id: edit.param_id,
+            value: edit.value,
+            text: edit.text.clone(),
+            gesture: edit.gesture,
+        },
+    );
+    if read_only || r.gates_message(&message) {
+        param_values_changed(
+            r,
+            instance_id,
+            vec![resonance_audio::types::ParamValueUpdate {
+                id: edit.param_id,
+                value: edit.value,
+                text: edit.text,
+            }],
+        );
+        return iced::Task::none();
+    }
+    r.update(message)
 }
 
 /// A Resonance plugin reported its loaded preset and modified flag
@@ -1059,6 +1220,8 @@ pub(crate) fn bus_removed(
     }
     r.ui.mixer.forget_plugin(instance_id);
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.kit_info.remove(&instance_id);
+    r.plugin_mirror.output_ports.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
@@ -1175,6 +1338,8 @@ pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     r.master.plugins.retain(|p| p.instance_id != instance_id);
     r.ui.mixer.forget_plugin(instance_id);
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.kit_info.remove(&instance_id);
+    r.plugin_mirror.output_ports.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.

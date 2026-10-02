@@ -1,5 +1,6 @@
 use resonance_common::{
-    decode_wav_channels, decode_wav_stereo, linear_resample_mono, linear_resample_stereo,
+    decode_wav_channels, decode_wav_native, decode_wav_stereo, linear_resample_mono,
+    linear_resample_stereo,
 };
 
 /// Build a minimal 16-bit PCM WAV file in memory from f32 samples.
@@ -137,4 +138,63 @@ fn tiny_input_resamples_to_at_least_one_sample() {
     assert!(linear_resample_stereo(&[], 96_000.0, 8_000.0).is_empty());
     // A lone sample is not a full stereo frame.
     assert!(linear_resample_stereo(&[0.5], 96_000.0, 8_000.0).is_empty());
+}
+
+/// Minimal 16-bit PCM mono WAV.
+fn build_wav_16_mono(samples: &[i16], sr: u32) -> Vec<u8> {
+    let data_bytes = samples.len() as u32 * 2;
+    let mut out = Vec::with_capacity(44 + data_bytes as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // channels
+    out.extend_from_slice(&sr.to_le_bytes());
+    out.extend_from_slice(&(sr * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_bytes.to_le_bytes());
+    for s in samples {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    out
+}
+
+/// `decode_wav_native` keeps a mono file mono, and its one channel is
+/// bit-identical to either side of the duplicated-stereo decode — at the
+/// file's own rate and through the resampler (44.1 → 48 kHz), which is
+/// what lets the drum sampler hold mono takes at half the memory without
+/// changing a rendered sample.
+#[test]
+fn native_decode_keeps_mono_and_matches_the_stereo_decode_bit_for_bit() {
+    let samples: Vec<i16> = (0..4_410)
+        .map(|i| ((i as f32 * 0.07).sin() * 12_000.0) as i16)
+        .collect();
+    let wav = build_wav_16_mono(&samples, 44_100);
+    for rate in [44_100.0, 48_000.0] {
+        let native = decode_wav_native(wav.clone(), rate).expect("native decode");
+        assert_eq!(native.channels, 1);
+        let stereo = decode_wav_stereo(&wav, rate).expect("stereo decode");
+        assert_eq!(native.frames() * 2, stereo.len(), "at {rate} Hz");
+        for (i, s) in native.samples.iter().enumerate() {
+            assert_eq!(s.to_bits(), stereo[2 * i].to_bits(), "L frame {i} at {rate} Hz");
+            assert_eq!(s.to_bits(), stereo[2 * i + 1].to_bits(), "R frame {i} at {rate} Hz");
+        }
+    }
+}
+
+/// A stereo file stays stereo, identical to `decode_wav_stereo`.
+#[test]
+fn native_decode_of_stereo_equals_the_stereo_decode() {
+    let frames: Vec<(i16, i16)> = (0..2_000).map(|i| (i as i16 * 7, -(i as i16) * 5)).collect();
+    let wav = build_wav_16_stereo(&frames, 44_100);
+    let native = decode_wav_native(wav.clone(), 48_000.0).expect("native decode");
+    assert_eq!(native.channels, 2);
+    let stereo = decode_wav_stereo(&wav, 48_000.0).expect("stereo decode");
+    let a: Vec<u32> = native.samples.iter().map(|s| s.to_bits()).collect();
+    let b: Vec<u32> = stereo.iter().map(|s| s.to_bits()).collect();
+    assert_eq!(a, b);
 }

@@ -16,14 +16,9 @@ fn make_pad(
     choke_group: Option<u8>,
 ) -> LoadedPad {
     let layers: Vec<VelocityLayer> = (0..n_layers)
-        .map(|_| VelocityLayer {
-            round_robins: (0..rr_per_layer)
-                .map(|_| LoadedSample {
-                    data: vec![0.0; 2],
-                    frames: 1,
-                })
-                .collect(),
-        })
+        .map(|_| VelocityLayer::new((0..rr_per_layer)
+                .map(|_| LoadedSample::from_data(vec![0.0; 2]))
+                .collect()))
         .collect();
     LoadedPad {
         name: "test".to_string(),
@@ -34,6 +29,7 @@ fn make_pad(
             setup_key: String::new(),
             layers,
         }],
+        extra_banks: Vec::new(),
         overhead: None,
     }
 }
@@ -53,6 +49,38 @@ fn make_sampler() -> DrumSampler {
 }
 
 /// Collect the `rr_index` values from all active voices for a given pad.
+/// CLAP `reset` (what a bounce does first) restarts the round robins —
+/// Cycle from the first take, Random from its seed — so bouncing the
+/// same project twice plays the same takes.
+#[test]
+fn reset_restarts_the_round_robins() {
+    use resonance_drums::dsp::RoundRobinMode;
+    for mode in [0, 1] {
+        let mut s = make_sampler();
+        s.pads = make_all_pads(1, 4);
+        let params = resonance_drums::params::DrumParams::default();
+        params.round_robin_mode.set_value(mode);
+        s.update_global_settings(&params);
+        assert_eq!(
+            s.global_settings().round_robin,
+            if mode == 0 { RoundRobinMode::Cycle } else { RoundRobinMode::Random }
+        );
+        let walk = |s: &mut DrumSampler| -> Vec<usize> {
+            (0..6)
+                .map(|_| {
+                    s.silence();
+                    s.note_on(drum_map::KICK, 0.8);
+                    active_rr_indices(s, 0)[0]
+                })
+                .collect()
+        };
+        let first = walk(&mut s);
+        s.reset();
+        let again = walk(&mut s);
+        assert_eq!(first, again, "mode {mode}: a reset replays the same takes");
+    }
+}
+
 fn active_rr_indices(sampler: &DrumSampler, pad_index: usize) -> Vec<usize> {
     sampler
         .voices
@@ -176,7 +204,7 @@ fn note_on_cycles_rr_across_hits() {
     let note = drum_map::KICK;
     let mut rr_sequence = Vec::new();
     for _ in 0..8 {
-        sampler.reset();
+        sampler.silence();
         sampler.note_on(note, 0.8);
         let indices = active_rr_indices(&sampler, 0);
         assert_eq!(indices.len(), 1, "expected 1 voice per hit");
@@ -191,7 +219,7 @@ fn note_on_single_rr_always_zero() {
     sampler.pads = make_all_pads(1, 1);
 
     for _ in 0..5 {
-        sampler.reset();
+        sampler.silence();
         sampler.note_on(drum_map::SNARE, 0.5);
         assert_eq!(active_rr_indices(&sampler, 1), vec![0]);
     }
@@ -203,16 +231,16 @@ fn independent_rr_counters_per_pad() {
     sampler.pads = make_all_pads(1, 3);
 
     // Advance kick to rr 1.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::KICK, 0.8);
     assert_eq!(active_rr_indices(&sampler, 0), vec![0]);
 
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::KICK, 0.8);
     assert_eq!(active_rr_indices(&sampler, 0), vec![1]);
 
     // Snare's counter is still at 0.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::SNARE, 0.8);
     assert_eq!(active_rr_indices(&sampler, 1), vec![0]);
 }
@@ -225,15 +253,15 @@ fn independent_rr_counters_per_velocity_layer() {
     let note = drum_map::KICK;
 
     // Two soft hits (layer 0).
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(note, 0.1);
     assert_eq!(active_rr_indices(&sampler, 0), vec![0]);
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(note, 0.1);
     assert_eq!(active_rr_indices(&sampler, 0), vec![1]);
 
     // Hard hit (layer 1) should start at rr 0.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(note, 0.9);
     assert_eq!(active_rr_indices(&sampler, 0), vec![0]);
 }
@@ -267,6 +295,7 @@ fn empty_pad_triggers_no_voices() {
             choke_group: m.choke_group,
             output_group: m.output_group,
             close_mics: Vec::new(),
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect();
@@ -280,14 +309,9 @@ fn all_voices_from_multi_bank_hit_share_rr() {
     let mut sampler = make_sampler();
 
     let layers = || -> Vec<VelocityLayer> {
-        vec![VelocityLayer {
-            round_robins: (0..4)
-                .map(|_| LoadedSample {
-                    data: vec![0.0; 2],
-                    frames: 1,
-                })
-                .collect(),
-        }]
+        vec![VelocityLayer::new((0..4)
+                .map(|_| LoadedSample::from_data(vec![0.0; 2]))
+                .collect())]
     };
     let kick_pad = LoadedPad {
         name: "Kick".to_string(),
@@ -305,6 +329,7 @@ fn all_voices_from_multi_bank_hit_share_rr() {
                 layers: layers(),
             },
         ],
+        extra_banks: Vec::new(),
         overhead: Some(LoadedMicBank {
             position: "OH".to_string(),
             setup_key: String::new(),
@@ -341,7 +366,7 @@ fn note_off_does_not_affect_rr_state() {
     sampler.pads = make_all_pads(1, 3);
 
     // Hit and advance to rr 0.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::KICK, 0.8);
     assert_eq!(active_rr_indices(&sampler, 0), vec![0]);
 
@@ -349,7 +374,7 @@ fn note_off_does_not_affect_rr_state() {
     sampler.note_off(drum_map::KICK);
 
     // Next hit should continue at rr 1.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::KICK, 0.8);
     assert_eq!(active_rr_indices(&sampler, 0), vec![1]);
 }
@@ -377,7 +402,7 @@ fn choke_does_not_reset_rr_counter() {
     assert!(!releasing.is_empty(), "choke should trigger release");
 
     // Next hit should continue RR sequence at 2, not reset to 0.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(note, 0.8);
     assert_eq!(active_rr_indices(&sampler, 2), vec![2]);
 }
@@ -394,7 +419,7 @@ fn choke_group_triggers_release_and_rr_continues() {
 
     // Hit open — should choke the closed voices but the closed pad's
     // RR counter stays advanced.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::HIHAT_OPEN, 0.8);
     assert_eq!(
         active_rr_indices(&sampler, 3),
@@ -403,7 +428,7 @@ fn choke_group_triggers_release_and_rr_continues() {
     );
 
     // Next closed hit continues at rr 2.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::HIHAT_CLOSED, 0.8);
     assert_eq!(active_rr_indices(&sampler, 2), vec![2]);
 }
@@ -423,17 +448,13 @@ fn overhead_only_pad_uses_rr() {
                     choke_group: None,
                     output_group: OutputGroup::Cymbals,
                     close_mics: Vec::new(),
+                    extra_banks: Vec::new(),
                     overhead: Some(LoadedMicBank {
                         position: "OH".to_string(),
                         setup_key: String::new(),
-                        layers: vec![VelocityLayer {
-                            round_robins: (0..3)
-                                .map(|_| LoadedSample {
-                                    data: vec![0.0; 2],
-                                    frames: 1,
-                                })
-                                .collect(),
-                        }],
+                        layers: vec![VelocityLayer::new((0..3)
+                                .map(|_| LoadedSample::from_data(vec![0.0; 2]))
+                                .collect())],
                     }),
                 }
             } else {
@@ -445,7 +466,7 @@ fn overhead_only_pad_uses_rr() {
     let note = drum_map::CRASH_16_EDGE;
     let mut rr_seq = Vec::new();
     for _ in 0..6 {
-        sampler.reset();
+        sampler.silence();
         sampler.note_on(note, 0.8);
         let indices = active_rr_indices(&sampler, 12);
         assert_eq!(indices.len(), 1, "OH-only pad should spawn 1 voice");
@@ -491,7 +512,7 @@ fn unmapped_note_does_not_affect_rr() {
     sampler.pads = make_all_pads(1, 3);
 
     // Hit kick once.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::KICK, 0.8);
     assert_eq!(active_rr_indices(&sampler, 0), vec![0]);
 
@@ -499,7 +520,7 @@ fn unmapped_note_does_not_affect_rr() {
     sampler.note_on(127, 0.8);
 
     // Next kick hit should still be rr 1.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::KICK, 0.8);
     assert_eq!(active_rr_indices(&sampler, 0), vec![1]);
 }
@@ -519,7 +540,7 @@ fn many_layers_each_with_own_rr_counter() {
         let actual_layer = pick_velocity_layer(velocity, n_layers);
         assert_eq!(actual_layer, layer_idx, "velocity mapping sanity check");
 
-        sampler.reset();
+        sampler.silence();
         sampler.note_on(note, velocity);
         assert_eq!(
             active_rr_indices(&sampler, 0),
@@ -527,7 +548,7 @@ fn many_layers_each_with_own_rr_counter() {
             "layer {layer_idx} first hit should be rr 0"
         );
 
-        sampler.reset();
+        sampler.silence();
         sampler.note_on(note, velocity);
         assert_eq!(
             active_rr_indices(&sampler, 0),
@@ -535,5 +556,37 @@ fn many_layers_each_with_own_rr_counter() {
             "layer {layer_idx} second hit should be rr 1"
         );
     }
+}
+
+/// Mapping a hit onto a bank of another shape (E7): equal shapes are the
+/// identity, a smaller bank takes the bucket at the same relative
+/// position, and every index lands inside the target.
+#[test]
+fn map_relative_keeps_relative_position() {
+    use resonance_drums::dsp::map_relative;
+    for n in 1..8 {
+        for i in 0..n {
+            assert_eq!(map_relative(i, n, n), i);
+        }
+    }
+    // Two takes onto one: both play it.
+    assert_eq!(map_relative(0, 2, 1), 0);
+    assert_eq!(map_relative(1, 2, 1), 0);
+    // Four layers onto two: soft half, loud half.
+    let mapped: Vec<usize> = (0..4).map(|i| map_relative(i, 4, 2)).collect();
+    assert_eq!(mapped, vec![0, 0, 1, 1]);
+    // One layer onto three: the middle one.
+    assert_eq!(map_relative(0, 1, 3), 1);
+    // Three onto five: soft, middle, loud.
+    let mapped: Vec<usize> = (0..3).map(|i| map_relative(i, 3, 5)).collect();
+    assert_eq!(mapped, vec![0, 2, 4]);
+    for from in 1..12 {
+        for to in 1..12 {
+            for i in 0..from {
+                assert!(map_relative(i, from, to) < to);
+            }
+        }
+    }
+    assert_eq!(map_relative(3, 4, 0), 0);
 }
 

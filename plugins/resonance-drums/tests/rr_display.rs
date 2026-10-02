@@ -23,16 +23,12 @@ fn pad_with_takes(mapping_index: usize, layers: usize, takes: usize) -> LoadedPa
             position: "close".to_string(),
             setup_key: String::new(),
             layers: (0..layers)
-                .map(|_| VelocityLayer {
-                    round_robins: (0..takes)
-                        .map(|_| LoadedSample {
-                            data: vec![0.5; 2],
-                            frames: 1,
-                        })
-                        .collect(),
-                })
+                .map(|_| VelocityLayer::new((0..takes)
+                        .map(|_| LoadedSample::from_data(vec![0.5; 2]))
+                        .collect()))
                 .collect(),
         }],
+        extra_banks: Vec::new(),
         overhead: None,
     }
 }

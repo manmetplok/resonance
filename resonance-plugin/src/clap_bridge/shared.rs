@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use clack_extensions::gui::HostGui;
 use clack_extensions::latency::HostLatency;
+use clack_extensions::params::HostParams;
 use clack_plugin::prelude::*;
 
 use crate::gui::{EditorFactory, PluginEditor};
@@ -38,6 +39,13 @@ pub(crate) struct ParamMeta {
     /// [`crate::param::Param::preset_excluded`], for the preset form of
     /// the state while the plugin is in the audio processor.
     pub preset_excluded: bool,
+    /// [`crate::param::Param::is_automatable`]: CLAP `IS_AUTOMATABLE`.
+    pub is_automatable: bool,
+    /// [`crate::param::Param::is_read_only`]: CLAP `IS_READONLY`.
+    pub is_read_only: bool,
+    /// [`crate::param::Param::state_excluded`], for the state written and
+    /// read while the plugin is in the audio processor.
+    pub state_excluded: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +78,9 @@ pub struct ClapShared<'a> {
     /// audio processor all consult this instead of re-calling the plugin hook.
     pub(crate) output_ports: Vec<OutputPortSpec>,
     pub(crate) midi_input: bool,
+    /// Whether the plugin has a `ResonancePlugin::kit_info_source`, i.e.
+    /// exposes `com.resonance.kit-info`. Harvested once at construction.
+    pub(crate) kit_info: bool,
     /// The plugin's parameter-id rename table, harvested once at
     /// construction from `ResonancePlugin::param_renames`.
     ///
@@ -86,6 +97,10 @@ pub struct ClapShared<'a> {
     /// Keeping the table intact lets both load paths run the one
     /// [`crate::state::migrate`] instead of two rules that must agree.
     pub(crate) param_renames: &'static [crate::state::ParamRename],
+    /// `ResonancePlugin::STATE_UPGRADE`, for the same reason: both of the
+    /// bridge's load paths run it after the renames
+    /// ([`crate::state::migrate_and_upgrade`]).
+    pub(crate) state_upgrade: Option<crate::state::StateUpgrade>,
     /// Flag: shared param values have been updated (e.g. state load while active).
     /// The audio processor should re-sync plugin params from shared atomics.
     pub(crate) params_dirty: AtomicBool,
@@ -121,6 +136,14 @@ pub struct ClapShared<'a> {
     /// its events never trigger a compare — a playing lane would otherwise
     /// ask for one every block.
     pub(crate) param_preset_ignored: Vec<AtomicBool>,
+    /// The render mode the host last set (CLAP `render.set`): true for
+    /// offline. Handed to the plugin directly while it is inactive; while
+    /// active, `render_mode_dirty` makes the audio processor hand it over
+    /// at the top of its next block.
+    pub(crate) render_offline: AtomicBool,
+    /// `render_offline` changed while the plugin was in the audio
+    /// processor and it has not been told yet.
+    pub(crate) render_mode_dirty: AtomicBool,
 }
 
 impl<'a> ClapShared<'a> {
@@ -286,6 +309,9 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     /// Parameter text conversion harvested at construction, for
     /// `value_to_text` / `text_to_value` while the plugin is active.
     pub(crate) param_text_source: Option<std::sync::Arc<dyn crate::plugin::ParamTextSource>>,
+    /// The kit-pads report harvested at construction
+    /// (`com.resonance.kit-info`); `None` for every non-drum plugin.
+    pub(crate) kit_info_source: Option<std::sync::Arc<dyn crate::plugin::KitInfoSource>>,
     /// The last identity report sent to the host
     /// (`com.resonance.preset-session`), for deduplication.
     pub(crate) last_preset_report: Option<String>,
@@ -311,7 +337,11 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
     ///   host stops showing the editor as open and destroys it (PLG-01). A
     ///   report from an editor that is no longer the current one — the host
     ///   destroyed it, and perhaps created another, before this ran — is
-    ///   dropped.
+    ///   dropped;
+    /// * the params one: a plugin that moved parameter values itself (a
+    ///   read-only progress output, a selection it derived from its state)
+    ///   asks through `HostHandle::request_params_rescan`, and here the
+    ///   host is told to re-read them (`clap_host_params.rescan`).
     fn on_main_thread(&mut self) {
         if self.host_handle.take_latency_dirty() {
             if let Some(latency) = self.host.shared().get_extension::<HostLatency>() {
@@ -331,6 +361,23 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
         }
         if self.host_handle.take_preset_dirty() {
             self.report_preset_identity();
+        }
+        let rescan = self.host_handle.take_params_rescan();
+        if !rescan.is_empty() {
+            // Inactive, the plugin object is here and is the newer side
+            // (it moved the values itself; nothing has copied them into the
+            // mirror `get_value` serves ordinary params from): publish it
+            // before the host re-reads. Active, the audio thread published
+            // them (`HostHandle::request_params_rescan`'s ordering note).
+            if let Some(plugin) = &self.plugin {
+                let count = plugin.param_count().min(self.shared.param_values.len());
+                for i in 0..count {
+                    self.shared.set_value(i, plugin.param(i).get_plain());
+                }
+            }
+            if let Some(params) = self.host.shared().get_extension::<HostParams>() {
+                params.rescan(&mut self.host, rescan);
+            }
         }
         if let Some(serial) = self.host_handle.take_gui_closed() {
             if serial == self.editor_serial && self.editor.is_some() {
@@ -362,6 +409,10 @@ impl<P: ResonancePlugin> Drop for ClapMainThread<'_, P> {
 pub struct ClapAudioProcessor<'a, P: ResonancePlugin> {
     pub(crate) plugin: P,
     pub(crate) shared: &'a ClapShared<'a>,
+    /// The plugin-facing host handle (the main thread's clone): brackets
+    /// each `process()` so a rescan requested inside it is posted after
+    /// the block's values are published.
+    pub(crate) host_handle: std::sync::Arc<crate::host::HostHandle>,
     /// Pre-allocated scratch buffers for the effect/instrument input
     /// (read from host into these before the plugin call).
     pub(crate) input_left: Vec<f32>,

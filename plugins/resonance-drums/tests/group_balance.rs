@@ -8,12 +8,13 @@
 //!    the only spread is what the samples themselves were recorded at. This
 //!    measures the shipped fallback kit end to end and pins that spread.
 //!
-//! 2. **A pad with no close mic still feeds its own group port.** Every
-//!    cymbal, ride and china piece in Drummica is recorded on the overheads
-//!    only (`close_mic_positions: &[]`), so before this test the Cymbals
-//!    output port — and the "Cymbals" sub-track the host derives from it —
-//!    was digital silence for the flagship kit. That is what a client saw as
-//!    "the kit has no cymbals".
+//! 2. **Where overhead takes play (E11).** Every cymbal, ride and china
+//!    piece in Drummica is recorded on the overheads only
+//!    (`close_mic_positions: &[]`): that take is the cymbal's whole sound,
+//!    so in Multi (the headless sampler's routing) it plays on the pad's
+//!    own port, Cymbals — its sub-track is not silent. A close-miked pad's
+//!    overhead take goes to the Overhead port; Stereo puts the whole kit
+//!    on Main.
 
 use resonance_drums::drum_map::{self, PAD_MAPPINGS};
 use resonance_drums::dsp::{DrumSampler, PortBuffers};
@@ -120,7 +121,7 @@ fn bundled_kit_groups_are_within_a_few_db_of_each_other() {
 }
 
 /// Nothing in the param defaults singles a pad out: every pad ships with the
-/// same volume / pan / OH blend / balance. This is the cheap invariant behind
+/// same volume / pan / per-mic trims. This is the cheap invariant behind
 /// the measurement above.
 #[test]
 fn pad_param_defaults_are_uniform_across_all_pads() {
@@ -133,16 +134,13 @@ fn pad_param_defaults_are_uniform_across_all_pads() {
             "pad {i} ships a different default volume"
         );
         assert_eq!(pad.pan.value(), first.pan.value(), "pad {i} pan differs");
-        assert_eq!(
-            pad.oh_blend.value(),
-            first.oh_blend.value(),
-            "pad {i} oh_blend differs"
-        );
-        assert_eq!(
-            pad.balance.value(),
-            first.balance.value(),
-            "pad {i} balance differs"
-        );
+        for (slot, trim) in pad.trims.iter().enumerate() {
+            assert_eq!(
+                trim.value(),
+                first.trims[slot].value(),
+                "pad {i} mic trim {slot} differs"
+            );
+        }
         assert!(!pad.mute.value(), "pad {i} ships muted");
     }
 }
@@ -152,12 +150,7 @@ fn pad_param_defaults_are_uniform_across_all_pads() {
 // ---------------------------------------------------------------------------
 
 fn layer(value: f32) -> VelocityLayer {
-    VelocityLayer {
-        round_robins: vec![LoadedSample {
-            data: vec![value; 64],
-            frames: 32,
-        }],
-    }
+    VelocityLayer::new(vec![LoadedSample::from_data(vec![value; 64])])
 }
 
 /// Build a pad shaped the way the Drummica loader builds it: one close bank
@@ -178,6 +171,7 @@ fn drummica_shaped_pad(index: usize) -> LoadedPad {
                 layers: vec![layer(0.5)],
             })
             .collect(),
+        extra_banks: Vec::new(),
         overhead: Some(LoadedMicBank {
             position: "OHsAB".to_string(),
             setup_key: String::new(),
@@ -192,8 +186,11 @@ fn drummica_shaped_sampler() -> DrumSampler {
     sampler
 }
 
+/// E11 (drums-plugin-rework.md §7): in Multi, an overhead-only cymbal's
+/// take — its whole sound — plays on its own port (Cymbals), not on
+/// Overhead, so the Cymbals sub-track is not silent (ba #1232).
 #[test]
-fn cymbal_pads_render_to_the_cymbals_port_not_overhead() {
+fn cymbal_overheads_land_on_the_cymbals_port_in_multi() {
     let mut sampler = drummica_shaped_sampler();
 
     for note in [
@@ -206,20 +203,17 @@ fn cymbal_pads_render_to_the_cymbals_port_not_overhead() {
         let peaks = peaks_for_hit(&mut sampler, note, 0.8, 2);
         assert!(
             peaks[PORT_CYMBALS] > 0.0,
-            "note {note}: Cymbals port is silent — the kit really would have \
-             no cymbals on its own sub-track"
+            "note {note}: the cymbal's overhead take must reach the Cymbals port"
         );
         assert_eq!(
             peaks[PORT_OVERHEAD], 0.0,
-            "note {note}: an overhead-only pad must not double into the \
-             Overhead port as well"
+            "note {note}: an overhead-only cymbal does not double into the Overhead port"
         );
     }
 }
 
-/// The change above is scoped to pads with *no* close mic. Kick, snare, toms
-/// and hats all have close banks, so their overhead take still belongs on the
-/// shared Overhead port.
+/// Close-miked pads play their close banks on their group port and their
+/// overhead take on the shared Overhead port (E11).
 #[test]
 fn close_miked_pads_still_send_their_overhead_to_the_overhead_port() {
     let mut sampler = drummica_shaped_sampler();
@@ -242,21 +236,34 @@ fn close_miked_pads_still_send_their_overhead_to_the_overhead_port() {
     }
 }
 
-/// Every declared output group must be reachable: a port the kit can never
-/// feed shows up in the host as a permanently dead sub-track.
+/// Every declared output group is reachable in Multi: a port no kit can
+/// ever feed shows up in the host as a permanently dead sub-track. A
+/// Drummica-shaped kit feeds every one — its overhead-only cymbals play on
+/// Cymbals (E11) — and so does the bundled kit, but for Overhead (it has
+/// no overhead bank).
 #[test]
-fn every_group_port_is_reachable_with_a_drummica_shaped_kit() {
-    let mut sampler = drummica_shaped_sampler();
-
-    let mut reached = [false; NUM_PORTS];
-    for m in PAD_MAPPINGS.iter() {
-        let peaks = peaks_for_hit(&mut sampler, m.note, 0.8, 2);
-        for (p, peak) in peaks.iter().enumerate() {
-            if *peak > 0.0 {
-                reached[p] = true;
+fn every_group_port_is_reachable() {
+    let reach = |sampler: &mut DrumSampler| {
+        let mut reached = [false; NUM_PORTS];
+        for m in PAD_MAPPINGS.iter() {
+            let peaks = peaks_for_hit(sampler, m.note, 0.8, 2);
+            for (p, peak) in peaks.iter().enumerate() {
+                if *peak > 0.0 {
+                    reached[p] = true;
+                }
             }
         }
-    }
+        reached
+    };
+    let drummica = reach(&mut drummica_shaped_sampler());
+    assert!(
+        drummica[PORT_CYMBALS],
+        "Drummica's overhead-only cymbals play on Cymbals"
+    );
+    let mut bundled = make_sampler();
+    bundled.load_defaults(SR);
+    let bundled = reach(&mut bundled);
+    let reached: Vec<bool> = drummica.iter().zip(&bundled).map(|(a, b)| *a || *b).collect();
 
     for port in [
         PORT_KICK,

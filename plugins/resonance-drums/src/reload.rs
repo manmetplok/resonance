@@ -17,7 +17,9 @@ use crate::{kit_loader, KitBridge};
 /// Spawn a loader for the current setup. Returns false when there is
 /// nothing to reload — no kit chosen, or no sample rate known yet.
 pub fn reload_kit(bridge: &KitBridge) -> bool {
-    let path = match bridge.kit_path.lock().clone() {
+    // The wanted kit, not `kit_path`: a mic change while a pick is still
+    // decoding must reload the pick, not revert to the kit before it.
+    let path = match bridge.wanted_kit_path() {
         Some(p) => p,
         None => return false,
     };
@@ -38,4 +40,13 @@ pub fn reload_kit(bridge: &KitBridge) -> bool {
         articulations,
     );
     true
+}
+
+/// [`reload_kit`] under [`crate::selection::KitSelection::acting`], for a
+/// caller that does not hold it (the editor's mic and overhead picks): a
+/// reload must not interleave with a `kit_select` act or a state load,
+/// which could otherwise revert the kit they just chose.
+pub fn reload_kit_acting(bridge: &KitBridge) -> bool {
+    let _acting = bridge.params.selection.acting();
+    reload_kit(bridge)
 }

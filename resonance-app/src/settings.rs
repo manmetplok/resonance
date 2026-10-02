@@ -197,7 +197,7 @@ pub fn load() -> AppSettings {
 }
 
 /// Load from a specific path (useful for testing, mirroring
-/// `registry::load_registry_from` / `midi_map::load_controller_maps_from`).
+/// `midi_map::load_controller_maps_from`).
 pub fn load_from(file: &std::path::Path) -> AppSettings {
     let bytes = match std::fs::read(file) {
         Ok(b) => b,

@@ -127,6 +127,11 @@ fn choices_for(
             if param.hidden {
                 continue;
             }
+            // CLAP's IS_AUTOMATABLE unset: the plugin offers no lane for
+            // it (the drums' kit selector, a read-only output).
+            if !param.automatable {
+                continue;
+            }
             out.push(AutoChoice {
                 kind: AutoKind::Param {
                     instance: slot.instance_id,

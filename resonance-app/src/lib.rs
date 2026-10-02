@@ -22,6 +22,7 @@ pub mod compose;
 pub mod control_jobs;
 pub mod control_socket;
 pub mod demo;
+pub mod drums_mirror;
 pub mod engine_events;
 pub mod focus;
 pub mod message;
@@ -693,6 +694,9 @@ impl Resonance {
             control: crate::state::ControlEndpointState {
                 amp_library: crate::update::control::AmpLibraryCache::new(
                     crate::update::control::amp_library_roots(matches!(host, Host::None)),
+                ),
+                drum_kit_library: crate::update::control::DrumKitLibraryCache::new(
+                    crate::update::control::drum_kit_library_roots(matches!(host, Host::None)),
                 ),
                 ..Default::default()
             },

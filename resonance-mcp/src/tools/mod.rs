@@ -17,6 +17,7 @@ pub mod bus;
 pub mod clip;
 pub mod compose;
 pub mod control;
+pub mod drum_kits;
 pub mod edit;
 pub mod external;
 pub mod global;

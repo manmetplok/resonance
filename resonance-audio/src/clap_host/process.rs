@@ -58,13 +58,6 @@ pub(super) unsafe extern "C" fn mixed_events_get(
     }
 }
 
-pub(super) unsafe extern "C" fn discard_output_event(
-    _list: *const clap_output_events,
-    _event: *const clap_event_header,
-) -> bool {
-    true
-}
-
 /// Split step for one queued note: an event inside the block is pushed
 /// onto `out` as a CLAP note event and dropped from its queue (`false`);
 /// a later one is re-based to the next call's start and kept (`true`).
@@ -225,6 +218,17 @@ impl ClapInstance {
             return;
         }
 
+        // Any `process()` satisfies a pending `clap_host.request_process()`
+        // (`ClapInstance::take_process_request`). Cleared BEFORE the
+        // plugin runs, and with an acquiring swap rather than a plain
+        // store: the plugin's own reads in this `process()` cannot move
+        // ahead of the clear, so a request raised after it is either
+        // already visible to this call or left set for the next one —
+        // never wiped unseen.
+        self.host_data
+            .process_requested
+            .swap(false, std::sync::atomic::Ordering::AcqRel);
+
         let frames = frames.min(8192);
         // The stopped-transport window counts down in rendered frames
         // (`ClapInstance::wants_idle_process`, code review MIX-08).
@@ -326,9 +330,12 @@ impl ClapInstance {
             get: Some(mixed_events_get),
         };
 
+        // The plugin's own param edits (output parameter events) are
+        // kept for the engine thread; everything else is dropped.
+        let mut out_param_events = std::mem::take(&mut self.out_param_events);
         let out_events = clap_output_events {
-            ctx: ptr::null_mut(),
-            try_push: Some(discard_output_event),
+            ctx: &mut out_param_events as *mut Vec<super::params::OutParamEvent> as *mut c_void,
+            try_push: Some(super::params::collect_output_event),
         };
 
         let mut transport_flags: u32 = 0;
@@ -406,6 +413,7 @@ impl ClapInstance {
         }
 
         // Reclaim event buffers for reuse (avoids allocation next call)
+        self.out_param_events = out_param_events;
         self.param_event_buf = event_ctx.param_events;
         self.param_event_buf.clear();
         self.note_event_buf = event_ctx.note_events;

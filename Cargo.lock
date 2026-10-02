@@ -5004,6 +5004,8 @@ name = "resonance-common"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "libc",
+ "resonance-common",
  "serde",
  "serde_json",
  "sha2",
@@ -5011,6 +5013,7 @@ dependencies = [
  "thiserror 2.0.21",
  "time",
  "tracing",
+ "zip",
 ]
 
 [[package]]
@@ -5057,18 +5060,23 @@ dependencies = [
 name = "resonance-drums"
 version = "0.1.0"
 dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
  "criterion",
  "crossbeam-channel",
- "dirs",
  "parking_lot",
  "plugin-gui-core",
  "resonance-common",
+ "resonance-drums",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-plugin",
  "rfd",
  "serde",
  "serde_json",
+ "sha2",
+ "tracing",
  "ureq",
  "zip",
 ]

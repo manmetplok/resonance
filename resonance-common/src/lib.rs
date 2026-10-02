@@ -18,8 +18,11 @@ pub mod device_registry;
 #[cfg(feature = "model")]
 pub mod external_instrument;
 pub mod factory_presets;
+pub mod kit_info;
+pub mod param_flags;
 pub mod preset_session;
 pub mod drum_map;
+pub mod drumkit_library;
 #[cfg(feature = "model")]
 pub mod group_identity;
 pub mod library_marks;
@@ -28,7 +31,6 @@ pub mod nam_library;
 pub mod midi_map;
 #[cfg(feature = "model")]
 pub mod freeze;
-pub mod registry;
 pub mod resample;
 pub mod reveal;
 mod scan;
@@ -90,8 +92,9 @@ pub use take::{
 pub use track_group::{MACRO_LEVEL_UNITY, TrackGroup};
 #[cfg(feature = "decode")]
 pub use wav::{
-    decode_file, decode_wav_channels, decode_wav_stereo, linear_resample_mono,
-    linear_resample_stereo, StreamingLinearResampler, WavChannels, WavDecodeError,
+    decode_file, decode_wav_channels, decode_wav_native, decode_wav_split, decode_wav_stereo,
+    linear_resample_mono, linear_resample_stereo, DecodedAudio, PcmEncoding, SplitAudio,
+    StreamingLinearResampler, TailScratch, WavChannels, WavDecodeError, WavPcmLayout, WavTail,
 };
 #[cfg(feature = "model")]
 pub use freeze::{

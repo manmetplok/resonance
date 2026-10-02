@@ -312,6 +312,8 @@ fn prune_plugin(r: &mut Resonance, owner: PluginLocator, instance_id: PluginInst
     }
     r.ui.mixer.forget_plugin(instance_id);
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.kit_info.remove(&instance_id);
+    r.plugin_mirror.output_ports.remove(&instance_id);
     // A re-add under this id (redo) parks its own copy; a stale one must
     // not be applied to it, nor written by the next save.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);

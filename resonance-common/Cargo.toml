@@ -13,14 +13,19 @@ default = ["model", "decode"]
 #
 # `dirs` and `time` stay plain (non-optional) dependencies rather than
 # gated-optional ones: the plan named them as "optional under model", but
-# `registry` — a utility module, always compiled regardless of features,
-# used by the `drums` plugin — also calls `dirs::data_dir()` and
-# `time::OffsetDateTime` (verified with `grep -rn 'dirs::\|time::'
-# resonance-common/src`). Gating them behind `model` would break a
+# the utility modules — always compiled regardless of features — call
+# them too (`drumkit_library`, `library_marks` and `nam_library` use
+# `dirs`; `drumkit_library` and `library_marks` use `time`; `grep -rn
+# 'dirs::\|time::' resonance-common/src`). Gating them behind `model` would break a
 # `decode`-only or utility-only build that never touches the model modules.
 model = []
 # WAV decode + audio-file probing; the only consumer of `symphonia`.
 decode = ["dep:symphonia"]
+# Kit import / install from a `.zip` (`drumkit_library::{import_zip,
+# install_zip, install_zip_replacing}`, and `import` of a `.zip`). Off by
+# default so a plugin or the app that never unpacks a kit does not compile
+# `zip` + its deflate backends; the drums plugin turns it on.
+drumkit-zip = ["dep:zip"]
 
 [dependencies]
 symphonia = { workspace = true, optional = true }
@@ -33,3 +38,16 @@ tracing.workspace = true
 thiserror.workspace = true
 # Content ids of NAM models (`nam_library`): sha256 of the file bytes.
 sha2 = "0.10"
+# Kit import from a .zip (`drumkit_library`, feature `drumkit-zip`); the
+# same build the drums plugin's downloader uses, so the workspace compiles
+# one zip.
+zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
+
+# The import disk check (`drumkit_library::free_space`, statvfs).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# The zip tests of `drumkit_library` build archives and need the feature.
+resonance-common = { path = ".", features = ["drumkit-zip"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

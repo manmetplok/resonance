@@ -102,11 +102,56 @@ pub trait ExtraStateSaver: Send + Sync {
 /// and the bridge falls back to it while active — so a host reads the real
 /// text of a live instance, and a label resolves on it
 /// (nam-model-library.md §9). Indices are host-order parameter indices.
+///
+/// It is also where the bridge reads a **live** value while active
+/// ([`Self::live_value`]): the values a host reads back
+/// (`clap_plugin_params.get_value`) otherwise come from the bridge's
+/// shared mirror, which only the audio thread's per-block push-back
+/// refreshes — so a value the plugin moves *off* the audio thread (a load
+/// progress written by a loader thread, a selection derived from a state
+/// load) reads stale for as long as no block runs, which is the whole
+/// time the transport is stopped.
 pub trait ParamTextSource: Send + Sync {
     /// The display text of `value` for parameter `index`.
     fn display(&self, index: usize, value: f64) -> Option<String>;
     /// The value `text` names for parameter `index`.
     fn parse(&self, index: usize, text: &str) -> Option<f64>;
+    /// The current value of parameter `index`, read from the plugin's own
+    /// (shared) parameter storage, for a host query made while the plugin
+    /// is active. `None` (the default) means "use the bridge's mirror".
+    ///
+    /// The bridge asks only for a parameter that is
+    /// [read-only](crate::param::Param::is_read_only) or
+    /// [state-excluded](crate::param::Param::state_excluded) — the two
+    /// kinds a plugin moves on its own — so a plugin answers for those and
+    /// may return `None` for the rest. Called on the host's main thread,
+    /// concurrently with `process()`: read an atomic, never lock what the
+    /// audio thread holds. A non-finite answer is ignored.
+    ///
+    /// Typical shape, for params shared behind an `Arc`:
+    ///
+    /// ```ignore
+    /// fn live_value(&self, index: usize) -> Option<f64> {
+    ///     let p = self.params.param(index);
+    ///     (p.is_read_only() || p.state_excluded()).then(|| p.get_plain())
+    /// }
+    /// ```
+    fn live_value(&self, index: usize) -> Option<f64> {
+        let _ = index;
+        None
+    }
+}
+
+/// What a drum plugin says about the pads of the kit it plays, served to
+/// the host as `com.resonance.kit-info` (`resonance_common::kit_info`).
+/// A plugin returns one from [`ResonancePlugin::kit_info_source`]; it is
+/// harvested once at plugin creation, like [`ParamTextSource`].
+pub trait KitInfoSource: Send + Sync {
+    /// The pads as `resonance_common::kit_info::KitInfo` JSON, or `None`
+    /// for nothing to report. Called on the host's main thread, while the
+    /// plugin may be processing: read shared state, never lock what the
+    /// audio thread holds.
+    fn kit_info_json(&self) -> Option<String>;
 }
 
 /// A note event for sample-accurate MIDI processing.
@@ -550,15 +595,29 @@ pub trait ResonancePlugin: Send + 'static {
         &[]
     }
 
+    /// The plugin's own state upgrade, beside
+    /// [`param_renames`](ResonancePlugin::param_renames): for what a
+    /// rename cannot say — a value whose unit changed, a default that
+    /// differs for states written before a param existed. See
+    /// [`crate::state::StateUpgrade`] for when it runs (every load path,
+    /// after the renames) and what it must be (idempotent).
+    ///
+    /// A constant rather than a method so the paths that have no plugin
+    /// object to ask can still run it: the CLAP bridge while the plugin
+    /// is active (its object is in the audio processor), and the preset
+    /// bank (`PresetBank::for_plugin`). Default: none.
+    const STATE_UPGRADE: Option<crate::state::StateUpgrade> = None;
+
     /// Load plugin state from bytes. Default: JSON deserialization of
     /// params plus any `extra_state_saver()` contribution, after bringing
     /// an older state version up to date (see
-    /// [`param_renames`](ResonancePlugin::param_renames)).
+    /// [`param_renames`](ResonancePlugin::param_renames) and
+    /// [`STATE_UPGRADE`](ResonancePlugin::STATE_UPGRADE)).
     fn load_state(&mut self, data: &[u8]) -> bool {
         let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(data) else {
             return false;
         };
-        crate::state::migrate(&mut state, self.param_renames());
+        crate::state::migrate_and_upgrade(&mut state, self.param_renames(), Self::STATE_UPGRADE);
         let ok = crate::state::load_params_from_json(&self.params(), &state);
         if let Some(saver) = self.extra_state_saver() {
             saver.load(&state);
@@ -587,6 +646,35 @@ pub trait ResonancePlugin: Send + 'static {
     /// text reads as its number.
     fn param_text_source(&self) -> Option<Arc<dyn ParamTextSource>> {
         None
+    }
+
+    /// The pads of the kit a drum plugin plays, for the host
+    /// (`com.resonance.kit-info`, see [`KitInfoSource`]). Harvested once
+    /// at plugin creation. Default: `None`, and the host hears nothing.
+    fn kit_info_source(&self) -> Option<Arc<dyn KitInfoSource>> {
+        None
+    }
+
+    /// The host switched between realtime and offline rendering (CLAP
+    /// `render.set`): `offline` is true for a bounce, an export, a freeze
+    /// — a render that runs as fast as the CPU allows and must never
+    /// cut corners for time — and false when it is back to realtime.
+    /// Default: ignored.
+    ///
+    /// A plugin that trades quality for time in realtime does the opposite
+    /// offline: a streaming sampler (the drums) waits for a disk read it
+    /// would otherwise drop, a convolver renders its full tail. The bridge
+    /// tells the bridged plugin `has_hard_realtime_requirement() = false`,
+    /// so a host may always ask.
+    ///
+    /// When it is called: on the main thread, right away, while the plugin
+    /// is inactive; while it is active (it lives in the audio processor,
+    /// out of the main thread's reach), on the audio thread at the start
+    /// of the next `process()` block, before that block's events — so the
+    /// first offline block already renders offline. Realtime-safe there
+    /// like the rest of `process()`: flip a flag, don't allocate.
+    fn set_render_mode(&mut self, offline: bool) {
+        let _ = offline;
     }
 
     /// Report latency in samples. Default: 0.

@@ -455,6 +455,9 @@ pub(crate) fn run_export(
     // normalization runs (`None` / `0.0` otherwise so the non-normalized
     // path keeps its old event payload).
     let normalize = settings.normalize;
+    // Offline for every pass, until this export returns — whichever way
+    // it does (cancel and write errors return from inside the passes).
+    let _render_mode = super::render::OfflineRenderMode::enter(shared);
     let (achieved_lufs, achieved_dbtp) = if normalize.enabled {
         // PASS 1 — analyze: render the whole range into the loudness
         // meters without writing anything. `reset_plugins` (CLAP `reset`,

@@ -586,6 +586,33 @@ pub enum AudioEvent {
         instance_id: PluginInstanceId,
         params: Vec<crate::types::ParamInfo>,
     },
+    /// A plugin's values rescan (`clap_host_params.rescan` with `VALUES`
+    /// and/or `TEXT`): the params whose value moved since the host last
+    /// read them — every param when the text changed — with their new
+    /// text. The cheap counterpart of [`Self::PluginParamsRefreshed`] for
+    /// a plugin that moves a value often (the drums' `kit_load_progress`).
+    PluginParamValuesChanged {
+        instance_id: PluginInstanceId,
+        values: Vec<crate::types::ParamValueUpdate>,
+    },
+    /// A plugin changed one of its parameters itself and told the host
+    /// (CLAP output parameter events — Resonance plugins send them through
+    /// `HostHandle::announce_param_change`). A gesture is reported once,
+    /// when it ends, with the value it ended on: the app records it as one
+    /// undoable edit and mirrors the value. The plugin already holds the
+    /// value; nothing is sent back to it.
+    PluginParamEdited {
+        instance_id: PluginInstanceId,
+        edit: crate::types::PluginParamEdit,
+    },
+    /// A Resonance drum plugin's pads changed (`com.resonance.kit-info`):
+    /// each pad's note, its name in the kit it now plays and whether that
+    /// kit has a piece for it. Sent once after the instance is created and
+    /// whenever a params rescan finds them changed.
+    PluginKitInfo {
+        instance_id: PluginInstanceId,
+        info: resonance_common::kit_info::KitInfo,
+    },
     /// A Resonance plugin reported its loaded preset and modified flag
     /// (`com.resonance.preset-session`, slice P5): from its own browser, a
     /// host load, or an edit that made it differ from the preset (or stop

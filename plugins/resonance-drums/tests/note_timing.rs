@@ -8,6 +8,7 @@
 
 use resonance_drums::drum_map;
 use resonance_drums::kit::NUM_OUTPUT_PORTS;
+use resonance_drums::params::OUTPUT_MODE_MULTI;
 use resonance_drums::ResonanceDrums;
 use resonance_plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin};
 
@@ -20,6 +21,8 @@ const HATS_PORT: usize = 4;
 
 fn booted_plugin() -> ResonanceDrums {
     let mut plugin = ResonanceDrums::new();
+    // Multi output (E11): these tests read a pad's own port.
+    plugin.bridge.params.output_mode.set_value(OUTPUT_MODE_MULTI);
     assert!(plugin.initialize(SAMPLE_RATE, BLOCK as u32));
     plugin
 }
@@ -157,8 +160,10 @@ fn a_choke_takes_effect_at_its_offset() {
         choked[512..].iter().zip(&free[512..]).any(|(a, b)| a != b),
         "the choke never took effect"
     );
-    // The release fade (1024 frames) ends a fade-length after the choke.
-    let tail = 512 + resonance_drums::voice::RELEASE_SAMPLES;
+    // The release fade ends a fade-length after the choke.
+    let tail = 512
+        + resonance_drums::voice::fade_frames(resonance_drums::voice::RELEASE_FADE_MS, SAMPLE_RATE)
+            as usize;
     assert!(
         choked[tail..].iter().all(|s| *s == 0.0),
         "choked voice still sounds after its fade"

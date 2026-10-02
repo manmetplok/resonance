@@ -32,14 +32,10 @@ fn sampler() -> DrumSampler {
                 .map(|pos| LoadedMicBank {
                     position: pos.to_string(),
                     setup_key: String::new(),
-                    layers: vec![VelocityLayer {
-                        round_robins: vec![LoadedSample {
-                            data: vec![0.5; 64],
-                            frames: 32,
-                        }],
-                    }],
+                    layers: vec![VelocityLayer::new(vec![LoadedSample::from_data(vec![0.5; 64])])],
                 })
                 .collect(),
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect();
