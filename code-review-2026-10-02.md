@@ -61,7 +61,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | Wave | Batch | Items | Model | Status | Merge |
 |---|---|---|---|---|---|
 | 1 | S1 control-surface safety | STATE2-01, STATE2-10 (mixdown ext), ARCH2-06, STATE2-05, STATE2-06, STATE2-08, STATE2-09 | opus | running | |
-| 1 | S2 save robustness + error surface | STATE2-02, UX-13, UX-04, UX-05 | opus | running | |
+| 1 | S2 save robustness + error surface | STATE2-02, UX-13, UX-04, UX-05 | opus | merged | 50140dcd |
 | 1 | P1 plugin live values (host/bridge side) | HOST-01, PUX-01 (host side: refresh before serialise), STATE2-03, STATE2-07, STATE2-10 (read-only param undo) | opus | running | |
 | 1 | R1 recording alignment | RT-01, RT-02, RT-08, RT-13, RT-17 | opus | running | |
 | 1 | D1a DSP: mastering/compressor/shared | DSP2-04, -05, -06, -07, -08, -11 (mastering/eq/stereo), -15, -16 | opus | running | |
@@ -69,7 +69,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 2 | P2 editor widgets + announce | PUX-01 (widget announce), PUX-02, -03, -05, -06, -08, -11 | opus | after P1 | |
 | 2 | R2 lock contention | HOST-02/RT-07, HOST-03, HOST-08, HOST-10 | opus | after P1 | |
 | 2 | U1 project lifecycle UX | UX-01, UX-03/STATE2-04, UX-11, UX-12, UX-14, UX-15, UX-16 | opus | after S1, S2 | |
-| 2 | U2 view correctness | UX-02, UX-06, UX-10, UX-22 | opus | after S2 | |
+| 2 | U2 view correctness | UX-02, UX-06, UX-10, UX-22 | opus | running | |
 | 2 | H1 host spec | HOST-05, -06, -09, -11, -12, -13, -15, -16 | opus | after P1, R1 | |
 | 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | after R2, H1 | |
 | 3 | R4 RT correctness | RT-03, RT-05, RT-06, RT-09, RT-10, RT-11, RT-12, RT-14, RT-15, RT-16, RT-18 | opus | after R1, H1 | |
@@ -78,6 +78,13 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | after U1, U2 | |
 | 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | after wave 3 | |
 | 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | last, alone | |
+
+### Follow-ups raised by batches
+
+- **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
+- **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
+- **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
+- **FU-S2d:** transient errors still share a single slot with no expiry. Replace it with a queue or toast.
 
 ## Suggested fix batches (original grouping)
 
