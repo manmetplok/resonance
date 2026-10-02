@@ -333,4 +333,52 @@ impl BandlimitedReader {
             0.0
         }
     }
+
+    /// The source frames a read at `index` and `rate` touches:
+    /// `first..=last`. A caller streaming its source keeps this window
+    /// delivered (`last`) and un-recycled (`first`).
+    #[inline]
+    pub fn span(index: f64, rate: f64) -> (i64, i64) {
+        let half = Self::half_width(rate);
+        ((index - half).ceil() as i64, (index + half).floor() as i64)
+    }
+
+    /// Band-limited read of a stereo source through `frame`, which returns
+    /// the (left, right) pair at a source frame index (any index in
+    /// [`Self::span`]; the caller decides what lies outside its data).
+    /// Same kernel and normalization as [`Self::read_wrapped`], with one
+    /// set of weights shared by both channels (the drums sampler's
+    /// pitched-up read, DSP2-09).
+    #[inline]
+    pub fn read_stereo_with(
+        &self,
+        index: f64,
+        rate: f64,
+        mut frame: impl FnMut(i64) -> (f32, f32),
+    ) -> (f32, f32) {
+        let c = BL_CUTOFF / rate.abs().max(1.0);
+        let (first, last) = Self::span(index, rate);
+        let scale = (c * BL_RES as f64) as f32;
+        let base = ((index - first as f64) * c * BL_RES as f64) as f32;
+        let limit = (BL_ZEROS * BL_RES) as f32;
+        let (mut acc_l, mut acc_r, mut wsum) = (0.0_f32, 0.0_f32, 0.0_f32);
+        for (k, n) in (first..=last).enumerate() {
+            let pos = (base - k as f32 * scale).abs();
+            if pos >= limit {
+                continue;
+            }
+            let i = pos as usize;
+            let frac = pos - i as f32;
+            let w = self.table[i] + (self.table[i + 1] - self.table[i]) * frac;
+            let (l, r) = frame(n);
+            acc_l += l * w;
+            acc_r += r * w;
+            wsum += w;
+        }
+        if wsum.abs() > 1e-6 {
+            (acc_l / wsum, acc_r / wsum)
+        } else {
+            (0.0, 0.0)
+        }
+    }
 }

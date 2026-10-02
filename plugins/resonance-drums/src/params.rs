@@ -474,7 +474,8 @@ pub struct PadParams {
     /// Pitch in semitones (E8), −24 … +24, default 0, resolved to the
     /// cent (0.01 st): one param carries both the coarse and the fine
     /// tune, so an automation lane moves pitch as one value. Played by
-    /// fractional playback with 4-point Hermite interpolation; at exactly
+    /// fractional playback (4-point Hermite tuned down, a rate-tracked
+    /// windowed sinc tuned up so nothing aliases, DSP2-09); at exactly
     /// 0 the sampler stays on its integer path, bit for bit.
     pub tune: FloatParam,
     /// Hold before the decay (E8), 0 … 2000 ms, default 0. Only matters

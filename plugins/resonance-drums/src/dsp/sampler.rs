@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 
+use resonance_dsp::BandlimitedReader;
+
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::{
     BankKind, LoadedMicBank, LoadedPad, SampleData, VelocityLayer, MAIN_PORT_INDEX,
@@ -448,6 +450,9 @@ pub struct DrumSampler {
     /// Where the bytes of ring storage the streams hold are published
     /// (the bridge's `stream_ring_bytes`), once a block.
     ring_bytes_out: Option<Arc<AtomicU64>>,
+    /// The windowed-sinc kernel a pitched-up voice reads through
+    /// (DSP2-09). One table per process, built off the audio thread.
+    bl_reader: &'static BandlimitedReader,
     /// How missing tail frames are treated (see [`RenderMode`]).
     render_mode: RenderMode,
     /// What the host declared ([`crate::KitBridge::host_render_mode`]):
@@ -552,6 +557,7 @@ impl DrumSampler {
             block_idle: true,
             streams: AudioStreams::with_registration(set, Some(registration)),
             ring_bytes_out: None,
+            bl_reader: bandlimited_reader(),
             render_mode: RenderMode::Auto,
             host_render_mode: None,
             offline: false,
@@ -1533,6 +1539,7 @@ impl DrumSampler {
         }
         let inv_frames = self.block_inv_frames;
         let streams = &self.streams;
+        let bl_reader = self.bl_reader;
         let offline = self.offline;
         let offline_wait_left = &mut self.offline_wait_left;
         let offline_holdoff = &mut self.offline_holdoff;
@@ -1694,6 +1701,24 @@ impl DrumSampler {
             // as it always did; a tuned one reads between frames.
             let unity = voice.rate == 1.0;
             let rate = voice.rate;
+            // DSP2-09: a voice tuned *up* reads band-limited, through a
+            // windowed sinc whose cutoff follows the rate, so take content
+            // above `fs / (2·rate)` is removed before it can fold. (A
+            // 4-point Hermite read folded it straight into the band: hats
+            // and cymbals tuned up got inharmonic grit.) Tuned down keeps
+            // the Hermite read — nothing folds — and at pitch the integer
+            // path is untouched. `reach` is how many take frames the read
+            // touches on each side of the position: Hermite's p−1 … p+2,
+            // or the sinc's half-width (10·rate frames).
+            let bandlimit = rate > 1.0;
+            let reach = if bandlimit {
+                BandlimitedReader::half_width(rate as f64).ceil() as usize
+            } else {
+                1
+            };
+            let ahead = if bandlimit { reach } else { 2 };
+            // Frames behind the position a read still needs.
+            let behind = if unity { 0 } else { reach };
             let ahd = voice.decay_frames > 0;
             // Output frames since the voice last published its progress.
             let mut since_publish = 0usize;
@@ -1721,10 +1746,11 @@ impl DrumSampler {
                 }
 
                 let (sample_l, sample_r) = if !unity {
-                    // Fractional playback, 4-point Hermite over frames
-                    // p−1 … p+2, through the same head / ring path.
+                    // Fractional playback over frames p−behind … p+ahead
+                    // (Hermite, or band-limited tuned up), through the
+                    // same head / ring path.
                     let pos = voice.position;
-                    let need = (pos + 2).min(end_at - 1);
+                    let need = (pos + ahead).min(end_at - 1);
                     if let (Some(ring), true) = (ring, need >= resident) {
                         let at = (need - resident) as u64;
                         if at >= written
@@ -1733,9 +1759,11 @@ impl DrumSampler {
                             && !offline_wait_left.is_zero()
                         {
                             streams.set.waits.fetch_add(1, Ordering::Relaxed);
-                            // Keep frame p−1 from being overwritten while
-                            // the reader catches up.
-                            let keep = (pos.saturating_sub(1).max(resident) - resident) as u64;
+                            // Keep the frames behind p the read still
+                            // needs from being overwritten while the
+                            // reader catches up.
+                            let keep =
+                                (pos.saturating_sub(behind).max(resident) - resident) as u64;
                             let failed;
                             (written, failed) =
                                 wait_for_frame(ring, at, keep, offline_wait_left);
@@ -1769,20 +1797,41 @@ impl DrumSampler {
                             Some((0.0, 0.0))
                         }
                     };
-                    let before = if pos == 0 {
-                        Some((0.0, 0.0))
-                    } else {
-                        fetch(pos - 1)
-                    };
-                    match (before, fetch(pos), fetch(pos + 1), fetch(pos + 2)) {
-                        (Some(a), Some(b), Some(c), Some(d)) => {
-                            let t = voice.frac;
-                            (hermite(a.0, b.0, c.0, d.0, t), hermite(a.1, b.1, c.1, d.1, t))
-                        }
-                        _ => {
+                    if bandlimit {
+                        let mut delivered = true;
+                        let index = pos as f64 + voice.frac as f64;
+                        let v = bl_reader.read_stereo_with(index, rate as f64, |n| {
+                            if n < 0 {
+                                return (0.0, 0.0);
+                            }
+                            fetch(n as usize).unwrap_or_else(|| {
+                                delivered = false;
+                                (0.0, 0.0)
+                            })
+                        });
+                        if delivered {
+                            v
+                        } else {
                             // Not delivered yet: silence, and on in time.
                             missing = true;
                             (0.0, 0.0)
+                        }
+                    } else {
+                        let before = if pos == 0 {
+                            Some((0.0, 0.0))
+                        } else {
+                            fetch(pos - 1)
+                        };
+                        match (before, fetch(pos), fetch(pos + 1), fetch(pos + 2)) {
+                            (Some(a), Some(b), Some(c), Some(d)) => {
+                                let t = voice.frac;
+                                (hermite(a.0, b.0, c.0, d.0, t), hermite(a.1, b.1, c.1, d.1, t))
+                            }
+                            _ => {
+                                // Not delivered yet: silence, and on in time.
+                                missing = true;
+                                (0.0, 0.0)
+                            }
                         }
                     }
                 } else if voice.position < resident {
@@ -1863,11 +1912,7 @@ impl DrumSampler {
                     if let Some(ring) = ring {
                         // Room for the reader behind the voice, and what
                         // it delivered since (see MID_BLOCK_PUBLISH_FRAMES).
-                        let done = if unity {
-                            voice.position
-                        } else {
-                            voice.position.saturating_sub(1)
-                        };
+                        let done = voice.position.saturating_sub(behind);
                         if done > resident {
                             ring.read.store((done - resident) as u64, Ordering::Release);
                         }
@@ -1895,17 +1940,15 @@ impl DrumSampler {
             if let Some(ring) = ring {
                 // Room for the reader: every ring frame before the
                 // voice's position is done with (a tuned voice still
-                // reads the frame before it). And its deadline: what is
-                // left of the head, in output frames.
-                let done = if unity {
-                    voice.position
-                } else {
-                    voice.position.saturating_sub(1)
-                };
+                // reads `behind` frames before it). And its deadline:
+                // what is left of the head, in output frames, less what
+                // a band-limited read looks ahead.
+                let done = voice.position.saturating_sub(behind);
                 if done > resident {
                     ring.read.store((done - resident) as u64, Ordering::Release);
                 }
-                let head_left = resident.saturating_sub(voice.position);
+                let lookahead = if bandlimit { ahead } else { 0 };
+                let head_left = resident.saturating_sub(voice.position + lookahead);
                 let head_left = if unity {
                     head_left
                 } else {
@@ -2053,6 +2096,15 @@ impl DrumSampler {
         self.streams
             .sweep(self.voices.iter().chain(self.tails.iter()));
     }
+}
+
+/// The process-wide band-limited reader (its kernel table is 16 KB and
+/// costs a few thousand Bessel evaluations to build, so every sampler
+/// shares one). First called from the sampler's constructor, never on the
+/// audio thread.
+fn bandlimited_reader() -> &'static BandlimitedReader {
+    static READER: std::sync::OnceLock<BandlimitedReader> = std::sync::OnceLock::new();
+    READER.get_or_init(BandlimitedReader::new)
 }
 
 /// 4-point, 3rd-order Hermite (Catmull-Rom) interpolation at `t` (0..1)
