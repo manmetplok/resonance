@@ -200,3 +200,89 @@ fn disable_under_gain_reduction_releases_without_click() {
         "toggle stepped {toggled_max} per sample vs {steady_max} steady"
     );
 }
+
+// ---- DSP2-08: makeup / mix ramps and the enable edge ----
+
+/// Largest sample-to-sample step of `x[range]`.
+fn max_delta(x: &[f32]) -> f32 {
+    x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+}
+
+/// Render a 60 Hz, 0.8-amplitude sine in 128-frame blocks, picking each
+/// block's config with `cfg(block_index)`.
+fn render_blocks(n: usize, cfg: impl Fn(usize) -> GlueCompressorConfig) -> Vec<f32> {
+    let sr = 48_000.0_f32;
+    let mut c = GlueCompressor::new(sr);
+    let mut l: Vec<f32> = (0..n)
+        .map(|i| (i as f32 / sr * 60.0 * std::f32::consts::TAU).sin() * 0.8)
+        .collect();
+    let mut r = l.clone();
+    for (k, start) in (0..n).step_by(128).enumerate() {
+        let end = (start + 128).min(n);
+        c.process_stereo(&mut l[start..end], &mut r[start..end], &cfg(k));
+    }
+    l
+}
+
+/// The sine's own largest step at 60 Hz, 0.8 amplitude, scaled by the
+/// +4 dB of makeup the tests below use.
+fn steady_step() -> f32 {
+    0.8 * std::f32::consts::TAU * 60.0 / 48_000.0 * 10f32.powf(4.0 / 20.0)
+}
+
+#[test]
+fn enabling_with_makeup_does_not_step() {
+    // Enabling with +4 dB makeup used to apply the whole makeup on the
+    // first sample while the gain reduction was still building, a step
+    // of up to 0.8 * (1.58 - 1) = 0.47 at a peak.
+    let on = GlueCompressorConfig {
+        enabled: true,
+        threshold_db: -20.0,
+        ratio: 4.0,
+        attack_ms: 30.0,
+        release_ms: 150.0,
+        knee_db: 0.0,
+        makeup_db: 4.0,
+        mix: 1.0,
+    };
+    let off = GlueCompressorConfig {
+        enabled: false,
+        ..on
+    };
+    // Toggle at block 78: sample 9984, near a 60 Hz peak (period 800).
+    let toggle = 78;
+    let out = render_blocks(20_000, |k| if k < toggle { off } else { on });
+    let t = toggle * 128;
+    let step = max_delta(&out[t - 1..t + 4_800]);
+    assert!(
+        step < 1.2 * steady_step(),
+        "enable stepped {step} per sample vs the sine's {}",
+        steady_step()
+    );
+}
+
+#[test]
+fn makeup_and_mix_automation_ramp() {
+    // Makeup 0 -> 4 dB and mix 1 -> 0.5 in steps over 20 blocks: block-
+    // rate steps used to land as one-sample jumps.
+    let out = render_blocks(30_000, |k| {
+        let p = (k.saturating_sub(100) as f32 / 20.0).min(1.0);
+        GlueCompressorConfig {
+            enabled: true,
+            threshold_db: -20.0,
+            ratio: 4.0,
+            attack_ms: 30.0,
+            release_ms: 150.0,
+            knee_db: 0.0,
+            makeup_db: 4.0 * p,
+            mix: 1.0 - 0.5 * p,
+        }
+    });
+    let t = 100 * 128;
+    let step = max_delta(&out[t - 1..t + 30 * 128]);
+    assert!(
+        step < 1.2 * steady_step(),
+        "automation stepped {step} per sample vs the sine's {}",
+        steady_step()
+    );
+}

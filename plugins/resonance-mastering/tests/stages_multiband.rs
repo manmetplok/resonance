@@ -251,3 +251,152 @@ fn side_only_high_band_content_is_compressed() {
     let peak = tail.iter().copied().map(f32::abs).fold(0.0_f32, f32::max);
     assert!(peak < 0.3, "side-only 9 kHz settled peak = {peak}");
 }
+
+// ---- DSP2-05 / DSP2-08: switching and trims must not step ----
+
+/// Run `n` frames of a stereo sine through `mb` in `block`-sized blocks,
+/// picking each block's config with `cfg(block_index)`.
+fn run_blocks(
+    mb: &mut Multiband,
+    sr: f32,
+    freq: f32,
+    n: usize,
+    block: usize,
+    cfg: impl Fn(usize) -> MultibandConfig,
+) -> Vec<f32> {
+    let (mut l, mut r) = sine_stereo(sr, freq, 0.5, n);
+    let mut start = 0;
+    let mut k = 0;
+    while start < n {
+        let end = (start + block).min(n);
+        mb.process_stereo(&mut l[start..end], &mut r[start..end], &cfg(k));
+        start = end;
+        k += 1;
+    }
+    l
+}
+
+fn max_step(x: &[f32]) -> f32 {
+    x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+}
+
+fn rms_db(x: &[f32]) -> f32 {
+    let ms = x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / x.len() as f64;
+    10.0 * ms.log10() as f32
+}
+
+/// Largest per-sample step of a 0.5-amplitude sine at `freq`.
+fn sine_step(sr: f32, freq: f32) -> f32 {
+    0.5 * std::f32::consts::TAU * freq / sr
+}
+
+fn top_band_boost() -> MultibandConfig {
+    let mut cfg = MultibandConfig {
+        enabled: true,
+        ..MultibandConfig::default()
+    };
+    cfg.bands[3].gain_db = 6.0;
+    cfg
+}
+
+#[test]
+fn enabling_does_not_route_the_whole_mix_through_the_top_band() {
+    // 1 kHz sits in band 2, so with band 3 at +6 dB the enabled steady
+    // state is unity. The crossovers restart from silence on the enable
+    // edge, and while they refill `band_3 = delayed − y3` is the whole
+    // mix: it used to get band 3's +6 dB for one FIR length.
+    let sr = 48_000.0_f32;
+    let block = 128;
+    let toggle_block = 400; // ~1.07 s in, well past the bypass latency.
+    let n = (toggle_block + 800) * block;
+    let mut mb = Multiband::new(sr, block);
+    let on = top_band_boost();
+    let off = MultibandConfig { enabled: false, ..on };
+    let out = run_blocks(&mut mb, sr, 1_000.0, n, block, |k| {
+        if k < toggle_block {
+            off
+        } else {
+            on
+        }
+    });
+    let t = toggle_block * block;
+    let steady = rms_db(&out[n - 8192..]);
+    let first_85ms = rms_db(&out[t..t + 4096]);
+    assert!(
+        (first_85ms - steady).abs() < 0.5,
+        "first 85 ms after enable at {first_85ms:.2} dB vs steady {steady:.2} dB"
+    );
+    let step = max_step(&out[t - 1..]);
+    assert!(
+        step < 1.1 * sine_step(sr, 1_000.0),
+        "enable step {step} vs sine's own {}",
+        sine_step(sr, 1_000.0)
+    );
+}
+
+#[test]
+fn enabling_and_disabling_a_boosted_band_ramps() {
+    // 8 kHz sits in band 3: the trim takes the level from 0.5 to 1.0
+    // when enabled and back when disabled. Both edges must ramp.
+    let sr = 48_000.0_f32;
+    let block = 128;
+    let (on_at, off_at) = (400, 1_200);
+    let n = 1_600 * block;
+    let mut mb = Multiband::new(sr, block);
+    let on = top_band_boost();
+    let off = MultibandConfig { enabled: false, ..on };
+    let out = run_blocks(&mut mb, sr, 8_000.0, n, block, |k| {
+        if (on_at..off_at).contains(&k) {
+            on
+        } else {
+            off
+        }
+    });
+    // A per-sample bound is useless this close to Nyquist (the sine's own
+    // step is ~0.5), so bound the envelope instead: the peak of each
+    // 6-sample period may move by at most a few percent of the 0.5
+    // amplitude difference (a 10 ms ramp moves it ~0.6 % per period; a
+    // hard switch moves it 100 % in one).
+    for (name, at) in [("enable", on_at), ("disable", off_at)] {
+        let t = at * block;
+        let env: Vec<f32> = out[t - 60..t + 16_384]
+            .chunks_exact(6)
+            .map(|c| c.iter().fold(0.0f32, |m, v| m.max(v.abs())))
+            .collect();
+        let jump = max_step(&env);
+        assert!(jump < 0.05, "{name}: envelope jumps {jump} in one period");
+    }
+    // And the boost actually lands once settled.
+    let t = off_at * block;
+    let boosted = rms_db(&out[t - 4096..t]);
+    let plain = rms_db(&out[n - 4096..]);
+    assert!(
+        (boosted - plain - 6.0).abs() < 0.3,
+        "boost {boosted:.2} dB vs {plain:.2} dB"
+    );
+}
+
+#[test]
+fn band_gain_sweep_does_not_zipper() {
+    // Band 0 trim swept 0 -> 6 dB over 20 blocks on a 50 Hz sine: block-
+    // rate steps of 0.3 dB used to land as one-sample jumps.
+    let sr = 48_000.0_f32;
+    let block = 128;
+    let start_block = 600;
+    let n = (start_block + 200) * block;
+    let mut mb = Multiband::new(sr, block);
+    let out = run_blocks(&mut mb, sr, 50.0, n, block, |k| {
+        let mut cfg = MultibandConfig {
+            enabled: true,
+            ..MultibandConfig::default()
+        };
+        let p = (k.saturating_sub(start_block) as f32 / 20.0).min(1.0);
+        cfg.bands[0].gain_db = 6.0 * p;
+        cfg
+    });
+    let t = start_block * block;
+    // The 50 Hz sine at up to +6 dB steps at most 2x its own step.
+    let limit = 2.0 * sine_step(sr, 50.0) * 1.1;
+    let step = max_step(&out[t - 1..t + 40 * block]);
+    assert!(step < limit, "sweep step {step} vs limit {limit}");
+}
