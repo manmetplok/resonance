@@ -110,10 +110,52 @@ pub fn default_root() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join(KIT_SUBDIR))
 }
 
-/// Where the retired installed-content registry lives
+/// Where the retired installed-content registry lived
 /// (`<data dir>/resonance/installed.json`), the migration source.
 pub fn default_installed_json() -> Option<PathBuf> {
-    crate::registry::registry_path()
+    dirs::data_dir().map(|d| d.join("resonance/installed.json"))
+}
+
+/// One drum-kit item of the retired `installed.json`
+/// (`{"items":[{"name","type","path","installed_at"}]}`). Only the
+/// migration reads the file; nothing writes it any more (D3).
+#[derive(Debug, Clone, Deserialize)]
+struct InstalledJsonItem {
+    name: String,
+    #[serde(rename = "type")]
+    kind: String,
+    path: String,
+    installed_at: String,
+}
+
+/// The `installed.json` document, items kept raw so one item of a type or
+/// shape this build does not know (the retired `amp-model`) is skipped
+/// rather than failing the whole file.
+#[derive(Debug, Deserialize)]
+struct InstalledJson {
+    #[serde(default)]
+    items: Vec<serde_json::Value>,
+}
+
+/// The drum-kit items of an `installed.json` document. `Err` when it is
+/// not JSON of that shape.
+fn installed_json_drumkits(bytes: &[u8]) -> Result<Vec<InstalledJsonItem>, serde_json::Error> {
+    let doc: InstalledJson = serde_json::from_slice(bytes)?;
+    Ok(doc
+        .items
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<InstalledJsonItem>(v).ok())
+        .filter(|item| item.kind == "drumkit")
+        .collect())
+}
+
+/// Whether the `installed.json` at `path` lists any drum kit. Only reads:
+/// a missing or corrupt file is `false` and is never quarantined.
+pub fn installed_json_lists_drumkits(path: &Path) -> bool {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| installed_json_drumkits(&bytes).ok())
+        .is_some_and(|items| !items.is_empty())
 }
 
 /// The mark key of a kit id.
@@ -1641,14 +1683,12 @@ fn date_to_rfc3339(date: &str) -> Option<String> {
 /// is a kit under `root` without one. Matches by path, then by the item's
 /// directory name (the root may have moved). Returns how many it wrote.
 fn migrate_installed(root: &Path, m: &Migration) -> usize {
-    use crate::registry::{ContentType, InstalledRegistry};
-    // Read it directly: `registry::load_registry_from` quarantines a
-    // corrupt file, and the migration only ever reads.
+    // The migration only ever reads: a corrupt file is left as it is.
     let Ok(bytes) = std::fs::read(&m.installed_json) else {
         return 0;
     };
-    let reg: InstalledRegistry = match serde_json::from_slice(&bytes) {
-        Ok(r) => r,
+    let items = match installed_json_drumkits(&bytes) {
+        Ok(items) => items,
         Err(e) => {
             tracing::warn!(
                 "installed.json migration: {} unreadable ({e}); skipped",
@@ -1659,7 +1699,7 @@ fn migrate_installed(root: &Path, m: &Migration) -> usize {
     };
     let kits = scan_kits(root);
     let mut written = 0;
-    for item in reg.items_of(&ContentType::Drumkit) {
+    for item in &items {
         let item_path = PathBuf::from(&item.path);
         let canon_item = std::fs::canonicalize(&item_path).ok();
         let hit = kits.iter().map(|(d, _)| d).find(|d| {

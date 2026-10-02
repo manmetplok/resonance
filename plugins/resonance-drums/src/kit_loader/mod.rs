@@ -961,12 +961,19 @@ pub fn spawn_loader(
         .expect("spawn drums kit loader thread");
 }
 
-/// The per-user directory installed kits live in:
-/// `$XDG_DATA_HOME/resonance/drumkits`, next to the shared registry's
-/// `installed.json`. `None` when no data directory can be determined.
+/// The kit library's root, the directory installed kits live in:
+/// `RESONANCE_DRUMKIT_DIR` when set, else `$XDG_DATA_HOME/resonance/drumkits`
+/// (a test build's isolated root under the test hooks). `None` when no
+/// data directory can be determined.
 pub fn drumkits_root() -> Option<PathBuf> {
-    resonance_common::registry::registry_path()
-        .and_then(|p| p.parent().map(|dir| dir.join("drumkits")))
+    #[cfg(feature = "editor")]
+    {
+        crate::library::default_root()
+    }
+    #[cfg(not(feature = "editor"))]
+    {
+        resonance_common::drumkit_library::default_root()
+    }
 }
 
 /// The name a kit is shown under, from its manifest's location.

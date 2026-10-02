@@ -210,6 +210,14 @@ fn default_roots() -> Roots {
     }
 }
 
+/// The library root [`shared`] opens: a test override when one was
+/// installed, else [`drumkit_library::default_root`] (which honours
+/// `RESONANCE_DRUMKIT_DIR`). `None` when no data directory can be
+/// determined.
+pub fn default_root() -> Option<PathBuf> {
+    default_roots().root
+}
+
 // The editor's own test entry points (`TestEditor`, `test_render_editor_frame`)
 // are the only callers, and they are themselves gated behind `test-hooks`
 // (`editor/mod.rs`) — so a build without it carries none of this module.
@@ -816,16 +824,10 @@ struct Migration {
     in_index: Arc<InIndexFn>,
 }
 
-/// Whether `installed.json` lists any drum kit. Read directly: the
-/// registry's loader quarantines a corrupt file, and this only reads.
+/// Whether `installed.json` lists any drum kit (read only, never
+/// quarantined).
 fn lists_drum_kits(path: &Path) -> bool {
-    use resonance_common::registry::{ContentType, InstalledRegistry};
-    let Ok(bytes) = std::fs::read(path) else {
-        return false;
-    };
-    serde_json::from_slice::<InstalledRegistry>(&bytes)
-        .map(|reg| reg.items_of(&ContentType::Drumkit).next().is_some())
-        .unwrap_or(false)
+    drumkit_library::installed_json_lists_drumkits(path)
 }
 
 /// [`SharedKitLibrary::plok_row_state`] over a library snapshot. Only a kit

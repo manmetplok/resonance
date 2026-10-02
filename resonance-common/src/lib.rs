@@ -31,7 +31,6 @@ pub mod nam_library;
 pub mod midi_map;
 #[cfg(feature = "model")]
 pub mod freeze;
-pub mod registry;
 pub mod resample;
 pub mod reveal;
 mod scan;
