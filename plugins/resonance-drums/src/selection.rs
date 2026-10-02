@@ -907,7 +907,7 @@ pub fn play_builtin(bridge: &KitBridge) {
                 bridge
                     .kit_shared_bytes
                     .store(shared_bytes, Ordering::Relaxed);
-                *bridge.pad_samples.lock() = infos;
+                *bridge.pad_samples.lock() = Arc::new(infos);
             });
         });
     if spawned.is_err() {

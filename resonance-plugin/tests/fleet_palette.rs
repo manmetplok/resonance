@@ -215,7 +215,7 @@ fn each_editor_draws_exactly_the_knob_family_it_should() {
             {
                 range_mapped.get_or_insert_with(|| file.clone());
             }
-            if ["knob_themed(", "knob_unipolar(", "knob_bipolar("]
+            if ["knob_themed(", "knob_themed_edit(", "knob_unipolar(", "knob_bipolar("]
                 .iter()
                 .any(|call| code.contains(call))
             {

@@ -518,22 +518,18 @@ fn the_editor_shows_the_kits_names_labels_and_absent_pads() {
         !strings.iter().any(|s| s == "Count Stick" || s == "Snare Handtuch"),
         "the GM name of a named piece is drawn"
     );
-    // The kit's names are what the filter matches, and a match is on screen.
-    editor.filter_pads("conga");
-    editor.frame(Vec::new());
-    let frame = editor.frame(Vec::new());
-    assert!(frame.shows("Perc Conga"), "the filtered row is not visible");
-    editor.filter_pads("");
+    // The kit's name is on screen in its cell (the grid shows all 30 pads
+    // at once; there is no filter to find one with).
+    assert!(frame.shows("Perc Conga"), "the conga's cell is not visible");
 
     // Tom pads are dimmed, the kick is not.
-    let frame = editor.frame(Vec::new());
     for pad in TOM_PADS {
         assert!(
-            frame.widget(&format!("pad_row.{pad}.absent")).is_some(),
+            frame.widget(&format!("pad_cell.{pad}.absent")).is_some(),
             "tom pad {pad} is not dimmed"
         );
     }
-    assert!(frame.widget("pad_row.0.absent").is_none(), "the kick is dimmed");
+    assert!(frame.widget("pad_cell.0.absent").is_none(), "the kick is dimmed");
 
     // The kick's inspector: the kit's articulation labels.
     editor.select_pad(KICK_PAD);

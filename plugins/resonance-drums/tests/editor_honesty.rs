@@ -10,28 +10,70 @@
 
 const APP: &str = include_str!("../src/editor/app.rs");
 const CHROME: &str = include_str!("../src/editor/chrome.rs");
+const CONTROLS: &str = include_str!("../src/editor/controls.rs");
+const FACTORY: &str = include_str!("../src/editor/factory.rs");
 const PAD_INSPECTOR: &str = include_str!("../src/editor/pad_inspector.rs");
 const PAD_GRID: &str = include_str!("../src/editor/pad_grid.rs");
+const PADS_TAB: &str = include_str!("../src/editor/pads_tab.rs");
+const MIX_TAB: &str = include_str!("../src/editor/mix_tab.rs");
+const SETUP_TAB: &str = include_str!("../src/editor/setup_tab.rs");
 const LIBRARY_PANEL: &str = include_str!("../src/editor/library_panel.rs");
 const PLOK_PANEL: &str = include_str!("../src/editor/plok_panel.rs");
 const KIT_BROWSER: &str = include_str!("../src/editor/kit_browser.rs");
 const JOBS: &str = include_str!("../src/editor/jobs.rs");
 const MISSING_KIT: &str = include_str!("../src/editor/missing_kit.rs");
+const THEME: &str = include_str!("../src/editor/theme.rs");
+const EDITOR_MOD: &str = include_str!("../src/editor/mod.rs");
 const DOWNLOAD: &str = include_str!("../src/download.rs");
 const LIBRARY: &str = include_str!("../src/library.rs");
+
+/// Every editor source file (K5 dropped the old per-test lists and their
+/// `chrome.rs` exemption, §9): a new file joins here or the
+/// `every_editor_file_is_checked` guard fails.
+const EDITOR_FILES: [(&str, &str); 17] = [
+    ("app.rs", APP),
+    ("chrome.rs", CHROME),
+    ("controls.rs", CONTROLS),
+    ("factory.rs", FACTORY),
+    ("jobs.rs", JOBS),
+    ("kit_browser.rs", KIT_BROWSER),
+    ("library_panel.rs", LIBRARY_PANEL),
+    ("missing_kit.rs", MISSING_KIT),
+    ("mix_tab.rs", MIX_TAB),
+    ("mod.rs", EDITOR_MOD),
+    ("pad_grid.rs", PAD_GRID),
+    ("pad_inspector.rs", PAD_INSPECTOR),
+    ("pads_tab.rs", PADS_TAB),
+    ("plok_panel.rs", PLOK_PANEL),
+    ("setup_tab.rs", SETUP_TAB),
+    ("theme.rs", THEME),
+    ("download.rs (editor half)", DOWNLOAD),
+];
+
+/// The list above is every file in `src/editor/`.
+#[test]
+fn every_editor_file_is_checked() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/editor");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".rs"))
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = EDITOR_FILES
+        .iter()
+        .map(|(n, _)| n.to_string())
+        .filter(|n| !n.contains(' '))
+        .collect();
+    listed.sort();
+    assert_eq!(on_disk, listed, "add the new editor file to EDITOR_FILES");
+}
 
 /// Mics and Articulations ship inside the pad inspector, and Mod / FX do
 /// not exist at all. No tab may claim otherwise.
 #[test]
 fn no_tab_says_coming_soon() {
-    for (name, src) in [
-        ("app.rs", APP),
-        ("chrome.rs", CHROME),
-        ("pad_grid.rs", PAD_GRID),
-        ("library_panel.rs", LIBRARY_PANEL),
-        ("plok_panel.rs", PLOK_PANEL),
-        ("missing_kit.rs", MISSING_KIT),
-    ] {
+    for (name, src) in EDITOR_FILES {
         assert!(
             !src.to_lowercase().contains("coming soon"),
             "{name} still advertises a 'coming soon' tab"
@@ -49,11 +91,42 @@ fn no_tab_says_coming_soon() {
 /// `no_control_discards_its_interaction` below catches, in any file.
 #[test]
 fn chrome_claims_no_view_that_does_not_exist() {
-    for absent in ["\"Mics\"", "\"Articulations\"", "\"Mod\"", "\"FX\""] {
-        assert!(
-            !CHROME.contains(absent),
-            "chrome still offers a {absent} tab — that view does not exist"
-        );
+    for (name, src) in [("chrome.rs", CHROME), ("app.rs", APP)] {
+        for absent in ["\"Mics\"", "\"Articulations\"", "\"Mod\"", "\"FX\""] {
+            assert!(
+                !src.contains(absent),
+                "{name} still offers a {absent} tab — that view does not exist"
+            );
+        }
+    }
+    // The views that do exist, each drawn by its own module.
+    assert!(APP.contains("[\"Pads\", \"Mix\", \"Setup\"]"));
+}
+
+/// There is no solo param, so there is no Solo control: one the editor
+/// alone understood would be a fake (§6.2's sketch drew one).
+#[test]
+fn there_is_no_fake_solo() {
+    for (name, src) in EDITOR_FILES {
+        assert!(!src.contains("\"Solo\""), "{name} draws a Solo control");
+    }
+}
+
+/// Every param a control writes is announced to the host as an edit:
+/// a file that sets a param also announces (the knob/fader/chip helpers
+/// in `controls.rs` do both, and so does every hand-written pick).
+#[test]
+fn every_file_that_writes_a_param_announces_it() {
+    for (name, src) in EDITOR_FILES {
+        let writes = [".set_normalized(", ".set_plain(", "params.output.set_value(", "params.choke.set_value(", "articulation.set_value("]
+            .iter()
+            .any(|w| src.contains(w));
+        if writes {
+            assert!(
+                src.contains("announce_param_edit("),
+                "{name} writes a param without announcing it to the host"
+            );
+        }
     }
 }
 
@@ -117,15 +190,7 @@ fn discarded_widget_calls(src: &str) -> Vec<String> {
 /// Either it writes something or it should not be drawn.
 #[test]
 fn no_control_discards_its_interaction() {
-    for (name, src) in [
-        ("app.rs", APP),
-        ("chrome.rs", CHROME),
-        ("pad_grid.rs", PAD_GRID),
-        ("pad_inspector.rs", PAD_INSPECTOR),
-        ("library_panel.rs", LIBRARY_PANEL),
-        ("plok_panel.rs", PLOK_PANEL),
-        ("missing_kit.rs", MISSING_KIT),
-    ] {
+    for (name, src) in EDITOR_FILES {
         let discarded = discarded_widget_calls(src);
         assert!(
             discarded.is_empty(),
@@ -163,13 +228,19 @@ fn no_card_is_labelled_preview() {
 #[test]
 fn audition_is_live_and_no_longer_apologises() {
     assert!(
-        PAD_INSPECTOR.contains("bridge.audition(mapping.note)"),
-        "the Audition button must trigger the pad"
+        PAD_INSPECTOR.contains("bridge.audition_at(note,"),
+        "the inspector's ▶ must trigger the pad"
     );
     assert!(
-        !PAD_INSPECTOR.contains("not wired up yet"),
-        "Audition still tells the user it does nothing"
+        PADS_TAB.contains("app.bridge.audition_at(note, velocity)"),
+        "a pad cell click must trigger the pad"
     );
+    for (name, src) in EDITOR_FILES {
+        assert!(
+            !src.contains("not wired up yet"),
+            "{name}: Audition still tells the user it does nothing"
+        );
+    }
 }
 
 /// The tab bar's "Mic and articulation pickers live in each pad's
@@ -179,8 +250,8 @@ fn audition_is_live_and_no_longer_apologises() {
 /// point at: the pickers really are in the inspector.
 #[test]
 fn the_mic_and_articulation_pickers_still_live_in_the_inspector() {
-    assert!(PAD_INSPECTOR.contains("CLOSE MICS"));
-    assert!(PAD_INSPECTOR.contains("ARTICULATIONS"));
+    assert!(PAD_INSPECTOR.contains("\"MICS\""));
+    assert!(PAD_INSPECTOR.contains("\"ARTICULATION\""));
 }
 
 /// The ghost `Browse` button and the `Load kit` button next to it used to
@@ -255,6 +326,11 @@ fn no_file_dialog_runs_on_the_editor_thread() {
         ("library_panel.rs", LIBRARY_PANEL),
         ("plok_panel.rs", PLOK_PANEL),
         ("missing_kit.rs", MISSING_KIT),
+        ("mix_tab.rs", MIX_TAB),
+        ("setup_tab.rs", SETUP_TAB),
+        ("pad_inspector.rs", PAD_INSPECTOR),
+        ("pads_tab.rs", PADS_TAB),
+        ("controls.rs", CONTROLS),
     ] {
         assert!(!src.contains("rfd::"), "{name} opens a file dialog on the UI thread");
     }
@@ -282,17 +358,27 @@ fn drums_no_longer_keeps_installed_json() {
     );
 }
 
-/// §6.1: the `DRUMS` label and the "N lit" PADS badge are decoration,
-/// and are gone.
+/// §6.1: the `DRUMS` label, the "N lit" PADS badge, the traffic-light
+/// dots and the `? A ⚙` glyphs are decoration, and are gone — on every
+/// tab.
 #[cfg(feature = "editor")]
 #[test]
-fn the_tab_bar_carries_no_decoration() {
+fn the_chrome_carries_no_decoration() {
     use resonance_plugin::ResonancePlugin;
     let plugin = resonance_drums::ResonanceDrums::new();
-    let frame = resonance_drums::test_render_editor_frame(&plugin, (960.0, 640.0));
-    for t in &frame.texts {
-        assert_ne!(t.text, "DRUMS", "the DRUMS label is back");
-        assert!(!t.text.ends_with(" lit"), "the lit badge is back: {:?}", t.text);
+    for tab in ["Pads", "Mix", "Setup"] {
+        resonance_drums::library::isolate_for_tests();
+        let mut editor =
+            resonance_drums::TestEditor::new(&plugin, resonance_drums::library::shared(), (960.0, 640.0));
+        editor.show_view(tab);
+        editor.frame(Vec::new());
+        let frame = editor.frame(Vec::new());
+        for t in &frame.texts {
+            for fake in ["DRUMS", "?", "A", "⚙", "●"] {
+                assert_ne!(t.text, fake, "{tab}: {fake:?} is back");
+            }
+            assert!(!t.text.ends_with(" lit"), "{tab}: the lit badge is back: {:?}", t.text);
+        }
     }
 }
 

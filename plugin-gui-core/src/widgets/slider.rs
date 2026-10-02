@@ -238,6 +238,13 @@ pub fn fill_span(value_unit: f32, bipolar: bool) -> (f32, f32, bool) {
 /// Draw a configured slider and handle its input. Returns the new unit
 /// value while the pointer or the keyboard is positioning it.
 pub fn slider(ui: &mut egui::Ui, s: &HSlider) -> Option<f32> {
+    slider_edit(ui, s).value
+}
+
+/// [`slider`], reporting the gesture too ([`super::GestureEdit`]): a drag
+/// begins and ends; a click on the track and an arrow-key step are each
+/// one finished edit.
+pub fn slider_edit(ui: &mut egui::Ui, s: &HSlider) -> super::GestureEdit {
     let style = s.style;
     let size = egui::vec2(s.width, style.height);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
@@ -274,7 +281,11 @@ pub fn slider(ui: &mut egui::Ui, s: &HSlider) -> Option<f32> {
         )
     });
 
-    new_unit
+    super::GestureEdit {
+        value: new_unit,
+        began: response.drag_started(),
+        ended: response.drag_stopped() || response.clicked() || steps != 0.0,
+    }
 }
 
 /// Net arrow-key presses this frame — right minus left — while the

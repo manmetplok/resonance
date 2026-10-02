@@ -133,6 +133,13 @@ fn no_editor_source_subtracts_from_the_available_width_unfloored() {
             include_str!("../src/editor/pad_inspector.rs"),
         ),
         ("kit_browser.rs", include_str!("../src/editor/kit_browser.rs")),
+        ("controls.rs", include_str!("../src/editor/controls.rs")),
+        ("pads_tab.rs", include_str!("../src/editor/pads_tab.rs")),
+        ("mix_tab.rs", include_str!("../src/editor/mix_tab.rs")),
+        ("setup_tab.rs", include_str!("../src/editor/setup_tab.rs")),
+        ("library_panel.rs", include_str!("../src/editor/library_panel.rs")),
+        ("plok_panel.rs", include_str!("../src/editor/plok_panel.rs")),
+        ("missing_kit.rs", include_str!("../src/editor/missing_kit.rs")),
     ];
 
     for (name, src) in SOURCES {

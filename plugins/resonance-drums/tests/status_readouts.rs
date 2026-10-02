@@ -209,3 +209,117 @@ fn envelope_is_measured_from_the_take() {
     // Nothing decoded means no shape at all.
     assert!(sample_info::envelope(&[], 0).is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// K5: the last hit, per-port meters, every take's waveform
+// ---------------------------------------------------------------------------
+
+use resonance_drums::last_hit::{self, LastHit, LastHits};
+
+/// A packed hit reads back as itself; the sequence number tells two
+/// identical hits apart, and 0 means "no hit yet".
+#[test]
+fn a_last_hit_round_trips() {
+    let hit = LastHit {
+        pad: 29,
+        velocity: 98,
+        layer: 4,
+        layers: 7,
+        take: 1,
+        takes: 3,
+        seq: 513,
+    };
+    assert_eq!(last_hit::unpack(last_hit::pack(&hit)), Some(hit));
+    assert_eq!(last_hit::unpack(0), None);
+    assert_eq!(hit.cell_text(), "layer 5/7 · take 2/3");
+    let again = LastHit { seq: 514, ..hit };
+    assert_ne!(last_hit::pack(&hit), last_hit::pack(&again));
+}
+
+/// Each hit the sampler plays is published: its pad, the velocity it
+/// struck with, and the layer and take it played — a new sequence number
+/// each time, even for the same cell.
+#[test]
+fn the_sampler_publishes_every_hit() {
+    let (mut sampler, _peak) = loaded_sampler();
+    let hits = Arc::new(LastHits::default());
+    sampler.set_last_hits(hits.clone());
+    assert!(hits.latest().is_none());
+
+    sampler.note_on(drum_map::TOM_HIGH, 1.0);
+    let first = hits.pad(9).expect("the tom hit is published");
+    assert_eq!(hits.latest(), Some(first));
+    assert_eq!((first.pad, first.velocity), (9, 127));
+    assert_eq!((first.layer, first.layers), (1, 2), "the loud layer");
+    assert_eq!(first.takes, 3);
+
+    sampler.note_on(drum_map::TOM_HIGH, 1.0);
+    let second = hits.pad(9).unwrap();
+    assert_ne!(second.seq, first.seq, "a second hit must read as new");
+    assert_eq!(second.take, (first.take + 1) % 3, "the takes cycle");
+
+    // A note on a pad with nothing loaded plays nothing, and publishes
+    // nothing.
+    sampler.note_on(PAD_MAPPINGS[0].note, 1.0);
+    assert!(hits.pad(0).is_none());
+    assert_eq!(hits.latest(), Some(second));
+}
+
+/// Each port's meter reads that port's block peak: the tom's close mic on
+/// its own port, its overhead on Overhead, silence elsewhere.
+#[test]
+fn port_peaks_match_each_port() {
+    let (mut sampler, _peak) = loaded_sampler();
+    let ports: Arc<[AtomicU32; NUM_PORTS]> = Arc::new(std::array::from_fn(|_| AtomicU32::new(0)));
+    sampler.set_port_peak(ports.clone());
+    sampler.note_on(drum_map::TOM_HIGH, 1.0);
+
+    let frames = 32;
+    let mut port_data: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_PORTS)
+        .map(|_| (vec![0.0; frames], vec![0.0; frames]))
+        .collect();
+    {
+        let mut bufs: Vec<PortBuffers<'_>> = port_data
+            .iter_mut()
+            .map(|(l, r)| PortBuffers {
+                left: l.as_mut_slice(),
+                right: r.as_mut_slice(),
+            })
+            .collect();
+        let params = DrumParams::default();
+        params
+            .output_mode
+            .set_value(resonance_drums::params::OUTPUT_MODE_MULTI);
+        sampler.render_block(&mut bufs, frames, &params, &[]);
+    }
+    let mut sounding = 0;
+    for (port, (l, r)) in port_data.iter().enumerate() {
+        let want = l.iter().chain(r).fold(0.0f32, |m, s| m.max(s.abs()));
+        let got = f32::from_bits(ports[port].load(Ordering::Relaxed));
+        assert_eq!(got, want, "port {port}");
+        if want > 0.0 {
+            sounding += 1;
+        }
+    }
+    assert_eq!(sounding, 2, "the tom's close port and Overhead");
+}
+
+/// The inspector can draw any take a hit played: the info carries every
+/// take of the reference bank, and which banks the pad holds.
+#[test]
+fn pad_sample_info_carries_every_take_and_the_banks() {
+    let pad = tom_pad(9);
+    let info = sample_info::info_for_pad(&pad, 48_000.0).unwrap();
+    assert_eq!(info.takes.len(), 2, "one entry per layer");
+    assert_eq!(info.takes[0].len(), 1);
+    assert_eq!(info.takes[1].len(), 3);
+    let loud = info.take(1, 2).expect("layer 2, take 3");
+    assert_eq!(loud.frames, 32, "64 interleaved stereo samples");
+    assert!(loud.envelope.iter().all(|&(lo, hi)| lo == 0.5 && hi == 0.5));
+    assert!(info.take(2, 0).is_none() && info.take(0, 1).is_none());
+    assert_eq!(
+        info.banks.close,
+        [("Tom01".to_string(), "07_Tom01_md421".to_string())]
+    );
+    assert!(info.banks.overhead && !info.banks.bleed && !info.banks.room);
+}

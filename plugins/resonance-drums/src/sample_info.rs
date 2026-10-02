@@ -6,7 +6,7 @@
 //! bridge. Everything in here is measured from the decoded samples — the
 //! inspector never draws a shape it did not get from a real take.
 
-use crate::kit::{LoadedMicBank, LoadedPad};
+use crate::kit::{BankKind, LoadedMicBank, LoadedPad};
 
 
 /// Number of min/max buckets in the published waveform envelope. Sized for
@@ -38,6 +38,54 @@ pub struct PadSampleInfo {
     /// Min/max pairs of the displayed take, `ENVELOPE_BUCKETS` long
     /// (shorter only when the take has fewer frames than buckets).
     pub envelope: Vec<(f32, f32)>,
+    /// Every take of the bank, `[layer][take]` (soft → loud, take order),
+    /// so the inspector can draw the take a pad **last played** (K5,
+    /// [`crate::last_hit`]) rather than the fixed one above. Measured from
+    /// what is in memory: a streamed take's envelope covers its head.
+    pub takes: Vec<Vec<TakeShape>>,
+    /// Which banks the pad holds — what the inspector offers a trim for,
+    /// so it never draws a control for a mic the pad does not have.
+    pub banks: PadBanks,
+}
+
+/// One take's length and waveform envelope.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TakeShape {
+    /// Frames in the take (the whole take, streamed or not).
+    pub frames: usize,
+    /// Min/max pairs, as [`PadSampleInfo::envelope`].
+    pub envelope: Vec<(f32, f32)>,
+}
+
+/// The banks one loaded pad holds.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PadBanks {
+    /// The close-mic banks, in bank order: (position, setup key).
+    /// Bank 0 is trimmed by `pad_N_mic1_trim`, bank 1 by `pad_N_mic2_trim`.
+    pub close: Vec<(String, String)>,
+    /// Any overhead bank (slot 1, 2 or 3): `pad_N_oh_trim` applies.
+    pub overhead: bool,
+    /// A bleed bank (E15): `pad_N_bleed_trim` applies.
+    pub bleed: bool,
+    /// A room bank (E15): `pad_N_room_trim` applies.
+    pub room: bool,
+}
+
+impl PadBanks {
+    /// What `pad` holds.
+    pub fn of(pad: &LoadedPad) -> Self {
+        let has = |kind: fn(&BankKind) -> bool| pad.extra_banks.iter().any(|e| kind(&e.kind));
+        Self {
+            close: pad
+                .close_mics
+                .iter()
+                .map(|b| (b.position.clone(), b.setup_key.clone()))
+                .collect(),
+            overhead: pad.overhead.is_some() || has(|k| matches!(k, BankKind::Overhead { .. })),
+            bleed: has(|k| matches!(k, BankKind::Bleed)),
+            room: has(|k| matches!(k, BankKind::Room)),
+        }
+    }
 }
 
 impl PadSampleInfo {
@@ -62,6 +110,11 @@ impl PadSampleInfo {
             (true, false) => self.setup_key.clone(),
             (false, false) => format!("{} · {}", self.position, self.setup_key),
         }
+    }
+
+    /// The take a hit on `layer`/`take` played, if this bank has it.
+    pub fn take(&self, layer: usize, take: usize) -> Option<&TakeShape> {
+        self.takes.get(layer)?.get(take)
     }
 
     /// Layer / take line, e.g. `layer 4/4 · take 1/3`.
@@ -92,6 +145,21 @@ pub fn info_for_bank(bank: &LoadedMicBank, sample_rate: f32) -> Option<PadSample
         frames: take.frames(),
         sample_rate,
         envelope: envelope_channels(take.samples(), take.resident_frames(), take.channels()),
+        takes: bank
+            .layers
+            .iter()
+            .map(|layer| {
+                layer
+                    .round_robins
+                    .iter()
+                    .map(|t| TakeShape {
+                        frames: t.frames(),
+                        envelope: envelope_channels(t.samples(), t.resident_frames(), t.channels()),
+                    })
+                    .collect()
+            })
+            .collect(),
+        banks: PadBanks::default(),
     })
 }
 
@@ -103,7 +171,9 @@ pub fn info_for_pad(pad: &LoadedPad, sample_rate: f32) -> Option<PadSampleInfo> 
         .close_mics
         .first()
         .or(pad.overhead.as_ref())?;
-    info_for_bank(bank, sample_rate)
+    let mut info = info_for_bank(bank, sample_rate)?;
+    info.banks = PadBanks::of(pad);
+    Some(info)
 }
 
 /// Build one entry per pad, in pad order.

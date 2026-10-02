@@ -863,7 +863,7 @@ pub fn spawn_loader(
                 Ok(Ok(kit)) => {
                     let num_pads = kit.pads.len();
                     let name = kit_display_name(&request.path, drumkits_root().as_deref());
-                    *bridge.catalog.lock() = kit.catalog;
+                    *bridge.catalog.lock() = Arc::new(kit.catalog);
                     // The pads go with the hand-off, under `kit_handoff`:
                     // the editor and the articulation text describe the
                     // kit the sampler takes, never one still decoding. A
@@ -904,7 +904,7 @@ pub fn spawn_loader(
                     bridge
                         .kit_shared_bytes
                         .store(kit.stats.shared_bytes, Ordering::Relaxed);
-                    *bridge.pad_samples.lock() = infos;
+                    *bridge.pad_samples.lock() = Arc::new(infos);
                     *bridge.kit_path.lock() = Some(request.path.clone());
                     *bridge.kit_status.lock() = KitStatus::Loaded {
                         name,
