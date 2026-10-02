@@ -9,6 +9,7 @@
 //! same track coalesced into one entry like a GUI drag burst. Every
 //! mutating call now runs in its own compound group.
 
+use resonance_app::message::{Message, TrackMessage, TransportMessage};
 use resonance_app::state::{MidiClipState, ViewMode};
 use resonance_app::Resonance;
 use resonance_audio::types::TrackType;
@@ -118,4 +119,67 @@ fn two_fader_calls_are_two_entries_and_one_undo_takes_back_one() {
         (volume_db(&mut app) - -6.0).abs() < 1e-4,
         "one undo restores the first call's value"
     );
+}
+
+/// A gated call that only reads (`master.summary`, a meter poll) records
+/// nothing, so it must not split the user's fader ride into several
+/// entries either (code review STATE2-06): the run breaks only when a
+/// call actually edits.
+#[test]
+fn a_read_only_poll_does_not_break_the_users_fader_ride() {
+    let mut app = app();
+    let ride = |app: &mut Resonance, db: f32| {
+        let _ = app.update(Message::Track(TrackMessage::SetTrackVolume(TRACK, db)));
+    };
+    ride(&mut app, -6.0);
+    ride(&mut app, -5.0);
+    assert_eq!(entries(&app), 1, "a GUI ride coalesces");
+
+    let summary = roundtrip(&mut app, Request::without_params(97, "master.summary"));
+    assert!(summary.error.is_none(), "{:?}", summary.error);
+    ride(&mut app, -4.0);
+    assert_eq!(entries(&app), 1, "the poll did not split the ride");
+
+    // An editing call still breaks it: the next ride step is its own entry.
+    set_volume(&mut app, -3.0);
+    ride(&mut app, -2.0);
+    assert_eq!(entries(&app), 3, "ride, call, the rest of the ride");
+}
+
+/// A control edit landing while a GUI drag is open (code review
+/// STATE2-05) used to record under the drag's pre-drag snapshot, so the
+/// user's undo of the drag took the agent's edit back with it. It is
+/// refused `busy` until the gesture ends; read-only calls still answer.
+#[test]
+fn an_edit_during_a_gui_drag_is_busy_and_reads_still_answer() {
+    use resonance_app::state::LoopDragTarget;
+    use resonance_control::ErrorKind;
+
+    let mut app = app();
+    let unity = volume_db(&mut app);
+    let _ = app.update(Message::Transport(TransportMessage::StartLoopDrag(
+        LoopDragTarget::Out,
+    )));
+    let refused = call(
+        &mut app,
+        "mixer.set_volume_db",
+        serde_json::json!({"track_id": TRACK, "volume_db": -6.0}),
+    );
+    let error = refused.error.expect("an edit mid-drag is refused");
+    assert_eq!(error.kind(), ErrorKind::Busy, "{}", error.message);
+    assert!(error.message.contains("gesture"), "{}", error.message);
+    let summary = roundtrip(&mut app, Request::without_params(97, "master.summary"));
+    assert!(summary.error.is_none(), "reads answer mid-drag: {:?}", summary.error);
+    let status = roundtrip(&mut app, Request::without_params(96, "edit.status"));
+    assert!(status.error.is_none(), "{:?}", status.error);
+
+    // A click that moved nothing records nothing, and the edit now lands.
+    let _ = app.update(Message::Transport(TransportMessage::EndLoopDrag));
+    assert_eq!(entries(&app), 0);
+    set_volume(&mut app, -6.0);
+    assert_eq!(entries(&app), 1);
+    let _: UndoResult = roundtrip(&mut app, Request::without_params(98, "edit.undo"))
+        .result()
+        .expect("edit.undo succeeds");
+    assert!((volume_db(&mut app) - unity).abs() < 1e-4, "the undo takes back the call");
 }

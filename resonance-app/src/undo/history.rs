@@ -280,14 +280,20 @@ impl UndoHistory {
     // `try_undo` snapshots the current (post-group) state when the entry
     // is undone.
 
-    /// Open a compound group. Breaks any in-progress coalesce run, so
-    /// the group's opening edit starts a fresh entry instead of merging
-    /// into a preceding fader burst. Groups do not nest — a group opens
-    /// and closes synchronously within one control dispatch on the
-    /// update loop, so nothing can interleave.
+    /// Open a compound group. Groups do not nest — a group opens and
+    /// closes synchronously within one control dispatch on the update
+    /// loop, so nothing can interleave.
+    ///
+    /// An in-progress coalesce run is broken only once the group's
+    /// opening edit arms it ([`absorb_into_compound`](Self::absorb_into_compound)),
+    /// so that edit starts a fresh entry instead of merging into a
+    /// preceding fader burst. A group that records nothing — a gated
+    /// read-only call such as `master.summary` or a `meter.*` poll —
+    /// leaves the user's run intact: an agent polling while the user
+    /// rides a fader must not split the ride into many entries (code
+    /// review STATE2-06).
     pub fn begin_compound(&mut self) {
         debug_assert!(!self.in_compound(), "compound groups do not nest");
-        self.coalesce_key = None;
         self.compound = CompoundPhase::Open;
     }
 
@@ -295,9 +301,10 @@ impl UndoHistory {
     /// A group that recorded nothing leaves the history untouched.
     pub fn end_compound(&mut self) {
         // Nothing inside a group records via the coalesce path (the
-        // opening edit records plain), so no run can leak out of it.
+        // opening edit records plain, and arming broke any run), so no
+        // run can leak out of an armed group.
         debug_assert!(
-            self.coalesce_key.is_none(),
+            self.compound != CompoundPhase::Armed || self.coalesce_key.is_none(),
             "a coalesce run cannot open inside a compound group"
         );
         self.compound = CompoundPhase::Closed;
@@ -321,6 +328,9 @@ impl UndoHistory {
             CompoundPhase::Closed => false,
             CompoundPhase::Open => {
                 self.compound = CompoundPhase::Armed;
+                // The call edits: break the user's coalesce run now
+                // (lazily, see `begin_compound`).
+                self.coalesce_key = None;
                 false
             }
             CompoundPhase::Armed => true,
