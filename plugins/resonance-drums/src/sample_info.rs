@@ -6,8 +6,10 @@
 //! bridge. Everything in here is measured from the decoded samples — the
 //! inspector never draws a shape it did not get from a real take.
 
-use crate::kit::{BankKind, LoadedMicBank, LoadedPad};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use crate::kit::{BankKind, LoadedMicBank, LoadedPad, LoadedSample, SampleData};
 
 /// Number of min/max buckets in the published waveform envelope. Sized for
 /// the ~500 px inspector canvas: enough detail to read the transient, small
@@ -35,9 +37,13 @@ pub struct PadSampleInfo {
     /// Frames in the displayed take, and the rate it was decoded to.
     pub frames: usize,
     pub sample_rate: f32,
-    /// Min/max pairs of the displayed take, `ENVELOPE_BUCKETS` long
-    /// (shorter only when the take has fewer frames than buckets).
-    pub envelope: Vec<(f32, f32)>,
+    /// Frames of the displayed take held in memory — `frames` unless disk
+    /// streaming (E14) keeps only its head; `envelope` covers these.
+    pub resident_frames: usize,
+    /// Min/max pairs of the displayed take's resident frames,
+    /// `ENVELOPE_BUCKETS` long (shorter only when it has fewer frames
+    /// than buckets).
+    pub envelope: Envelope,
     /// Every take of the bank, `[layer][take]` (soft → loud, take order),
     /// so the inspector can draw the take a pad **last played** (K5,
     /// [`crate::last_hit`]) rather than the fixed one above. Measured from
@@ -48,13 +54,39 @@ pub struct PadSampleInfo {
     pub banks: PadBanks,
 }
 
+/// A take's min/max envelope, shared: a reload that keeps a take (the
+/// same decoded `SampleData`, from the kit cache) keeps its envelope too,
+/// rather than measuring every take of every pad again ([`envelope_of`]).
+pub type Envelope = Arc<Vec<(f32, f32)>>;
+
 /// One take's length and waveform envelope.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TakeShape {
     /// Frames in the take (the whole take, streamed or not).
     pub frames: usize,
-    /// Min/max pairs, as [`PadSampleInfo::envelope`].
-    pub envelope: Vec<(f32, f32)>,
+    /// Frames of it held in memory: `frames`, or the head of a streamed
+    /// take. The envelope covers these — a waveform drawn across the full
+    /// width would stretch the head over the take's whole length.
+    pub resident_frames: usize,
+    /// Min/max pairs of the resident frames, as
+    /// [`PadSampleInfo::envelope`].
+    pub envelope: Envelope,
+}
+
+impl TakeShape {
+    /// The fraction of the take the envelope covers (`resident_frames /
+    /// frames`), `1.0` for a take held whole.
+    pub fn resident_fraction(&self) -> f32 {
+        resident_fraction(self.resident_frames, self.frames)
+    }
+}
+
+fn resident_fraction(resident: usize, frames: usize) -> f32 {
+    if frames == 0 {
+        1.0
+    } else {
+        (resident as f32 / frames as f32).clamp(0.0, 1.0)
+    }
 }
 
 /// The banks one loaded pad holds.
@@ -112,6 +144,11 @@ impl PadSampleInfo {
         }
     }
 
+    /// [`TakeShape::resident_fraction`] of the displayed take.
+    pub fn resident_fraction(&self) -> f32 {
+        resident_fraction(self.resident_frames, self.frames)
+    }
+
     /// The take a hit on `layer`/`take` played, if this bank has it.
     pub fn take(&self, layer: usize, take: usize) -> Option<&TakeShape> {
         self.takes.get(layer)?.get(take)
@@ -144,7 +181,8 @@ pub fn info_for_bank(bank: &LoadedMicBank, sample_rate: f32) -> Option<PadSample
         take_index: 0,
         frames: take.frames(),
         sample_rate,
-        envelope: envelope_channels(take.samples(), take.resident_frames(), take.channels()),
+        resident_frames: take.resident_frames(),
+        envelope: envelope_of(take),
         takes: bank
             .layers
             .iter()
@@ -154,7 +192,8 @@ pub fn info_for_bank(bank: &LoadedMicBank, sample_rate: f32) -> Option<PadSample
                     .iter()
                     .map(|t| TakeShape {
                         frames: t.frames(),
-                        envelope: envelope_channels(t.samples(), t.resident_frames(), t.channels()),
+                        resident_frames: t.resident_frames(),
+                        envelope: envelope_of(t),
                     })
                     .collect()
             })
@@ -165,12 +204,17 @@ pub fn info_for_bank(bank: &LoadedMicBank, sample_rate: f32) -> Option<PadSample
 
 /// Build the info for a pad, reading the same reference bank that
 /// `DrumSampler::note_on` uses to pick the velocity layer and round robin:
-/// the first close mic, else the overhead.
+/// the first close mic, else overhead slot 1, else an overhead slot
+/// layered on it (E15) — a pad whose only bank is a slot-2 or slot-3
+/// overhead plays that bank, so the inspector shows it (and its MICS)
+/// too. Bleed and room never lead.
 pub fn info_for_pad(pad: &LoadedPad, sample_rate: f32) -> Option<PadSampleInfo> {
-    let bank = pad
-        .close_mics
-        .first()
-        .or(pad.overhead.as_ref())?;
+    let bank = pad.close_mics.first().or(pad.overhead.as_ref()).or_else(|| {
+        pad.extra_banks
+            .iter()
+            .find(|extra| matches!(extra.kind, BankKind::Overhead { .. }))
+            .map(|extra| &extra.bank)
+    })?;
     let mut info = info_for_bank(bank, sample_rate)?;
     info.banks = PadBanks::of(pad);
     Some(info)
@@ -178,9 +222,55 @@ pub fn info_for_pad(pad: &LoadedPad, sample_rate: f32) -> Option<PadSampleInfo> 
 
 /// Build one entry per pad, in pad order.
 pub fn infos_for_pads(pads: &[LoadedPad], sample_rate: f32) -> Vec<Option<PadSampleInfo>> {
-    pads.iter()
+    let infos = pads
+        .iter()
         .map(|pad| info_for_pad(pad, sample_rate))
-        .collect()
+        .collect();
+    prune_envelopes();
+    infos
+}
+
+/// Envelopes measured so far, by the address of the take's shared
+/// `SampleData`, with a weak handle that tells a live take from a freed
+/// one whose address was reused.
+type EnvelopeCache = HashMap<usize, (Weak<SampleData>, Envelope)>;
+
+fn envelope_cache() -> &'static Mutex<EnvelopeCache> {
+    static CACHE: OnceLock<Mutex<EnvelopeCache>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// The envelope of `take`'s resident frames, measured once per decoded
+/// take: a mic change reloads one pad, but the infos are rebuilt for all
+/// thirty — every other pad's takes are the same `Arc<SampleData>` (the
+/// kit cache's), so their envelopes come back from here instead of being
+/// measured again.
+pub fn envelope_of(take: &LoadedSample) -> Envelope {
+    let shared = take.shared();
+    let key = Arc::as_ptr(shared) as usize;
+    let mut cache = envelope_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((weak, envelope)) = cache.get(&key) {
+        if weak.upgrade().is_some_and(|live| Arc::ptr_eq(&live, shared)) {
+            return envelope.clone();
+        }
+    }
+    let envelope = Arc::new(envelope_channels(
+        take.samples(),
+        take.resident_frames(),
+        take.channels(),
+    ));
+    cache.insert(key, (Arc::downgrade(shared), envelope.clone()));
+    envelope
+}
+
+/// Forget the envelopes of takes no kit holds any more.
+fn prune_envelopes() {
+    envelope_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retain(|_, (weak, _)| weak.strong_count() > 0);
 }
 
 /// Bytes of decoded sample data a kit holds, counting every mic bank,

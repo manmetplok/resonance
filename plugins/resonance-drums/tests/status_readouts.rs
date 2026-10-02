@@ -323,3 +323,123 @@ fn pad_sample_info_carries_every_take_and_the_banks() {
     );
     assert!(info.banks.overhead && !info.banks.bleed && !info.banks.room);
 }
+
+// ---------------------------------------------------------------------------
+// fix6: E15 lead banks, streamed heads, shared envelopes
+// ---------------------------------------------------------------------------
+
+/// A pad whose only bank is an overhead slot layered on slot 1 (E15) —
+/// what `note_on` leads with when slot 1 plays nothing on it — has an
+/// info, and its banks say it holds overheads (so the inspector offers
+/// MICS for it).
+#[test]
+fn a_pad_led_by_an_extra_overhead_slot_has_an_info() {
+    use resonance_drums::kit::{BankKind, ExtraBank};
+    let mut pad = silent_pad(12);
+    pad.extra_banks.push(ExtraBank {
+        kind: BankKind::Overhead { slot: 1 },
+        bank: LoadedMicBank {
+            position: "OHsXY".to_string(),
+            setup_key: "25_OHsXY_USM69i".to_string(),
+            layers: vec![layer(0.5, 2)],
+        },
+    });
+    let info = sample_info::info_for_pad(&pad, 48_000.0).expect("the slot-2 overhead leads");
+    assert_eq!(info.setup_key, "25_OHsXY_USM69i");
+    assert!(info.banks.overhead);
+    // Bleed or room alone never lead.
+    let mut bleed_only = silent_pad(12);
+    bleed_only.extra_banks.push(ExtraBank {
+        kind: BankKind::Bleed,
+        bank: LoadedMicBank {
+            position: "SNBtm".to_string(),
+            setup_key: "09_SNBtm_e906".to_string(),
+            layers: vec![layer(0.5, 1)],
+        },
+    });
+    assert!(sample_info::info_for_pad(&bleed_only, 48_000.0).is_none());
+}
+
+/// A mono 16-bit WAV of `frames` frames, every sample `value`.
+fn wav_bytes(frames: usize, value: i16) -> Vec<u8> {
+    let data_len = frames * 2;
+    let mut out = Vec::with_capacity(44 + data_len);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&48_000u32.to_le_bytes());
+    out.extend_from_slice(&96_000u32.to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(data_len as u32).to_le_bytes());
+    for _ in 0..frames {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
+/// A streamed take keeps only its head in memory: the info says how much
+/// of the take the envelope covers, so the inspector draws the head over
+/// its share of the width rather than stretched across all of it.
+#[test]
+fn a_streamed_take_says_how_much_of_it_the_envelope_covers() {
+    let frames = 48_000;
+    let bytes = wav_bytes(frames, 8_000);
+    let dir = std::env::temp_dir().join(format!("resonance-drums-sinfo-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("long.wav");
+    std::fs::write(&path, &bytes).unwrap();
+    let meta = std::fs::metadata(&path).unwrap();
+    let data = resonance_drums::kit::decode_sample_streamed(
+        bytes,
+        48_000.0,
+        4_800,
+        &path,
+        meta.len(),
+        meta.modified().ok(),
+    )
+    .unwrap();
+    assert!(data.tail().is_some(), "the take did not stream");
+    let take = LoadedSample::from_shared(Arc::new(data));
+    let mut pad = silent_pad(9);
+    pad.close_mics.push(LoadedMicBank {
+        position: "Tom01".to_string(),
+        setup_key: "07_Tom01_md421".to_string(),
+        layers: vec![VelocityLayer::new(vec![take])],
+    });
+    let info = sample_info::info_for_pad(&pad, 48_000.0).unwrap();
+    assert_eq!(info.frames, frames);
+    assert_eq!(info.resident_frames, 4_800);
+    assert!((info.resident_fraction() - 0.1).abs() < 1e-6);
+    let shape = info.take(0, 0).unwrap();
+    assert_eq!((shape.frames, shape.resident_frames), (frames, 4_800));
+    assert!((shape.resident_fraction() - 0.1).abs() < 1e-6);
+    // Whole takes cover all of themselves.
+    let whole = sample_info::info_for_pad(&tom_pad(9), 48_000.0).unwrap();
+    assert_eq!(whole.resident_fraction(), 1.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Rebuilding the infos for a kit whose takes did not change reuses
+/// their envelopes (the same allocation) instead of measuring them again;
+/// a take that is gone is forgotten.
+#[test]
+fn rebuilt_infos_share_the_envelopes_of_unchanged_takes() {
+    let pads = vec![tom_pad(9)];
+    let first = sample_info::infos_for_pads(&pads, 48_000.0);
+    let second = sample_info::infos_for_pads(&pads, 48_000.0);
+    let (a, b) = (first[0].as_ref().unwrap(), second[0].as_ref().unwrap());
+    assert!(Arc::ptr_eq(&a.envelope, &b.envelope));
+    for (la, lb) in a.takes.iter().zip(&b.takes) {
+        for (ta, tb) in la.iter().zip(lb) {
+            assert!(Arc::ptr_eq(&ta.envelope, &tb.envelope));
+        }
+    }
+    // A different decoded take with the same samples is measured anew.
+    let other = sample_info::infos_for_pads(&[tom_pad(9)], 48_000.0);
+    assert!(!Arc::ptr_eq(&a.envelope, &other[0].as_ref().unwrap().envelope));
+}

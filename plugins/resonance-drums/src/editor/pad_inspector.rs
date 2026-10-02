@@ -212,23 +212,50 @@ fn draw_sample_stage(
         // The take the last hit played, when this kit has it; else the
         // full-velocity one, said to be that.
         let played = hit.and_then(|h| info.take(h.layer, h.take).map(|t| (h, t)));
-        let (envelope, frames, readout) = match played {
+        let (envelope, frames, resident, readout) = match played {
             Some((h, take)) => (
                 &take.envelope,
                 take.frames,
+                take.resident_fraction(),
                 format!("last hit v{} · {}", h.velocity, h.cell_text()),
             ),
             None => (
                 &info.envelope,
                 info.frames,
+                info.resident_fraction(),
                 format!("not played yet — showing the loudest: {}", info.layer_text()),
             ),
         };
 
+        // The envelope covers what is in memory. A streamed take keeps
+        // only its head resident: the head is drawn over its share of the
+        // take's length, and the rest is shaded as streamed — never the
+        // head stretched across the whole width under the take's full
+        // duration.
         let half = h * 0.36;
+        let shown_w = w * resident;
+        if resident < 1.0 {
+            let tail = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + shown_w, rect.top()),
+                rect.right_bottom(),
+            );
+            p.rect_filled(tail, 0.0, theme::BG_2);
+            p.line_segment(
+                [tail.left_top(), tail.left_bottom()],
+                egui::Stroke::new(1.0, theme::LINE_2),
+            );
+            let streamed = p.text(
+                tail.center(),
+                egui::Align2::CENTER_CENTER,
+                "streamed from disk",
+                egui::FontId::proportional(10.0),
+                theme::TEXT_4,
+            );
+            probe(ui, "inspector.streamed", streamed);
+        }
         let buckets = envelope.len();
         if buckets > 0 {
-            let bucket_w = w / buckets as f32;
+            let bucket_w = shown_w / buckets as f32;
             let color = if played.is_some() {
                 theme::ACCENT_SOFT
             } else {
