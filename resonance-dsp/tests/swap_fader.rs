@@ -303,10 +303,10 @@ fn janitor_thread_drops_retired_payloads_off_caller() {
 }
 
 #[test]
-fn without_sink_displaced_payloads_still_drop_in_place() {
-    // The pre-retirement contract, kept for payloads with trivial
-    // destructors (e.g. `SwapFader<f32>` in resonance-granular-delay):
-    // no sink means displaced payloads drop where they always did.
+fn without_sink_heap_payloads_are_parked_not_dropped() {
+    // DSP2-15: with no sink a displaced payload with a real destructor
+    // used to drop in place, on the audio thread. It is parked for the
+    // owner's `take_retired` instead.
     let drops = Arc::new(AtomicUsize::new(0));
     let mut fader = SwapFader::new(4);
 
@@ -315,7 +315,70 @@ fn without_sink_displaced_payloads_still_drop_in_place() {
     for _ in 0..4 {
         fader.next();
     }
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(fader.take_retired().map(|p| p.id), Some(1));
+    assert_eq!(fader.active().map(|p| p.id), Some(2));
+}
+
+#[test]
+fn without_sink_trivial_payloads_just_swap() {
+    // `SwapFader<f32>` (resonance-granular-delay) has nothing to retire:
+    // swaps are always admitted and nothing is parked.
+    let mut fader = SwapFader::new(4);
+    fader.install(1.0f32);
+    for v in 2..20 {
+        fader.begin_swap(v as f32);
+        for _ in 0..8 {
+            fader.next();
+        }
+        assert_eq!(fader.active().copied(), Some(v as f32));
+    }
+    assert!(fader.take_retired().is_none());
+    assert_eq!(fader.overflow_drops(), 0);
+}
+
+#[test]
+fn a_swap_that_could_not_retire_is_refused_not_dropped() {
+    // DSP2-15: a dead janitor (channel wedged full) plus full parking
+    // slots used to end in a drop on the audio thread. `try_begin_swap`
+    // refuses instead and hands the payload back; nothing is dropped.
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (tx, _rx) = sync_channel(1);
+    tx.try_send(DropCounted::new(99, &drops)).expect("wedge the channel");
+    let mut fader = SwapFader::new(4);
+    fader.set_retire_sink(tx);
+    fader.install(DropCounted::new(0, &drops));
+
+    let mut refused = None;
+    for id in 1..20 {
+        match fader.try_begin_swap(DropCounted::new(id, &drops)) {
+            Ok(()) => {
+                for _ in 0..8 {
+                    fader.next();
+                }
+            }
+            Err(p) => {
+                refused = Some(p);
+                break;
+            }
+        }
+    }
+    let refused = refused.expect("a swap is eventually refused");
+    assert_eq!(drops.load(Ordering::SeqCst), 0, "a payload dropped in the fader");
+    // The fader still plays the last admitted payload.
+    assert_eq!(fader.active().map(|p| p.id), Some(refused.id - 1));
+    assert!(!fader.try_begin_clear(), "a clear must be refused as well");
+
+    // The infallible form counts what it has to drop.
+    fader.begin_swap(refused);
+    assert_eq!(fader.overflow_drops(), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
+
+    // Once the owner sweeps the parking slots, swaps are admitted again.
+    while let Some(p) = fader.take_retired() {
+        drop(p);
+    }
+    assert!(fader.try_begin_swap(DropCounted::new(100, &drops)).is_ok());
 }
 
 #[test]
