@@ -93,3 +93,22 @@ fn reset_rearms_the_gate() {
         "half-full window after reset must read neutral 0.0"
     );
 }
+
+/// DSP2-16: one NaN or Inf sample used to poison the running sums until
+/// reset. Once it has left the window the meter must read normally again.
+#[test]
+fn non_finite_sample_does_not_stick() {
+    let sr = 48_000.0;
+    let mut m = CorrelationMeter::new(sr);
+    let n = (sr * 0.2) as usize;
+    let mut l: Vec<f32> = (0..n).map(|i| (i as f32 * 0.01).sin()).collect();
+    l[10] = f32::NAN;
+    let mut r = l.clone();
+    r[20] = f32::INFINITY;
+    m.push_stereo(&l, &r);
+    let c = m.correlation();
+    assert!(
+        (c - 1.0).abs() < 1e-3,
+        "after a NaN/Inf that left the window: {c}"
+    );
+}

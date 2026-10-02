@@ -32,9 +32,6 @@ use crate::lufs::gating::{block_mean_square_to_lufs, ABSOLUTE_GATE_LUFS};
 /// -10 LU relative gate used for integrated loudness).
 pub const LRA_RELATIVE_GATE_LU: f64 = -20.0;
 
-/// Hard cap on the number of 1 s blocks we hold before dropping new ones.
-const BLOCK_CAP: usize = 60 * 60; // 60 minutes of 1 s blocks.
-
 /// Histogram floor. Blocks below the absolute gate are never stored, so
 /// the floor coincides with [`ABSOLUTE_GATE_LUFS`].
 const HIST_MIN_LUFS: f64 = ABSOLUTE_GATE_LUFS;
@@ -61,11 +58,12 @@ pub struct LraMeter {
     /// energetic mean that seeds the relative gate.
     abs_sum_ms: f64,
     /// Number of absolute-gated blocks.
+    ///
+    /// There is no session cap: the histogram is constant memory, so a
+    /// block of any session length is a bucket increment. (A cap used to
+    /// silently drop every block past 3600 pushes, which at the bounce
+    /// measurer's 10 Hz cadence froze the LRA after 6 minutes.)
     abs_count: usize,
-    /// Total blocks accepted (including sub-absolute-gate ones), for the
-    /// [`BLOCK_CAP`] session cap.
-    total_blocks: usize,
-    dropped: u64,
 }
 
 impl LraMeter {
@@ -75,8 +73,6 @@ impl LraMeter {
             lufs_sums: vec![0.0f64; HIST_BINS].into_boxed_slice(),
             abs_sum_ms: 0.0,
             abs_count: 0,
-            total_blocks: 0,
-            dropped: 0,
         }
     }
 
@@ -85,8 +81,6 @@ impl LraMeter {
         self.lufs_sums.fill(0.0);
         self.abs_sum_ms = 0.0;
         self.abs_count = 0;
-        self.total_blocks = 0;
-        self.dropped = 0;
     }
 
     /// Record a 3-second short-term mean-square. Intended to be called at
@@ -94,11 +88,6 @@ impl LraMeter {
     /// allocation: the absolute gate is applied here and the surviving
     /// block becomes a bucket increment plus two running sums.
     pub fn push_short_term_mean_square(&mut self, mean_square: f64) {
-        if self.total_blocks >= BLOCK_CAP {
-            self.dropped += 1;
-            return;
-        }
-        self.total_blocks += 1;
         let lufs = block_mean_square_to_lufs(mean_square);
         if lufs >= ABSOLUTE_GATE_LUFS {
             self.abs_sum_ms += mean_square;
