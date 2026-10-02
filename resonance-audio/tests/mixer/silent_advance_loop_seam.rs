@@ -27,9 +27,7 @@ fn harness() -> MixAudioHarness {
         true,
     );
     let s = h.shared();
-    s.loop_in.store(1_000, Ordering::Relaxed);
-    s.loop_out.store(2_000, Ordering::Relaxed);
-    s.loop_enabled.store(true, Ordering::Relaxed);
+    s.set_loop_range(resonance_audio::test_support::LoopRange::new(true, 1_000, 2_000));
     s.playing.store(true, Ordering::Relaxed);
     h
 }
@@ -69,7 +67,7 @@ fn landing_exactly_on_loop_out_wraps_to_loop_in() {
 #[test]
 fn a_loop_shorter_than_a_buffer_stays_inside_the_loop() {
     let mut h = reference_harness();
-    h.shared().loop_out.store(1_050, Ordering::Relaxed);
+    h.shared().set_loop_range(resonance_audio::test_support::LoopRange::new(true, 1_000, 1_050));
     h.shared().playhead.store(1_040, Ordering::Release);
     h.render();
     let p = h.shared().playhead.load(Ordering::Acquire);

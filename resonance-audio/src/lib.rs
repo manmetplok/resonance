@@ -138,6 +138,12 @@ pub mod test_support {
     /// `tests/engine/offline_render_gate.rs` can hold the real guard over the
     /// mixer and engine harnesses.
     pub use crate::engine::{OfflineRenderGuard, OFFLINE_RENDER_BUSY_MSG};
+    /// The loop range the callback wraps at, published as one value
+    /// (code review RT-13): tests set it with `SharedState::set_loop_range`.
+    pub use crate::engine::LoopRange;
+    /// The recording ring's sizing (code review RT-17), and the count-in →
+    /// record hand-off states (RT-08).
+    pub use crate::engine::{count_in_arm, recording_ring_len, RECORDING_RING_SECONDS};
     /// The deferred-drop queue every callback-visible `ArcSwap` is
     /// published through (code review MIX-04 / ARCH-02 A2-2), and the two
     /// publish helpers, so `tests/retire_queue.rs` can pin the primitive

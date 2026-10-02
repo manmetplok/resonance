@@ -288,11 +288,8 @@ fn playing_blocks_with_loop_seam_are_bit_identical() {
     h.shared().input_channels.store(IN_CH as u16, Ordering::Relaxed);
     h.shared().master_volume_bits.store(0.8f32.to_bits(), Ordering::Relaxed);
     // A loop that ends 40 frames into the fifth block.
-    h.shared().loop_enabled.store(true, Ordering::Relaxed);
-    h.shared().loop_in.store(64, Ordering::Relaxed);
     h.shared()
-        .loop_out
-        .store((BLOCK * 4 + 40) as u64, Ordering::Relaxed);
+        .set_loop_range(resonance_audio::test_support::LoopRange::new(true, 64, (BLOCK * 4 + 40) as u64));
 
     let mut hash = BitHash::new();
     let mut heard = false;
@@ -311,10 +308,8 @@ fn playing_blocks_with_loop_seam_are_bit_identical() {
     // the case the end-of-block check's `>=` exists for (a strict `>`
     // would miss the seam on every cycle at pro-audio quanta).
     h.shared().playhead.store(0, Ordering::Relaxed);
-    h.shared().loop_in.store(0, Ordering::Relaxed);
     h.shared()
-        .loop_out
-        .store((BLOCK * 3) as u64, Ordering::Relaxed);
+        .set_loop_range(resonance_audio::test_support::LoopRange::new(true, 0, (BLOCK * 3) as u64));
     for block in 0..4u32 {
         h.push_monitor(&input_block(600 + block));
         let out = h.render().to_vec();
@@ -509,11 +504,8 @@ fn audition_blocks_are_bit_identical() {
     use std::sync::atomic::Ordering;
     let mut h = harness(false);
     h.shared().playing.store(true, Ordering::Relaxed);
-    h.shared().loop_enabled.store(true, Ordering::Relaxed);
-    h.shared().loop_in.store(0, Ordering::Relaxed);
     h.shared()
-        .loop_out
-        .store((BLOCK * 3 + 17) as u64, Ordering::Relaxed);
+        .set_loop_range(resonance_audio::test_support::LoopRange::new(true, 0, (BLOCK * 3 + 17) as u64));
     h.start_audition(noise(BLOCK * 5, 71), true);
     // The same overlay with the transport stopped: the audition alone.
     let mut alone = harness(false);

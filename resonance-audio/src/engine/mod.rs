@@ -4,16 +4,28 @@
 //! (`thread`, `transport`, `tracks`, `clips`, `midi`, `plugins`,
 //! `busses`, plus `scan` and `bounce`).
 
-/// Ring buffer size for recording input: ~10 seconds at 96kHz stereo.
-/// Sized as a safety margin between the cpal input callback (producer)
-/// and the engine control thread's drain-to-WAV loop (consumer); the
-/// engine thread wakes at ~60 Hz, so even a pathological scheduling
-/// gap fits inside this.
-pub(crate) const RECORDING_RING_SIZE: usize = 96000 * 2 * 10;
+/// Seconds of capture the recording ring holds: the safety margin
+/// between the input callback (producer) and the engine control thread's
+/// drain-to-WAV loop (consumer). The engine thread wakes at ~60 Hz but
+/// also runs every blocking command handler, so the margin is generous.
+pub const RECORDING_RING_SECONDS: usize = 10;
+
+/// The recording ring's length in samples for a capture stream of
+/// `input_channels` interleaved channels at `sample_rate`: the ring holds
+/// whole frames, so it is sized in frames × channels (code review RT-17 —
+/// a fixed sample count held 20 s of stereo but ~2 s of an 18-in
+/// interface). Never below the historical 10 s of 96 kHz stereo.
+/// Allocated by the engine thread when the stream is set up, never on
+/// the audio thread.
+pub fn recording_ring_len(sample_rate: u32, input_channels: u16) -> usize {
+    const FLOOR: usize = 96_000 * 2 * RECORDING_RING_SECONDS;
+    let per_second = sample_rate.max(1) as usize * input_channels.max(1) as usize;
+    (per_second * RECORDING_RING_SECONDS).max(FLOOR)
+}
 pub(crate) use crate::limits::MAX_BUSSES;
 
 use indexmap::IndexMap;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8};
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -53,6 +65,22 @@ pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(ctx: &thread::HandlerCtx, f: F
 
 pub(crate) mod retire;
 pub use retire::Retired;
+
+mod loop_range;
+pub use loop_range::LoopRange;
+
+/// States of [`SharedState::count_in_record_arm`] (code review RT-08).
+pub mod count_in_arm {
+    /// No record is waiting on a count-in.
+    pub const IDLE: u8 = 0;
+    /// A session is open; the audio thread starts it when the count-in ends.
+    pub const ARMED: u8 = 1;
+    /// The audio thread is mid-flip (a few stores); never seen for long.
+    pub const FIRING: u8 = 2;
+    /// The audio thread started the take; the engine thread finishes the
+    /// bookkeeping and goes back to `IDLE`.
+    pub const FIRED: u8 = 3;
+}
 
 pub(crate) mod internal;
 
@@ -164,11 +192,11 @@ pub struct SharedState {
     /// no stream is open. Used by the mix callback to de-interleave
     /// per-track monitor audio from a multi-channel input device.
     pub input_channels: AtomicU16,
-    /// Loop (cycle) playback enabled: when true, the audio callback
-    /// wraps the playhead from `loop_out` back to `loop_in`.
-    pub loop_enabled: AtomicBool,
-    pub loop_in: AtomicU64,
-    pub loop_out: AtomicU64,
+    /// The loop (cycle) range, one published value so a block can never
+    /// see half of a move (code review RT-13). Read with
+    /// [`SharedState::loop_range`], written with
+    /// [`SharedState::set_loop_range`].
+    pub(crate) loop_range: arc_swap::ArcSwap<loop_range::LoopRange>,
     /// True while a record-with-count-in is in flight. The mixer uses
     /// this to pick its count-in branch (hold the playhead, skip
     /// track/clip rendering, render metronome ticks and monitoring).
@@ -185,6 +213,16 @@ pub struct SharedState {
     /// with `count_in_remaining` to derive elapsed frames for beat
     /// alignment inside the mixer's count-in branch.
     pub count_in_total: AtomicU64,
+    /// Count-in → record hand-off (code review RT-08), one of
+    /// [`count_in_arm`]'s states. The engine thread opens the recording
+    /// session when the count-in starts and sets `ARMED`; the audio
+    /// thread, in the block whose frames finish the count-in, moves it
+    /// `ARMED → FIRING`, starts the playhead at the exact frame the
+    /// count-in ends, sets `recording`, leaves the count-in branch and
+    /// publishes `FIRED`. Stop / Pause settle it first
+    /// (`transport::settle_count_in_arm`), so a take is either fully
+    /// started or never started.
+    pub count_in_record_arm: AtomicU8,
     /// How many offline renders are running right now (ba todo #1218).
     ///
     /// Bounce / export / freeze / stem export / mix measurement all run on
@@ -543,12 +581,11 @@ impl Default for SharedState {
             master_fx_bypass: crate::bypass::BypassFade::new(),
             recording_overflow: AtomicU64::new(0),
             input_channels: AtomicU16::new(0),
-            loop_enabled: AtomicBool::new(false),
-            loop_in: AtomicU64::new(0),
-            loop_out: AtomicU64::new(0),
+            loop_range: arc_swap::ArcSwap::from_pointee(loop_range::LoopRange::default()),
             count_in_active: AtomicBool::new(false),
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
+            count_in_record_arm: AtomicU8::new(count_in_arm::IDLE),
             offline_render_count: AtomicU32::new(0),
             external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
             dsp_load_ema_bits: AtomicU32::new(0),

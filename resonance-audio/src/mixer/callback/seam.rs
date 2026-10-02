@@ -7,8 +7,6 @@
 //! playback: no silent gap, and no stray audio from past `loop_out`
 //! bleeding across the seam.
 
-use std::sync::atomic::Ordering;
-
 use crate::engine::SharedState;
 use crate::mixer::common::{panic_instrument_tracks, TransportSnap};
 use crate::mixer::render_core::BlockInputs;
@@ -43,11 +41,13 @@ impl Seam {
 /// aligned case renders the full block as `head` and sets `tail = 0`,
 /// snapping the playhead back to `loop_in` for the next buffer.
 pub(super) fn detect(shared: &SharedState, playhead: u64, frames: usize) -> Option<Seam> {
-    if !shared.loop_enabled.load(Ordering::Relaxed) {
+    // One snapshot of the whole range: a loop moved mid-play can never
+    // pair the new `loop_in` with the old `loop_out` (code review RT-13).
+    let range = shared.loop_range();
+    if !range.enabled {
         return None;
     }
-    let lo = shared.loop_in.load(Ordering::Relaxed);
-    let hi = shared.loop_out.load(Ordering::Relaxed);
+    let (lo, hi) = (range.loop_in, range.loop_out);
     if hi > lo && playhead < hi && playhead + frames as u64 >= hi {
         let head_frames = (hi - playhead) as usize;
         Some(Seam {

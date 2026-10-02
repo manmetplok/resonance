@@ -77,9 +77,7 @@ fn render(loop_out: u64, reroute: Option<Reroute>) -> Vec<f32> {
     h.push_track(track);
     h.push_clip(dc_clip());
     let shared = h.shared_arc();
-    shared.loop_in.store(0, Ordering::Relaxed);
-    shared.loop_out.store(loop_out, Ordering::Relaxed);
-    shared.loop_enabled.store(true, Ordering::Relaxed);
+    shared.set_loop_range(resonance_audio::test_support::LoopRange::new(true, 0, loop_out));
     shared.playing.store(true, Ordering::Relaxed);
     let mut cb = MixAudioHarness::on_shared(shared, BLOCK, 2, SR);
     let mut left = Vec::with_capacity(BLOCKS * BLOCK);

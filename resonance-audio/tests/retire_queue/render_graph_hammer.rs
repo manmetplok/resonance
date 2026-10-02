@@ -784,9 +784,7 @@ fn a_500_clip_project_under_heavy_edits_renders_every_block_and_frees_nothing_on
     };
     let shared = engine.h.shared_arc();
     let arm = |shared: &SharedState| {
-        shared.loop_in.store(LOOP_IN, Ordering::Relaxed);
-        shared.loop_out.store(LOOP_IN + LOOP_LEN, Ordering::Relaxed);
-        shared.loop_enabled.store(true, Ordering::Relaxed);
+        shared.set_loop_range(resonance_audio::test_support::LoopRange::new(true, LOOP_IN, LOOP_IN + LOOP_LEN));
         shared.playing.store(true, Ordering::Relaxed);
     };
     engine.build_base();

@@ -74,6 +74,8 @@ mod persist_clip_wavs;
 mod playback_source_handler;
 #[path = "engine/playhead_seek_race.rs"]
 mod playhead_seek_race;
+#[path = "engine/recording_alignment.rs"]
+mod recording_alignment;
 #[path = "engine/reference_handlers.rs"]
 mod reference_handlers;
 #[path = "engine/startup_no_default_track.rs"]

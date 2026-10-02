@@ -2,14 +2,25 @@
 //! emit metronome ticks from a count-in-local elapsed counter so the last
 //! click lands exactly one beat before the punch-in line.
 //!
-//! `count_in_active` stays set across the brief window between
-//! `count_in_remaining` hitting zero and the engine control thread opening
-//! the recording stream, so the playhead stays pinned to the punch-in line
-//! throughout.
+//! A record count-in starts its take here, on the audio thread, at the
+//! exact frame the count-in ends (code review RT-08). The engine thread
+//! opened the recording session when the count-in started and armed
+//! `SharedState::count_in_record_arm`; the block whose frames finish the
+//! count-in moves the playhead on by the frames left after the count-in
+//! ended, sets `recording` and leaves this branch, so the next block is
+//! already a playing block on the punch-in timeline. Nothing waits for the
+//! engine thread's tick or an input-stream rebuild.
+//!
+//! A count-in with nothing to record (no armed session) hands over the old
+//! way: `count_in_active` stays set across the brief window between
+//! `count_in_remaining` hitting zero and the engine control thread clearing
+//! it, so the playhead stays pinned to the punch-in line throughout.
 
 use std::sync::atomic::Ordering;
 
+use crate::engine::count_in_arm;
 use crate::mixer::click::render_count_in_clicks;
+use crate::mixer::common::commit_playhead;
 use crate::mixer::master::apply_master_volume_and_peaks;
 use crate::mixer::monitor::mix_monitor_passthrough;
 
@@ -20,6 +31,7 @@ pub(super) fn render_count_in_block(
     scratch: &mut CallbackScratch<'_>,
     timing: &BlockTiming<'_>,
     monitor: MonitorRead,
+    playhead: u64,
     frames: usize,
 ) {
     let shared = inputs.shared;
@@ -69,12 +81,36 @@ pub(super) fn render_count_in_block(
     apply_master_volume_and_peaks(scratch.data, inputs.channels, shared, None);
 
     // Decrement the remaining-clicks counter. Once it hits zero the
-    // metronome goes quiet, but `count_in_active` keeps the mixer in this
-    // branch until the engine control thread has actually opened the
-    // recording stream — that cross-thread handoff is what guarantees the
-    // playhead doesn't start advancing until recording is armed.
+    // metronome goes quiet; a record count-in flips to recording right
+    // below, a count-in with nothing to record waits for the engine thread
+    // to clear `count_in_active`.
     let new_remaining = count_in_remaining.saturating_sub(frames as u64);
     shared
         .count_in_remaining
         .store(new_remaining, Ordering::Relaxed);
+
+    // Record count-in: the count-in ended inside this block, so the take
+    // starts at that exact frame. The `click_frames..frames` tail is
+    // timeline already — silent here, but the playhead moves over it, so
+    // the next block starts exactly where the performer's downbeat fell.
+    if new_remaining == 0
+        && shared
+            .count_in_record_arm
+            .compare_exchange(
+                count_in_arm::ARMED,
+                count_in_arm::FIRING,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+    {
+        let past_downbeat = (frames - click_frames) as u64;
+        // A Seek that landed under this block wins, as in every branch.
+        commit_playhead(shared, playhead, playhead + past_downbeat);
+        shared.recording.store(true, Ordering::SeqCst);
+        shared.count_in_active.store(false, Ordering::Release);
+        shared
+            .count_in_record_arm
+            .store(count_in_arm::FIRED, Ordering::Release);
+    }
 }

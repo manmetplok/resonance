@@ -371,11 +371,7 @@ fn fixture(threads: usize, shuffle_seed: u64) -> MixAudioHarness {
     shared
         .master_volume_bits
         .store(0.7f32.to_bits(), Ordering::Relaxed);
-    shared.loop_enabled.store(true, Ordering::Relaxed);
-    shared.loop_in.store(64, Ordering::Relaxed);
-    shared
-        .loop_out
-        .store((BLOCK * 9 + 37) as u64, Ordering::Relaxed);
+    shared.set_loop_range(resonance_audio::test_support::LoopRange::new(true, 64, (BLOCK * 9 + 37) as u64));
 
     h.set_render_threads(threads, shuffle_seed);
     h

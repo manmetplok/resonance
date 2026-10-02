@@ -287,9 +287,7 @@ fn playing_harness() -> MixAudioHarness {
     tempo.rebuild_bar_table(48_000);
     let h = MixAudioHarness::new(vec![track], Vec::new(), vec![clip], Vec::new(), Vec::new(), tempo, 128, 2, 48_000, true);
     h.shared().playing.store(true, Ordering::Relaxed);
-    h.shared().loop_enabled.store(true, Ordering::Relaxed);
-    h.shared().loop_in.store(0, Ordering::Relaxed);
-    h.shared().loop_out.store(4096, Ordering::Relaxed);
+    h.shared().set_loop_range(resonance_audio::test_support::LoopRange::new(true, 0, 4096));
     h
 }
 
