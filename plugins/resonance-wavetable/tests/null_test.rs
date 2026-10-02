@@ -290,6 +290,11 @@ fn output_matches_golden() {
     // a non-zero envelope (a click). Only `voice_stealing_u7`, the one
     // scenario that steals, moved.
     //
+    // And for DSP2-13: unison sub-voices start at fixed low-discrepancy
+    // phase offsets instead of all at 0 (a coherent onset peak). Every
+    // scenario with unison > 1 moved; `init_single` (sub-voice 0 only,
+    // still at phase 0) did not.
+    //
     // Every transform applied to the DSP itself is a caching or hoisting
     // change that re-uses the identical expression, so all of those are
     // bit-exact against the golden — with exactly one deliberate exception:

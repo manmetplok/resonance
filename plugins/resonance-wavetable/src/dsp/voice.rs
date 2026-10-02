@@ -363,11 +363,13 @@ impl Voice {
     ///
     /// Called right after [`Self::trigger`] (never after a legato
     /// take-over, whose phases and drift carry on). `phase_random` is the
-    /// `osc_phase_random` knob: each start phase is a uniform draw scaled by
-    /// it, so 0 leaves `trigger`'s reset-to-zero phases exactly as they were
-    /// and 1 is a fully random start — the free-running oscillator of an
-    /// analog poly, where a key finds its VCO wherever it happens to be.
-    /// The draws are the same whatever the knobs say.
+    /// `osc_phase_random` knob: each start phase is the sub-voice's fixed
+    /// [`unison_phase_spread`] offset plus a uniform draw scaled by it, so
+    /// 0 is the fixed spread (sub-voice 0 at phase 0) and 1 is a fully
+    /// random start — the free-running oscillator of an analog poly, where
+    /// a key finds its VCO wherever it happens to be. The draws are the
+    /// same whatever the knobs say. A sounding voice that was retriggered
+    /// keeps its running phases (DSP2-03).
     pub fn seed_analog(&mut self, seed: u32, phase_random: f32, coeffs: &DriftCoeffs) {
         let rng = &mut self.analog_rng;
         *rng = AnalogRng::new(seed);
@@ -382,8 +384,9 @@ impl Voice {
             // A retriggered sounding voice keeps its running phases
             // (DSP2-03); see `fresh_phases_from`.
             if i >= self.fresh_phases_from {
-                sub.osc1_phase = p1 * phase_random;
-                sub.osc2_phase = p2 * phase_random;
+                let (s1, s2) = unison_phase_spread(i);
+                sub.osc1_phase = (s1 + p1 * phase_random).fract();
+                sub.osc2_phase = (s2 + p2 * phase_random).fract();
             }
         }
     }
@@ -416,6 +419,24 @@ impl Voice {
         self.amp_env.reset();
         self.mod_env.reset();
     }
+}
+
+/// Fixed start-phase offsets of unison sub-voice `i` for osc1 and osc2, in
+/// cycles (DSP2-13).
+///
+/// With every sub-voice starting at phase 0 the stack was phase-locked at
+/// the onset: a coherent peak about √N above the steady level (the sum is
+/// scaled by 1/√N), then a slow phasey sweep as the detune pulled the
+/// copies apart. Low-discrepancy offsets (multiples of the golden-ratio
+/// and plastic-number conjugates) spread the copies at once without ever
+/// lining up evenly — `i / N` spacing would cancel a saw's lower harmonics
+/// at the onset instead. Sub-voice 0 stays at phase 0, so a single-voice
+/// patch with `osc_phase_random` at 0 starts exactly as before.
+#[inline]
+fn unison_phase_spread(i: usize) -> (f64, f64) {
+    const GOLDEN: f64 = 0.618_033_988_749_894_9;
+    const PLASTIC: f64 = 0.754_877_666_246_692_8;
+    ((i as f64 * GOLDEN).fract(), (i as f64 * PLASTIC).fract())
 }
 
 /// Distribute unison sub-voices symmetrically across the stereo field and
