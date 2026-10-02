@@ -60,7 +60,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 
 | Wave | Batch | Items | Model | Status | Merge |
 |---|---|---|---|---|---|
-| 1 | S1 control-surface safety | STATE2-01, STATE2-10 (mixdown ext), ARCH2-06, STATE2-05, STATE2-06, STATE2-08, STATE2-09 | opus | running | |
+| 1 | S1 control-surface safety | STATE2-01, STATE2-10 (mixdown ext), ARCH2-06, STATE2-05, STATE2-06, STATE2-08, STATE2-09 | opus | merged | a591626c |
 | 1 | S2 save robustness + error surface | STATE2-02, UX-13, UX-04, UX-05 | opus | merged | 50140dcd |
 | 1 | P1 plugin live values (host/bridge side) | HOST-01, PUX-01 (host side: refresh before serialise), STATE2-03, STATE2-07, STATE2-10 (read-only param undo) | opus | running | |
 | 1 | R1 recording alignment | RT-01, RT-02, RT-08, RT-13, RT-17 | opus | running | |
@@ -68,7 +68,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 1 | D1b DSP: instruments/effects | DSP2-01, -02, -03, -09, -10, -12, -13, -14 | opus | running | |
 | 2 | P2 editor widgets + announce | PUX-01 (widget announce), PUX-02, -03, -05, -06, -08, -11 | opus | after P1 | |
 | 2 | R2 lock contention | HOST-02/RT-07, HOST-03, HOST-08, HOST-10 | opus | after P1 | |
-| 2 | U1 project lifecycle UX | UX-01, UX-03/STATE2-04, UX-11, UX-12, UX-14, UX-15, UX-16 | opus | after S1, S2 | |
+| 2 | U1 project lifecycle UX | UX-01, UX-03/STATE2-04, UX-11, UX-12, UX-14, UX-15, UX-16 | opus | running | |
 | 2 | U2 view correctness | UX-02, UX-06, UX-10, UX-22 | opus | running | |
 | 2 | H1 host spec | HOST-05, -06, -09, -11, -12, -13, -15, -16 | opus | after P1, R1 | |
 | 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | after R2, H1 | |
@@ -81,6 +81,10 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 
 ### Follow-ups raised by batches
 
+- **FU-S1a:** STATE2-05 was fixed by answering busy. If that proves too coarse, do the split-gesture fix in `undo/mod.rs` `record_undo` and drop the `reads_open_project_only` exemption list. The comment at `undo/mod.rs` ~:121 ("begin_compound already broke…") is now stale.
+- **FU-S1b:** the MCP `call_tool` override has no end-to-end test, because that needs rmcp's `client` feature. Also, `combined_router()` is rebuilt on every call; cache it.
+- **FU-S1c:** the first open of `presets.vocabulary`/`search` with no plugin id still scans on the update loop. Warm the PresetLibrary off-thread.
+- **FU-S1d:** some nested leaf specs, such as `AmountSpec`, still accept unknown fields.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
