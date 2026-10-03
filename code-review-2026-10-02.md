@@ -66,7 +66,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 1 | R1 recording alignment | RT-01, RT-02, RT-08, RT-13, RT-17 | opus | merged | b398afbe |
 | 1 | D1a DSP: mastering/compressor/shared | DSP2-04, -05, -06, -07, -08, -11 (mastering/eq/stereo), -15, -16 | opus | merged | 96e27095 |
 | 1 | D1b DSP: instruments/effects | DSP2-01, -02, -03, -09, -10, -12, -13, -14 | opus | merged | 34c6bd05 |
-| 2 | P2 editor widgets + announce | PUX-01 (widget announce), PUX-02, -03, -05, -06, -08, -11 | opus | running |  |
+| 2 | P2 editor widgets + announce | PUX-01 (widget announce), PUX-02, -03, -05, -06, -08, -11 | opus | merged | 75dfe7f9 |
 | 2 | R2 lock contention | HOST-02/RT-07, HOST-03, HOST-08, HOST-10 | opus | merged | 2991b9fc |
 | 2 | U1 project lifecycle UX | UX-01, UX-03/STATE2-04, UX-11, UX-12, UX-14, UX-15, UX-16 | opus | merged | c8c79366 |
 | 2 | U2 view correctness | UX-02, UX-06, UX-10, UX-22 | opus | merged | 72ab6819 |
@@ -74,7 +74,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 2 | D2 DSP follow-ups | FU-D1b1 (rescale wavetable factory presets to the new envelope timing), FU-D1a1 (amp/IR `try_begin_swap`) | sonnet | running | |
 | 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | after R2, H1 | |
 | 3 | R4 RT correctness | RT-03, RT-05, RT-06, RT-09, RT-10, RT-11, RT-12, RT-14, RT-15, RT-16, RT-18 | opus | after R1, H1 | |
-| 3 | P3 editor runtime | PUX-04, -07, -09, -10, -12, PUX-01 (preset-bar recall), DEP-03 | sonnet | after P2 | |
+| 3 | P3 editor runtime | PUX-04, -07, -09, -10, -12, PUX-01 (preset-bar recall), DEP-03, FU-P1a, FU-P2a, FU-P2b, FU-P2e, FU-P2f | sonnet | running | |
 | 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | after wave 2 | |
 | 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | running (deps met early) |  |
 | 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | after wave 3 | |
@@ -124,6 +124,13 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 - **FU-R2c:** `handle_set_plugin_param` still runs `params.flush` and `value_to_text` under the lock; queue them to the audio thread.
 - **FU-R2d:** `PluginScanFailure` now also carries duplicate-id warnings; give them a separate warning kind in the app.
 - **FU-R2e:** any new host thread that makes main-thread calls must call `thread_check::mark_main_thread()`.
+- **FU-P2a:** move the delay character/routing labels into `params.rs` `with_choices` (in P3).
+- **FU-P2b:** the EQ freq display ("1.00 kHz") doesn't parse back for typed entry (in P3).
+- **FU-P2c:** pre-existing EQ layout problems: the dynamics Att/Rel rows overflow the 350 px `STRIP_H`; the header Output/Auto-gain go off-window at ≤960 px.
+- **FU-P2d:** drums' own knob wrappers have no typed entry.
+- **FU-P2e:** a gesture that never ends leaves a stale start value in the shared ledger (in P3).
+- **FU-P2f:** the classic `widgets::knob` is unused by plugins and can be deleted (in P3).
+- *UX change (P2):* the nine classic-knob editors now use the themed lavender knob (label below, sub-label row). The delay editor is rebuilt as wrapping cards with Sync/Freeze/Gate chips. The granular editor's minimum width is 1320 px.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
