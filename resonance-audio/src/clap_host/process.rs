@@ -8,9 +8,10 @@ use std::ffi::c_void;
 use std::ptr;
 
 use clap_sys::events::{
-    clap_event_header, clap_event_note, clap_event_param_value, clap_event_transport,
-    clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF,
-    CLAP_EVENT_NOTE_ON, CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
+    clap_event_header, clap_event_midi, clap_event_note, clap_event_param_value,
+    clap_event_transport, clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID,
+    CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_TRANSPORT,
+    CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
     CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
 };
 use clap_sys::fixedpoint::CLAP_BEATTIME_FACTOR;
@@ -22,20 +23,57 @@ use super::instance::{ClapInstance, StereoBufMut};
 // Event list for parameter changes + note events
 // ---------------------------------------------------------------------------
 
-/// Context for input events carrying both param value and note events.
-/// Param events (time=0) come first, then note events, which
-/// `process_multi_with_key` sorts by time and bounds to the block.
-///
-/// Also reused by [`super::params`] to build the param-only event list
-/// handed to `clap_plugin_params.flush` (with `note_events` empty).
+/// The input event list handed to `process()` (and, with no notes or
+/// MIDI, to `params.flush`): parameter changes, CLAP note events and
+/// `CLAP_EVENT_MIDI` messages, each list sorted by time on its own, read
+/// in the merged order `order` gives — CLAP requires the plugin see one
+/// list sorted by time (code review HOST-06: param events are no longer
+/// all at time 0). At equal times params come first, then notes, then
+/// MIDI, so a value lands before the note it shapes.
 pub(super) struct MixedEventListCtx {
     pub(super) param_events: Vec<clap_event_param_value>,
     pub(super) note_events: Vec<clap_event_note>,
+    pub(super) midi_events: Vec<clap_event_midi>,
+    /// Each entry is a list tag (top two bits) and an index into it.
+    pub(super) order: Vec<u32>,
+}
+
+const ORDER_PARAM: u32 = 0;
+const ORDER_NOTE: u32 = 1 << 30;
+const ORDER_MIDI: u32 = 2 << 30;
+const ORDER_INDEX: u32 = (1 << 30) - 1;
+
+impl MixedEventListCtx {
+    /// Fill `order` with a three-way merge of the (individually sorted)
+    /// lists. Allocation-free while `order` has room for all of them.
+    pub(super) fn merge_order(&mut self) {
+        self.order.clear();
+        let (mut p, mut n, mut m) = (0usize, 0usize, 0usize);
+        loop {
+            let tp = self.param_events.get(p).map(|e| e.header.time);
+            let tn = self.note_events.get(n).map(|e| e.header.time);
+            let tm = self.midi_events.get(m).map(|e| e.header.time);
+            let take_param = tp.is_some_and(|t| tn.is_none_or(|u| t <= u) && tm.is_none_or(|u| t <= u));
+            let take_note = !take_param && tn.is_some_and(|t| tm.is_none_or(|u| t <= u));
+            if take_param {
+                self.order.push(ORDER_PARAM | p as u32);
+                p += 1;
+            } else if take_note {
+                self.order.push(ORDER_NOTE | n as u32);
+                n += 1;
+            } else if tm.is_some() {
+                self.order.push(ORDER_MIDI | m as u32);
+                m += 1;
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 pub(super) unsafe extern "C" fn mixed_events_size(list: *const clap_input_events) -> u32 {
     let ctx = &*((*list).ctx as *const MixedEventListCtx);
-    (ctx.param_events.len() + ctx.note_events.len()) as u32
+    ctx.order.len() as u32
 }
 
 pub(super) unsafe extern "C" fn mixed_events_get(
@@ -43,17 +81,44 @@ pub(super) unsafe extern "C" fn mixed_events_get(
     index: u32,
 ) -> *const clap_event_header {
     let ctx = &*((*list).ctx as *const MixedEventListCtx);
-    let param_count = ctx.param_events.len();
-    let idx = index as usize;
-    if idx < param_count {
-        &ctx.param_events[idx].header as *const clap_event_header
-    } else {
-        let note_idx = idx - param_count;
-        if note_idx < ctx.note_events.len() {
-            &ctx.note_events[note_idx].header as *const clap_event_header
-        } else {
-            ptr::null()
+    let Some(&entry) = ctx.order.get(index as usize) else {
+        return ptr::null();
+    };
+    let idx = (entry & ORDER_INDEX) as usize;
+    let header = match entry & !ORDER_INDEX {
+        ORDER_PARAM => ctx.param_events.get(idx).map(|e| &e.header),
+        ORDER_NOTE => ctx.note_events.get(idx).map(|e| &e.header),
+        _ => ctx.midi_events.get(idx).map(|e| &e.header),
+    };
+    header.map_or(ptr::null(), |h| h as *const clap_event_header)
+}
+
+/// Stable in-place insertion sort of any event list by `header.time`
+/// (allocation-free; the lists are short and almost always sorted).
+#[inline]
+fn sort_by_time<T>(events: &mut [T], time: impl Fn(&T) -> u32) {
+    for i in 1..events.len() {
+        let mut j = i;
+        while j > 0 && time(&events[j - 1]) > time(&events[j]) {
+            events.swap(j - 1, j);
+            j -= 1;
         }
+    }
+}
+
+/// A `CLAP_EVENT_MIDI` on note port 0.
+#[inline]
+fn midi_event(time: u32, data: [u8; 3]) -> clap_event_midi {
+    clap_event_midi {
+        header: clap_event_header {
+            size: std::mem::size_of::<clap_event_midi>() as u32,
+            time,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            type_: CLAP_EVENT_MIDI,
+            flags: 0,
+        },
+        port_index: 0,
+        data,
     }
 }
 
@@ -99,13 +164,7 @@ fn keep_for_later(
 /// wants off-then-on, a zero-length note on-then-off.
 #[inline]
 fn sort_notes_by_time(events: &mut [clap_event_note]) {
-    for i in 1..events.len() {
-        let mut j = i;
-        while j > 0 && events[j - 1].header.time > events[j].header.time {
-            events.swap(j - 1, j);
-            j -= 1;
-        }
-    }
+    sort_by_time(events, |e| e.header.time);
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +265,8 @@ impl ClapInstance {
         frames: usize,
     ) {
         if !self.active || frames == 0 {
+            // Automation points are queued for this block only.
+            self.pending_auto.clear();
             return;
         }
 
@@ -214,6 +275,7 @@ impl ClapInstance {
         // passes an empty slice today; this guard keeps the function safe
         // for any input rather than safe by coincidence.
         if outputs.is_empty() {
+            self.pending_auto.clear();
             return;
         }
 
@@ -250,6 +312,7 @@ impl ClapInstance {
         );
         let frames = frames.min(max);
         if frames == 0 {
+            self.pending_auto.clear();
             return;
         }
         // The stopped-transport window counts down in rendered frames
@@ -265,13 +328,25 @@ impl ClapInstance {
         // reads silence.
         self.ports.bind(outputs, key, frames);
 
-        // Build input events from pending parameter changes (reuse pre-allocated buffer)
+        let frames_u32 = frames as u32;
+        let last_frame = frames_u32 - 1;
+
+        // Parameter events (reuse pre-allocated buffer): changes queued
+        // through `set_param` at the block start, then the automation
+        // points at their own samples (code review HOST-06), sorted by
+        // time — stable, so a later-queued value at the same sample wins.
         self.param_event_buf.clear();
         self.param_event_buf.extend(
             self.pending_params
                 .drain(..)
                 .map(|(param_id, value)| super::params::param_value_event(param_id, value)),
         );
+        self.param_event_buf.extend(self.pending_auto.drain(..).map(|(time, param_id, value)| {
+            // Queued for this block, so inside it; clamped in case the
+            // block was cut short (`frames` above).
+            super::params::param_value_event_at(param_id, value, time.min(last_frame))
+        }));
+        sort_by_time(&mut self.param_event_buf, |e| e.header.time);
 
         // Build note events (reuse pre-allocated buffer). CLAP requires
         // input events inside the block and sorted by time. Events past
@@ -281,7 +356,6 @@ impl ClapInstance {
         // range (the plugin would never reach them, and the queue is
         // drained, so a lost note-off sticks). Allocation-free: both
         // queues are filtered in place and the carry is capacity-bounded.
-        let frames_u32 = frames as u32;
         self.note_event_buf.clear();
         let note_buf = &mut self.note_event_buf;
         // Carried events were queued earlier, so they go first; the
@@ -297,10 +371,41 @@ impl ClapInstance {
         }
         sort_notes_by_time(&mut self.note_event_buf);
 
+        // Raw MIDI (code review HOST-13): queued controllers, and — for a
+        // plugin whose note port prefers or only takes MIDI — the notes,
+        // re-spoken as MIDI 1.0 note on / off on channel 1.
+        self.midi_event_buf.clear();
+        self.midi_event_buf.extend(
+            self.pending_midi
+                .drain(..)
+                .map(|(time, data)| midi_event(time.min(last_frame), data)),
+        );
+        if self.note_dialect.notes_as_midi {
+            for n in self.note_event_buf.drain(..) {
+                let key = n.key.clamp(0, 127) as u8;
+                let data = if n.header.type_ == CLAP_EVENT_NOTE_ON {
+                    let velocity = (n.velocity * 127.0).round().clamp(1.0, 127.0) as u8;
+                    [0x90, key, velocity]
+                } else {
+                    [0x80, key, 0]
+                };
+                self.midi_event_buf.push(midi_event(n.header.time, data));
+            }
+        }
+        if !self.note_dialect.has_note_input {
+            // A plugin that declares no note input gets none.
+            self.note_event_buf.clear();
+            self.midi_event_buf.clear();
+        }
+        sort_by_time(&mut self.midi_event_buf, |e| e.header.time);
+
         let mut event_ctx = MixedEventListCtx {
             param_events: std::mem::take(&mut self.param_event_buf),
             note_events: std::mem::take(&mut self.note_event_buf),
+            midi_events: std::mem::take(&mut self.midi_event_buf),
+            order: std::mem::take(&mut self.event_order),
         };
+        event_ctx.merge_order();
 
         let in_events = clap_input_events {
             ctx: &mut event_ctx as *mut MixedEventListCtx as *mut c_void,
@@ -397,5 +502,9 @@ impl ClapInstance {
         self.param_event_buf.clear();
         self.note_event_buf = event_ctx.note_events;
         self.note_event_buf.clear();
+        self.midi_event_buf = event_ctx.midi_events;
+        self.midi_event_buf.clear();
+        self.event_order = event_ctx.order;
+        self.event_order.clear();
     }
 }

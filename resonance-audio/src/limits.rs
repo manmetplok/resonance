@@ -39,6 +39,25 @@ pub const MAX_METRONOME_BEATS_PER_BUFFER: usize = 16;
 /// silently dropped. Duplicate param_ids always update in place.
 pub const MAX_PENDING_PARAMS: usize = 128;
 
+/// Maximum time-stamped parameter-automation events queued for one
+/// process() call (code review HOST-06): one per automated param per
+/// [`PARAM_AUTOMATION_CADENCE`] frames, so 2048 covers 128 lanes on one
+/// plugin across a 1024-frame bounce chunk. Beyond it, events are
+/// dropped (the next block's start re-sends every lane's value).
+pub const MAX_PENDING_AUTOMATION: usize = 2048;
+
+/// Frames between the points at which a plugin-param automation lane is
+/// sampled and sent to the plugin as a time-stamped `PARAM_VALUE`
+/// (code review HOST-06). Aligned to the absolute timeline (frame 0, 64,
+/// 128, …), not to the block, so the plugin sees the same values at the
+/// same samples whatever block size renders it — live at the device
+/// quantum, a bounce in 1024-frame chunks.
+pub const PARAM_AUTOMATION_CADENCE: u64 = 64;
+
+/// Maximum raw MIDI 1.0 messages (controllers, pitch bend, aftertouch)
+/// queued for one process() call (code review HOST-13).
+pub const MAX_PENDING_MIDI: usize = 256;
+
 /// Maximum pending note events queued between process() calls.
 /// Prevents unbounded Vec growth on the audio thread. 256 covers
 /// a full all_notes_off (128) plus a generous burst of new notes.

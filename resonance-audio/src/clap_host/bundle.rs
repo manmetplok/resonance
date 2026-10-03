@@ -471,6 +471,10 @@ pub(super) fn build_instance(
         super::ACTIVATE_MAX_FRAMES as usize,
     );
 
+    // `clap.note-ports`: how notes and MIDI controllers reach the plugin
+    // (code review HOST-13).
+    let note_dialect = unsafe { super::instance::NoteDialect::query(plugin) };
+
     let mut instance = ClapInstance::from_parts(
         plugin,
         host_data,
@@ -481,6 +485,7 @@ pub(super) fn build_instance(
         gui_ext,
         latency_ext,
         ports,
+        note_dialect,
         latency,
     );
     // First-party: which params the plugin's state leaves out

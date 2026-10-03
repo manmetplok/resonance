@@ -14,9 +14,9 @@
 //!   doesn't carry a "previous block gain", still ramps smoothly.
 //! - **Mute** lanes become a per-block boolean, OR-ed into the track's
 //!   static mute so the existing mute fade-out applies.
-//! - **Plugin-param** lanes are queued onto the plugin instance via
-//!   `set_param` right before it processes the block — the same path as
-//!   `SetPluginParam`.
+//! - **Plugin-param** lanes are queued onto the plugin instance right
+//!   before it processes the block, as time-stamped parameter events on a
+//!   fixed timeline grid ([`apply_plugin_params`], code review HOST-06).
 //!
 //! Everything here is allocation-free: lookups are `HashMap::get`, value
 //! sampling is a binary search ([`resonance_common::sample_lane`]).
@@ -26,6 +26,7 @@ use resonance_dsp::db_to_linear;
 
 use crate::clap_host::SyncClapInstance;
 use crate::engine::AutomationSnapshot;
+use crate::limits::PARAM_AUTOMATION_CADENCE;
 
 /// Convert a gain lane's decibel value to a linear coefficient. A value
 /// at (or below) the lane floor maps to exact silence so a full fade-out
@@ -129,21 +130,51 @@ pub fn auto_muted(
         .map(|l| l.real_value_at(frame) >= 0.5)
 }
 
-/// Queue every plugin-param lane targeting `instance` onto `inst`,
-/// sampled at `frame` and mapped into the plugin's own range. A no-op
-/// when no param lane targets the instance. Must be called while holding
-/// the plugin lock, before `process()`.
+/// Queue every plugin-param lane targeting `instance` onto `inst` for the
+/// block `[start, start + frames)`, as time-stamped parameter events
+/// (code review HOST-06). A no-op when no param lane targets the
+/// instance. Must be called while holding the plugin lock, before
+/// `process()`.
+///
+/// Each lane is sampled on a fixed grid of the absolute timeline —
+/// every [`PARAM_AUTOMATION_CADENCE`] frames from frame 0 — not per
+/// block: the plugin gets the value of the grid step the block starts in
+/// at the block's first sample, then each later grid point whose value
+/// differs, at its own sample. So the plugin's parameter is the same
+/// function of the timeline whatever the block size — the live callback
+/// at the device quantum and a bounce in 1024-frame chunks render the
+/// same automation identically — and it moves in steps of at most
+/// `PARAM_AUTOMATION_CADENCE` frames (1.3 ms at 48 kHz) rather than once
+/// per block (2.7 ms live, 21 ms in a bounce, before).
+///
+/// Allocation-free: a binary search per grid point.
 #[inline]
 pub(crate) fn apply_plugin_params(
     inst: &mut SyncClapInstance,
     snap: &AutomationSnapshot,
     instance: PluginInstanceId,
-    frame: u64,
+    start: u64,
+    frames: usize,
 ) {
-    if let Some(params) = snap.plugin_params.get(&instance) {
-        for p in params {
-            let real = lane_value_to_plugin_param(p.lane.sample(frame), p.min, p.max);
-            inst.0.set_param(p.param_id, real);
+    let Some(params) = snap.plugin_params.get(&instance) else {
+        return;
+    };
+    let end = start + frames as u64;
+    let first_grid = start - start % PARAM_AUTOMATION_CADENCE;
+    for p in params {
+        let value_at =
+            |frame: u64| lane_value_to_plugin_param(p.lane.sample(frame), p.min, p.max);
+        let mut last = value_at(first_grid);
+        inst.0.queue_param_at(p.param_id, last, 0);
+        let mut grid = first_grid + PARAM_AUTOMATION_CADENCE;
+        while grid < end {
+            let value = value_at(grid);
+            if value.to_bits() != last.to_bits() {
+                inst.0
+                    .queue_param_at(p.param_id, value, (grid - start) as u32);
+                last = value;
+            }
+            grid += PARAM_AUTOMATION_CADENCE;
         }
     }
 }

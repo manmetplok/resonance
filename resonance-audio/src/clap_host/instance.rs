@@ -11,7 +11,7 @@
 
 use std::pin::Pin;
 
-use clap_sys::events::{clap_event_note, clap_event_param_value};
+use clap_sys::events::{clap_event_midi, clap_event_note, clap_event_param_value};
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports};
 use clap_sys::ext::gui::clap_plugin_gui;
 use clap_sys::ext::latency::clap_plugin_latency;
@@ -23,7 +23,9 @@ use crate::types::ParamInfo;
 
 use super::HostData;
 
+mod note_ports;
 mod ports;
+pub(crate) use note_ports::NoteDialect;
 pub(crate) use ports::{PortBuffers, MAX_PORTS, MAX_PORT_CHANNELS};
 
 /// The most bytes [`ClapInstance::poll_kit_info`] allocates for a
@@ -125,8 +127,27 @@ pub struct ClapInstance {
     pub(super) open_gestures: Vec<(u32, Option<f64>)>,
     /// Pending parameter changes to send during next process() call.
     pub(super) pending_params: Vec<(u32, f64)>,
+    /// Time-stamped parameter changes for the next process() call, as
+    /// `(sample_offset, param_id, value)`: plugin-param automation sampled
+    /// at [`crate::limits::PARAM_AUTOMATION_CADENCE`] (code review
+    /// HOST-06). Unlike `pending_params` (one value per param, at the
+    /// block start) these keep every point, each at its own sample.
+    pub(super) pending_auto: Vec<(u32, u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
     pub(super) param_event_buf: Vec<clap_event_param_value>,
+    /// Raw MIDI 1.0 messages (controllers, pitch bend, aftertouch) for the
+    /// next process() call, as `(sample_offset, bytes)` — sent only to a
+    /// plugin whose note port takes MIDI (code review HOST-13).
+    pub(super) pending_midi: Vec<(u32, [u8; 3])>,
+    /// Pre-allocated buffer for `CLAP_EVENT_MIDI` events: the queued
+    /// controllers, plus the notes for a plugin that takes them as MIDI.
+    pub(super) midi_event_buf: Vec<clap_event_midi>,
+    /// The order the plugin reads the block's events in: params, notes
+    /// and MIDI merged by time (see `process::MixedEventListCtx`).
+    pub(super) event_order: Vec<u32>,
+    /// How this plugin's note input is spoken to (`clap.note-ports`, read
+    /// at activation).
+    pub(super) note_dialect: NoteDialect,
     /// Pending note events to send during next process() call.
     /// Each entry: (is_note_on, key, velocity, sample_offset)
     pub(super) pending_notes: Vec<(bool, u8, f32, u32)>,
@@ -171,6 +192,7 @@ impl ClapInstance {
         gui_ext: Option<*const clap_plugin_gui>,
         latency_ext: Option<*const clap_plugin_latency>,
         ports: PortBuffers,
+        note_dialect: NoteDialect,
         latency: u32,
     ) -> Self {
         Self {
@@ -202,7 +224,21 @@ impl ClapInstance {
             out_param_events: Vec::with_capacity(super::params::OUT_PARAM_EVENT_CAPACITY),
             open_gestures: Vec::new(),
             pending_params: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
-            param_event_buf: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
+            pending_auto: Vec::with_capacity(crate::limits::MAX_PENDING_AUTOMATION),
+            param_event_buf: Vec::with_capacity(
+                crate::limits::MAX_PENDING_PARAMS + crate::limits::MAX_PENDING_AUTOMATION,
+            ),
+            pending_midi: Vec::with_capacity(crate::limits::MAX_PENDING_MIDI),
+            midi_event_buf: Vec::with_capacity(
+                crate::limits::MAX_PENDING_MIDI + 2 * crate::limits::MAX_PENDING_NOTES,
+            ),
+            event_order: Vec::with_capacity(
+                crate::limits::MAX_PENDING_PARAMS
+                    + crate::limits::MAX_PENDING_AUTOMATION
+                    + crate::limits::MAX_PENDING_MIDI
+                    + 2 * crate::limits::MAX_PENDING_NOTES,
+            ),
+            note_dialect,
             pending_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
             carried_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
             note_event_buf: Vec::with_capacity(2 * crate::limits::MAX_PENDING_NOTES),
@@ -756,6 +792,37 @@ impl ClapInstance {
         }
     }
 
+    /// Queue a parameter change at `sample_offset` into the next
+    /// process() call — a point of a plugin-param automation lane (code
+    /// review HOST-06). Every point is kept, in the order queued; the
+    /// process call sorts them by time. Dropped when the queue is full
+    /// (the next block's start re-sends every lane's value).
+    /// Allocation-free.
+    pub fn queue_param_at(&mut self, param_id: u32, value: f64, sample_offset: u32) {
+        if self.pending_auto.len() < crate::limits::MAX_PENDING_AUTOMATION {
+            self.pending_auto.push((sample_offset, param_id, value));
+        }
+    }
+
+    /// Queue a raw MIDI 1.0 channel message (control change, pitch bend,
+    /// channel or poly aftertouch) at `sample_offset` into the next
+    /// process() call, as `CLAP_EVENT_MIDI` on note port 0 (code review
+    /// HOST-13). A no-op for a plugin whose note port does not take MIDI,
+    /// and when the queue is full. Allocation-free.
+    pub fn queue_midi(&mut self, data: [u8; 3], sample_offset: u32) {
+        if self.note_dialect.accepts_midi
+            && self.pending_midi.len() < crate::limits::MAX_PENDING_MIDI
+        {
+            self.pending_midi.push((sample_offset, data));
+        }
+    }
+
+    /// Whether [`Self::queue_midi`] reaches this plugin: its note input
+    /// takes MIDI 1.0.
+    pub fn accepts_midi(&self) -> bool {
+        self.note_dialect.accepts_midi
+    }
+
     /// Queue a note-on event to be sent during the next process() call.
     /// Dropped when the queue is full — a lost note-on is a missed note,
     /// never a stuck one.
@@ -881,6 +948,7 @@ impl ClapInstance {
         }
         self.pending_notes.clear();
         self.carried_notes.clear();
+        self.pending_midi.clear();
         self.idle_hold_frames = 0;
         // SAFETY: `self.plugin` is the live plugin this instance owns;
         // `active` holds, and `&mut self` means no process() runs.

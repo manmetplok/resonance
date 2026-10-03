@@ -226,6 +226,9 @@ pub(crate) fn handle_live_midi_event(
             }
             handle_record_midi_event(ctx, state, track_id, false, note, 0.0, arrival);
         }
+        // Controllers reach the instrument on the audio thread (HOST-13);
+        // recording them and sending them Thru is not built yet.
+        LiveMidiEvent::InboundMidi { .. } => {}
     }
 }
 

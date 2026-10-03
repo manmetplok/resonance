@@ -620,6 +620,7 @@ fn render_instrument_source(
                     ctx.inputs.automation,
                     instrument_id,
                     ctx.evals.eval_start,
+                    frames,
                 );
                 for event in js.note_event_buf.iter() {
                     if event.is_note_on {

@@ -72,13 +72,24 @@ fn omni_admits_any_channel() {
 }
 
 #[test]
-fn non_note_messages_return_none() {
-    // CC.
-    assert!(parse_live_event_for_test(&[0xB0, 7, 64], 1, None).is_none());
-    // Pitch bend.
-    assert!(parse_live_event_for_test(&[0xE0, 0, 64], 1, None).is_none());
-    // Aftertouch.
-    assert!(parse_live_event_for_test(&[0xD0, 64], 1, None).is_none());
+fn controllers_parse_as_raw_midi_for_the_instrument() {
+    // Code review HOST-13: CC, pitch bend and aftertouch reach the
+    // instrument, as their raw bytes (channel kept, data masked).
+    let raw = |bytes: &[u8]| match parse_live_event_for_test(bytes, 1, None) {
+        Some(LiveMidiEvent::InboundMidi { track_id, data, .. }) => {
+            assert_eq!(track_id, 1);
+            data
+        }
+        other => panic!("{bytes:02x?} parsed as {other:?}"),
+    };
+    assert_eq!(raw(&[0xB3, 1, 0xC0]), [0xB3, 1, 0x40], "mod wheel, channel 4");
+    assert_eq!(raw(&[0xE0, 0, 64]), [0xE0, 0, 64], "pitch bend");
+    assert_eq!(raw(&[0xD0, 64]), [0xD0, 64, 0], "channel aftertouch");
+    assert_eq!(raw(&[0xA0, 60, 90]), [0xA0, 60, 90], "poly aftertouch");
+    // Truncated controllers, program change and system messages are not.
+    assert!(parse_live_event_for_test(&[0xB0, 7], 1, None).is_none());
+    assert!(parse_live_event_for_test(&[0xC0, 5], 1, None).is_none());
+    assert!(parse_live_event_for_test(&[0xF8], 1, None).is_none());
 }
 
 #[test]

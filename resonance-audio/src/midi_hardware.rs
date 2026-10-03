@@ -112,6 +112,18 @@ pub enum LiveMidiEvent {
         note: u8,
         arrival: std::time::Instant,
     },
+    /// A MIDI 1.0 channel message other than a note — control change,
+    /// pitch bend, channel or poly aftertouch — on a track's input port,
+    /// as its raw bytes (status with its channel, then the data bytes; a
+    /// two-byte message is padded with 0). The audio thread forwards it
+    /// to the track's instrument as `CLAP_EVENT_MIDI` when the
+    /// instrument's note port takes MIDI (code review HOST-13); it is not
+    /// recorded or sent Thru yet.
+    InboundMidi {
+        track_id: TrackId,
+        data: [u8; 3],
+        arrival: std::time::Instant,
+    },
 }
 
 /// Control-surface MIDI input drained from the midir-spawned thread on
@@ -339,9 +351,10 @@ fn encode_channel_filter(c: Option<u8>) -> u8 {
 }
 
 /// Parse a raw MIDI status byte slice from `midir` into a
-/// [`LiveMidiEvent::InboundNoteOn`] / `InboundNoteOff`. Returns
-/// `None` for non-note messages, channel-filtered messages, or
-/// malformed data. A NoteOn with velocity 0 is normalised to
+/// [`LiveMidiEvent::InboundNoteOn`] / `InboundNoteOff`, or an
+/// [`LiveMidiEvent::InboundMidi`] for a control change, pitch bend or
+/// aftertouch. Returns `None` for other messages (program change,
+/// system), channel-filtered messages, or malformed data. A NoteOn with velocity 0 is normalised to
 /// NoteOff to follow the running-status convention. `arrival` is the
 /// wall-clock instant at which the midir callback fired and gets
 /// stamped on the resulting event.
@@ -384,6 +397,18 @@ fn parse_live_event(
                 arrival,
             })
         }
+        // Poly aftertouch, control change, pitch bend: three bytes.
+        0xA0 | 0xB0 | 0xE0 if raw.len() >= 3 => Some(LiveMidiEvent::InboundMidi {
+            track_id,
+            data: [status, raw[1] & 0x7F, raw[2] & 0x7F],
+            arrival,
+        }),
+        // Channel aftertouch: two.
+        0xD0 if raw.len() >= 2 => Some(LiveMidiEvent::InboundMidi {
+            track_id,
+            data: [status, raw[1] & 0x7F, 0],
+            arrival,
+        }),
         _ => None,
     }
 }
