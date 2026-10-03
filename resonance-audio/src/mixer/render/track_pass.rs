@@ -649,6 +649,7 @@ fn render_instrument_source(
                         frames,
                     );
                 }
+                inst.0.publish_out_events();
                 has_audio = true;
             } else if strategy.is_live() {
                 // The UI thread holds the plugin lock (param drag /

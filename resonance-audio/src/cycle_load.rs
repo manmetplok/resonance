@@ -25,6 +25,12 @@
 //! stream still met its deadline); the meter only folds the counter
 //! into its report line.
 //!
+//! Plugin lock misses are counted the same way (code review RT-07): a
+//! live block that finds a plugin's lock held by another thread skips the
+//! plugin — an effect passes dry, an instrument is silent for the block —
+//! and [`record_plugin_lock_miss`] is the only trace of it. The process-wide
+//! count is [`plugin_lock_misses`]; each `PluginSlot` keeps its own too.
+//!
 //! There is no state-lock line: the callback reads the project through
 //! the published render graph (`engine::render_graph`, code review
 //! ARCH-02), a load that cannot miss, so a playing block always renders.
@@ -60,6 +66,22 @@ pub const QUIET_PEAK_THRESHOLD: f32 = 0.75;
 /// load spike.
 pub const LOAD_EMA_ALPHA: f32 = 0.05;
 
+/// Live blocks, process-wide, that skipped a plugin because its lock was
+/// held by another thread (see the module doc).
+static PLUGIN_LOCK_MISSES: AtomicU64 = AtomicU64::new(0);
+
+/// Count one plugin skipped on a busy lock. Audio-thread side: one relaxed
+/// increment.
+#[inline]
+pub fn record_plugin_lock_miss() {
+    PLUGIN_LOCK_MISSES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Plugin lock misses since the process started.
+pub fn plugin_lock_misses() -> u64 {
+    PLUGIN_LOCK_MISSES.load(Ordering::Relaxed)
+}
+
 /// One report-window summary, ready for formatting.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CycleLoadReport {
@@ -75,6 +97,11 @@ pub struct CycleLoadReport {
     pub shortfalls_window: u64,
     /// Lifetime monitor-ring shortfall cycles.
     pub shortfalls_lifetime: u64,
+    /// Plugins skipped on a busy lock in the window
+    /// ([`record_plugin_lock_miss`]).
+    pub lock_misses_window: u64,
+    /// Plugins skipped on a busy lock since the process started.
+    pub lock_misses_lifetime: u64,
     /// The track pass's parallel rendering over the window
     /// (realtime-multithreading.md §6). All zero when nothing was
     /// recorded, and then left out of the line.
@@ -118,6 +145,8 @@ pub struct CycleReportSlot {
     overruns_lifetime: AtomicU64,
     shortfalls_window: AtomicU64,
     shortfalls_lifetime: AtomicU64,
+    lock_misses_window: AtomicU64,
+    lock_misses_lifetime: AtomicU64,
     pool_threads: AtomicU32,
     pool_critical_us: AtomicU32,
     /// `track id + 1`; 0 = none.
@@ -141,6 +170,10 @@ impl CycleReportSlot {
             .store(report.shortfalls_window, Ordering::Relaxed);
         self.shortfalls_lifetime
             .store(report.shortfalls_lifetime, Ordering::Relaxed);
+        self.lock_misses_window
+            .store(report.lock_misses_window, Ordering::Relaxed);
+        self.lock_misses_lifetime
+            .store(report.lock_misses_lifetime, Ordering::Relaxed);
         let pool = &report.pool;
         self.pool_threads.store(pool.threads, Ordering::Relaxed);
         self.pool_critical_us
@@ -170,6 +203,8 @@ impl CycleReportSlot {
                 overruns_lifetime: self.overruns_lifetime.load(Ordering::Relaxed),
                 shortfalls_window: self.shortfalls_window.load(Ordering::Relaxed),
                 shortfalls_lifetime: self.shortfalls_lifetime.load(Ordering::Relaxed),
+                lock_misses_window: self.lock_misses_window.load(Ordering::Relaxed),
+                lock_misses_lifetime: self.lock_misses_lifetime.load(Ordering::Relaxed),
                 pool: PoolReport {
                     threads: self.pool_threads.load(Ordering::Relaxed),
                     critical_us: self.pool_critical_us.load(Ordering::Relaxed),
@@ -246,6 +281,13 @@ pub struct CycleLoadMeter {
     window_overruns: u64,
     /// Lifetime shortfall count as of the last report, for the window delta.
     shortfalls_seen: u64,
+    /// Lifetime plugin lock-miss count as of the last report.
+    lock_misses_seen: u64,
+    /// Where the lifetime lock-miss count comes from:
+    /// [`plugin_lock_misses`], unless a test substitutes its own
+    /// ([`Self::with_lock_miss_source`]) — the real count is process-wide,
+    /// and other tests in the same binary move it.
+    lock_misses: fn() -> u64,
     last_report: Option<Instant>,
     /// Track-pass stats over the window ([`Self::record_pass`]).
     pass_threads: usize,
@@ -273,6 +315,8 @@ impl CycleLoadMeter {
             window_cycles: 0,
             window_overruns: 0,
             shortfalls_seen: 0,
+            lock_misses_seen: plugin_lock_misses(),
+            lock_misses: plugin_lock_misses,
             last_report: None,
             pass_threads: 0,
             pass_critical_ns: 0,
@@ -282,6 +326,14 @@ impl CycleLoadMeter {
             pass_join_wait_ns: 0,
             pass_cycles: 0,
         }
+    }
+
+    /// Read the lifetime plugin lock-miss count from `source` instead of
+    /// the process-wide [`plugin_lock_misses`] (tests).
+    pub fn with_lock_miss_source(mut self, source: fn() -> u64) -> Self {
+        self.lock_misses = source;
+        self.lock_misses_seen = source();
+        self
     }
 
     /// Fold one callback's track-pass stats into the window. Call before
@@ -372,6 +424,7 @@ impl CycleLoadMeter {
         }
 
         let shortfalls_lifetime = shared.monitor_shortfall_cycles.load(Ordering::Relaxed);
+        let lock_misses_lifetime = (self.lock_misses)();
         let report = CycleLoadReport {
             avg: (self.window_sum / self.window_cycles as f64) as f32,
             peak: self.window_peak,
@@ -379,6 +432,8 @@ impl CycleLoadMeter {
             overruns_lifetime: shared.dsp_overrun_cycles.load(Ordering::Relaxed),
             shortfalls_window: shortfalls_lifetime.saturating_sub(self.shortfalls_seen),
             shortfalls_lifetime,
+            lock_misses_window: lock_misses_lifetime.saturating_sub(self.lock_misses_seen),
+            lock_misses_lifetime,
             pool: self.take_pool_report(),
         };
         self.last_report = Some(now);
@@ -387,9 +442,11 @@ impl CycleLoadMeter {
         self.window_cycles = 0;
         self.window_overruns = 0;
         self.shortfalls_seen = shortfalls_lifetime;
+        self.lock_misses_seen = lock_misses_lifetime;
 
         let noteworthy = report.overruns_window > 0
             || report.shortfalls_window > 0
+            || report.lock_misses_window > 0
             || report.peak >= QUIET_PEAK_THRESHOLD;
         (self.verbose || noteworthy).then_some(report)
     }
@@ -407,6 +464,12 @@ pub fn format_cycle_load_line(report: &CycleLoadReport) -> String {
         report.shortfalls_window,
         report.shortfalls_lifetime,
     );
+    if report.lock_misses_lifetime > 0 {
+        line.push_str(&format!(
+            " | plugin lock misses {} (lifetime {})",
+            report.lock_misses_window, report.lock_misses_lifetime,
+        ));
+    }
     let pool = &report.pool;
     if pool.threads > 0 {
         let track = pool

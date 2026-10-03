@@ -45,7 +45,7 @@ fn drive(
 #[test]
 fn publishes_load_atomics_every_cycle() {
     let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(false);
+    let mut meter = CycleLoadMeter::new(false).with_lock_miss_source(no_misses);
     let start = Instant::now();
     // Half the budget per cycle -> load 0.5.
     drive(&mut meter, &shared, start, 10, budget() / 2);
@@ -59,16 +59,22 @@ fn publishes_load_atomics_every_cycle() {
 #[test]
 fn counts_over_budget_cycles() {
     let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(false);
+    let mut meter = CycleLoadMeter::new(false).with_lock_miss_source(no_misses);
     let start = Instant::now();
     drive(&mut meter, &shared, start, 3, budget() * 2);
     assert_eq!(shared.dsp_overrun_cycles.load(Ordering::Relaxed), 3);
 }
 
+/// The process-wide lock-miss count moves with every other test in this
+/// binary; the meters here read a quiet one instead.
+fn no_misses() -> u64 {
+    0
+}
+
 #[test]
 fn quiet_mode_stays_silent_when_healthy() {
     let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(false);
+    let mut meter = CycleLoadMeter::new(false).with_lock_miss_source(no_misses);
     let start = Instant::now();
     // Low load, no shortfalls: well past the quiet interval with no report.
     let cycles = (QUIET_REPORT_INTERVAL.as_secs_f64() / budget().as_secs_f64()) as usize + 50;
@@ -80,7 +86,7 @@ fn quiet_mode_stays_silent_when_healthy() {
 fn quiet_mode_reports_over_budget_and_near_budget_peaks() {
     // An over-budget cycle forces a report.
     let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(false);
+    let mut meter = CycleLoadMeter::new(false).with_lock_miss_source(no_misses);
     let start = Instant::now();
     let cycles = (QUIET_REPORT_INTERVAL.as_secs_f64() / budget().as_secs_f64()) as usize + 50;
     let report = drive(&mut meter, &shared, start, cycles, budget() * 2).expect("report");
@@ -92,7 +98,7 @@ fn quiet_mode_reports_over_budget_and_near_budget_peaks() {
 
     // A peak at the threshold (but under budget) also forces one.
     let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(false);
+    let mut meter = CycleLoadMeter::new(false).with_lock_miss_source(no_misses);
     let busy = budget().mul_f32(QUIET_PEAK_THRESHOLD + 0.05);
     let report = drive(&mut meter, &shared, start, cycles, busy).expect("report");
     assert_eq!(report.overruns_window, 0);
@@ -102,7 +108,7 @@ fn quiet_mode_reports_over_budget_and_near_budget_peaks() {
 #[test]
 fn quiet_mode_reports_monitor_shortfalls_as_window_delta() {
     let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(false);
+    let mut meter = CycleLoadMeter::new(false).with_lock_miss_source(no_misses);
     let start = Instant::now();
     let cycles = (QUIET_REPORT_INTERVAL.as_secs_f64() / budget().as_secs_f64()) as usize + 50;
     shared.monitor_shortfall_cycles.store(7, Ordering::Relaxed);
@@ -114,6 +120,28 @@ fn quiet_mode_reports_monitor_shortfalls_as_window_delta() {
     let start2 = start + budget() * (cycles as u32 + 1);
     let report = drive(&mut meter, &shared, start2, cycles, budget() / 100);
     assert_eq!(report, None);
+}
+
+/// A plugin skipped on a busy lock is reason enough for a quiet-mode line
+/// (code review RT-07), reported as the window's delta.
+#[test]
+fn quiet_mode_reports_plugin_lock_misses_as_window_delta() {
+    static MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    fn misses() -> u64 {
+        MISSES.load(Ordering::Relaxed)
+    }
+    let shared = SharedState::default();
+    let mut meter = CycleLoadMeter::new(false).with_lock_miss_source(misses);
+    let start = Instant::now();
+    let cycles = (QUIET_REPORT_INTERVAL.as_secs_f64() / budget().as_secs_f64()) as usize + 50;
+    MISSES.store(4, Ordering::Relaxed);
+    let report = drive(&mut meter, &shared, start, cycles, budget() / 100).expect("report");
+    assert_eq!(report.lock_misses_window, 4);
+    assert_eq!(report.lock_misses_lifetime, 4);
+
+    let start2 = start + budget() * (cycles as u32 + 1);
+    let report = drive(&mut meter, &shared, start2, cycles, budget() / 100);
+    assert_eq!(report, None, "no new misses: silent again");
 }
 
 #[test]
@@ -129,6 +157,8 @@ fn report_slot_hands_each_report_to_the_engine_loop_once() {
         overruns_lifetime: 2,
         shortfalls_window: 3,
         shortfalls_lifetime: 4,
+        lock_misses_window: 5,
+        lock_misses_lifetime: 6,
         pool: PoolReport {
             threads: 8,
             critical_us: 1_234,
@@ -234,7 +264,7 @@ fn oversize_host_buffer_is_latched_for_the_engine_loop_once() {
 #[test]
 fn verbose_mode_reports_unconditionally_on_its_interval() {
     let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(true);
+    let mut meter = CycleLoadMeter::new(true).with_lock_miss_source(no_misses);
     let start = Instant::now();
     let cycles = (VERBOSE_REPORT_INTERVAL.as_secs_f64() / budget().as_secs_f64()) as usize + 20;
     let report = drive(&mut meter, &shared, start, cycles, budget() / 100).expect("report");
@@ -245,7 +275,7 @@ fn verbose_mode_reports_unconditionally_on_its_interval() {
 #[test]
 fn degenerate_cycles_are_ignored() {
     let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(true);
+    let mut meter = CycleLoadMeter::new(true).with_lock_miss_source(no_misses);
     let now = Instant::now();
     assert_eq!(meter.record(now, budget(), 0, RATE, &shared), None);
     assert_eq!(meter.record(now, budget(), FRAMES, 0, &shared), None);
@@ -261,11 +291,29 @@ fn line_format_is_stable() {
         overruns_lifetime: 15,
         shortfalls_window: 0,
         shortfalls_lifetime: 3,
+        lock_misses_window: 0,
+        lock_misses_lifetime: 0,
         pool: PoolReport::default(),
     });
     assert_eq!(
         line,
         "audio: dsp load avg 3.2% peak 41.0% | over-budget cycles 2 (lifetime 15) | monitor shortfalls 0 (lifetime 3)"
+    );
+}
+
+/// A plugin the render skipped on a busy lock passed dry audio (or none)
+/// for a block (code review RT-07); once that has happened at all, the
+/// line carries the count.
+#[test]
+fn line_reports_plugin_lock_misses_once_there_are_any() {
+    let line = format_cycle_load_line(&CycleLoadReport {
+        lock_misses_window: 2,
+        lock_misses_lifetime: 9,
+        ..CycleLoadReport::default()
+    });
+    assert!(
+        line.ends_with("| monitor shortfalls 0 (lifetime 0) | plugin lock misses 2 (lifetime 9)"),
+        "{line}"
     );
 }
 
@@ -299,7 +347,7 @@ fn line_names_the_critical_track_when_the_pool_reported() {
 #[test]
 fn pass_stats_fold_into_the_windows_report() {
     let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(true);
+    let mut meter = CycleLoadMeter::new(true).with_lock_miss_source(no_misses);
     let t0 = std::time::Instant::now();
     meter.record(t0, budget() / 2, FRAMES, RATE, &shared);
     for (critical_ns, track) in [(400_000u64, 3u64), (900_000, 5), (100_000, 3)] {

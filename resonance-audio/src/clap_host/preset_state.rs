@@ -60,19 +60,22 @@ impl ClapInstance {
     /// plugin has state-context, else the plain full state. The flag says
     /// which one it is.
     pub fn save_preset_state(&self) -> Option<(Vec<u8>, bool)> {
-        if let Some(ctx) = self.state_context() {
-            // SAFETY: `ctx` came from `get_extension` for this instance.
-            if let Some(save) = unsafe { (*ctx).save } {
-                let plugin = self.plugin;
-                let out = capture_ostream(|stream| unsafe {
-                    save(plugin, stream, CLAP_STATE_CONTEXT_FOR_PRESET)
-                });
-                if let Some(data) = out {
-                    return Some((data, true));
-                }
-            }
+        // SAFETY: this instance is alive for the call, on its main thread.
+        unsafe { self.preset_save_handle().save() }
+    }
+
+    /// [`Self::save_preset_state`] as a handle, so the engine serialises a
+    /// preset without holding the instance lock (code review HOST-03) — as
+    /// [`Self::state_save_handle`] does for the full state.
+    pub fn preset_save_handle(&self) -> PresetSaveHandle {
+        // SAFETY: `ctx` came from `get_extension` for this instance.
+        let context_save = self.state_context().and_then(|ctx| unsafe { (*ctx).save });
+        PresetSaveHandle {
+            plugin: self.plugin,
+            context_save,
+            state: self.state_save_handle(),
+            main_call: &self.host_data.main_call,
         }
-        self.save_state().map(|d| (d, false))
     }
 
     /// Recall a preset's state: `load_ex(FOR_PRESET)` when the plugin has
@@ -210,7 +213,7 @@ unsafe extern "C" fn host_preset_loaded(
         let Some(location) = location_from(kind, location) else {
             return;
         };
-        data.preset_reports.lock().push(PresetHostReport::Loaded {
+        data.push_preset_report(PresetHostReport::Loaded {
             location,
             load_key: c_str(load_key),
         });
@@ -231,7 +234,7 @@ unsafe extern "C" fn host_preset_on_error(
             return;
         };
         let message = c_str(msg).unwrap_or_else(|| format!("preset load failed ({os_error})"));
-        data.preset_reports.lock().push(PresetHostReport::Error { message });
+        data.push_preset_report(PresetHostReport::Error { message });
     }
 }
 
@@ -251,7 +254,7 @@ unsafe extern "C" fn host_preset_report(host: *const c_void, json: *const c_char
             tracing::debug!("preset session: dropped a malformed identity report");
             return;
         };
-        data.preset_reports.lock().push(PresetHostReport::Identity(identity));
+        data.push_preset_report(PresetHostReport::Identity(identity));
     }
 }
 
@@ -284,6 +287,7 @@ impl ClapInstance {
             clap_sys::ext::params::CLAP_PARAM_RESCAN_ALL,
             std::sync::atomic::Ordering::AcqRel,
         );
+        self.host_data.flag_poll();
     }
 
     /// How much of the params to re-read — the plugin's rescan flags, or a
@@ -339,5 +343,45 @@ impl ClapInstance {
         // SAFETY: the plugin is live; the string outlives the call.
         unsafe { set(self.plugin as *const c_void, json.as_ptr()) };
         true
+    }
+}
+
+/// See [`ClapInstance::preset_save_handle`].
+#[derive(Clone, Copy)]
+pub struct PresetSaveHandle {
+    plugin: *const clap_sys::plugin::clap_plugin,
+    context_save: Option<
+        unsafe extern "C" fn(
+            *const clap_sys::plugin::clap_plugin,
+            *const clap_sys::stream::clap_ostream,
+            u32,
+        ) -> bool,
+    >,
+    state: Option<super::state::StateSaveHandle>,
+    /// The instance's `HostData::main_call`.
+    main_call: *const parking_lot::ReentrantMutex<()>,
+}
+
+impl PresetSaveHandle {
+    /// The state to store as a preset, and whether it is the
+    /// `FOR_PRESET` form (see [`ClapInstance::save_preset_state`]).
+    ///
+    /// # Safety
+    /// As [`super::state::StateSaveHandle::save`]: on the instance's main
+    /// thread, while the instance the handle came from is alive.
+    pub unsafe fn save(&self) -> Option<(Vec<u8>, bool)> {
+        if let Some(save) = self.context_save {
+            let plugin = self.plugin;
+            // SAFETY: the caller's contract keeps `HostData` alive.
+            let _main = unsafe { (*self.main_call).lock() };
+            let out = capture_ostream(|stream| unsafe {
+                save(plugin, stream, CLAP_STATE_CONTEXT_FOR_PRESET)
+            });
+            if let Some(data) = out {
+                return Some((data, true));
+            }
+        }
+        // SAFETY: the caller's contract.
+        self.state.and_then(|h| unsafe { h.save() }).map(|d| (d, false))
     }
 }

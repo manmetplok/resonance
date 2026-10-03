@@ -354,7 +354,46 @@ fn load_bundles(
         }
     }
 
+    failures.extend(duplicate_id_warnings(bundles));
     (catalog(bundles), failures)
+}
+
+/// One scan warning per bundle that declares a plugin id an earlier bundle
+/// already declares (code review HOST-10): a dev `target/bundled` build
+/// beside an installed copy, typically. Both stay loaded and listed, and a
+/// slot instantiates from the file it names (`plugins::ensure_bundle`
+/// keys by path first), but the user should know two files claim one id —
+/// a project names a plugin by id as well as by path.
+fn duplicate_id_warnings(bundles: &[ClapBundle]) -> Vec<PluginScanFailure> {
+    let mut first_seen: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut warnings = Vec::new();
+    for bundle in bundles {
+        for desc in bundle.descriptors() {
+            match first_seen.get(desc.id.as_str()) {
+                Some(&other) if other != bundle.path() => {
+                    tracing::warn!(
+                        "plugin id {} is declared by both {} and {}",
+                        desc.id,
+                        other,
+                        bundle.path()
+                    );
+                    warnings.push(PluginScanFailure {
+                        path: bundle.path().to_string(),
+                        reason: format!(
+                            "duplicate plugin id '{}': {} declares it too. Both are listed; \
+                             each instance loads from the file it was added from.",
+                            desc.id, other
+                        ),
+                    });
+                }
+                Some(_) => {}
+                None => {
+                    first_seen.insert(desc.id.as_str(), bundle.path());
+                }
+            }
+        }
+    }
+    warnings
 }
 
 /// Every plugin in every loaded bundle, as the app's catalog entries.

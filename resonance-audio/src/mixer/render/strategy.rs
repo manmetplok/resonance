@@ -5,9 +5,9 @@
 //! See the [`super::super::render_core`] module docs for what "Live" and
 //! "Bounce" mean; the decisions themselves are documented per method.
 
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::MutexGuard;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::{PluginSlot, SyncClapInstance};
 use crate::mixer::common::{bus_stereo_gains, latch_transport, track_stereo_gains, TransportSnap};
 use crate::types::*;
 
@@ -221,20 +221,22 @@ impl RenderStrategy<'_> {
     }
 
     /// Acquire an effect plugin's lock. Live: non-blocking, skipping the
-    /// plugin for this block on contention (and latching the transport
-    /// snapshot on success). Bounce: blocking with spin + back-off.
+    /// plugin for this block on contention — counted on the slot and in
+    /// the DSP-load report (code review RT-07) — and latching the
+    /// transport snapshot on success. Bounce: blocking with spin +
+    /// back-off.
     #[inline]
     pub(crate) fn lock_fx<'p>(
         &self,
-        mutex: &'p Mutex<SyncClapInstance>,
+        slot: &'p PluginSlot,
     ) -> Option<MutexGuard<'p, SyncClapInstance>> {
         match self {
             Self::Live { transport_snap, .. } => {
-                let mut inst = mutex.try_lock()?;
+                let mut inst = slot.try_lock_counted()?;
                 latch_transport(&mut inst, *transport_snap);
                 Some(inst)
             }
-            Self::Bounce { .. } => Some(crate::engine::try_lock_with_backoff(mutex)),
+            Self::Bounce { .. } => Some(crate::engine::try_lock_with_backoff(&**slot)),
         }
     }
 
@@ -244,9 +246,9 @@ impl RenderStrategy<'_> {
     #[inline]
     pub(crate) fn lock_instrument<'p>(
         &self,
-        mutex: &'p Mutex<SyncClapInstance>,
+        slot: &'p PluginSlot,
     ) -> Option<MutexGuard<'p, SyncClapInstance>> {
-        self.lock_fx(mutex)
+        self.lock_fx(slot)
     }
 
     /// Decide whether and how a top-level track renders this block.

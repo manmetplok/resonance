@@ -439,6 +439,11 @@ pub(crate) struct EngineThreadParams {
     pub quantum: usize,
 }
 
+/// The least time between two plugin host-request polls: the engine
+/// loop's 16 ms housekeeping tick, less a little so an idle loop, woken by
+/// that tick, always polls.
+const HOST_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(12);
+
 pub(crate) fn engine_thread(params: EngineThreadParams) {
     let EngineThreadParams {
         cmd_rx,
@@ -459,6 +464,10 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         buf_frames,
         quantum,
     } = params;
+    // CLAP's main thread for every instance this engine hosts (code
+    // review HOST-08): `is_main_thread()` answers true here, not on a
+    // plugin's own threads.
+    crate::clap_host::thread_check::mark_main_thread();
     let mut state = HandlerState::new(sample_rate, live_midi_tx, live_control_tx, clock_tx);
     let ctx = HandlerCtx {
         shared: &shared,
@@ -491,6 +500,9 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
     // Previous-iteration playhead, used to detect a loop wrap so the
     // cycle-record seam handler can roll the just-finished pass into a take.
     let mut last_playhead: SamplePos = 0;
+    // The plugin host-request poll runs at most once per housekeeping
+    // tick, not after every command (code review HOST-02).
+    let mut last_host_poll: Option<std::time::Instant> = None;
 
     // Report actual sample rate to GUI
     let _ = ctx
@@ -562,7 +574,14 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         // activation (the safe point at which latency may change),
         // re-read their latency, and republish PDC if anything moved
         // (doc #260 finding #10).
-        plugins::poll_plugin_host_requests(&ctx, &state.external_instruments);
+        //
+        // Once per tick, however many commands a burst brings (HOST-02);
+        // and the poll itself only locks an instance whose lock-free
+        // pending flag is set, so an idle plugin is never contended.
+        if last_host_poll.is_none_or(|at| at.elapsed() >= HOST_POLL_INTERVAL) {
+            last_host_poll = Some(std::time::Instant::now());
+            plugins::poll_plugin_host_requests(&ctx, &state.external_instruments);
+        }
 
         // Drain hardware MIDI events the audio callback picked up since
         // the previous iteration. Instrument delivery already happened

@@ -46,6 +46,8 @@ mod plugin_binaries;
 mod plugin_bypass;
 #[path = "clap_host/plugin_editor_state.rs"]
 mod plugin_editor_state;
+#[path = "clap_host/plugin_lock_contention.rs"]
+mod plugin_lock_contention;
 #[path = "clap_host/plugin_id_duplicate_rejected.rs"]
 mod plugin_id_duplicate_rejected;
 #[path = "clap_host/plugin_live_values.rs"]

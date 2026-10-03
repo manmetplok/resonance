@@ -35,14 +35,20 @@ impl ClapInstance {
     /// A handle to this instance's `clap.state.save`, for saving without
     /// holding the instance's lock (review: a large state — user
     /// wavetables — made the audio thread miss blocks while the engine
-    /// held the lock to save it). CLAP allows `state.save` (`[main-thread]`)
-    /// while `process` runs, so the lock is not what makes it legal.
+    /// held the lock to save it; code review HOST-03 routes every save
+    /// through it). CLAP allows `state.save` (`[main-thread]`) while
+    /// `process` runs, so the lock is not what makes it legal. What it
+    /// must not overlap is another main-thread call — an offline render's
+    /// `render.set` or activation cycle, made from a bounce thread — and
+    /// the handle's save holds the instance's main-call guard for that
+    /// (HOST-08).
     pub fn state_save_handle(&self) -> Option<StateSaveHandle> {
         let state_ext = self.state_ext?;
         let save = unsafe { (*state_ext).save }?;
         Some(StateSaveHandle {
             plugin: self.plugin,
             save,
+            main_call: &self.host_data.main_call,
         })
     }
 
@@ -110,6 +116,13 @@ impl ClapInstance {
     /// (`self.active == false`) and `Drop` skips the deactivate it would
     /// otherwise run.
     fn cycle_activation(&mut self, while_deactivated: impl FnOnce(&mut Self) -> bool) -> bool {
+        // Exclusive with an unlocked state save (HOST-08). The guard lives
+        // in the pinned `HostData`, not in `self`, so holding it across the
+        // `&mut self` calls below is sound; the raw pointer only sidesteps
+        // the borrow checker's view of `self`.
+        let main_call: *const parking_lot::ReentrantMutex<()> = &self.host_data.main_call;
+        // SAFETY: `HostData` is pinned and outlives this call.
+        let _main = unsafe { (*main_call).lock() };
         // Stop processing (`[audio-thread]`; see `AudioThreadScope`)
         if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
             let _audio = super::thread_check::AudioThreadScope::enter();
@@ -129,6 +142,10 @@ impl ClapInstance {
     /// activate → re-query latency → start, from the deactivated state.
     /// On failure the plugin is left deactivated and `false` returned.
     fn activate_and_start(&mut self) -> bool {
+        // See `cycle_activation`.
+        let main_call: *const parking_lot::ReentrantMutex<()> = &self.host_data.main_call;
+        // SAFETY: `HostData` is pinned and outlives this call.
+        let _main = unsafe { (*main_call).lock() };
         // Reactivate
         if let Some(activate) = unsafe { (*self.plugin).activate } {
             let ok = unsafe {
@@ -201,6 +218,10 @@ impl ClapInstance {
         if started {
             return true;
         }
+        // See `cycle_activation`.
+        let main_call: *const parking_lot::ReentrantMutex<()> = &self.host_data.main_call;
+        // SAFETY: `HostData` is pinned and outlives this call.
+        let _main = unsafe { (*main_call).lock() };
         if let Some(deactivate) = unsafe { (*self.plugin).deactivate } {
             unsafe { deactivate(self.plugin) };
         }
@@ -357,6 +378,8 @@ pub struct StateSaveHandle {
         *const clap_sys::plugin::clap_plugin,
         *const clap_sys::stream::clap_ostream,
     ) -> bool,
+    /// The instance's `HostData::main_call`, held for the save.
+    main_call: *const parking_lot::ReentrantMutex<()>,
 }
 
 impl StateSaveHandle {
@@ -369,6 +392,8 @@ impl StateSaveHandle {
     /// safe.
     pub unsafe fn save(&self) -> Option<Vec<u8>> {
         let (plugin, save) = (self.plugin, self.save);
+        // SAFETY: the caller's contract keeps the pinned `HostData` alive.
+        let _main = unsafe { (*self.main_call).lock() };
         // SAFETY: the caller's contract.
         capture_ostream(|stream| unsafe { save(plugin, stream) })
     }

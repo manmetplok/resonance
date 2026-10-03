@@ -643,6 +643,20 @@ impl EngineHandlerHarness {
             .unwrap_or_default()
     }
 
+    /// Publish a hand-built plugin slot under `id`, as an add would — for
+    /// fake plugins built with `__instance_from_raw_for_test`. Returns the
+    /// slot, so a test can lock it from another thread.
+    pub fn insert_plugin_slot(
+        &mut self,
+        id: PluginInstanceId,
+        slot: crate::clap_host::PluginSlot,
+    ) -> Arc<crate::clap_host::PluginSlot> {
+        let slot = Arc::new(slot);
+        let published = Arc::clone(&slot);
+        self.shared.edit_plugins(|plugins| plugins.insert(id, published));
+        slot
+    }
+
     /// How many live CLAP instances `ctx.plugins()` holds, across every
     /// track/bus/master chain. Used to confirm a refused duplicate-id add
     /// did not insert (or replace) an instance.
