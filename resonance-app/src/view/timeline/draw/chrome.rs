@@ -136,11 +136,11 @@ pub fn gain_tinted_body(gain_db: f32) -> Color {
 }
 
 /// Format a clip-gain value as a signed mono dB tag, e.g. `+3.0 dB`,
-/// `-6.0 dB`. Values within 0.05 dB of unity collapse to `+0.0 dB` so a
-/// `-0.0` never prints.
+/// `-6.0 dB`. Thin wrapper over the one view-layer dB formatter
+/// (`util::format_db_signed`, UX-17), which already collapses values
+/// within 0.05 dB of unity to `+0.0 dB` so a `-0.0` never prints.
 pub fn format_gain_db(gain_db: f32) -> String {
-    let g = if gain_db.abs() < 0.05 { 0.0 } else { gain_db };
-    format!("{g:+.1} dB")
+    crate::util::format_db_signed(gain_db, true)
 }
 
 /// Sample-overlap of two clips (in samples), or `None` if they don't

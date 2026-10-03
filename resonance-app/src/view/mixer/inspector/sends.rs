@@ -120,7 +120,7 @@ pub(crate) fn add_options(
 
 /// The dB readout drawn beside a send's level slider.
 pub(crate) fn level_readout(send: &AuxSend) -> String {
-    format!("{:+.1} dB", send.level_db)
+    crate::util::format_db_signed(send.level_db, true)
 }
 
 /// The label on a send's tap-point toggle.

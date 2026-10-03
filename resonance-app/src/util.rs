@@ -19,12 +19,23 @@ pub fn db_to_gain(db: f32) -> f32 {
     }
 }
 
-/// Format a dB value for display. Returns "-inf" for -60 dB or below.
-pub fn format_db(db: f32) -> Cow<'static, str> {
+/// Format a dB value for display, signed, with the floor spelled out as
+/// "−∞" rather than a literal "-60.0". This is the one dB formatter for
+/// the view layer — sends, bus members, automation, clip gain, the
+/// reference offset/trim, and the fader label all used to format the same
+/// kind of value three different ways (`"{:.1}"`, `"{:+.1} dB"`, and this
+/// function's old `format_db`); UX-17 collapses them onto this one.
+///
+/// `with_unit` appends `" dB"`; faders drop it (the fader rail already
+/// reads as a dB scale) but every other call site keeps it. Values within
+/// 0.05 dB of zero collapse to `+0.0` so a `-0.0` never prints.
+pub fn format_db_signed(db: f32, with_unit: bool) -> String {
+    let unit = if with_unit { " dB" } else { "" };
     if db <= -60.0 {
-        Cow::Borrowed("-inf")
+        format!("\u{2212}\u{221e}{unit}")
     } else {
-        Cow::Owned(format!("{:.1}", db))
+        let v = if db.abs() < 0.05 { 0.0 } else { db };
+        format!("{v:+.1}{unit}")
     }
 }
 

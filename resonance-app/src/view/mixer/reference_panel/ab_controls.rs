@@ -10,7 +10,7 @@ use resonance_audio::types::{ABSource, ReferenceId};
 use crate::message::*;
 use crate::reference::{ReferenceEntry, ReferenceMarkerState, ReferenceMessage, ReferenceState};
 use crate::theme::{self};
-use crate::util::format_db;
+use crate::util::format_db_signed;
 
 use super::waveform;
 
@@ -203,7 +203,7 @@ fn loudness_row(state: &ReferenceState) -> Element<'static, Message> {
     });
 
     let offset = if matched {
-        text(format!("{:+.1} dB", offset_db))
+        text(format_db_signed(offset_db, true))
             .size(11)
             .font(theme::MONO_FONT)
             .color(theme::TEXT_2)
@@ -227,7 +227,7 @@ fn trim_row(trim_db: f32) -> Element<'static, Message> {
         row![
             text("Trim").size(11).color(theme::TEXT_3),
             Space::new().width(Length::Fill),
-            text(format_db(trim_db))
+            text(format_db_signed(trim_db, true))
                 .size(11)
                 .font(theme::MONO_FONT)
                 .color(theme::TEXT_2),

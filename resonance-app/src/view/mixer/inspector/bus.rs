@@ -158,7 +158,7 @@ pub(crate) fn fingerprint(r: &crate::Resonance, bus: &BusState) -> u64 {
 fn return_badge() -> Element<'static, Message> {
     container(
         text("RETURN")
-            .size(8)
+            .size(9)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::WARM),
     )
@@ -231,7 +231,7 @@ fn routing_group(
                     .unwrap_or_else(|| format!("Bus {id}")),
             };
             if s.enabled {
-                format!("{name} {:+.1} dB", s.level_db)
+                format!("{name} {}", crate::util::format_db_signed(s.level_db, true))
             } else {
                 format!("{name} (off)")
             }

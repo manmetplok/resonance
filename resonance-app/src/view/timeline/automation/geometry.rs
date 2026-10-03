@@ -332,7 +332,7 @@ pub fn format_real_value(target: AutomationTarget, real: f32) -> String {
     match target {
         AutomationTarget::TrackGain(_)
         | AutomationTarget::BusGain(_)
-        | AutomationTarget::MasterGain => format!("{real:+.1} dB"),
+        | AutomationTarget::MasterGain => crate::util::format_db_signed(real, true),
         AutomationTarget::TrackPan(_) | AutomationTarget::BusPan(_) => {
             if real.abs() < 0.01 {
                 "C".to_string()
