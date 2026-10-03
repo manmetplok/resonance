@@ -66,4 +66,35 @@ pub struct PluginMirror {
     /// policy can run again when a parameter — the drums' `output_mode` —
     /// decides it later. Runtime only.
     pub output_ports: std::collections::HashMap<PluginInstanceId, Vec<String>>,
+
+    /// Instances whose cached blob is known stale: the plugin changed
+    /// state the blob carries (an editor kit pick, `kit_select`) and the
+    /// `SavePluginState` that refreshes the cache is in flight (code
+    /// review STATE2-07). An undo snapshot taken in that window holds the
+    /// stale blob, and once the echo replaced the cache, undoing that
+    /// unrelated edit pushed it back: the kit reverted with it. So such a
+    /// snapshot also gets a late slot the echo fills, as a preset load's
+    /// "after" capture does (`PresetState::pending_after`).
+    pub(crate) owed_blobs: std::collections::HashMap<PluginInstanceId, OwedBlob>,
+}
+
+/// See [`PluginMirror::owed_blobs`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct OwedBlob {
+    /// Refreshes asked for, one per change that made the blob stale.
+    pub marks: u64,
+    /// Echoes (`PluginStateSaved`) received since the first mark. The
+    /// k-th echo is the state after the k-th change: engine commands and
+    /// events are both FIFO.
+    pub echoes: u64,
+    /// The late slots of snapshots taken while owed, each with the mark
+    /// count it was taken at: the echo of that mark fills it. Behind a
+    /// lock so `snapshot_for_undo(&self)` can register one.
+    pub slots: std::sync::Arc<
+        std::sync::Mutex<Vec<(u64, crate::undo::snapshot::LateBlob)>>,
+    >,
+    /// An undo / redo restored since: the echoes still owed describe a
+    /// state the restore replaced, so they fill the slots waiting on them
+    /// but no longer the live cache.
+    pub superseded: bool,
 }

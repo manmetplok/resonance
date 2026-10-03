@@ -120,20 +120,27 @@ pub trait ParamTextSource: Send + Sync {
     /// (shared) parameter storage, for a host query made while the plugin
     /// is active. `None` (the default) means "use the bridge's mirror".
     ///
-    /// The bridge asks only for a parameter that is
-    /// [read-only](crate::param::Param::is_read_only) or
-    /// [state-excluded](crate::param::Param::state_excluded) — the two
-    /// kinds a plugin moves on its own — so a plugin answers for those and
-    /// may return `None` for the rest. Called on the host's main thread,
-    /// concurrently with `process()`: read an atomic, never lock what the
-    /// audio thread holds. A non-finite answer is ignored.
+    /// The bridge asks for **every** parameter — for `get_value`, for the
+    /// params `state.save` writes and for the preset-modified comparison
+    /// (HOST-01) — except an ordinary one while a state load is still
+    /// waiting for the audio thread to apply it (then the mirror holds the
+    /// load and is the newer side). An answer for every parameter is what
+    /// makes an editor edit made with the transport stopped reach a
+    /// host's save and readback even when the host never flushes; a
+    /// plugin may still answer only for the
+    /// [read-only](crate::param::Param::is_read_only) and
+    /// [state-excluded](crate::param::Param::state_excluded) ones it moves
+    /// on its own and return `None` for the rest, which then read the
+    /// mirror (refreshed every block and every `params.flush`). Called on
+    /// the host's main thread, concurrently with `process()`: read an
+    /// atomic, never lock what the audio thread holds. A non-finite answer
+    /// is ignored.
     ///
     /// Typical shape, for params shared behind an `Arc`:
     ///
     /// ```ignore
     /// fn live_value(&self, index: usize) -> Option<f64> {
-    ///     let p = self.params.param(index);
-    ///     (p.is_read_only() || p.state_excluded()).then(|| p.get_plain())
+    ///     (index < PARAM_COUNT).then(|| self.params.param_at(index).get_plain())
     /// }
     /// ```
     fn live_value(&self, index: usize) -> Option<f64> {

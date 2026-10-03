@@ -33,6 +33,7 @@ pub(crate) use replay::{
     restore_references,
 };
 pub use serialize::{build_project_file, plugin_states_for_save};
+pub(crate) use serialize::add_session_plugin_params;
 pub use templates::{
     builtin_templates, compute_summary, ensure_templates_dir, scan_templates_in,
     scan_user_templates, templates_dir, write_template, BuiltinProject, BuiltinTemplateId,
@@ -371,6 +372,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.io.pending_load = Some(loaded);
             r.session.undo.clear();
             r.plugin_mirror.state_cache.clear();
+            r.plugin_mirror.owed_blobs.clear();
             r.plugin_mirror.kit_info.clear();
             r.plugin_mirror.output_ports.clear();
             // Both are re-seeded from the incoming file by the

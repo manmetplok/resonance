@@ -270,6 +270,19 @@ impl crate::Resonance {
                 late_plugin_states.push((owed.instance_id, late));
             }
         }
+        // A blob refresh still in flight (an editor kit pick): the cached
+        // blob this snapshot holds predates the change, so the refresh's
+        // echo fills it in (STATE2-07).
+        for (&instance_id, owed) in self.plugin_mirror.owed_blobs.iter() {
+            if owed.superseded || !self.plugin_mirror.index.contains_key(&instance_id) {
+                continue;
+            }
+            let late = LateBlob::default();
+            if let Ok(mut s) = owed.slots.lock() {
+                s.push((owed.marks, late.clone()));
+            }
+            late_plugin_states.push((instance_id, late));
+        }
         UndoSnapshot {
             project: LoadedProject {
                 file,
@@ -305,10 +318,13 @@ impl crate::Resonance {
     /// The `ProjectFile` an undo snapshot carries: `build_project_file`
     /// minus the reference A/B monitor state, which is saved with the
     /// project but is not undo state — an undo leaves it alone, and
-    /// flipping the A/B switch is not an edit (ARCH-01 A-5).
+    /// flipping the A/B switch is not an edit (ARCH-01 A-5) — plus the
+    /// state-excluded plugin params, which are undo state but not file
+    /// state (STATE2-03, `add_session_plugin_params`).
     fn undo_project_file(&self) -> crate::project::ProjectFile {
         let mut file = crate::update::build_project_file(self);
         file.reference_settings.clear_monitor_state();
+        crate::update::project_io::add_session_plugin_params(self, &mut file);
         file
     }
 
@@ -397,6 +413,9 @@ impl crate::Resonance {
         // An owed "after" state that lands from now on no longer describes
         // the live plugin; it only fills the snapshots that wait on it.
         for owed in self.presets.pending_after.values_mut() {
+            owed.superseded = true;
+        }
+        for owed in self.plugin_mirror.owed_blobs.values_mut() {
             owed.superseded = true;
         }
 

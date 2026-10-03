@@ -575,7 +575,31 @@ impl crate::Resonance {
         if self.bus_rename_is_noop(message) {
             return true;
         }
+        if self.plugin_param_is_read_only(message) {
+            return true;
+        }
         false
+    }
+
+    /// A `SetPluginParam` on a read-only output (a load progress): the
+    /// plugin drops the write, so the handler sends nothing. Gated here
+    /// rather than refused there because the message records its undo
+    /// entry, marks the project dirty and bumps the revision before
+    /// dispatch (code review STATE2-10).
+    fn plugin_param_is_read_only(&self, message: &crate::message::Message) -> bool {
+        let crate::message::Message::Plugin(crate::message::PluginMessage::SetPluginParam(
+            instance_id,
+            param_id,
+            _,
+        )) = message
+        else {
+            return false;
+        };
+        self.plugin_slot(*instance_id).is_some_and(|slot| {
+            slot.params
+                .iter()
+                .any(|p| p.id == *param_id && p.read_only)
+        })
     }
 
     /// A `RenameBus` that would change nothing: the trimmed name is empty

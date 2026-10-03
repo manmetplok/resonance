@@ -867,7 +867,10 @@ pub(crate) fn handle_close_plugin_editor(ctx: &HandlerCtx, instance_id: PluginIn
 
 pub(crate) fn handle_save_plugin_state(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     if let Some(mutex) = ctx.plugins().get(&instance_id) {
-        if let Some(inst) = mutex.try_lock() {
+        if let Some(mut inst) = mutex.try_lock() {
+            // An editor edit made with the transport stopped is in the
+            // plugin but not yet in what it saves (HOST-01).
+            inst.0.sync_plugin_values();
             let data = inst.0.save_state();
             if let Some(data) = data {
                 let _ = ctx
@@ -904,7 +907,8 @@ pub(crate) fn handle_load_plugin_state(
 
 pub(crate) fn handle_save_plugin_preset_state(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     if let Some(mutex) = ctx.plugins().get(&instance_id) {
-        if let Some(inst) = mutex.try_lock() {
+        if let Some(mut inst) = mutex.try_lock() {
+            inst.0.sync_plugin_values();
             if let Some((data, preset_form)) = inst.0.save_preset_state() {
                 let _ = ctx.event_tx.send(AudioEvent::PluginPresetStateSaved {
                     instance_id,
@@ -935,7 +939,11 @@ fn capture_unlocked(
     token: u64,
     after: bool,
 ) -> bool {
-    let Some(handle) = mutex.try_lock().map(|inst| inst.0.state_save_handle()) else {
+    // Synced under the lock (a `params.flush`, cheap), saved outside it.
+    let Some(handle) = mutex.try_lock().map(|mut inst| {
+        inst.0.sync_plugin_values();
+        inst.0.state_save_handle()
+    }) else {
         return false;
     };
     // SAFETY: engine thread; the instance stays in `ctx.plugins()` for the
@@ -1152,7 +1160,23 @@ pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
     let plugins_guard = ctx.plugins();
     let mut retry = false;
     for (&instance_id, mutex) in plugins_guard.iter() {
-        if let Some(inst) = mutex.try_lock() {
+        if let Some(mut inst) = mutex.try_lock() {
+            // What the plugin plays, not what it last reported (HOST-01,
+            // PUX-01): an editor edit the plugin never announced is in its
+            // params, and reaches neither its saved state nor the app's
+            // mirror on its own while the transport is stopped. The flush
+            // brings its saved state in step; the values that moved since
+            // the host last read them go to the app ahead of the states,
+            // on the same channel, so the project file the app writes from
+            // its mirror when the states arrive carries them — not stale
+            // values it would re-send over the blob on reopen.
+            inst.0.sync_plugin_values();
+            let values = inst.0.refresh_param_values(false);
+            if !values.is_empty() {
+                let _ = ctx
+                    .event_tx
+                    .send(AudioEvent::PluginParamValuesChanged { instance_id, values });
+            }
             if let Some(data) = inst.0.save_state() {
                 states.push((instance_id, data));
             }

@@ -58,27 +58,7 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
 
     fn get_value(&mut self, param_id: ClapId) -> Option<f64> {
         let slot = self.shared.find_slot(param_id.get())?;
-        let meta = &self.shared.param_metas[slot];
-        // A value the plugin moves itself — an output, or one derived from
-        // its state — is read where it lives, not from the mirror: only
-        // the audio thread's push-back refreshes the mirror, so with no
-        // block running (transport stopped) it would read stale forever.
-        if meta.is_read_only || meta.state_excluded {
-            if let Some(plugin) = &self.plugin {
-                if slot < plugin.param_count() {
-                    return Some(plugin.param(slot).get_plain());
-                }
-            }
-            if let Some(live) = self
-                .param_text_source
-                .as_ref()
-                .and_then(|s| s.live_value(slot))
-                .filter(|v| v.is_finite())
-            {
-                return Some(live);
-            }
-        }
-        Some(self.shared.get_value(slot))
+        Some(self.current_value(slot))
     }
 
     fn value_to_text(
@@ -185,8 +165,17 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
         output_parameter_changes: &mut OutputEvents,
     ) {
         // Active with no block running (a host with its transport
-        // stopped): report what the plugin announced, as `process()`
-        // would have.
+        // stopped): bring the mirror in step first, as the top of
+        // `process()` would have (HOST-01). A load published while active
+        // reaches the plugin, then whatever the editor wrote into the
+        // plugin's own params since the last block reaches `shared` —
+        // which `get_value` and `state.save` read. A host that flushes
+        // before it saves or reads values back therefore never gets an
+        // editor edit's old value, with or without a block in between.
+        self.apply_pending_load();
+        self.push_back_params();
+        // Then report what the plugin announced, as `process()` would
+        // have.
         {
             let plugin = &self.plugin;
             super::param_output::report_announced(

@@ -221,38 +221,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // is no waiting involved — an odd generation just leaves
         // `params_dirty` set for a later block, which is exactly what the
         // flag is for.
-        let publish_gen = self.shared.param_publish_gen();
-        if publish_gen & 1 == 0 && self.shared.params_dirty.swap(false, Ordering::Acquire) {
-            for i in 0..self.plugin.param_count() {
-                // A state-excluded param was not loaded: its atomic holds
-                // the plugin's last value, which the plugin may since have
-                // moved itself (from the very state being loaded).
-                if i < self.shared.param_values.len() && !self.shared.param_metas[i].state_excluded
-                {
-                    self.plugin.param(i).set_plain(self.shared.get_value(i));
-                }
-            }
-            // A load that opened its window *after* the check above could
-            // have been publishing while the loop ran, so what the plugin
-            // just took may be a blend. Hand the flag back rather than
-            // leave it: the next block re-runs the copy against the
-            // finished load.
-            //
-            // The Acquire fence is what makes the re-read below *evidence*:
-            // the value loads above are Relaxed, and without the fence
-            // nothing stops them sinking below the generation re-read on a
-            // weakly-ordered CPU (the SeqCst load is an acquire, which only
-            // pins later accesses, not earlier ones) — a bracket the loads
-            // escaped validates nothing. The fence keeps every load above
-            // it above the re-read, and pairs with the Release fence in
-            // `begin_param_publish`: a value load that caught a mid-publish
-            // store forces the re-read to observe that publish's odd
-            // generation (or later), so the mismatch is detected.
-            std::sync::atomic::fence(Ordering::Acquire);
-            if self.shared.param_publish_gen() != publish_gen {
-                self.shared.params_dirty.store(true, Ordering::Release);
-            }
-        }
+        self.apply_pending_load();
 
         // Push any editor-driven parameter writes back into the shared
         // atomics so the main-thread save path (which reads from `shared`
@@ -578,11 +547,53 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 }
 
 impl<P: ResonancePlugin> ClapAudioProcessor<'_, P> {
+    /// Copy a state load published into `shared` while active into the
+    /// plugin: the re-sync described at its call site in `process()`.
+    /// The audio-processor `params.flush` runs it too, so a host that
+    /// flushes with no block coming (transport stopped) hands the plugin
+    /// the load before the push-back reads the plugin's values. Never
+    /// concurrent with `process()` (CLAP's rule for both callers);
+    /// wait-free, allocation-free.
+    pub(super) fn apply_pending_load(&mut self) {
+    let publish_gen = self.shared.param_publish_gen();
+    if publish_gen & 1 == 0 && self.shared.params_dirty.swap(false, Ordering::Acquire) {
+        for i in 0..self.plugin.param_count() {
+            // A state-excluded param was not loaded: its atomic holds
+            // the plugin's last value, which the plugin may since have
+            // moved itself (from the very state being loaded).
+            if i < self.shared.param_values.len() && !self.shared.param_metas[i].state_excluded
+            {
+                self.plugin.param(i).set_plain(self.shared.get_value(i));
+            }
+        }
+        // A load that opened its window *after* the check above could
+        // have been publishing while the loop ran, so what the plugin
+        // just took may be a blend. Hand the flag back rather than
+        // leave it: the next block re-runs the copy against the
+        // finished load.
+        //
+        // The Acquire fence is what makes the re-read below *evidence*:
+        // the value loads above are Relaxed, and without the fence
+        // nothing stops them sinking below the generation re-read on a
+        // weakly-ordered CPU (the SeqCst load is an acquire, which only
+        // pins later accesses, not earlier ones) — a bracket the loads
+        // escaped validates nothing. The fence keeps every load above
+        // it above the re-read, and pairs with the Release fence in
+        // `begin_param_publish`: a value load that caught a mid-publish
+        // store forces the re-read to observe that publish's odd
+        // generation (or later), so the mismatch is detected.
+        std::sync::atomic::fence(Ordering::Acquire);
+        if self.shared.param_publish_gen() != publish_gen {
+            self.shared.params_dirty.store(true, Ordering::Release);
+        }
+    }
+    }
+
     /// Push the plugin's own parameter values into the shared mirror the
     /// main thread reads — the editor push-back described at its call
     /// site in `process()`, with the guards against a concurrent
     /// `state::load`. Audio thread; wait-free, allocation-free.
-    fn push_back_params(&mut self) {
+    pub(super) fn push_back_params(&mut self) {
         // `gen_before` is a SeqCst (so acquire) load, which keeps every
         // Relaxed slot read below from being hoisted above it. Odd: a
         // load is publishing, and whatever the slots hold may be its

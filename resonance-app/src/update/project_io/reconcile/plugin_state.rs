@@ -238,7 +238,40 @@ fn apply_plugin_params(
             continue;
         };
         let blob_pushed = pushed.contains(&slot.instance_id);
-        // A param the host does not persist is not in the snapshot, so
+        // A param the plugin's state carries in its own form (the drums'
+        // `kit_select`) is in an undo snapshot only (`undo_project_file`),
+        // never in a file. With the blob pushed, the blob recalls it (by
+        // its kit reference, which is what survives a renumbered library);
+        // otherwise it is driven back like any edit — the blob that was
+        // NOT pushed is the live one, which a host-side write of the param
+        // never refreshed, so it says nothing about the value (STATE2-03).
+        // Absent (a snapshot of a file load), it is never driven: that
+        // would mean "to its default", over what the blob recalled.
+        if !blob_pushed {
+            let excluded: Vec<(u32, f64)> = slot
+                .params
+                .iter()
+                .filter(|p| p.state_excluded && !p.read_only)
+                .filter_map(|p| {
+                    let target = pp.params.iter().find(|s| s.id == p.id)?.value;
+                    (p.current_value != target).then_some((p.id, target))
+                })
+                .collect();
+            for (param_id, target) in excluded {
+                let kit = resonance_plugin::stable_hash(crate::drums_mirror::KIT_SELECT);
+                if crate::drums_mirror::is_drums(slot) && param_id == kit {
+                    crate::drums_mirror::mirror_kit_select(slot, target);
+                } else if let Some(p) = slot.params.iter_mut().find(|p| p.id == param_id) {
+                    p.current_value = target;
+                }
+                let _ = engine.send(AudioCommand::SetPluginParam {
+                    instance_id: slot.instance_id,
+                    param_id,
+                    value: target,
+                });
+            }
+        }
+        // A param the host does not persist is not in a saved file, so
         // "absent" does not mean "at its default" for it: driving it to
         // the default would override what the blob recalls (the drums'
         // `kit_select`, restored from the blob's kit reference).

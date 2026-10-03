@@ -390,6 +390,7 @@ pub(crate) fn track_removed(
         track.plugins.retain(|p| p.instance_id != instance_id);
     }
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.owed_blobs.remove(&instance_id);
     r.plugin_mirror.kit_info.remove(&instance_id);
     r.plugin_mirror.output_ports.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
@@ -728,7 +729,37 @@ pub(super) fn state_saved(
     // Feeds the undo system's plugin-state cache so snapshots can replay
     // internal CLAP state on restore. The project-save path drains the
     // cache via `SaveAllPluginStates` separately.
-    r.plugin_mirror.state_cache.insert(instance_id, data.into());
+    let blob: std::sync::Arc<[u8]> = data.into();
+    // A refresh that was owed (an editor kit pick, STATE2-07): this echo
+    // is the state after the change it was asked for, and fills the
+    // snapshots taken while waiting for it — the same `Arc` the cache
+    // takes, so restoring one of them finds the blob live and pushes
+    // nothing.
+    let mut superseded = false;
+    if let Some(owed) = r.plugin_mirror.owed_blobs.get_mut(&instance_id) {
+        owed.echoes += 1;
+        let echo = owed.echoes;
+        if let Ok(mut slots) = owed.slots.lock() {
+            slots.retain(|(mark, late)| {
+                if *mark != echo {
+                    return true;
+                }
+                if let Ok(mut slot) = late.lock() {
+                    *slot = Some(blob.clone());
+                }
+                false
+            });
+        }
+        superseded = owed.superseded;
+        if owed.echoes >= owed.marks {
+            r.plugin_mirror.owed_blobs.remove(&instance_id);
+        }
+    }
+    // An undo / redo restored a state since the refresh was asked for:
+    // this blob describes the state it replaced.
+    if !superseded {
+        r.plugin_mirror.state_cache.insert(instance_id, blob);
+    }
 }
 
 /// A `*.save_plugin_preset` (or a host bar's Save) armed this capture:
@@ -1220,6 +1251,7 @@ pub(crate) fn bus_removed(
     }
     r.ui.mixer.forget_plugin(instance_id);
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.owed_blobs.remove(&instance_id);
     r.plugin_mirror.kit_info.remove(&instance_id);
     r.plugin_mirror.output_ports.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
@@ -1338,6 +1370,7 @@ pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     r.master.plugins.retain(|p| p.instance_id != instance_id);
     r.ui.mixer.forget_plugin(instance_id);
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.owed_blobs.remove(&instance_id);
     r.plugin_mirror.kit_info.remove(&instance_id);
     r.plugin_mirror.output_ports.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither

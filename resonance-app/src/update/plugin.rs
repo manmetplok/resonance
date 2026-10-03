@@ -207,8 +207,15 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             // not in the undo snapshot's param list, so the snapshot's
             // BLOB is what an undo restores it from: refresh the cached
             // blob now, so the entry just recorded (holding the old one)
-            // differs from the live cache and an undo pushes it.
+            // differs from the live cache and an undo pushes it. Until the
+            // fresh blob is back the cache is stale, and a snapshot taken
+            // meanwhile is owed it (STATE2-07).
             if state_excluded == Some(true) {
+                r.plugin_mirror
+                    .owed_blobs
+                    .entry(instance_id)
+                    .or_default()
+                    .marks += 1;
                 let _ = r.engine.send(AudioCommand::SavePluginState { instance_id });
             }
             if let Some(identity) = r.presets.plugin_preset_identity.get_mut(&instance_id) {

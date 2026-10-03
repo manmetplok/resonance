@@ -69,6 +69,62 @@ fn project_plugin(r: &Resonance, p: &crate::state::PluginSlotState) -> ProjectPl
     }
 }
 
+/// Add to `file` — an **undo snapshot's** file, never one written to disk
+/// — the value of every parameter a plugin's state carries in its own
+/// form (`state_excluded`, not read-only: the drums' `kit_select`).
+///
+/// [`project_plugin`] leaves those out, rightly for a file another machine
+/// may open. But an undo restore of a live instance skips the snapshot's
+/// blob when the live cache still holds the same one, and a host-side
+/// write of such a param (`track.set_plugin_param kit_select`) does not
+/// refresh the cache: with the param missing from the snapshot too, the
+/// undo restored nothing (code review STATE2-03). Carried here, the
+/// restore drives it back (`reconcile::plugin_state::apply_plugin_params`)
+/// whenever it does not push the blob — and within one session the slot
+/// a value names is the slot it named when the snapshot was taken.
+///
+/// Written for every live slot, at any value (a default is a value to
+/// restore too), after the persisted overrides. A slot whose overrides are
+/// still parked (no `PluginAdded` yet) has no live params to read.
+pub(crate) fn add_session_plugin_params(r: &Resonance, file: &mut ProjectFile) {
+    let session = |slots: &[crate::state::PluginSlotState],
+                   plugins: &mut [ProjectPlugin]| {
+        for slot in slots {
+            if r
+                .presets
+                .pending_plugin_param_overrides
+                .contains_key(&slot.instance_id)
+            {
+                continue;
+            }
+            let Some(pp) = plugins.iter_mut().find(|p| p.instance_id == slot.instance_id) else {
+                continue;
+            };
+            pp.params.extend(
+                slot.params
+                    .iter()
+                    .filter(|param| param.state_excluded && !param.read_only)
+                    .map(|param| crate::project::ProjectPluginParam {
+                        id: param.id,
+                        name: param.name.clone(),
+                        value: param.current_value,
+                    }),
+            );
+        }
+    };
+    for track in &r.registry.tracks {
+        if let Some(pt) = file.tracks.iter_mut().find(|t| t.id == track.id) {
+            session(&track.plugins, &mut pt.plugins);
+        }
+    }
+    for bus in &r.registry.busses {
+        if let Some(pb) = file.busses.iter_mut().find(|b| b.id == bus.id) {
+            session(&bus.plugins, &mut pb.plugins);
+        }
+    }
+    session(&r.master.plugins, &mut file.master_plugins);
+}
+
 /// The plugin-state blobs a save must write: every blob the engine just
 /// reported for a live instance, plus the app-side copy for every slot
 /// the engine said nothing about.
