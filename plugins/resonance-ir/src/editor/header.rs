@@ -83,7 +83,16 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
             drop(list);
 
             let raw_name = app.ir_name.lock().clone();
-            let name = if raw_name.is_empty() {
+            // PUX-09: a load failure's only channel is "Error: {e}" in
+            // this same string (`loader.rs`'s doc comment on
+            // `load_into` says so) — shown here as plain filename text
+            // it used to be indistinguishable from a real one at a
+            // glance. The banner (`missing_banner::draw`, drawn over
+            // the centre when `load_error` is `Some`) says the real
+            // detail; this slot just stops pretending it's a filename.
+            let name = if super::missing_banner::load_error(&raw_name).is_some() {
+                "(load failed — see below)".to_string()
+            } else if raw_name.is_empty() {
                 if stem.is_empty() {
                     "(no IR loaded)".to_string()
                 } else {
@@ -124,7 +133,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
 /// inside `ui()` would otherwise block the Wayland editor thread (no
 /// repaint, no Wayland dispatch) for as long as the dialog is up.
 #[cfg(target_os = "macos")]
-fn start_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
+pub(super) fn start_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Impulse response (WAV)", &["wav"])
         .pick_file()
@@ -135,7 +144,7 @@ fn start_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn start_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
+pub(super) fn start_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
     use resonance_plugin::file_picker::FileDialogRequest;
     app.ir_picker.lock().start(
         FileDialogRequest::open_file()
@@ -146,7 +155,7 @@ fn start_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn poll_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
+pub(super) fn poll_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
     let Some(answer) = app.ir_picker.lock().poll() else {
         return;
     };

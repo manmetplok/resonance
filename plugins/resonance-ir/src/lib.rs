@@ -14,7 +14,7 @@ pub mod state;
 pub mod viz;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use dsp::{IrEngine, LatencyMode, StereoConvolver};
 use loader::{LoaderDeps, LoaderHandle};
@@ -91,6 +91,16 @@ impl ResonanceIr {
     /// reactivation that applies it.
     fn target_block_size(&self) -> usize {
         dsp::block_size_for(self.sample_rate, self.latency_mode())
+    }
+
+    /// Set `ir_name` directly, for `tests/missing_banner.rs` (PUX-09):
+    /// driving an actual failed load (a bad path through
+    /// `loader::load_into`) would also need a running loader thread,
+    /// when all the banner test needs is `ir_name` holding
+    /// `loader.rs`'s own `"Error: {e}"` convention. Not plugin API.
+    #[doc(hidden)]
+    pub fn test_set_ir_name(&self, text: &str) {
+        *self.ir_name.lock() = text.to_string();
     }
 }
 

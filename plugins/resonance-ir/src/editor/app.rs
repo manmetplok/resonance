@@ -13,7 +13,7 @@ use plugin_gui_core::{egui, EditorApp};
 use crate::params::IrParams;
 use crate::viz::IrViz;
 
-use super::{controls, header, latency, meters, response_view, theme, waveform_view};
+use super::{controls, header, latency, meters, missing_banner, response_view, theme, waveform_view};
 
 pub(crate) struct IrEditorApp {
     pub(crate) params: Arc<IrParams>,
@@ -76,6 +76,17 @@ fn draw_center(ui: &mut egui::Ui, app: &mut IrEditorApp) {
         egui::pos2(avail.left() + gap, avail.bottom() - meter_h),
         egui::pos2(avail.right() - gap, avail.bottom() - 2.0),
     );
+
+    // PUX-09: a load failure has nothing real to draw — the banner
+    // takes the waveform/response views' place, as the amp's
+    // missing-model banner does for its scope/curve.
+    let error = missing_banner::load_error(&app.ir_name.lock()).map(str::to_string);
+    if let Some(message) = error {
+        missing_banner::draw(ui, viz_rect, app, &message);
+        let painter = ui.painter_at(avail);
+        meters::draw(&painter, meter_rect, &app.viz);
+        return;
+    }
 
     // Split viz: waveform (left ~55%), response (right ~45%).
     let resp_w = (viz_rect.width() * 0.45).clamp(240.0, 520.0);
