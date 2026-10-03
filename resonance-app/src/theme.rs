@@ -453,6 +453,12 @@ pub const GROUP_HEADER_HEIGHT: f32 = 60.0;
 /// stack of parameter lanes reads as detail under the track rather than
 /// competing with full 96 px lanes.
 pub const AUTOMATION_LANE_ROW_HEIGHT: f32 = 44.0;
+/// Width of the Compose drum grid's pad-label column (name + share %),
+/// measured from the card's inner edge. Sized so the longest kit names
+/// ("Half Open", "Rim Click") fit beside a right-aligned "100%" (UX-06).
+pub const DRUM_PAD_LABEL_WIDTH: f32 = 108.0;
+/// Pad-name characters shown before the drum grid ellipsizes the name.
+pub const DRUM_PAD_NAME_MAX_CHARS: usize = 10;
 /// Arrange-view take-lane sub-row height (epic #15, doc #165). One row per
 /// recorded take, stacked beneath the owning track while its take lane is
 /// expanded. Slimmer than an automation lane row: a take row carries only a

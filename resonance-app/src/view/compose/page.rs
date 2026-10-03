@@ -193,19 +193,70 @@ impl crate::Resonance {
                     }
                     _ => None,
                 };
-                let right_panel = lane_inspector::view(
-                    definition,
-                    &self.compose.selected_lane,
-                    &self.registry.tracks,
-                    &self.compose.drumroll,
-                    section_drum_groups,
-                    &self.compose.drum_patterns,
-                    clip_id_for_drum,
-                    &self.table_registry,
-                    &self.compose.vocal_bulk_lyrics,
-                    &self.compose.collapsed_rail_panels,
-                    vocal_tempo_warning,
-                );
+                // The rail is `lazy` (UX-10): the Compose tab repaints at the
+                // 16 ms playback tick, and nothing in the rail moves with the
+                // playhead. Its key is a revision over an owned snapshot of
+                // everything the rail reads, so any edit — UI, undo, control
+                // API, load — rebuilds it. While a vocal lane's bulk-lyrics
+                // editor is open the rail borrows that `text_editor::Content`
+                // and can't be `'static`, so it is built eagerly then.
+                let bulk_content = match &self.compose.selected_lane {
+                    SelectedLane::Instrument(track_id) => {
+                        self.compose.vocal_bulk_lyrics.get(&(definition.id, *track_id))
+                    }
+                    _ => None,
+                };
+                let right_panel: Element<'_, Message> = match bulk_content {
+                    Some(content) => lane_inspector::view(
+                        definition,
+                        &self.compose.selected_lane,
+                        &self.registry.tracks,
+                        &self.compose.drumroll,
+                        section_drum_groups,
+                        &self.compose.drum_patterns,
+                        clip_id_for_drum,
+                        &self.table_registry,
+                        Some(content),
+                        &self.compose.collapsed_rail_panels,
+                        vocal_tempo_warning,
+                    ),
+                    None => {
+                        let revision = self.ui.view_caches.compose_rail.revision(
+                            crate::view::ui_caches::ComposeRailInputs {
+                                definition: definition.clone(),
+                                selected_lane: self.compose.selected_lane.clone(),
+                                tracks: self
+                                    .registry
+                                    .tracks
+                                    .iter()
+                                    .map(|t| (t.id, t.name.clone(), t.track_type))
+                                    .collect(),
+                                drumroll: self.compose.drumroll.clone(),
+                                drum_groups: section_drum_groups.to_vec(),
+                                drum_patterns: self.compose.drum_patterns.clone(),
+                                clip_id_for_drum,
+                                collapsed_panels: self.compose.collapsed_rail_panels.clone(),
+                                vocal_tempo_warning,
+                            },
+                        );
+                        iced::widget::lazy(revision, move |_| -> Element<'static, Message> {
+                            lane_inspector::view(
+                                definition,
+                                &self.compose.selected_lane,
+                                &self.registry.tracks,
+                                &self.compose.drumroll,
+                                section_drum_groups,
+                                &self.compose.drum_patterns,
+                                clip_id_for_drum,
+                                &self.table_registry,
+                                None,
+                                &self.compose.collapsed_rail_panels,
+                                vocal_tempo_warning,
+                            )
+                        })
+                        .into()
+                    }
+                };
 
                 row![left_column, right_panel]
                     .spacing(0)

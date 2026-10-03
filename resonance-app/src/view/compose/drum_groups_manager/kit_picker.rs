@@ -273,15 +273,17 @@ fn pad_row<'a>(
 
     let note_value = pad.note;
     let area = container(row_widget).padding([7, 10]).style(bg_style);
-    mouse_area(area)
-        .on_press(match active {
-            Some(group_id) => Message::Compose(ComposeMessage::DrumGroups(
+    // No active group → no click message at all (UX-22): the row is inert
+    // rather than routing a stand-in `Message::Tick` through the tick handler.
+    match active {
+        Some(group_id) => mouse_area(area)
+            .on_press(Message::Compose(ComposeMessage::DrumGroups(
                 DrumGroupsMessage::TogglePadAssignment {
                     group_id,
                     note: note_value,
                 },
-            )),
-            None => Message::Tick,
-        })
-        .into()
+            )))
+            .into(),
+        None => mouse_area(area).into(),
+    }
 }

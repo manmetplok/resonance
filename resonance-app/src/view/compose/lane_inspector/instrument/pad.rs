@@ -16,7 +16,7 @@ use super::{register_high_options, register_low_options, NotePick};
 pub(super) fn pad_controls<'a>(
     definition_id: u64,
     track_id: TrackId,
-    params: &'a resonance_music_theory::PadParams,
+    params: &resonance_music_theory::PadParams,
 ) -> Element<'a, Message> {
     let reg_lo_picker = pick_list(
         register_low_options(),

@@ -19,7 +19,7 @@ use super::common::{chip, dim_label, group_card, group_title};
 pub(super) fn voice_group<'a>(
     definition_id: u64,
     track_id: TrackId,
-    params: &'a VocalParams,
+    params: &VocalParams,
     collapsed: bool,
 ) -> Element<'a, Message> {
     let key = crate::compose::RailPanelKey::VocalVoice(track_id);

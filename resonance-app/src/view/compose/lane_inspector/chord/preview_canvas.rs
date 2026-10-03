@@ -13,7 +13,7 @@ use crate::theme;
 /// Small "MOTIF · N notes" preview card with scattered dashes — read-only,
 /// purely for at-a-glance density feedback.
 pub(super) fn motif_preview_card<'a>(
-    definition: &'a SectionDefinitionState,
+    definition: &SectionDefinitionState,
 ) -> Element<'a, Message> {
     let note_count = match &definition.motif_source {
         MotifSource::Manual { notes, .. } => notes.len(),

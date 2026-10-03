@@ -19,7 +19,7 @@ use resonance_app::view::compose::tracks::NAME_COLUMN_WIDTH;
 use resonance_app::{demo, Resonance};
 
 // Canvas geometry, mirrored from `view/compose/drumroll/canvas.rs`.
-const PAD_LABEL_WIDTH: f32 = 76.0;
+const PAD_LABEL_WIDTH: f32 = resonance_app::theme::DRUM_PAD_LABEL_WIDTH;
 const STEP_HEADER_HEIGHT: f32 = 16.0;
 const GROUP_HEAD_HEIGHT: f32 = 22.0;
 const PAD_ROW_HEIGHT: f32 = 18.0;

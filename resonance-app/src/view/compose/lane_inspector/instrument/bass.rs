@@ -18,9 +18,9 @@ use super::{bass_base_note_options, NotePick};
 pub(super) fn bass_controls<'a>(
     definition_id: u64,
     track_id: TrackId,
-    params: &'a resonance_music_theory::BassParams,
+    params: &resonance_music_theory::BassParams,
 ) -> Element<'a, Message> {
-    let style_picker = pick_list(BassStyle::ALL.to_vec(), Some(params.style), move |style| {
+    let style_picker = pick_list(BassStyle::ALL, Some(params.style), move |style| {
         Message::Compose(ComposeMessage::LaneInspector {
             definition_id,
             track_id,
@@ -79,7 +79,7 @@ pub(super) fn bass_controls<'a>(
 
     if params.style == BassStyle::Motif {
         let mode_picker = pick_list(
-            BassMotifMode::ALL.to_vec(),
+            BassMotifMode::ALL,
             Some(params.motif_mode),
             move |mode| {
                 Message::Compose(ComposeMessage::LaneInspector {
@@ -94,7 +94,7 @@ pub(super) fn bass_controls<'a>(
         .width(Length::Fill);
 
         let phrase_picker = pick_list(
-            BassMotifPhrase::ALL.to_vec(),
+            BassMotifPhrase::ALL,
             Some(params.motif_phrase),
             move |phrase| {
                 Message::Compose(ComposeMessage::LaneInspector {

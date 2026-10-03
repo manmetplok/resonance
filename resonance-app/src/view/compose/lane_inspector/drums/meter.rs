@@ -12,7 +12,7 @@ use crate::theme;
 use super::common::{rail_card, rail_dot, section_head, u8_color, BEATS_PER_BAR};
 
 pub(super) fn meter_panel<'a>(
-    group: &'a DrumGroup,
+    group: &DrumGroup,
     base_grid: u8,
     base_cycle: u32,
     collapsed: bool,
@@ -78,7 +78,7 @@ pub(super) fn meter_panel<'a>(
 
     // Grid + cycle steppers (as a pick_list for grid, slider/stepper for cycle).
     let grid_pick = pick_list(
-        vec![2u8, 3, 4, 5, 6, 7],
+        [2u8, 3, 4, 5, 6, 7],
         Some(group.grid),
         {
             let id = group.id;
@@ -216,7 +216,7 @@ pub(super) fn meter_panel<'a>(
     )
 }
 
-fn polyrhythm_chip_row<'a>(group: &'a DrumGroup, base_grid: u8, base_cycle: u32) -> Element<'a, Message> {
+fn polyrhythm_chip_row<'a>(group: &DrumGroup, base_grid: u8, base_cycle: u32) -> Element<'a, Message> {
     let base_cycle_f = base_cycle as f32;
     let base_grid_f = base_grid as f32;
     let presets: Vec<(String, u8, u32)> = vec![
@@ -264,7 +264,7 @@ fn polyrhythm_chip_row<'a>(group: &'a DrumGroup, base_grid: u8, base_cycle: u32)
     iced::widget::Row::with_children(items).spacing(4).wrap().into()
 }
 
-fn polymeter_chip_row<'a>(group: &'a DrumGroup, base_grid: u8, base_cycle: u32) -> Element<'a, Message> {
+fn polymeter_chip_row<'a>(group: &DrumGroup, base_grid: u8, base_cycle: u32) -> Element<'a, Message> {
     let presets: Vec<(String, u32)> = vec![
         (format!("{} : {}", base_cycle, base_cycle), base_cycle),
         (format!("5 : {}", base_cycle), 5),

@@ -171,6 +171,19 @@ fn build_global_lane_label(
     height: f32,
     warm: bool,
 ) -> Element<'static, Message> {
+    build_global_lane_label_with(glyph, name, sub, theme::TEXT_3, height, warm)
+}
+
+/// [`build_global_lane_label`] with an explicit sub-line colour (the chord
+/// lane turns its sub-line into an error line, UX-02).
+fn build_global_lane_label_with(
+    glyph: char,
+    name: &'static str,
+    sub: String,
+    sub_color: iced::Color,
+    height: f32,
+    warm: bool,
+) -> Element<'static, Message> {
     let glyph_color = if warm { theme::WARM } else { theme::TEXT_2 };
     let glyph_box = container(theme::icon(glyph).size(11).color(glyph_color))
         .width(theme::GLOBAL_TRACK_GLYPH_SIZE)
@@ -191,7 +204,7 @@ fn build_global_lane_label(
         .size(12)
         .font(theme::UI_FONT_MEDIUM)
         .color(theme::TEXT_1);
-    let sub_el = text(sub).size(10).font(theme::MONO_FONT).color(theme::TEXT_3);
+    let sub_el = text(sub).size(10).font(theme::MONO_FONT).color(sub_color);
     let name_col = column![name_el, sub_el].spacing(1);
 
     // Mini M / Lock control cluster — placeholders for parity with the
@@ -245,20 +258,39 @@ fn build_global_lane_label(
         .into()
 }
 
-/// Chord lane label — name "Chords", sub "from sections · N chords".
+/// Chord lane label — name "Chords". The sub-line counts the section
+/// chords ("from sections · N chords"); once the global chord track holds
+/// regions it counts those and their pins instead ("3 on track · 1 pinned"),
+/// matching the region strip the canvas draws under the section chords.
+/// The chord track's `last_error` (a rejected chord symbol) replaces the
+/// sub-line in the error colour until the next successful edit (UX-02).
 pub(super) fn view_chord_lane_header(r: &Resonance) -> Element<'static, Message> {
-    let total: usize = r
-        .compose
-        .definitions
-        .iter()
-        .map(|d| d.chords.len())
-        .sum();
-    let sub = if total == 0 {
-        "from sections".to_string()
-    } else if total == 1 {
-        "from sections · 1 chord".to_string()
+    if let Some(err) = r.chord_track.last_error.as_deref() {
+        return build_global_lane_label_with(
+            fa::MUSIC,
+            "Chords",
+            crate::util::short(err, 30),
+            theme::BAD,
+            theme::GLOBAL_TRACK_CHORD_HEIGHT,
+            false,
+        );
+    }
+    let regions = r.chord_track.regions.len();
+    let sub = if regions > 0 {
+        let pinned = r.chord_track.regions.iter().filter(|rg| rg.pinned).count();
+        format!("{regions} on track · {pinned} pinned")
     } else {
-        format!("from sections · {} chords", total)
+        let total: usize = r
+            .compose
+            .definitions
+            .iter()
+            .map(|d| d.chords.len())
+            .sum();
+        match total {
+            0 => "from sections".to_string(),
+            1 => "from sections · 1 chord".to_string(),
+            n => format!("from sections · {} chords", n),
+        }
     };
     build_global_lane_label(
         fa::MUSIC,

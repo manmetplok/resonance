@@ -41,7 +41,7 @@ const BEATS_PER_BAR: u32 = 4;
 
 const GROUP_HEAD_HEIGHT: f32 = 22.0;
 const PAD_ROW_HEIGHT: f32 = 18.0;
-const PAD_LABEL_WIDTH: f32 = 76.0;
+const PAD_LABEL_WIDTH: f32 = theme::DRUM_PAD_LABEL_WIDTH;
 const STEP_HEADER_HEIGHT: f32 = 16.0;
 const LANE_PAD_TOP: f32 = 8.0;
 const LANE_PAD_BOTTOM: f32 = 8.0;
@@ -381,9 +381,13 @@ impl<'a> ComposeDrumCanvas<'a> {
             let mut pad_y = y + GROUP_HEAD_HEIGHT;
 
             for (pi, pad) in group.pads.iter().enumerate() {
-                // Pad name.
+                // Pad name — ellipsized so it never runs into the share
+                // column (UX-06).
                 frame.fill_text(canvas::Text {
-                    content: pad.name.clone(),
+                    content: crate::util::short(
+                        &pad.name,
+                        theme::DRUM_PAD_NAME_MAX_CHARS,
+                    ),
                     position: Point::new(card_rect.x + 26.0, pad_y + 2.0),
                     color: if focused {
                         theme::TEXT_2
@@ -394,17 +398,18 @@ impl<'a> ComposeDrumCanvas<'a> {
                     ..canvas::Text::default()
                 });
 
-                // Share %.
+                // Share %, right-aligned to the label column's edge.
                 let share = group.weight_share(pi);
                 frame.fill_text(canvas::Text {
                     content: format!("{}%", share),
                     position: Point::new(
-                        card_rect.x + 6.0 + PAD_LABEL_WIDTH - 28.0,
-                        pad_y + 4.0,
+                        card_rect.x + 6.0 + PAD_LABEL_WIDTH - 4.0,
+                        pad_y + 3.0,
                     ),
-                    color: theme::TEXT_4,
-                    size: 9.0.into(),
+                    color: theme::TEXT_3,
+                    size: 10.0.into(),
                     font: theme::MONO_FONT,
+                    align_x: iced::widget::text::Alignment::Right,
                     ..canvas::Text::default()
                 });
 

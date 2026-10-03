@@ -66,6 +66,7 @@ impl crate::Resonance {
             section_placements: &self.compose.placements,
             section_definitions: &self.compose.definitions,
             selected_placement_id: self.compose.selected_placement_id,
+            chord_track: &self.chord_track,
             automation: &self.automation,
             device_param_labels: crate::view::timeline::automation::device_param_labels(
                 &self.automation,

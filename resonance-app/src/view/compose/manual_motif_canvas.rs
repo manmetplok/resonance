@@ -38,7 +38,9 @@ pub const CELL_H: f32 = 12.0;
 
 pub struct ManualMotifCanvas<'a> {
     pub definition_id: u64,
-    pub notes: &'a [ManualMotifNote],
+    /// Owned when built inside the lazy Compose rail (which must be
+    /// `'static`, UX-10); borrowed elsewhere.
+    pub notes: std::borrow::Cow<'a, [ManualMotifNote]>,
     pub scale: Option<Scale>,
 }
 
@@ -66,7 +68,7 @@ impl<'a> ManualMotifCanvas<'a> {
     pub fn fingerprint(&self) -> ManualMotifFingerprint {
         use std::hash::{Hash, Hasher};
         let mut nh = std::collections::hash_map::DefaultHasher::new();
-        for n in self.notes {
+        for n in self.notes.iter() {
             n.scale_step.hash(&mut nh);
             n.duration_sixteenths.hash(&mut nh);
             n.accent.hash(&mut nh);
@@ -236,7 +238,7 @@ impl<'a> ManualMotifCanvas<'a> {
 
         // Notes and rests.
         let mut cursor_beat: u32 = 0;
-        for n in self.notes {
+        for n in self.notes.iter() {
             let dur = n.duration_sixteenths.max(1) as u32;
             if cursor_beat >= GRID_COLS as u32 {
                 cursor_beat += dur;

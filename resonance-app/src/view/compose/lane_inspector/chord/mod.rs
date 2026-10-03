@@ -182,7 +182,7 @@ pub(super) fn field_label<'a>(label: impl Into<String>) -> Element<'a, Message> 
 }
 
 /// Two-state toggle row — label on the left, pill toggle on the right.
-pub(super) fn toggle_row<'a>(label: &'a str, on: bool, msg: Message) -> Element<'a, Message> {
+pub(super) fn toggle_row<'a>(label: &str, on: bool, msg: Message) -> Element<'a, Message> {
     let track_color = if on { theme::ACCENT } else { theme::BG_3 };
     let knob_x = if on { 14.0 } else { 1.0 };
 
@@ -217,7 +217,7 @@ pub(super) fn toggle_row<'a>(label: &'a str, on: bool, msg: Message) -> Element<
 
     let mouse = iced::widget::mouse_area(
         row![
-            text(label).size(12).color(theme::TEXT_1),
+            text(label.to_string()).size(12).color(theme::TEXT_1),
             Space::new().width(Length::Fill),
             track,
         ]

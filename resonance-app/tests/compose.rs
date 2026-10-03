@@ -127,3 +127,5 @@ mod vocal_tempo_mismatch_warning;
 mod vocal_roll_keys;
 #[path = "compose/vocal_roll_fingerprint.rs"]
 mod vocal_roll_fingerprint;
+#[path = "compose/compose_rail_lazy.rs"]
+mod compose_rail_lazy;

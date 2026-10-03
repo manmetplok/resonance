@@ -12,7 +12,7 @@ use crate::theme;
 use super::{field_label, section_header};
 
 pub(in crate::view::compose::lane_inspector) fn scale_block<'a>(
-    definition: &'a SectionDefinitionState,
+    definition: &SectionDefinitionState,
     collapsed: bool,
 ) -> Element<'a, Message> {
     let definition_id = definition.id;
@@ -35,8 +35,8 @@ pub(in crate::view::compose::lane_inspector) fn scale_block<'a>(
             .into(),
     };
 
-    let roots: Vec<PitchClass> = PitchClass::ALL.to_vec();
-    let modes: Vec<Mode> = Mode::ALL.to_vec();
+    let roots = PitchClass::ALL;
+    let modes = Mode::ALL;
     let current_root = current.map(|s| s.root).unwrap_or(PitchClass::C);
     let current_mode = current.map(|s| s.mode).unwrap_or(Mode::Major);
 

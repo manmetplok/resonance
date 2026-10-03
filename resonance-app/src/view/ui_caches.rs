@@ -64,6 +64,8 @@ pub(crate) struct UiViewCaches {
     /// the External-Instrument inspector's device-preset picker (epic #40).
     /// Rebuilt only when the device registry changes (startup today).
     pub device_choices: Rc<[DevicePresetChoice]>,
+    /// Revision memo keying the Compose right rail's `lazy` (UX-10).
+    pub compose_rail: RevisionMemo<ComposeRailInputs>,
 }
 
 impl Default for UiViewCaches {
@@ -91,6 +93,7 @@ impl Default for UiViewCaches {
             // valid option before the registry is scanned; `Resonance::new`
             // rebuilds it from the bundled + user definitions at startup.
             device_choices: Rc::from(device_choices(&[])),
+            compose_rail: RevisionMemo::default(),
         }
     }
 }
@@ -199,3 +202,71 @@ impl<T: Clone + 'static> Clone for ChoiceList<T> {
     }
 }
 
+
+/// Equality memo that turns "the inputs a view region reads" into a `u64`
+/// revision for `iced::widget::lazy`. Many view inputs (section
+/// definitions with float generator params, drum patterns) can't derive
+/// `Hash`, and a hand-written fingerprint silently goes stale when someone
+/// adds a field. Instead, the view snapshots everything the region reads
+/// into one `PartialEq` value each frame and calls [`revision`]: an equal
+/// snapshot keeps the revision (the lazy region is reused), any difference
+/// — an edit, an undo, a control-API write, a project load — bumps it.
+/// Comparing is a field walk with no allocation; the snapshot is only
+/// stored (moved) when it changed.
+///
+/// [`revision`]: RevisionMemo::revision
+#[derive(Debug)]
+pub(crate) struct RevisionMemo<T> {
+    inner: std::cell::RefCell<(Option<T>, u64)>,
+}
+
+impl<T> Default for RevisionMemo<T> {
+    fn default() -> Self {
+        Self {
+            inner: std::cell::RefCell::new((None, 0)),
+        }
+    }
+}
+
+impl<T> Clone for RevisionMemo<T> {
+    /// A clone starts empty: the memo is a per-view cache, never state.
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl<T: PartialEq> RevisionMemo<T> {
+    /// The revision for `inputs`: unchanged when `inputs` equals the last
+    /// snapshot, otherwise bumped (and `inputs` becomes the snapshot).
+    pub(crate) fn revision(&self, inputs: T) -> u64 {
+        let mut inner = self.inner.borrow_mut();
+        if inner.0.as_ref() != Some(&inputs) {
+            inner.0 = Some(inputs);
+            inner.1 = inner.1.wrapping_add(1);
+        }
+        inner.1
+    }
+}
+
+/// Everything the Compose right rail (`view::compose::lane_inspector`)
+/// reads, owned, for [`RevisionMemo`]. Keep in step with
+/// `lane_inspector::view`'s parameters: a field the rail reads but this
+/// struct lacks is a stale-rail bug. The table registry is left out on
+/// purpose — it is built once at startup and never mutated.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ComposeRailInputs {
+    pub definition: crate::compose::SectionDefinitionState,
+    pub selected_lane: crate::compose::SelectedLane,
+    /// `(id, name, type)` of every track — the rail's only `TrackState`
+    /// reads (EDITING header, Name field, generator options). Levels and
+    /// the rest of `TrackState` tick constantly and are not read.
+    pub tracks: Vec<(resonance_audio::types::TrackId, String, resonance_audio::types::TrackType)>,
+    pub drumroll: crate::compose::DrumrollViewState,
+    pub drum_groups: Vec<crate::compose::DrumGroup>,
+    pub drum_patterns: Vec<crate::compose::drumroll::DrumPattern>,
+    pub clip_id_for_drum: Option<u64>,
+    /// Set equality is order-independent, so iteration order can't fake
+    /// a change.
+    pub collapsed_panels: std::collections::HashSet<crate::compose::RailPanelKey>,
+    pub vocal_tempo_warning: Option<crate::update::compose::VocalTempoMismatch>,
+}

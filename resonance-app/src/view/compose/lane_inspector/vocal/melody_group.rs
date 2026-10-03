@@ -20,7 +20,7 @@ use super::toggle_row;
 pub(super) fn melody_group<'a>(
     definition_id: u64,
     track_id: TrackId,
-    params: &'a VocalParams,
+    params: &VocalParams,
     collapsed: bool,
 ) -> Element<'a, Message> {
     let key = crate::compose::RailPanelKey::VocalMelody(track_id);

@@ -11,7 +11,7 @@ use crate::theme;
 
 use super::common::{field, rail_card, rail_dot};
 
-pub(super) fn rhythm_panel<'a>(group: &'a DrumGroup, collapsed: bool) -> Element<'a, Message> {
+pub(super) fn rhythm_panel<'a>(group: &DrumGroup, collapsed: bool) -> Element<'a, Message> {
     let title_left: Element<'a, Message> = row![
         rail_dot(theme::WARM),
         text("Rhythm").size(12).color(theme::WARM),

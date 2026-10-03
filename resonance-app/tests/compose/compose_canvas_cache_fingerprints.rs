@@ -318,7 +318,7 @@ fn motif_notes() -> Vec<ManualMotifNote> {
 fn motif_canvas(notes: &[ManualMotifNote]) -> ManualMotifCanvas<'_> {
     ManualMotifCanvas {
         definition_id: 7,
-        notes,
+        notes: notes.into(),
         scale: Some(Scale::new(PitchClass::A, Mode::Minor)),
     }
 }

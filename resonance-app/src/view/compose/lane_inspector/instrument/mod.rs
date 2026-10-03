@@ -1,8 +1,6 @@
 //! Instrument-lane inspector body: generator picker + the bass / melody /
 //! pad parameter panels.
 
-use std::collections::HashMap;
-
 use iced::widget::{button, column, container, pick_list, row, text, text_input, Space};
 use iced::{alignment, Element, Length};
 
@@ -122,9 +120,9 @@ impl std::fmt::Display for PhraseLenPick {
 }
 
 pub(in crate::view::compose::lane_inspector) fn instrument_body<'a>(
-    definition: &'a SectionDefinitionState,
-    track: &'a TrackState,
-    vocal_bulk_lyrics: &'a HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
+    definition: &SectionDefinitionState,
+    track: &TrackState,
+    bulk_content: Option<&'a iced::widget::text_editor::Content>,
     collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
     vocal_tempo_warning: Option<crate::update::compose::VocalTempoMismatch>,
 ) -> Element<'a, Message> {
@@ -156,12 +154,12 @@ pub(in crate::view::compose::lane_inspector) fn instrument_body<'a>(
 
     // Filter the picker options by track type — vocal tracks only run
     // the vocal generator, instrument tracks never do.
-    let gen_options: &[GeneratorPick] = match track.track_type {
+    let gen_options: &'static [GeneratorPick] = match track.track_type {
         TrackType::Vocal => &GeneratorPick::VOCAL,
         _ => &GeneratorPick::INSTRUMENT,
     };
     let gen_picker = pick_list(
-        gen_options.to_vec(),
+        gen_options,
         Some(current_gen),
         move |pick| {
             Message::Compose(ComposeMessage::LaneInspector {
@@ -207,7 +205,7 @@ pub(in crate::view::compose::lane_inspector) fn instrument_body<'a>(
                 track_id,
                 params,
                 cfg.seed,
-                vocal_bulk_lyrics.get(&(definition_id, track_id)),
+                bulk_content,
                 collapsed_panels,
                 vocal_tempo_warning,
             ),

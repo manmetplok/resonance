@@ -79,6 +79,10 @@ pub struct TimelineCanvas<'a> {
     pub section_placements: &'a [crate::compose::SectionPlacementState],
     pub section_definitions: &'a [crate::compose::SectionDefinitionState],
     pub selected_placement_id: Option<u64>,
+    /// The global chord track (doc #168). Its regions draw as a strip in
+    /// the shelf's chord lane, beneath the section chords, with pinned
+    /// regions marked and the section chords they override dimmed (UX-02).
+    pub chord_track: &'a crate::chord_track::ChordTrack,
     /// App-side mirror of the engine's parameter-automation lanes. The
     /// timeline renders the primary lane for each track as an overlay band
     /// (doc #162 §3); empty => no lanes drawn.
@@ -462,6 +466,11 @@ pub struct TimelineFingerprint {
     /// canvas cache would hold a stale chord layout after a chord is
     /// added / removed / re-rolled inside Compose.
     pub section_chord_total: usize,
+    /// Hash of every section chord's `(start, duration, chord)` and every
+    /// chord-track region's `(id, span, chord, pinned)`. The chord lane
+    /// draws symbols and pin state, so a re-symbol or a pin toggle — which
+    /// leave every count alone — must still repaint (UX-02).
+    pub chord_lane_hash: u64,
     /// Hash of every automation lane's target, Read state and breakpoints.
     /// Repaints the cached lane geometry when a lane is added, cleared, or
     /// edited. The *live* playhead value is drawn uncached, so it is
@@ -625,6 +634,24 @@ impl<'a> TimelineCanvas<'a> {
             m.color.hash(&mut mh);
         }
         let markers_hash = mh.finish();
+
+        let mut ch = std::collections::hash_map::DefaultHasher::new();
+        for d in self.section_definitions {
+            d.id.hash(&mut ch);
+            for c in &d.chords {
+                c.start_beat.hash(&mut ch);
+                c.duration_beats.hash(&mut ch);
+                c.chord.hash(&mut ch);
+            }
+        }
+        for rg in &self.chord_track.regions {
+            rg.id.hash(&mut ch);
+            rg.start_sample.hash(&mut ch);
+            rg.end_sample.hash(&mut ch);
+            rg.chord.hash(&mut ch);
+            rg.pinned.hash(&mut ch);
+        }
+        let chord_lane_hash = ch.finish();
 
         // Hash every clip's geometry + fade/gain shaping so the cached
         // clip layer invalidates on move / trim / fade / gain edits.
@@ -833,6 +860,7 @@ impl<'a> TimelineCanvas<'a> {
                 .iter()
                 .map(|d| d.chords.len())
                 .sum(),
+            chord_lane_hash,
             automation_hash,
             markers_len: self.markers.len(),
             markers_hash,
