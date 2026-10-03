@@ -62,20 +62,21 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 |---|---|---|---|---|---|
 | 1 | S1 control-surface safety | STATE2-01, STATE2-10 (mixdown ext), ARCH2-06, STATE2-05, STATE2-06, STATE2-08, STATE2-09 | opus | merged | a591626c |
 | 1 | S2 save robustness + error surface | STATE2-02, UX-13, UX-04, UX-05 | opus | merged | 50140dcd |
-| 1 | P1 plugin live values (host/bridge side) | HOST-01, PUX-01 (host side: refresh before serialise), STATE2-03, STATE2-07, STATE2-10 (read-only param undo) | opus | running | |
+| 1 | P1 plugin live values (host/bridge side) | HOST-01, PUX-01 (host side: refresh before serialise), STATE2-03, STATE2-07, STATE2-10 (read-only param undo) | opus | merged | 3503f116 |
 | 1 | R1 recording alignment | RT-01, RT-02, RT-08, RT-13, RT-17 | opus | merged | b398afbe |
-| 1 | D1a DSP: mastering/compressor/shared | DSP2-04, -05, -06, -07, -08, -11 (mastering/eq/stereo), -15, -16 | opus | running | |
-| 1 | D1b DSP: instruments/effects | DSP2-01, -02, -03, -09, -10, -12, -13, -14 | opus | running | |
-| 2 | P2 editor widgets + announce | PUX-01 (widget announce), PUX-02, -03, -05, -06, -08, -11 | opus | after P1 | |
-| 2 | R2 lock contention | HOST-02/RT-07, HOST-03, HOST-08, HOST-10 | opus | after P1 | |
-| 2 | U1 project lifecycle UX | UX-01, UX-03/STATE2-04, UX-11, UX-12, UX-14, UX-15, UX-16 | opus | running | |
-| 2 | U2 view correctness | UX-02, UX-06, UX-10, UX-22 | opus | running | |
-| 2 | H1 host spec | HOST-05, -06, -09, -11, -12, -13, -15, -16 | opus | after P1, R1 | |
+| 1 | D1a DSP: mastering/compressor/shared | DSP2-04, -05, -06, -07, -08, -11 (mastering/eq/stereo), -15, -16 | opus | merged | 96e27095 |
+| 1 | D1b DSP: instruments/effects | DSP2-01, -02, -03, -09, -10, -12, -13, -14 | opus | merged | 34c6bd05 |
+| 2 | P2 editor widgets + announce | PUX-01 (widget announce), PUX-02, -03, -05, -06, -08, -11 | opus | running |  |
+| 2 | R2 lock contention | HOST-02/RT-07, HOST-03, HOST-08, HOST-10 | opus | running |  |
+| 2 | U1 project lifecycle UX | UX-01, UX-03/STATE2-04, UX-11, UX-12, UX-14, UX-15, UX-16 | opus | merged | c8c79366 |
+| 2 | U2 view correctness | UX-02, UX-06, UX-10, UX-22 | opus | merged | 72ab6819 |
+| 2 | H1 host spec | HOST-05, -06, -09, -11, -12, -13, -15, -16 | opus | running |  |
+| 2 | D2 DSP follow-ups | FU-D1b1 (rescale wavetable factory presets to the new envelope timing), FU-D1a1 (amp/IR `try_begin_swap`) | sonnet | running | |
 | 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | after R2, H1 | |
 | 3 | R4 RT correctness | RT-03, RT-05, RT-06, RT-09, RT-10, RT-11, RT-12, RT-14, RT-15, RT-16, RT-18 | opus | after R1, H1 | |
 | 3 | P3 editor runtime | PUX-04, -07, -09, -10, -12, PUX-01 (preset-bar recall), DEP-03 | sonnet | after P2 | |
 | 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | after wave 2 | |
-| 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | after U1, U2 | |
+| 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | running (deps met early) |  |
 | 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | after wave 3 | |
 | 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | last, alone | |
 
@@ -93,6 +94,31 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 - **FU-R1e:** size the recording ring from the negotiated channel count and device rate.
 - **FU-R1f:** MIDI cycle passes still roll on the engine tick (~16 ms jitter).
 - *Behaviour change (R1):* the count-in no longer forces the metronome on for the first playing blocks.
+- **FU-P1a:** opt every first-party plugin into `ParamTextSource::live_value` for all params, so live values are right in third-party hosts that never flush. Do this after P2, because both edit the plugins' lib.rs.
+- **FU-P1b:** the save-time refresh of param values also moves an automated param's mirror to its value at the playhead.
+- **FU-P1c:** remaining STATE2-03/07 edge cases: an unrelated cache refresh between a kit_select set and its undo; an in-flight `SavePluginState` counted as an owed echo.
+- **FU-P1d:** template capture serialises from the cached blob and mirror without an engine round-trip.
+- **FU-U1a:** Save As between two titled projects doesn't carry clip WAVs that only the undo history references.
+- **FU-U1b:** a tempo change while BPM text is being typed leaves the editing flag set (harmless).
+- **FU-U1c:** the preset-delete confirm wraps the preset name in the 200 px add-track menu.
+- **FU-U1d:** the 200 px undo-notice slot shifts the view tabs; consider an overlay.
+- **FU-U2a:** chord-track regions are display-only (no click, edit, drag or pin from the lane), and visible only in Arrange with the shelf expanded.
+- **FU-U2b:** lazy-wrap the rest of Compose's left column (section strip, scale stripe, group headers).
+- **FU-U2c:** add a `view_compose` timing benchmark during playback.
+- **FU-U2d:** the shelf header's chord summary counts section chords only.
+- **FU-D1a1:** amp and IR should use `try_begin_swap` and retry a refused payload (in D2).
+- **FU-D1a2:** phase-matched dry path for Transformer's sat_mix, to remove the sub-band dip (−2.3 dB at 20 Hz at mix 0.5).
+- **FU-D1a3:** realtime-only deferral instead of the inline last-resort FIR design; needs a determinism story for tests.
+- **FU-D1a4:** requests that arrive during a fade wait for the whole fade (stereo mode, saturator mode, multiband settle).
+- **FU-D1b1:** rescale the wavetable factory presets to the new envelope timing (in D2; approved by the user).
+- **FU-D1b2:** profile the drums band-limited read on a densely tuned-up kit (~20×rate taps per voice); consider decimated copies of each sample.
+- **FU-D1b3:** cosmetic dip (≤0.07 dB) at the decay→sustain handover with curve −1.
+- **FU-D1b4:** the granular `dsp_regression` golden needs `RESONANCE_BLESS_GRANULAR_DSP=1`; align it with `RESONANCE_BLESS`.
+- **FU-D1b5:** the wavetable param snapshot and envelope coefficients are still taken once per block.
+- **FU-D1b6:** decide on a louder-channel or L/R/sum input for one-sided DIs into the amp on stereo tracks.
+- *Sound changes approved and merged:*
+  - D1b: IR level after resampling; delay wet-path filtering and drive; granular HQ brightness; wavetable retrigger, unison and envelope times; drums anti-aliasing.
+  - D1a: compressor louder-channel detection; FIR accuracy and landing time.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
