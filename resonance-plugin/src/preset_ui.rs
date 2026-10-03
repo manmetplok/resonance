@@ -185,6 +185,22 @@ pub fn preset_bar(
     }
     editor.browser_just_opened = false;
 
+    // PUX-01: a preset recall from this bar — the ◀/▶ step, a combo
+    // pick, a browser commit/audition/import — writes many params at
+    // once through `PresetSession`, none of it through the per-gesture
+    // `float_knob`/`param_knob` announce path. Without this the host's
+    // mirror of those values goes stale (save→reopen can then revert
+    // the recall: `project_plugin` only writes an override for a param
+    // whose mirror differs from default). `request_params_rescan` just
+    // asks the host to re-read; it records no undo entry of its own —
+    // the recall itself is the user action worth remembering, and
+    // that's on whatever triggered `PresetEvent::Loaded`, not here.
+    if matches!(event, PresetEvent::Loaded(_)) {
+        if let Some(announcer) = crate::editor_widgets::announcer(ui.ctx()) {
+            announcer.request_params_rescan();
+        }
+    }
+
     event
 }
 
