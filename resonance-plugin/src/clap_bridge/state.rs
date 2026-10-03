@@ -41,7 +41,11 @@ impl TempParamOwned {
                 value: value(i),
                 min: meta.min,
                 max: meta.max,
-                clap_id: meta.clap_id,
+                // The plugin-side id (`Param::clap_id`'s default), like
+                // the plugin's own params report — not the rename-pinned
+                // wire id: the preset comparison matches these against
+                // ids translated the same way.
+                clap_id: crate::stable_hash(&meta.str_id),
                 preset_excluded: meta.preset_excluded,
                 state_excluded: meta.state_excluded,
             })

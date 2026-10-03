@@ -88,7 +88,17 @@ unsafe extern "C" fn set_ignored_params<P: ResonancePlugin>(
             flag.store(ignored, std::sync::atomic::Ordering::Relaxed);
         }
         if let Some(saver) = &main.extra_state_saver {
-            saver.set_ignored_params(ids);
+            // The host names params by their wire ids; the plugin side
+            // compares `Param::clap_id`, which a rename does not pin
+            // (HOST-11). Translate.
+            let own_ids = main
+                .shared
+                .param_metas
+                .iter()
+                .filter(|m| ids.contains(&m.clap_id))
+                .map(|m| crate::stable_hash(&m.str_id))
+                .collect();
+            saver.set_ignored_params(own_ids);
         }
         Ok(())
     });

@@ -363,6 +363,15 @@ fn get_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
         .unwrap_or_else(|| panic!("param `{id}` is unknown to the bridge"))
 }
 
+/// [`get_value`] for the renamed plugin: a renamed param keeps its
+/// pre-rename CLAP id on the wire (HOST-11), so a host asks by that.
+fn get_renamed_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
+    let ext = params_ext(instance);
+    let wire = ClapId::new(resonance_plugin::wire_clap_id(id, BRIDGE_RENAMES));
+    ext.get_value(&mut instance.plugin_handle(), wire)
+        .unwrap_or_else(|| panic!("param `{id}` is unknown to the bridge"))
+}
+
 /// Deliver a param change the way a host does when the plugin is idle.
 fn flush_inactive(instance: &mut PluginInstance<TestHost>, changes: &[(&str, f64)]) {
     let ext = params_ext(instance);
@@ -1079,16 +1088,44 @@ fn a_renamed_param_still_loads_from_pre_rename_state_while_active() {
     // `get_value` reads the shared atomics while active, so this is the
     // value the host now reports and would re-save.
     assert_eq!(
-        get_value(&mut instance, "mix"),
+        get_renamed_value(&mut instance, "mix"),
         0.25,
         "the declared rename must carry the old id across on the active path too"
     );
-    assert_eq!(get_value(&mut instance, "taps"), 6.0);
+    assert_eq!(get_renamed_value(&mut instance, "taps"), 6.0);
 
     // …and it survives the trip back into the plugin object.
     instance.deactivate(processor);
-    assert_eq!(get_value(&mut instance, "mix"), 0.25);
-    assert_eq!(get_value(&mut instance, "taps"), 6.0);
+    assert_eq!(get_renamed_value(&mut instance, "mix"), 0.25);
+    assert_eq!(get_renamed_value(&mut instance, "taps"), 6.0);
+}
+
+/// A rename keeps the parameter's CLAP id (code review HOST-11): a host
+/// keys automation lanes and MIDI maps by that `u32`, so the id `mix`
+/// reports is the one `wet` had, and a host event sent to it lands on
+/// `mix`. The rename changed the string id only.
+#[test]
+fn a_renamed_param_keeps_its_pre_rename_clap_id() {
+    let mut instance = renamed_instance();
+    let ext = params_ext(&instance);
+    let mut buffer = ParamInfoBuffer::new();
+    let info = ext
+        .get_info(&mut instance.plugin_handle(), 0, &mut buffer)
+        .expect("mix is param 0");
+    assert_eq!(String::from_utf8(info.name.to_vec()).unwrap(), "Mix");
+    assert_eq!(info.id, clap_id("wet"), "the rename must pin the old CLAP id");
+    let taps = ext
+        .get_info(&mut instance.plugin_handle(), 1, &mut buffer)
+        .expect("taps is param 1");
+    assert_eq!(taps.id, clap_id("taps"), "an unrenamed param keeps its own hash");
+
+    // A host automating the old id still reaches the param.
+    flush_inactive(&mut instance, &[("wet", 0.75)]);
+    assert_eq!(get_renamed_value(&mut instance, "mix"), 0.75);
+    assert_eq!(
+        resonance_plugin::wire_clap_id("mix", BRIDGE_RENAMES),
+        stable_hash("wet")
+    );
 }
 
 /// Both load paths must migrate identically, since which one runs is the
@@ -1106,8 +1143,8 @@ fn the_active_and_inactive_load_paths_agree_on_pre_rename_state() {
 
     for id in ["mix", "taps"] {
         assert_eq!(
-            get_value(&mut active, id),
-            get_value(&mut inactive, id),
+            get_renamed_value(&mut active, id),
+            get_renamed_value(&mut inactive, id),
             "`{id}` differs between the active and inactive load paths"
         );
     }
@@ -1136,14 +1173,14 @@ fn an_unrecognised_id_beside_a_renamed_one_still_loads_what_it_can() {
 
     for id in ["mix", "taps"] {
         assert_eq!(
-            get_value(&mut active, id),
-            get_value(&mut inactive, id),
+            get_renamed_value(&mut active, id),
+            get_renamed_value(&mut inactive, id),
             "`{id}` differs between the active and inactive load paths"
         );
     }
-    assert_eq!(get_value(&mut active, "mix"), 0.25);
+    assert_eq!(get_renamed_value(&mut active, "mix"), 0.25);
     assert_eq!(
-        get_value(&mut active, "taps"),
+        get_renamed_value(&mut active, "taps"),
         RENAMED_TAPS_DEFAULT,
         "a param the blob never mentioned keeps its default"
     );
@@ -1165,7 +1202,7 @@ fn a_stale_id_in_an_already_migrated_blob_is_ignored_while_active() {
         .activate(|_, _| (), audio_config())
         .expect("activation");
     assert!(load_state(&mut instance, mixed));
-    assert_eq!(get_value(&mut instance, "mix"), 0.75);
+    assert_eq!(get_renamed_value(&mut instance, "mix"), 0.75);
     instance.deactivate(processor);
 }
 

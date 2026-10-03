@@ -190,3 +190,74 @@ fn an_inactive_flush_carries_the_edit() {
     );
     assert_eq!(decode(&output), selector_edit(7.0));
 }
+
+// ---------------------------------------------------------------------------
+// A renamed param announces under its pinned id (HOST-11)
+// ---------------------------------------------------------------------------
+
+/// [`AnnouncingPlugin`] after `selector` was renamed from `picker`.
+struct RenamedAnnouncingPlugin(AnnouncingPlugin);
+
+const PICKER_RENAME: &[resonance_plugin::ParamRename] = &[resonance_plugin::ParamRename {
+    since_version: 1,
+    from: "picker",
+    to: "selector",
+}];
+
+impl ResonancePlugin for RenamedAnnouncingPlugin {
+    const CLAP_ID: &'static str = "test.param-announce-renamed";
+    const NAME: &'static str = "ParamAnnounceRenamed";
+    const VENDOR: &'static str = "test";
+    const VERSION: &'static str = "0.0.0";
+    const DESCRIPTION: &'static str = "";
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::AUDIO_EFFECT];
+    const INPUT_CHANNELS: Option<u32> = Some(2);
+
+    fn new() -> Self {
+        Self(AnnouncingPlugin::new())
+    }
+    fn param_count(&self) -> usize {
+        self.0.param_count()
+    }
+    fn param(&self, index: usize) -> &dyn Param {
+        self.0.param(index)
+    }
+    fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
+        self.0.initialize(sample_rate, max_buffer_size)
+    }
+    fn reset(&mut self) {}
+    fn set_host(&mut self, host: Arc<HostHandle>) {
+        self.0.set_host(host);
+    }
+    fn param_renames(&self) -> &'static [resonance_plugin::ParamRename] {
+        PICKER_RENAME
+    }
+    fn process(
+        &mut self,
+        _outputs: &mut [OutputBuffer<'_>],
+        _frames: usize,
+        _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
+    ) {
+    }
+}
+
+/// The plugin still announces by its current string id; the host is told
+/// the id it has always known the param by — the pre-rename one — so an
+/// undo step or automation lane recorded against it stays attached.
+#[test]
+fn a_renamed_param_announces_under_its_pinned_clap_id() {
+    let mut harness = ProcessHarness::new::<RenamedAnnouncingPlugin>(
+        c"resonance-test-param-announce-renamed.clap",
+        c"test.param-announce-renamed",
+    );
+    let (host, selector) = live();
+    selector.set_value(3);
+    host.announce_param_change("selector");
+    let id = stable_hash("picker");
+    assert_eq!(
+        decode(&harness.run_empty()),
+        vec![('b', id, 0.0), ('v', id, 3.0), ('e', id, 0.0)]
+    );
+}
