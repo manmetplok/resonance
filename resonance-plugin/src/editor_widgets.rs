@@ -141,6 +141,21 @@ fn gesture_id(param: &dyn Param) -> egui::Id {
 ///
 /// Public for the editors whose continuous controls are drawn by their
 /// own code (an EQ node on the curve, the granular hero view).
+///
+/// FU-P2e: a gesture a widget never reports the end of (scrolled out of
+/// a list mid-drag, a tab switched away from it) used to leave its
+/// start value in this ledger forever. That was not just a leak: the
+/// *next* real gesture on the same param then saw an entry already
+/// there (`began` only checked whether one was open, never whether it
+/// was *this* one) and kept the old, stale start as its own baseline —
+/// so the new gesture's `ended` could announce a no-op edit, or miss a
+/// real one, depending on where the abandoned drag happened to leave
+/// the value. `began` is the widget's own "this is a fresh gesture"
+/// signal (a drag's first frame, a key run's first press), so it is
+/// always trusted to reset the baseline — drums' separate ledger
+/// (`drums/src/editor/controls.rs::Gestures`) reaches the same
+/// correctness the other way, with a per-frame sweep that proactively
+/// closes anything its widgets stopped reporting on.
 pub fn apply_gesture(
     ctx: &egui::Context,
     param: &dyn Param,
@@ -148,7 +163,10 @@ pub fn apply_gesture(
     write: impl FnOnce(f32),
 ) {
     let id = gesture_id(param);
-    if edit.began || edit.value.is_some() {
+    if edit.began {
+        let start = param.get_plain();
+        ctx.data_mut(|d| d.insert_temp(id, start));
+    } else if edit.value.is_some() {
         let open = ctx.data(|d| d.get_temp::<f64>(id)).is_some();
         if !open {
             let start = param.get_plain();
