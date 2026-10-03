@@ -301,19 +301,72 @@ fn sort_options() -> [(&'static str, Sort); 5] {
     ]
 }
 
-/// A modal file dialog. Sync on the UI thread, as the amp's model picker
-/// (the Cocoa runtime guards the modal run loop).
+/// PUX-07: on Cocoa the dialog runs inside the guarded AppKit modal run
+/// loop, so it stays a direct, synchronous `rfd` call there. Everywhere
+/// else (the Wayland editor thread) it runs on [`FilePicker`]'s own
+/// thread and is polled from `ctx.data`, so this file never blocks the
+/// thread that would otherwise be pumping repaints and Wayland
+/// dispatch while the native dialog is up.
+#[cfg(target_os = "macos")]
 fn pick_preset_file() -> Option<std::path::PathBuf> {
     rfd::FileDialog::new()
         .add_filter("Resonance preset", &["json"])
         .pick_file()
 }
 
+#[cfg(target_os = "macos")]
 fn save_preset_file(name: &str) -> Option<std::path::PathBuf> {
     rfd::FileDialog::new()
         .add_filter("Resonance preset", &["json"])
         .set_file_name(format!("{name}.json"))
         .save_file()
+}
+
+/// Non-macOS: the import/export pickers, kept alive across frames via
+/// [`crate::file_picker::CtxPicker`] so they survive from the click
+/// that opens the dialog to the frame the user answers it, without
+/// needing a field on every plugin's editor `App` struct.
+#[cfg(not(target_os = "macos"))]
+mod picker {
+    use crate::file_picker::{CtxPicker, FileDialogRequest, PickerAnswer};
+    use plugin_gui_core::egui;
+
+    /// Start `request`'s dialog for the picker keyed by `id`, unless
+    /// one is already up for it. `with` is handed back unchanged by
+    /// [`poll`] once the dialog resolves.
+    pub(super) fn start<T: Clone + Send + Sync + 'static>(
+        ctx: &egui::Context,
+        id: egui::Id,
+        request: FileDialogRequest,
+        with: T,
+    ) {
+        CtxPicker::<T>::get(ctx, id).start(request, with);
+    }
+
+    /// The picker keyed by `id`'s answer and its `with` value, once
+    /// the dialog has closed. Polling (not just starting) every frame
+    /// is what keeps this entry alive in `ctx.data`'s temp storage.
+    pub(super) fn poll<T: Clone + Send + Sync + 'static>(
+        ctx: &egui::Context,
+        id: egui::Id,
+    ) -> Option<(Option<std::path::PathBuf>, T)> {
+        let (answer, with) = CtxPicker::<T>::get(ctx, id).poll()?;
+        Some((answer_into_one(answer), with))
+    }
+
+    fn answer_into_one(answer: PickerAnswer) -> Option<std::path::PathBuf> {
+        answer.into_one()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn import_picker_id() -> egui::Id {
+    egui::Id::new("resonance_preset_import_picker")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn export_picker_id() -> egui::Id {
+    egui::Id::new("resonance_preset_export_picker")
 }
 
 /// The browser: an `egui::Area` over the editor body, the plugin's
@@ -515,8 +568,29 @@ fn browser_overlay(
                             if ui.small_button("Save as…").clicked() {
                                 browser.begin_save_as(bank, session);
                             }
+                            #[cfg(target_os = "macos")]
                             if ui.small_button("Import…").clicked() {
                                 if let Some(path) = pick_preset_file() {
+                                    let e = browser.import(bank, params, &path);
+                                    if !matches!(e, PresetEvent::None) {
+                                        event = e;
+                                    }
+                                }
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                if ui.small_button("Import…").clicked() {
+                                    picker::start(
+                                        ui.ctx(),
+                                        import_picker_id(),
+                                        crate::file_picker::FileDialogRequest::open_file()
+                                            .filter("Resonance preset", &["json"]),
+                                        (),
+                                    );
+                                }
+                                if let Some((Some(path), ())) =
+                                    picker::poll::<()>(ui.ctx(), import_picker_id())
+                                {
                                     let e = browser.import(bank, params, &path);
                                     if !matches!(e, PresetEvent::None) {
                                         event = e;
@@ -625,9 +699,28 @@ fn detail_pane(
         if ui.add_enabled(is_user, egui::Button::new("Rename").small()).clicked() {
             browser.begin_rename(&key);
         }
+        #[cfg(target_os = "macos")]
         if ui.small_button("Export…").clicked() {
             if let Some(path) = save_preset_file(&meta.name) {
                 browser.export(bank, &key, &path);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if ui.small_button("Export…").clicked() {
+                picker::start(
+                    ui.ctx(),
+                    export_picker_id(),
+                    crate::file_picker::FileDialogRequest::save_file()
+                        .filter("Resonance preset", &["json"])
+                        .file_name(format!("{}.json", meta.name)),
+                    key.clone(),
+                );
+            }
+            if let Some((Some(path), exported_key)) =
+                picker::poll::<String>(ui.ctx(), export_picker_id())
+            {
+                browser.export(bank, &exported_key, &path);
             }
         }
         if let (true, Some(path)) = (is_user, &record.path) {

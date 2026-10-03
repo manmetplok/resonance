@@ -33,6 +33,12 @@ pub mod library_ui;
 #[cfg(feature = "editor-widgets")]
 pub mod preset_ui;
 
+/// Non-blocking native file/folder picker for plugin editors (PUX-07).
+/// Linux only — Cocoa's modal dialog runs on the guarded AppKit main
+/// thread and calls `rfd` directly.
+#[cfg(all(feature = "editor-widgets", not(target_os = "macos")))]
+pub mod file_picker;
+
 // Re-export core types for convenient use
 pub use clap_bridge::ClapBridge;
 pub use formatters::*;

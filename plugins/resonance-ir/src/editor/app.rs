@@ -29,6 +29,12 @@ pub(crate) struct IrEditorApp {
     pub(crate) presets: Arc<resonance_plugin::presets::PresetSession>,
     /// Transient bar state (open combo, in-progress rename), editor-only.
     pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
+    /// `Load IR…`'s dialog, polled from `header::draw` (PUX-07) — a
+    /// field rather than a one-off local because the dialog can take
+    /// many frames to resolve. Linux only; Cocoa calls `rfd` directly
+    /// on the guarded AppKit main thread.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) ir_picker: Mutex<resonance_plugin::file_picker::FilePicker>,
 }
 
 impl EditorApp for IrEditorApp {

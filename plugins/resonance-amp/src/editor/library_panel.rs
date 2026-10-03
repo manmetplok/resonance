@@ -92,6 +92,16 @@ pub(crate) fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
 }
 
 fn draw_contents(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
+    // Polled here (not in `draw_footer`) because `draw_installed` skips
+    // the footer entirely for an empty library (`draw_empty_state`
+    // returns early) — but its own "Import .nam…" can still have a
+    // dialog in flight that needs collecting every frame regardless of
+    // which state the panel is in.
+    #[cfg(not(target_os = "macos"))]
+    if let Some(files) = actions::poll_nam_picker(ui.ctx(), actions::import_nam_picker_id()) {
+        actions::start_import(app, files);
+    }
+
     // After a download this editor asked for, switch to Installed with the
     // new row selected. (The Tone3000 worker is shared by every amp's
     // editor, so its own `last_downloaded` is not this editor's.)
@@ -444,7 +454,7 @@ fn draw_footer(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     ui.horizontal(|ui| {
         let busy = app.jobs.busy();
         if ui.add_enabled(!busy, egui::Button::new("Import .nam…")).clicked() {
-            import_clicked(app);
+            import_clicked(ui.ctx(), app);
         }
         if ui.add_enabled(!busy, egui::Button::new("Rescan")).clicked() {
             app.start_rescan();
@@ -460,9 +470,17 @@ fn draw_footer(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
 
 /// Import one or more files (a job); a single file is also loaded, and a
 /// file that is already in the library selects its row.
-pub(crate) fn import_clicked(app: &mut AmpEditorApp) {
-    let files = actions::pick_nam_files(true);
-    actions::start_import(app, files);
+pub(crate) fn import_clicked(ctx: &egui::Context, app: &mut AmpEditorApp) {
+    #[cfg(target_os = "macos")]
+    {
+        let files = actions::pick_nam_files(true);
+        actions::start_import(app, files);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        actions::start_nam_picker(ctx, actions::import_nam_picker_id(), true);
+    }
 }
 
 fn draw_empty_state(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
@@ -475,7 +493,7 @@ fn draw_empty_state(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
                 app.library_panel.tab = Tab::Tone3000;
             }
             if ui.button("Import .nam…").clicked() {
-                import_clicked(app);
+                import_clicked(ui.ctx(), app);
             }
         });
         ui.add_space(8.0);
