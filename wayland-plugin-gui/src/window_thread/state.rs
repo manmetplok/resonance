@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use smithay_client_toolkit::output::OutputState;
+use smithay_client_toolkit::reexports::calloop::LoopHandle;
 use smithay_client_toolkit::registry::RegistryState;
 use smithay_client_toolkit::seat::SeatState;
 use smithay_client_toolkit::shell::xdg::window::{DecorationMode, Window};
@@ -128,6 +129,18 @@ pub(super) struct State {
     /// toplevel attribute (xdg-shell), so [`State::show`] sets them again.
     pub(super) app_id: String,
     pub(super) min_size: (u32, u32),
+    /// Needed to register the client-side key-repeat timer
+    /// (`get_keyboard_with_repeat`) from `new_capability`, where only
+    /// `&mut State` is available — the event loop that owns this
+    /// handle is what runs that timer (PUX-10).
+    pub(super) loop_handle: LoopHandle<'static, State>,
+    /// Whether this surface currently has keyboard focus, from the
+    /// `enter`/`leave` keyboard events (PUX-10). Read into
+    /// `RawInput::focused` every frame instead of the hardcoded `true`
+    /// it used to be — plain text entry (a param's typed-value field)
+    /// behaves oddly in egui when the backend claims focus it doesn't
+    /// have.
+    pub(super) keyboard_focused: bool,
 }
 
 impl State {

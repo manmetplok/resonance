@@ -13,6 +13,12 @@ pub struct InputState {
     /// Which pointer buttons egui has been told are down, indexed by
     /// `PointerButton as usize`.
     held: [bool; egui::NUM_POINTER_BUTTONS],
+    /// Keys `process_key` currently thinks are down (PUX-10): a keyboard
+    /// `leave` — focus moving to another surface — otherwise leaves a
+    /// key "held" with no matching "up" ever coming, which keeps a
+    /// key-driven widget gesture (e.g. an arrow-key slider run) open
+    /// forever. See [`Self::release_held_keys`].
+    held_keys: Vec<egui::Key>,
 }
 
 impl InputState {
@@ -22,6 +28,7 @@ impl InputState {
             modifiers: Modifiers::default(),
             scale: 1.0,
             held: [false; egui::NUM_POINTER_BUTTONS],
+            held_keys: Vec::new(),
         }
     }
 
@@ -135,13 +142,28 @@ impl InputState {
         self.modifiers
     }
 
-    pub fn process_key(&mut self, event: &KeyEvent, pressed: bool, out: &mut Vec<egui::Event>) {
+    /// `repeat` is true for a repeated key-down from client-side repeat
+    /// (PUX-10) — never true for an actual press or a release.
+    pub fn process_key(
+        &mut self,
+        event: &KeyEvent,
+        pressed: bool,
+        repeat: bool,
+        out: &mut Vec<egui::Event>,
+    ) {
         if let Some(key) = map_keysym(event.keysym) {
+            if pressed {
+                if !self.held_keys.contains(&key) {
+                    self.held_keys.push(key);
+                }
+            } else {
+                self.held_keys.retain(|&k| k != key);
+            }
             out.push(egui::Event::Key {
                 key,
                 physical_key: None,
                 pressed,
-                repeat: false,
+                repeat,
                 modifiers: self.modifiers,
             });
         }
@@ -155,6 +177,26 @@ impl InputState {
                 }
             }
         }
+    }
+
+    /// Keyboard focus left this surface (Wayland `leave`): release
+    /// every key [`Self::process_key`] still thinks is held and tell
+    /// egui the window lost focus. Without this, a key held when focus
+    /// moves away (alt-tab, a click on another window) never gets its
+    /// matching "up" — holding Shift while tabbing away, say, leaves
+    /// egui believing Shift is still down, and a widget mid key-driven
+    /// gesture (an arrow-key slider run) never sees it end.
+    pub fn release_held_keys(&mut self, out: &mut Vec<egui::Event>) {
+        for key in self.held_keys.drain(..) {
+            out.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: self.modifiers,
+            });
+        }
+        out.push(egui::Event::WindowFocused(false));
     }
 }
 

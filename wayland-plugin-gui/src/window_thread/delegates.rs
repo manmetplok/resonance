@@ -117,7 +117,30 @@ impl SeatHandler for State {
         capability: Capability,
     ) {
         if capability == Capability::Keyboard && self.keyboard.is_none() {
-            if let Ok(kb) = self.seat_state.get_keyboard(qh, &seat, None) {
+            // PUX-10: plain `get_keyboard` gets no client-side repeat —
+            // Wayland has no server-sent "repeated" key event, so
+            // without this, holding Backspace or an arrow key (an
+            // `HSlider`'s key-driven nudge) does exactly one step. The
+            // repeat timer lives on this same event loop; the callback
+            // runs exactly what `KeyboardHandler::repeat_key` would,
+            // marked as a repeat.
+            let loop_handle = self.loop_handle.clone();
+            let kb = self.seat_state.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                loop_handle,
+                Box::new(|state: &mut State, _kbd, event| {
+                    if !state.visible {
+                        return;
+                    }
+                    state
+                        .input
+                        .process_key(&event, true, true, &mut state.pending_events);
+                    state.needs_redraw = true;
+                }),
+            );
+            if let Ok(kb) = kb {
                 self.keyboard = Some(kb);
             }
         }
@@ -161,6 +184,11 @@ impl KeyboardHandler for State {
         _: &[u32],
         _: &[Keysym],
     ) {
+        // PUX-10: `keyboard_focused` feeds `RawInput::focused` every
+        // frame (`paint.rs`), which used to be hardcoded `true`.
+        self.keyboard_focused = true;
+        self.pending_events.push(egui::Event::WindowFocused(true));
+        self.needs_redraw = true;
     }
     fn leave(
         &mut self,
@@ -170,6 +198,13 @@ impl KeyboardHandler for State {
         _: &WlSurface,
         _: u32,
     ) {
+        // PUX-10: release every key `InputState` still thinks is held —
+        // a key held when focus moves to another surface (alt-tab, a
+        // click elsewhere) otherwise never gets its matching "up",
+        // which keeps a key-driven widget gesture open forever.
+        self.keyboard_focused = false;
+        self.input.release_held_keys(&mut self.pending_events);
+        self.needs_redraw = true;
     }
     fn press_key(
         &mut self,
@@ -184,7 +219,7 @@ impl KeyboardHandler for State {
             return;
         }
         self.input
-            .process_key(&event, true, &mut self.pending_events);
+            .process_key(&event, true, false, &mut self.pending_events);
         self.needs_redraw = true;
     }
     fn repeat_key(
@@ -199,7 +234,7 @@ impl KeyboardHandler for State {
             return;
         }
         self.input
-            .process_key(&event, true, &mut self.pending_events);
+            .process_key(&event, true, true, &mut self.pending_events);
         self.needs_redraw = true;
     }
     fn release_key(
@@ -214,7 +249,7 @@ impl KeyboardHandler for State {
             return;
         }
         self.input
-            .process_key(&event, false, &mut self.pending_events);
+            .process_key(&event, false, false, &mut self.pending_events);
         self.needs_redraw = true;
     }
     fn update_modifiers(

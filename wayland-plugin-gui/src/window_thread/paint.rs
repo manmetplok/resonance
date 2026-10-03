@@ -214,7 +214,9 @@ pub(super) fn paint_frame(
         events,
         modifiers: state.input.modifiers(),
         time: Some(start_time.elapsed().as_secs_f64()),
-        focused: true,
+        // PUX-10: tracked from the keyboard enter/leave events instead
+        // of hardcoded, so alt-tabbing away is reflected here too.
+        focused: state.keyboard_focused,
         ..Default::default()
     };
 
