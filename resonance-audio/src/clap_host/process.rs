@@ -7,7 +7,6 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::events::{
     clap_event_header, clap_event_note, clap_event_param_value, clap_event_transport,
     clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF,
@@ -155,7 +154,8 @@ fn scrub_non_finite(buf: &mut [f32]) -> bool {
 impl ClapInstance {
     /// Process audio through the plugin (single-output convenience wrapper).
     /// CLAP spec allows aliased input/output buffers so this is in-place.
-    /// Works with any plugin — non-main output ports are silently dropped.
+    /// Works with any plugin — non-main output ports are rendered into
+    /// host scratch and dropped.
     pub fn process(&mut self, buf_l: &mut [f32], buf_r: &mut [f32], frames: usize) {
         // SAFETY: we hand the single mutable borrow pair to process_multi
         // as a one-element slice; both references disappear before this
@@ -170,8 +170,10 @@ impl ClapInstance {
     /// Process audio through the plugin, delivering each declared output
     /// port into its own stereo buffer pair. `outputs[0]` is the main
     /// output (same role as [`ClapInstance::process`]). Extra entries
-    /// beyond the plugin's declared output-port count are ignored; extra
-    /// plugin ports beyond `outputs.len()` are silently dropped.
+    /// beyond the plugin's declared output-port count are left untouched;
+    /// plugin ports beyond `outputs.len()` still get buffers of their own
+    /// (host scratch, discarded), as CLAP requires every declared port be
+    /// passed.
     ///
     /// This is the multi-output fast path used by the mixer for the drum
     /// plugin's per-group outputs.
@@ -207,13 +209,10 @@ impl ClapInstance {
             return;
         }
 
-        // No destination buffers: nothing could be produced, and — worse
-        // — for an effect the in-place main *input* below would be built
-        // from the null pointer pair `outputs.first_mut()` falls back
-        // to, handed over as `audio_inputs_count = 1`. A conforming
-        // plugin dereferences a connected input port unconditionally.
-        // No call site passes an empty slice today; this guard keeps the
-        // function safe for any input rather than safe by coincidence.
+        // No destination buffers: nothing could be produced, and the
+        // in-place main *input* below has no pair to alias. No call site
+        // passes an empty slice today; this guard keeps the function safe
+        // for any input rather than safe by coincidence.
         if outputs.is_empty() {
             return;
         }
@@ -229,63 +228,42 @@ impl ClapInstance {
             .process_requested
             .swap(false, std::sync::atomic::Ordering::AcqRel);
 
-        let frames = frames.min(8192);
+        // Never run past a buffer the plugin is handed (code review
+        // HOST-12): the main pair, every caller output, the key, and the
+        // pre-allocated port backing. A caller passing a shorter slice
+        // than `frames` is a bug upstream; in release the block is cut
+        // short rather than read or written out of bounds.
+        // (`max_frames` is the activation's `max_frames_count`; a longer
+        // block is cut to it silently, as it always was.)
+        let frames = frames.min(self.ports.max_frames());
+        let mut max = frames;
+        for port in outputs.iter() {
+            max = max.min(port.left.len()).min(port.right.len());
+        }
+        let key = key.filter(|_| self.has_sidechain_input());
+        if let Some((l, r)) = key {
+            max = max.min(l.len()).min(r.len());
+        }
+        debug_assert!(
+            frames <= max,
+            "process_multi_with_key: {frames} frames against buffers of {max}"
+        );
+        let frames = frames.min(max);
+        if frames == 0 {
+            return;
+        }
         // The stopped-transport window counts down in rendered frames
         // (`ClapInstance::wants_idle_process`, code review MIX-08).
         self.idle_hold_frames = self.idle_hold_frames.saturating_sub(frames as u32);
 
-        // Point CLAP input buffers at the main output pair (in-place
-        // processing — CLAP allows aliased in/out pointers).
-        let (main_left_ptr, main_right_ptr) = outputs
-            .first_mut()
-            .map(|p| (p.left.as_mut_ptr(), p.right.as_mut_ptr()))
-            .unwrap_or((ptr::null_mut(), ptr::null_mut()));
-        let mut in_ptrs: [*mut f32; 2] = [main_left_ptr, main_right_ptr];
-
-        // Port 0 is the main input. Port 1, when present, is the external
-        // key — only connected for a plugin that declared one AND when the
-        // caller supplied a signal, so the count below stays 1 in every
-        // other case and the existing path is untouched.
-        let key = key.filter(|_| self.has_sidechain_input());
-        let mut key_ptrs: [*mut f32; 2] = match key {
-            // Cast away const: CLAP's buffer struct is shared between
-            // inputs and outputs so it has no const variant. The plugin
-            // contract for an input port is read-only, and the bridge in
-            // `resonance-plugin` hands the key out as `&[f32]`.
-            Some((l, r)) => [l.as_ptr() as *mut f32, r.as_ptr() as *mut f32],
-            None => [ptr::null_mut(), ptr::null_mut()],
-        };
-
-        let mut audio_in = [
-            clap_audio_buffer {
-                data32: in_ptrs.as_mut_ptr(),
-                data64: ptr::null_mut(),
-                channel_count: 2,
-                latency: 0,
-                constant_mask: 0,
-            },
-            clap_audio_buffer {
-                data32: key_ptrs.as_mut_ptr(),
-                data64: ptr::null_mut(),
-                channel_count: 2,
-                latency: 0,
-                constant_mask: 0,
-            },
-        ];
-        let audio_inputs_count: u32 = if key.is_some() { 2 } else { 1 };
-
-        // Refresh each output port's pointer array to point at the
-        // caller's buffer slices for this block. We iterate up to the
-        // smaller of the pre-allocated buffer array and the caller's
-        // output slice so callers can pass fewer buffers (in which case
-        // the plugin's extra ports are dropped) without crashing.
-        let active_out_count = outputs.len().min(self.output_port_count);
-        for (i, port) in outputs.iter_mut().enumerate().take(active_out_count) {
-            self.audio_out_ptrs[i][0] = port.left.as_mut_ptr();
-            self.audio_out_ptrs[i][1] = port.right.as_mut_ptr();
-            self.audio_out_buffers[i].data32 = self.audio_out_ptrs[i].as_mut_ptr();
-            self.audio_out_buffers[i].channel_count = 2;
-        }
+        // Every port the plugin declared, each with its declared channel
+        // count (code review HOST-05): the caller's pairs where it has
+        // them — the main input in place on the main output, CLAP allows
+        // aliased in/out pointers — and pre-allocated silence / scratch
+        // for the rest. The key, when this plugin declares a key port
+        // and the caller routed one, is input port 1; unrouted, that port
+        // reads silence.
+        self.ports.bind(outputs, key, frames);
 
         // Build input events from pending parameter changes (reuse pre-allocated buffer)
         self.param_event_buf.clear();
@@ -380,10 +358,10 @@ impl ClapInstance {
             steady_time: -1,
             frames_count: frames as u32,
             transport: transport_ptr,
-            audio_inputs: audio_in.as_mut_ptr() as *const clap_audio_buffer,
-            audio_outputs: self.audio_out_buffers.as_mut_ptr(),
-            audio_inputs_count,
-            audio_outputs_count: active_out_count as u32,
+            audio_inputs: self.ports.inputs_ptr(),
+            audio_outputs: self.ports.outputs_ptr(),
+            audio_inputs_count: self.ports.input_count() as u32,
+            audio_outputs_count: self.ports.output_count() as u32,
             in_events: &in_events,
             out_events: &out_events,
         };
@@ -406,7 +384,8 @@ impl ClapInstance {
             // chains, bus/master sums, sends, sidechain taps, sub-track
             // fan-out all read these buffers), so this is the one choke
             // point that guards every path. See `scrub_non_finite`.
-            for port in outputs.iter_mut().take(active_out_count) {
+            let produced = self.ports.finish(outputs, frames);
+            for port in outputs.iter_mut().take(produced) {
                 scrub_non_finite(&mut port.left[..frames]);
                 scrub_non_finite(&mut port.right[..frames]);
             }

@@ -92,7 +92,7 @@ pub use types::*;
 pub mod test_support {
     pub use crate::clap_host::{
         ClapBundle, ClapInstance, ParamsRefresh, PluginMap, PluginSlot, PresetHostReport,
-        SyncClapInstance,
+        StereoBufMut, SyncClapInstance,
     };
     /// Preset discovery (slice P8), for driving the indexer with a fake factory.
     pub use crate::clap_host::discovery;

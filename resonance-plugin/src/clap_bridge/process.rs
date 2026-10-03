@@ -406,7 +406,13 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             key_right.fill(0.0);
             let mut connected = false;
             if let Some(port) = audio.input_port(sc_index) {
-                if let Some(channels) = port.channels()?.into_f32() {
+                // CLAP passes every declared port every block, so a host
+                // with nothing routed to the key passes silence. One that
+                // says so — every channel flagged constant, at zero, as
+                // the Resonance host does for an unrouted key — is read as
+                // no key, and the plugin keys off its own input.
+                let unrouted = port_is_constant_silence(&port)?;
+                if let Some(channels) = port.channels()?.into_f32().filter(|_| !unrouted) {
                     connected = true;
                     if let Some(l) = channels.channel(0) {
                         key_left.copy_from_slice(&l[..frames]);
@@ -832,4 +838,29 @@ impl Drop for FpEnvGuard {
             }
         }
     }
+}
+
+/// Whether a host passed `port` as "nothing connected": every channel
+/// flagged constant in its `constant_mask`, at zero. The Resonance host
+/// passes an unrouted key port exactly so (CLAP has every declared port
+/// passed every block, so leaving it out is not an option).
+fn port_is_constant_silence(
+    port: &clack_plugin::process::audio::InputPort<'_>,
+) -> Result<bool, PluginError> {
+    let n = port.channel_count();
+    if n == 0 {
+        return Ok(false);
+    }
+    let mask = port.constant_mask();
+    if (0..u64::from(n).min(64)).any(|c| !mask.is_channel_constant(c)) {
+        return Ok(false);
+    }
+    let Some(channels) = port.channels()?.into_f32() else {
+        return Ok(false);
+    };
+    Ok((0..n).all(|c| {
+        channels
+            .channel(c)
+            .is_none_or(|s| s.first().is_none_or(|&v| v == 0.0))
+    }))
 }
