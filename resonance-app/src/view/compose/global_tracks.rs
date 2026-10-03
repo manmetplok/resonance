@@ -232,9 +232,12 @@ impl<'a> ComposeGlobalTracksCanvas<'a> {
         // Right edge
         points.push((width, bpm_to_y(end_bpm), end_bpm));
 
-        // Draw connecting lines and filled area.
-        let line_color = Color::from_rgba(0.9, 0.55, 0.15, 0.7);
-        let fill_color = Color::from_rgba(0.9, 0.55, 0.15, 0.10);
+        // Draw connecting lines and filled area. Tempo is the warm/amber
+        // domain everywhere else in the app (ux-guidelines.md, UX-19) — this
+        // graph used an ad-hoc orange before; now it's `theme::WARM` at the
+        // same alphas the graph was tuned around.
+        let line_color = Color { a: 0.7, ..theme::WARM };
+        let fill_color = Color { a: 0.10, ..theme::WARM };
 
         for pair in points.windows(2) {
             let (x1, y1, _) = pair[0];
@@ -280,7 +283,7 @@ impl<'a> ComposeGlobalTracksCanvas<'a> {
 
             // Dot
             let dot_r = 3.0;
-            let dot_color = Color::from_rgb(0.9, 0.55, 0.15);
+            let dot_color = theme::WARM;
             frame.fill_rectangle(
                 Point::new(x - dot_r, y - dot_r),
                 Size::new(dot_r * 2.0, dot_r * 2.0),
@@ -290,7 +293,7 @@ impl<'a> ComposeGlobalTracksCanvas<'a> {
             frame.fill_rectangle(
                 Point::new(x, 0.0),
                 Size::new(1.0, ROW_HEIGHT),
-                Color::from_rgba(0.9, 0.55, 0.15, 0.3),
+                Color { a: 0.3, ..theme::WARM },
             );
             // BPM label
             let label_x = x + 5.0;
@@ -363,7 +366,11 @@ impl<'a> ComposeGlobalTracksCanvas<'a> {
 
             let block_w = (next_x - x).max(2.0);
 
-            let block_color = Color::from_rgba(0.3, 0.6, 0.9, 0.12);
+            // Signature-change blocks mirror the Arrange shelf's own
+            // signature lane (`view/timeline/draw/global_tracks.rs`), which
+            // already uses the lavender accent at low alpha for this —
+            // this canvas had drifted to an ad-hoc blue (UX-19).
+            let block_color = theme::ACCENT_DIM;
             frame.fill_rectangle(
                 Point::new(x, sig_y + 1.0),
                 Size::new(block_w, ROW_HEIGHT - 2.0),

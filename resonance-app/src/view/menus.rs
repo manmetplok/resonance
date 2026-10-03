@@ -37,7 +37,7 @@ fn preset_button(preset: &TrackPreset, is_user: bool, armed: bool) -> Element<'_
     }
     let icon_char = preset.instrument_icon.glyph();
     let icon_color = if preset.track_type == "instrument" {
-        Color::from_rgb(0.3, 0.75, 0.8)
+        theme::INSTRUMENT_TINT
     } else {
         theme::TEXT
     };
@@ -138,11 +138,11 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
         row![
             theme::icon(fa::MUSIC)
                 .size(14)
-                .color(Color::from_rgb(0.3, 0.75, 0.8)),
+                .color(theme::INSTRUMENT_TINT),
             Space::new().width(8),
             text("Instrument")
                 .size(13)
-                .color(Color::from_rgb(0.3, 0.75, 0.8)),
+                .color(theme::INSTRUMENT_TINT),
         ]
         .align_y(alignment::Vertical::Center),
     )

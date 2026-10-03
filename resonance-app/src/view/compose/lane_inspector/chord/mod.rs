@@ -190,7 +190,7 @@ pub(super) fn toggle_row<'a>(label: &str, on: bool, msg: Message) -> Element<'a,
         .width(12)
         .height(12)
         .style(|_theme| iced::widget::container::Style {
-            background: Some(iced::Background::Color(iced::Color::WHITE)),
+            background: Some(iced::Background::Color(theme::TEXT_1)),
             border: iced::Border {
                 radius: 6.0.into(),
                 ..Default::default()

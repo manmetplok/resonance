@@ -27,18 +27,14 @@ impl crate::Resonance {
         });
 
         let status: Element<'_, Message> = match &self.compose.last_error {
-            Some(err) => container(
-                text(err)
-                    .size(12)
-                    .color(iced::Color::from_rgb(1.0, 0.6, 0.5)),
-            )
-            .padding([4, 10])
-            .width(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::PANEL_DARK)),
-                ..Default::default()
-            })
-            .into(),
+            Some(err) => container(text(err).size(12).color(theme::BAD))
+                .padding([4, 10])
+                .width(Length::Fill)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(theme::PANEL_DARK)),
+                    ..Default::default()
+                })
+                .into(),
             None => container(Space::new().height(0)).width(Length::Fill).into(),
         };
 

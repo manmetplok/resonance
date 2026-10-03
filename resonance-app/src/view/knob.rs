@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::Canvas;
-use iced::{mouse, Color, Element, Length, Point, Rectangle, Renderer, Theme};
+use iced::{mouse, Element, Length, Point, Rectangle, Renderer, Theme};
 
 use crate::theme;
 
@@ -132,16 +132,12 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
             let center = Point::new(bounds.width * 0.5, bounds.height * 0.5);
             let radius = (bounds.width.min(bounds.height) * 0.5) - 2.0;
 
-            // Body fill + outer ring.
-            frame.fill(
-                &Path::circle(center, radius),
-                Color::from_rgb(0.14, 0.14, 0.16),
-            );
+            // Body fill + outer ring (UX-19: these were ad-hoc greys; now
+            // the theme's raised-control / border tokens).
+            frame.fill(&Path::circle(center, radius), theme::BG_3);
             frame.stroke(
                 &Path::circle(center, radius),
-                Stroke::default()
-                    .with_width(1.0)
-                    .with_color(Color::from_rgb(0.28, 0.28, 0.32)),
+                Stroke::default().with_width(1.0).with_color(theme::LINE),
             );
 
             let start_angle = std::f32::consts::FRAC_PI_2 + SWEEP * 0.5;
@@ -175,9 +171,7 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
                     Point::new(center.x + radius * a.cos(), center.y - radius * a.sin());
                 frame.stroke(
                     &Path::line(inner, outer),
-                    Stroke::default()
-                        .with_width(1.0)
-                        .with_color(Color::from_rgb(0.45, 0.45, 0.48)),
+                    Stroke::default().with_width(1.0).with_color(theme::LINE),
                 );
             }
 
