@@ -43,19 +43,27 @@ fn no_smoothing_jumps_to_the_target_immediately() {
 }
 
 #[test]
-fn an_unconfigured_smoother_jumps_rather_than_stalling() {
-    // `set_sample_rate` has not been called, so the ramp length is 0. The
-    // smoother must snap to the target instead of getting stuck at 0 —
-    // a plugin that forgets to propagate the sample rate would otherwise
-    // go silent.
+fn an_unconfigured_smoother_still_smooths_at_the_default_rate() {
+    // `set_sample_rate` has not been called. The smoother must neither
+    // stall at 0 nor — the old behaviour (code review HOST-09) — jump
+    // straight to the target with no smoothing at all: it ramps as if
+    // at 44.1 kHz, and lands.
     for style in [
         SmoothingStyle::Linear(10.0),
         SmoothingStyle::Logarithmic(10.0),
     ] {
         let mut s = Smoother::new(style);
         s.set_target(0.5);
-        assert_eq!(s.current(), 0.5);
-        assert_eq!(s.next(), 0.5);
+        let first = s.next();
+        assert!(
+            first > 0.0 && first < 0.5,
+            "an unconfigured smoother must ramp, got {first}"
+        );
+        // 10 ms at 44.1 kHz is 441 samples.
+        for _ in 1..441 {
+            s.next();
+        }
+        assert_eq!(s.current(), 0.5, "the default-rate ramp must land");
     }
 }
 
@@ -215,14 +223,39 @@ fn a_logarithmic_ramp_rises_monotonically_and_lands_exactly_on_the_target() {
         previous = v;
     }
 
-    // The documented convergence is ~95% by the end of the nominal ramp,
-    // with the final sample snapped exactly onto the target.
+    // The ramp converges to within 1e-4 of the distance by the end of
+    // the nominal ramp, so the final snap onto the target is inaudible.
     assert!(
-        (0.94..0.96).contains(&previous),
-        "expected ~95% convergence one sample before the end, got {previous}"
+        1.0 - previous < 2e-4,
+        "expected convergence to within 1e-4 one sample before the end, got {previous}"
     );
     assert_eq!(s.next(), 1.0);
     assert_eq!(s.next(), 1.0);
+}
+
+/// The final snap onto the target is inaudible (code review HOST-09):
+/// the old coefficient reached only ~95 % of the way, then jumped the
+/// last 5 % in one sample — a −26 dB click on a 0 → 1 gain step, larger
+/// than any step of the ramp's tail.
+#[test]
+fn a_logarithmic_ramp_never_ends_with_a_jump() {
+    let mut s = log_smoother();
+    s.reset(0.0);
+    s.set_target(1.0);
+    let mut previous = 0.0_f32;
+    let mut steps = Vec::with_capacity(RAMP as usize);
+    for _ in 0..RAMP {
+        let v = s.next();
+        steps.push(v - previous);
+        previous = v;
+    }
+    assert_eq!(previous, 1.0);
+    let last = *steps.last().unwrap();
+    // 1e-4 of the distance (−80 dB), plus f32 rounding.
+    assert!(last <= 2e-4, "final snap of {last} onto the target");
+    // The largest step is the first, bounded by the coefficient.
+    let max = steps.iter().cloned().fold(0.0f32, f32::max);
+    assert!(max < 10.0 / RAMP as f32, "max per-sample step {max}");
 }
 
 #[test]
