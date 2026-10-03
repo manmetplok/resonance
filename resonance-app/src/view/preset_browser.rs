@@ -344,7 +344,7 @@ pub(crate) fn media_presets_body(r: &Resonance) -> Element<'_, Message> {
 
     // The rows are a `lazy` region keyed on the list's generation (bumped
     // by every re-query) and the selection, so a frame that changed
-    // neither reuses them (ui-work.md §11, like the Files tab's listing).
+    // neither reuses them (ux-guidelines.md → "View Performance", like the Files tab's listing).
     let key = (list.generation, list.selected, list.plugin.is_none());
     let rows = iced::widget::lazy(key, move |_| -> Element<'static, Message> {
         let mut rows = column![].spacing(2);

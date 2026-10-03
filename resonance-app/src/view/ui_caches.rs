@@ -10,7 +10,7 @@
 //!
 //! **When to add a new cache here:** any time you reach for a Vec
 //! inside `view()` that's a function of state that doesn't change every
-//! frame. See `.claude/skills/ui-work.md` §11.
+//! frame. See `ux-guidelines.md` → "View Performance".
 
 use std::borrow::Borrow;
 use std::rc::Rc;

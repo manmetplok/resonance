@@ -88,7 +88,7 @@ impl Resonance {
         // content is cached behind `iced::widget::lazy` keyed on a fingerprint
         // of its inputs — during a take the telemetry clock can churn without
         // rebuilding the stage / next-lane / footer subtrees (view-performance
-        // rule #2; see ui-work.md §11, and the reference impls in
+        // rule #2; see ux-guidelines.md → "View Performance", and the reference impls in
         // mixer/inspector.rs and track_header/mod.rs). The next-lane + footer
         // are fixed-height, so the whole band wraps; the centre stage is
         // `Length::Fill` (which lazy doesn't forward), so it caches its content

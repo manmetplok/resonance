@@ -53,7 +53,7 @@ impl crate::Resonance {
                 // field it draws, so the Mixer's fast meter tick reuses the
                 // built widgets instead of cloning each parameter's name and
                 // text and rebuilding a row per parameter every frame
-                // (ui-work.md §11, review VIEW-26).
+                // (ux-guidelines.md → "View Performance", review VIEW-26).
                 let fp = plugin_params_fingerprint(plugin);
                 iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
                     let plugin_element = match &plugin.custom {
