@@ -212,9 +212,19 @@ impl ResonancePlugin for ResonanceIr {
         let right = &mut *main.right;
         resonance_dsp::flush_denormals();
 
+        // Retry a convolver (or a clear) a previous block's admission
+        // could not take (parking full, FU-D1a1) before considering
+        // anything new.
+        self.engine.retry_pending();
+
         // Check mailbox for newly loaded convolver — start crossfade.
-        if let Some(conv) = self.convolver_mailbox.try_take() {
-            self.engine.begin_swap(conv);
+        // Skipped while a swap is still stuck retrying: the mailbox's
+        // single slot holds the next convolver safely until then (see
+        // `IrEngine::has_pending_swap`).
+        if !self.engine.has_pending_swap() {
+            if let Some(conv) = self.convolver_mailbox.try_take() {
+                self.engine.begin_swap(conv);
+            }
         }
 
         // A state/preset load's index (or "no IR"), adopted here so the

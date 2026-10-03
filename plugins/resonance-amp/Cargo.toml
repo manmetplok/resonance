@@ -11,6 +11,12 @@ crate-type = ["cdylib", "lib"]
 # The editor is enabled by default so the bundled .clap ships with a GUI.
 # Turn it off (`--no-default-features`) for headless builds.
 default = ["editor"]
+# Test-only surface on `AmpProcessor` (FU-D1a1): lets a test replace the
+# janitor-backed swap-fader retire sink with its own channel, so it can
+# fill every parking slot deterministically instead of racing a live
+# thread. No normal dependency enables it — only this crate's own dev-
+# dependency below (mirrors resonance-audio's `test-internals`).
+test-internals = []
 editor = [
     "dep:plugin-gui-core",
     "resonance-plugin/editor-widgets",
@@ -60,6 +66,10 @@ webbrowser = { version = "1", optional = true }
 criterion.workspace = true
 dirs.workspace = true
 resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
+# Turns on `test-internals` for this crate's own tests and benches only
+# (resolver 2 unifies the feature into test/bench builds; a normal build
+# of this crate never sees it).
+resonance-amp = { path = ".", features = ["test-internals"] }
 # `tests/state.rs` drives this plugin through a real (in-process) CLAP host
 # across the C ABI, which is the only way to reach the state path the bridge
 # takes while the plugin is active and its object lives in the audio processor.
