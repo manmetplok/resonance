@@ -70,7 +70,7 @@ fn widget_kinds_match_the_declared_params() {
 fn the_editor_binds_controls_only_through_the_param_helpers() {
     assert_eq!(WIDGET_SRC.matches("editor_widgets::float_knob(").count(), 1);
     assert_eq!(WIDGET_SRC.matches("editor_widgets::bool_checkbox(").count(), 1);
-    assert_eq!(WIDGET_SRC.matches("widgets::segmented(").count(), 1);
+    assert_eq!(WIDGET_SRC.matches("editor_widgets::choice_segmented(").count(), 1);
     assert!(
         !WIDGET_SRC.contains("widgets::knob("),
         "the raw knob takes its range as arguments — restating the param"

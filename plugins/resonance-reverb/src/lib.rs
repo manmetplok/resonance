@@ -35,6 +35,9 @@ pub struct ResonanceReverb {
     /// plugin's extra state, so the identity survives closing the
     /// window (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     /// Audio-thread-only smoothers. Kept outside `params` so the audio
     /// thread can mutate smoother state through `&mut self`.
     smoothers: ReverbSmoothers,
@@ -67,6 +70,7 @@ impl ResonancePlugin for ResonanceReverb {
     fn new() -> Self {
         Self {
             params: Arc::new(ReverbParams::default()),
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             smoothers: ReverbSmoothers::new(),
             viz: ReverbViz::new(),
@@ -131,12 +135,17 @@ impl ResonancePlugin for ResonanceReverb {
         Some(self.presets.clone())
     }
 
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        self.editor_announcer.attach(host);
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::ReverbEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

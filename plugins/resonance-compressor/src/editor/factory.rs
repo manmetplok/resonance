@@ -18,6 +18,7 @@ pub struct CompressorEditorFactory {
     params: Arc<CompressorParams>,
     viz: Arc<CompressorViz>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl CompressorEditorFactory {
@@ -25,8 +26,10 @@ impl CompressorEditorFactory {
         params: Arc<CompressorParams>,
         viz: Arc<CompressorViz>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             viz,
             presets,
@@ -54,7 +57,7 @@ impl EditorFactory for CompressorEditorFactory {
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Compressor".to_string(),
                 app_id: "com.resonance.compressor".to_string(),

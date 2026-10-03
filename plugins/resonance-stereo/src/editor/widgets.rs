@@ -4,7 +4,8 @@
 //! come off the parameter itself; nothing here restates a fact that
 //! `params.rs` declares.
 
-use plugin_gui_core::{egui, widgets};
+use plugin_gui_core::egui;
+use plugin_gui_core::widgets::SegmentedStyle;
 use resonance_plugin::{editor_widgets, Param};
 
 use crate::params::{ParamRef, StereoParams};
@@ -23,12 +24,7 @@ pub fn param_control(ui: &mut egui::Ui, params: &StereoParams, index: usize) {
         }
         ParamRef::Int(p) => {
             ui.label(egui::RichText::new(p.name()).color(theme::TEXT_2).size(10.5));
-            let labels = p.choices().unwrap_or(&[]);
-            let min = p.range().min();
-            let selected = usize::try_from(p.value() - min).unwrap_or(0);
-            if let Some(i) = widgets::segmented(ui, labels, selected) {
-                p.set_plain(f64::from(min + i as i32));
-            }
+            editor_widgets::choice_segmented(ui, p, &SegmentedStyle::LAVENDER);
             ui.add_space(4.0);
         }
     }

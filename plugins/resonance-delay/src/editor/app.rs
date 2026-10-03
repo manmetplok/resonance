@@ -55,8 +55,11 @@ impl EditorApp for DelayEditorApp {
             .exact_size(42.0)
             .show_inside(ui, |ui| draw_header(ui, self));
 
+        // The strip wraps its cards to the window, so its height follows
+        // the width (code review PUX-03).
+        let strip_h = controls::strip_height(ui.available_width());
         egui::Panel::bottom("delay_strip")
-            .exact_size(180.0)
+            .exact_size(strip_h)
             .show_inside(ui, |ui| controls::draw(ui, &self.params));
 
         egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
@@ -118,16 +121,11 @@ fn draw_header(ui: &mut egui::Ui, app: &mut DelayEditorApp) {
 
         // Character + Routing readout.
         ui.add_space(12.0);
-        let char_label = if app.params.character.value() == 1 {
-            "Analog"
-        } else {
-            "Digital"
+        let pick = |labels: &'static [&'static str], v: i32| {
+            labels[(v.max(0) as usize).min(labels.len() - 1)]
         };
-        let route_label = match app.params.routing.value() {
-            1 => "Ping-Pong",
-            2 => "Dual",
-            _ => "Stereo",
-        };
+        let char_label = pick(controls::CHARACTER_LABELS, app.params.character.value());
+        let route_label = pick(controls::ROUTING_LABELS, app.params.routing.value());
         ui.label(
             egui::RichText::new(format!("{char_label} · {route_label}")).color(theme::TEXT_DIM),
         );

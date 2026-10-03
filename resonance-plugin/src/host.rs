@@ -436,3 +436,96 @@ impl HostHandle {
         }
     }
 }
+
+/// The editor's side of [`HostHandle::announce_param_change`]: what a
+/// plugin hands its editor so every param-bound control can tell the
+/// host about the user's edits (code review PUX-01).
+///
+/// A plugin creates one with the plugin object, attaches the host in
+/// [`ResonancePlugin::set_host`](crate::plugin::ResonancePlugin::set_host)
+/// (which the bridge calls before it asks for the editor factory) and
+/// passes a clone to its editor factory. The editor never needs to know
+/// whether a host is attached: before one is (a headless test, a
+/// plugin constructed outside the bridge) an announcement is counted
+/// and otherwise dropped.
+///
+/// The controls in `resonance_plugin::editor_widgets` announce through
+/// it **once per gesture** — at the end of a drag, on a reset, a typed
+/// entry, a click — and only when the gesture moved the value, so the
+/// host records one undoable `ParamEditedByPlugin` edit per user action
+/// rather than one per frame of a drag.
+///
+/// Cheap to clone; safe from any thread.
+#[derive(Clone, Default)]
+pub struct EditAnnouncer {
+    inner: Arc<AnnouncerInner>,
+}
+
+#[derive(Default)]
+struct AnnouncerInner {
+    host: std::sync::OnceLock<Arc<HostHandle>>,
+    count: AtomicU64,
+    /// Every announced id, in order — only for an announcer built with
+    /// [`EditAnnouncer::recording`] (tests); `None` keeps a live editor
+    /// from growing a log forever.
+    log: Option<std::sync::Mutex<Vec<String>>>,
+}
+
+impl EditAnnouncer {
+    /// An announcer with no host attached yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// An announcer that also keeps every announced param id, for a
+    /// test to read back with [`Self::announced`].
+    pub fn recording() -> Self {
+        Self {
+            inner: Arc::new(AnnouncerInner {
+                log: Some(std::sync::Mutex::new(Vec::new())),
+                ..AnnouncerInner::default()
+            }),
+        }
+    }
+
+    /// Route announcements to `host` from now on. The first host wins:
+    /// the bridge hands a plugin instance exactly one.
+    pub fn attach(&self, host: Arc<HostHandle>) {
+        let _ = self.inner.host.set(host);
+    }
+
+    /// Whether a host is attached.
+    pub fn is_attached(&self) -> bool {
+        self.inner.host.get().is_some()
+    }
+
+    /// The user finished an edit of param `param_id` (its string id) in
+    /// the editor; the value is already set. Forwards to
+    /// [`HostHandle::announce_param_change`] when a host is attached.
+    pub fn announce(&self, param_id: &str) {
+        self.inner.count.fetch_add(1, Ordering::Relaxed);
+        if let Some(log) = &self.inner.log {
+            if let Ok(mut log) = log.lock() {
+                log.push(param_id.to_string());
+            }
+        }
+        if let Some(host) = self.inner.host.get() {
+            host.announce_param_change(param_id);
+        }
+    }
+
+    /// How many edits have been announced, attached or not.
+    pub fn count(&self) -> u64 {
+        self.inner.count.load(Ordering::Relaxed)
+    }
+
+    /// The ids announced so far, in order — empty unless this announcer
+    /// was built with [`Self::recording`].
+    pub fn announced(&self) -> Vec<String> {
+        self.inner
+            .log
+            .as_ref()
+            .and_then(|log| log.lock().ok().map(|l| l.clone()))
+            .unwrap_or_default()
+    }
+}

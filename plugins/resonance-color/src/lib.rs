@@ -39,6 +39,9 @@ pub struct ResonanceColor {
     pub params: Arc<ColorParams>,
     /// The loaded-preset identity, persisted beside the params.
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     viz: Arc<ColorViz>,
     dsp: Option<ColorDsp>,
 }
@@ -65,6 +68,7 @@ impl ResonancePlugin for ResonanceColor {
     fn new() -> Self {
         Self {
             params: Arc::new(ColorParams::default()),
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             viz: ColorViz::new(),
             dsp: None,
@@ -124,12 +128,17 @@ impl ResonancePlugin for ResonanceColor {
         Some(self.presets.clone())
     }
 
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        self.editor_announcer.attach(host);
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::ColorEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

@@ -45,6 +45,8 @@ const TABS: [(&str, &str); 5] = [
 
 /// The module the param bindings themselves live in.
 const BINDINGS: &str = include_str!("../src/editor/tabs/mod.rs");
+/// The fleet's param binding the tab helpers delegate to.
+const SHARED_BINDINGS: &str = include_str!("../../../resonance-plugin/src/editor_widgets.rs");
 
 /// Split a single-line call's argument list on commas. Safe here because
 /// the guard also rejects any argument that is not a plain path, a string
@@ -336,12 +338,20 @@ fn no_tab_declares_a_unit_or_a_readout_of_its_own() {
 fn the_bindings_take_the_curve_and_the_default_from_the_parameter() {
     // The two things the old helpers hardcoded. `knob_unipolar` /
     // `knob_bipolar` are the shorthands that take a default as a plain
-    // number; the bindings must build a `ThemedKnob` from the param's own
-    // normalized view instead.
-    for needle in ["default_normalized()", "normalized_value()", "set_normalized("] {
+    // number; the bindings must build the knob from the param's own
+    // normalized view instead. Since code review PUX-11 the tab helpers
+    // delegate to the fleet's one binding, `editor_widgets`, so that is
+    // where the normalized view is read — and the helpers must use it.
+    for needle in ["editor_widgets::param_knob(", "editor_widgets::param_slider("] {
         assert!(
             BINDINGS.contains(needle),
-            "the bindings must read `{needle}` off the parameter"
+            "the tab bindings must go through `{needle}`"
+        );
+    }
+    for needle in ["default_normalized()", "normalized_value()", "set_normalized("] {
+        assert!(
+            SHARED_BINDINGS.contains(needle),
+            "the shared bindings must read `{needle}` off the parameter"
         );
     }
     for needle in ["knob_unipolar", "knob_bipolar"] {

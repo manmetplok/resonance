@@ -16,6 +16,7 @@ pub struct ColorEditorFactory {
     params: Arc<ColorParams>,
     viz: Arc<ColorViz>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl ColorEditorFactory {
@@ -23,8 +24,10 @@ impl ColorEditorFactory {
         params: Arc<ColorParams>,
         viz: Arc<ColorViz>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             viz,
             presets,
@@ -52,7 +55,7 @@ impl EditorFactory for ColorEditorFactory {
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Color".to_string(),
                 app_id: "com.resonance.color".to_string(),

@@ -24,7 +24,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
         ui.add_space(8.0);
 
         if ui.button("Load IR…").clicked() {
-            load_ir_clicked(app);
+            load_ir_clicked(ui.ctx(), app);
         }
 
         ui.add_space(8.0);
@@ -55,10 +55,10 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
         let enabled = list_len > 1;
         ui.add_enabled_ui(enabled, |ui| {
             if ui.button("◀").clicked() {
-                seek_relative(app, -1);
+                seek_relative(ui.ctx(), app, -1);
             }
             if ui.button("▶").clicked() {
-                seek_relative(app, 1);
+                seek_relative(ui.ctx(), app, 1);
             }
         });
 
@@ -115,7 +115,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
     });
 }
 
-fn load_ir_clicked(app: &IrEditorApp) {
+fn load_ir_clicked(ctx: &egui::Context, app: &IrEditorApp) {
     // Sync rfd dialog on the UI thread — the Wayland runtime's editor
     // thread, or the AppKit main thread under the Cocoa runtime, where a
     // modal panel is the supported path and the runtime's reentrancy
@@ -136,11 +136,13 @@ fn load_ir_clicked(app: &IrEditorApp) {
 
     *app.params.file_list.lock() = files;
     *app.params.ir_path.lock() = path_str;
+    // A new file is an edit even at the same index (the path changed).
     app.params.file_select.set_value(idx as i32);
+    resonance_plugin::editor_widgets::announce_edit(ctx, &app.params.file_select);
     app.load_request.store(idx as i32, Ordering::Release);
 }
 
-fn seek_relative(app: &IrEditorApp, delta: i32) {
+fn seek_relative(ctx: &egui::Context, app: &IrEditorApp, delta: i32) {
     let len = app.params.file_list.lock().len();
     if len == 0 {
         return;
@@ -148,6 +150,6 @@ fn seek_relative(app: &IrEditorApp, delta: i32) {
     let len_i = len as i32;
     let current = app.params.file_select.value();
     let next = (current + delta).rem_euclid(len_i);
-    app.params.file_select.set_value(next);
+    resonance_plugin::editor_widgets::commit_plain(ctx, &app.params.file_select, next as f64);
     app.load_request.store(next, Ordering::Release);
 }

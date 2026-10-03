@@ -1,23 +1,16 @@
 //! Per-band control strip drawn at the bottom of the EQ editor.
 //!
-//! Freq / Gain / Q are the shared kit's slider (ba todo #1335). They
-//! were raw `egui::Slider`s — the only sliders left in the fleet that
-//! were not the widget every other editor draws — so the band strip now
-//! matches the rest of the plugins: a thin track with a filled span and
-//! a circular thumb, and Gain fills centre-out from 0 dB with a centre
-//! tick, which is what a ±24 dB control should look like.
-//!
-//! Two things moved out of the widget and into this file as a result:
-//! the logarithmic mapping of Freq and Q (the shared slider works in
-//! unit travel and leaves the curve to the caller, the same contract
-//! `resonance_plugin::editor_widgets` uses) and the palette, which was
-//! `SliderStyle::CLASSIC` while this editor was still on the old blue
-//! palette. Ba todo #1338 moved it: [`SliderStyle::LAVENDER`] is the
-//! only palette now, and since the two differed in colour alone, nothing
-//! else here changed.
+//! Freq / Gain / Q and the dynamics sliders are the shared kit's slider
+//! bound through `resonance_plugin::editor_widgets` (code review PUX-01,
+//! PUX-06): travel is each param's own normalized value — the
+//! `FloatRange::Skewed` curve `params.rs` declares, not a restated
+//! true-log range — a double-click resets to the declared default, the
+//! readout under each slider takes a typed value, and every gesture is
+//! announced to the host as one undoable edit. The switches and the
+//! kind / slope / M-S picks announce too.
 
 use plugin_gui_core::egui;
-use plugin_gui_core::widgets::{slider, HSlider, SliderStyle};
+use resonance_plugin::editor_widgets::{self, ParamSlider};
 use resonance_plugin::{FloatParam, Param};
 
 use crate::band::{BandKind, BandMs, BandSlope};
@@ -79,39 +72,36 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                             .strong()
                             .color(header_color),
                     );
-                    let mut enabled = band.enabled.value();
-                    if ui.checkbox(&mut enabled, "").changed() {
-                        band.enabled.set_value(enabled);
-                    }
+                    editor_widgets::bool_checkbox(ui, &band.enabled, "");
                 });
 
                 ui.add_space(2.0);
 
                 // Kind dropdown.
-                let mut kind = BandKind::from_index(band.kind.value());
+                let kind = BandKind::from_index(band.kind.value());
                 egui::ComboBox::from_id_salt(("eq_band_kind", band_index))
                     .width(92.0)
                     .selected_text(kind.short_name())
                     .show_ui(ui, |ui| {
                         for opt in BandKind::ALL {
                             if ui.selectable_label(kind == opt, opt.short_name()).clicked() {
-                                kind = opt;
-                                band.kind.set_value(kind.to_index());
+                                let v = f64::from(opt.to_index());
+                                editor_widgets::commit_plain(ui.ctx(), &band.kind, v);
                             }
                         }
                     });
 
                 // Slope dropdown (only meaningful on cuts).
                 if kind.is_cut() {
-                    let mut slope = BandSlope::from_index(band.slope.value());
+                    let slope = BandSlope::from_index(band.slope.value());
                     egui::ComboBox::from_id_salt(("eq_band_slope", band_index))
                         .width(92.0)
                         .selected_text(slope.label())
                         .show_ui(ui, |ui| {
                             for opt in [BandSlope::Db12, BandSlope::Db24, BandSlope::Db48] {
                                 if ui.selectable_label(slope == opt, opt.label()).clicked() {
-                                    slope = opt;
-                                    band.slope.set_value(slope.to_index());
+                                    let v = f64::from(opt.to_index());
+                                    editor_widgets::commit_plain(ui.ctx(), &band.slope, v);
                                 }
                             }
                         });
@@ -122,44 +112,28 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                 }
 
                 // Stereo / Mid / Side: which component the band filters.
-                let mut ms = BandMs::from_index(band.ms.value());
+                let ms = BandMs::from_index(band.ms.value());
                 egui::ComboBox::from_id_salt(("eq_band_ms", band_index))
                     .width(92.0)
                     .selected_text(ms.label())
                     .show_ui(ui, |ui| {
                         for opt in BandMs::ALL {
                             if ui.selectable_label(ms == opt, opt.label()).clicked() {
-                                ms = opt;
-                                band.ms.set_value(ms.to_index());
+                                let v = f64::from(opt.to_index());
+                                editor_widgets::commit_plain(ui.ctx(), &band.ms, v);
                             }
                         }
                     });
 
                 ui.add_space(4.0);
 
-                // Freq.
-                // The readout follows the value the drag just produced,
-                // not last frame's — `egui::Slider` wrote through a
-                // `&mut`, so it read fresh in the same frame.
-                let mut freq = band.freq.value();
-                if let Some(travel) = band_slider(ui, log_travel(FREQ_HZ, freq), false) {
-                    freq = log_value(FREQ_HZ, travel);
-                    band.freq.set_value(freq);
-                }
-                ui.label(egui::RichText::new(format_hz_short(freq)).color(theme::TEXT_DIM));
+                band_slider(ui, &band.freq, None);
 
                 // Gain (only meaningful for bell/shelf). Bipolar: the
-                // fill runs out from 0 dB rather than up from -24.
+                // fill runs out from 0 dB rather than up from -24 (read
+                // off the range, which spans zero).
                 if kind.uses_gain() {
-                    let mut gain = band.gain.value();
-                    if let Some(travel) = band_slider(ui, (gain + GAIN_DB) / (GAIN_DB * 2.0), true)
-                    {
-                        gain = travel * GAIN_DB * 2.0 - GAIN_DB;
-                        band.gain.set_value(gain);
-                    }
-                    ui.label(
-                        egui::RichText::new(format!("{:+.1} dB", gain)).color(theme::TEXT_DIM),
-                    );
+                    band_slider(ui, &band.gain, None);
                 } else {
                     // Keep vertical alignment with bell/shelf bands.
                     ui.add_space(22.0);
@@ -169,12 +143,7 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                 // Q — the one-knob kinds (Tilt, LF Lift+Dip, Air) fix
                 // their own shape, so they show no Q.
                 if kind.uses_q() {
-                    let mut q = band.q.value();
-                    if let Some(travel) = band_slider(ui, log_travel(Q, q), false) {
-                        q = log_value(Q, travel);
-                        band.q.set_value(q);
-                    }
-                    ui.label(egui::RichText::new(format!("Q {:.2}", q)).color(theme::TEXT_DIM));
+                    band_slider(ui, &band.q, Some("Q"));
                 } else {
                     ui.add_space(22.0);
                     ui.label(egui::RichText::new(" ").color(theme::TEXT_DIM));
@@ -186,82 +155,37 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                 // dynamics (the cuts, Tilt, LF Lift+Dip).
                 ui.add_space(4.0);
                 ui.add_enabled_ui(kind.supports_dyn(), |ui| {
-                    let mut on = band.dyn_on.value();
+                    let on = band.dyn_on.value();
                     ui.horizontal(|ui| {
-                        if ui.checkbox(&mut on, "Dyn").changed() {
-                            band.dyn_on.set_value(on);
-                        }
+                        editor_widgets::bool_checkbox(ui, &band.dyn_on, "Dyn");
                         // Detect on the sidechain key instead of the band.
                         ui.add_enabled_ui(on, |ui| {
-                            let mut sc = band.dyn_sc.value();
-                            if ui
-                                .checkbox(&mut sc, "Key")
-                                .on_hover_text("Detect on the sidechain key when one is connected")
-                                .changed()
-                            {
-                                band.dyn_sc.set_value(sc);
-                            }
-                        });
+                            editor_widgets::bool_checkbox(ui, &band.dyn_sc, "Key");
+                        })
+                        .response
+                        .on_hover_text("Detect on the sidechain key when one is connected");
                     });
                     ui.add_enabled_ui(on, |ui| {
-                        param_slider(ui, &band.dyn_threshold, "Thr");
-                        param_slider(ui, &band.dyn_ratio, "Ratio");
-                        param_slider(ui, &band.dyn_attack, "Att");
-                        param_slider(ui, &band.dyn_release, "Rel");
+                        band_slider(ui, &band.dyn_threshold, Some("Thr"));
+                        band_slider(ui, &band.dyn_ratio, Some("Ratio"));
+                        band_slider(ui, &band.dyn_attack, Some("Att"));
+                        band_slider(ui, &band.dyn_release, Some("Rel"));
                     });
                 });
             });
         });
 }
 
-/// A band slider bound straight to a `FloatParam`: travel is the param's
-/// own normalized value (its declared skew), and the readout is its own
-/// formatter, captioned with `caption`.
-fn param_slider(ui: &mut egui::Ui, param: &FloatParam, caption: &str) {
-    if let Some(travel) = band_slider(ui, param.normalized_value(), false) {
-        param.set_normalized(travel);
-    }
-    let text = format!("{caption} {}", param.display(param.value() as f64));
-    ui.label(egui::RichText::new(text).color(theme::TEXT_DIM));
-}
-
-/// One band slider: the shared geometry and palette. Returns the new
-/// unit travel while it is being positioned.
-fn band_slider(ui: &mut egui::Ui, travel: f32, bipolar: bool) -> Option<f32> {
-    let s = HSlider::new(SLIDER_W, travel)
-        .bipolar(bipolar)
-        .style(SliderStyle::LAVENDER);
-    slider(ui, &s)
-}
-
-/// Declared range of the Freq slider, Hz.
-const FREQ_HZ: (f32, f32) = (20.0, 20_000.0);
-/// Declared range of the Q slider.
-const Q: (f32, f32) = (0.1, 10.0);
-/// Half-range of the Gain slider, dB (it runs `-GAIN_DB..=GAIN_DB`).
-const GAIN_DB: f32 = 24.0;
-
-/// Slider travel of `value` on a logarithmic `min..max` range.
-///
-/// This is `egui::Slider::logarithmic(true)` for an all-positive range,
-/// which is what Freq and Q were before they moved onto the shared
-/// slider: even travel per decade, so the first third of the Freq
-/// groove is still 20–200 Hz.
-fn log_travel((min, max): (f32, f32), value: f32) -> f32 {
-    let span = max.ln() - min.ln();
-    ((value.clamp(min, max).ln() - min.ln()) / span).clamp(0.0, 1.0)
-}
-
-/// The value a travel maps back to on a logarithmic range.
-fn log_value((min, max): (f32, f32), travel: f32) -> f32 {
-    let span = max.ln() - min.ln();
-    (min.ln() + travel.clamp(0.0, 1.0) * span).exp().clamp(min, max)
-}
-
-fn format_hz_short(freq: f32) -> String {
-    if freq >= 1000.0 {
-        format!("{:.2} kHz", freq / 1000.0)
-    } else {
-        format!("{:.0} Hz", freq)
-    }
+/// A band slider bound to `param` — its own travel (declared skew),
+/// default, polarity and formatter — with its readout underneath,
+/// captioned with `caption` when given. Click the readout to type a
+/// value.
+fn band_slider(ui: &mut egui::Ui, param: &FloatParam, caption: Option<&str>) {
+    editor_widgets::param_slider(ui, ParamSlider::new(param, SLIDER_W));
+    // The readout follows the value the drag just produced, not last
+    // frame's.
+    let text = param.display(param.get_plain());
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let caption = caption.unwrap_or("");
+    editor_widgets::param_readout(ui, param, caption, &text, SLIDER_W, font, theme::TEXT_DIM);
 }

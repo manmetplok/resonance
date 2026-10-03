@@ -25,7 +25,8 @@ pub fn int_combo(ui: &mut egui::Ui, param: &IntParam, id: &str, labels: &[&str])
         .show_ui(ui, |ui| {
             for (i, label) in labels.iter().enumerate() {
                 if ui.selectable_label(i == idx, *label).clicked() {
-                    param.set_value(min + i as i32);
+                    let v = f64::from(min + i as i32);
+                    resonance_plugin::editor_widgets::commit_plain(ui.ctx(), param, v);
                 }
             }
         });

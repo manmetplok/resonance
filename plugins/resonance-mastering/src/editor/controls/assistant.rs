@@ -46,17 +46,24 @@ pub fn draw(ui: &mut egui::Ui, params: &MasteringParams, assistant: &Assistant) 
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             ui.label(egui::RichText::new("Input trim:").color(theme::TEXT_DIM));
-            let mut trim = params.input_trim_db.value();
-            if ui
-                .add(
-                    egui::Slider::new(&mut trim, -24.0..=24.0)
-                        .fixed_decimals(1)
-                        .suffix(" dB"),
-                )
-                .changed()
-            {
-                params.input_trim_db.set_value(trim);
-            }
+            // The param's own range, default (double-click), formatter
+            // and typed entry; one host edit per drag (PUX-01/-06).
+            let trim = &params.input_trim_db;
+            resonance_plugin::editor_widgets::param_slider(
+                ui,
+                resonance_plugin::editor_widgets::ParamSlider::new(trim, 120.0),
+            );
+            let text = resonance_plugin::Param::display(trim, f64::from(trim.value()));
+            let font = egui::TextStyle::Body.resolve(ui.style());
+            resonance_plugin::editor_widgets::param_readout(
+                ui,
+                trim,
+                "",
+                &text,
+                64.0,
+                font,
+                theme::TEXT_DIM,
+            );
         });
         ui.add_space(6.0);
 
@@ -228,7 +235,16 @@ pub fn draw(ui: &mut egui::Ui, params: &MasteringParams, assistant: &Assistant) 
                             ))
                             .clicked()
                         {
-                            s.apply_to(params);
+                            // One host edit per param the suggestions moved.
+                            let all: Vec<&dyn resonance_plugin::Param> =
+                                (0..crate::params::PARAM_COUNT)
+                                    .map(|i| params.param_at(i))
+                                    .collect();
+                            resonance_plugin::editor_widgets::apply_and_announce(
+                                ui.ctx(),
+                                &all,
+                                || s.apply_to(params),
+                            );
                         }
                     } else {
                         ui.label(

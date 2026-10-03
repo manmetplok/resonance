@@ -43,6 +43,9 @@ pub struct ResonanceCompressor {
     /// plugin's extra state, so the identity survives closing the
     /// window (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     /// Shared viz snapshots (meters + GR history ring) read by the editor.
     viz: Arc<CompressorViz>,
     dsp: Option<CompressorDsp>,
@@ -76,6 +79,7 @@ impl ResonancePlugin for ResonanceCompressor {
     fn new() -> Self {
         Self {
             params: Arc::new(CompressorParams::default()),
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             viz: CompressorViz::new(),
             dsp: None,
@@ -160,12 +164,17 @@ impl ResonancePlugin for ResonanceCompressor {
         Some(self.presets.clone())
     }
 
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        self.editor_announcer.attach(host);
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::CompressorEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

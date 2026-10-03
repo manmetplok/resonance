@@ -11,14 +11,15 @@
 //!
 //! The kit provides:
 //!
-//! - two rotary-knob families — a range-mapped [`knob`] (64x76 cell,
-//!   caption above the dial, wrapped by
-//!   `resonance_plugin::editor_widgets::float_knob`) and the
-//!   configurable [`knob_themed`] family (unit-space, [`KnobStyle`]
-//!   geometry, bipolar and over-unity arcs), of which [`knob_unipolar`]
-//!   / [`knob_bipolar`] are the default-styled shorthands. Both paint in
-//!   the one canonical palette since ba todo #1338; what still differs is
-//!   geometry and capability, not colour. No editor mixes the two;
+//! - the rotary knob: the configurable [`knob_themed`] family
+//!   (unit-space, [`KnobStyle`] geometry, bipolar and over-unity arcs,
+//!   an optional sub-label), of which [`knob_unipolar`] / [`knob_bipolar`]
+//!   are the default-styled shorthands. It is the one knob every plugin
+//!   editor draws (code review PUX-11), through
+//!   `resonance_plugin::editor_widgets::{float_knob, param_knob}`.
+//!   The older range-mapped [`knob`] (caption above the dial, no
+//!   gesture state of its own before PUX-02) stays only as a building
+//!   block; `tools/arch-invariants` fails a plugin that calls it;
 //! - [`chip_button`] / [`chip_styled`] — the pill-shaped discrete
 //!   toggle, styled by [`ChipStyle`];
 //! - [`segmented`] / [`segmented_styled`] — a one-of-N strip of chips,
@@ -27,7 +28,8 @@
 //!   and the configurable [`slider`], styled by [`SliderStyle`].
 //!
 //! The configurable knob and slider each have a gesture-aware twin,
-//! [`knob_themed_edit`] / [`slider_edit`], which return a [`GestureEdit`]:
+//! [`knob_themed_edit`] / [`slider_edit`] (and [`knob`] reports one
+//! too), which return a [`GestureEdit`]:
 //! the new value *and* whether the user's gesture began or ended this
 //! frame. An editor that tells its host about edits (CLAP undo) needs the
 //! end of a drag, not every frame of it — one drag is one undoable edit.
@@ -37,8 +39,11 @@
 //! `resonance_plugin::editor_widgets`, keeping this crate free of
 //! plugin-framework dependencies.
 //!
-//! Both families drag through [`knob_drag_unit`], so every knob in
-//! every plugin answers the same mouse gesture the same way. A plugin
+//! Both knobs drag through [`knob_drag_unit`], so every knob in every
+//! plugin answers the same mouse gesture the same way, and both run the
+//! drag from a position kept for the whole gesture, so a caller that
+//! quantizes (an int or bool param) still steps on a slow drag
+//! (PUX-02). A plugin
 //! that needs a different size, a bipolar centre tick or an extra arc
 //! zone configures [`ThemedKnob`] / [`KnobStyle`] rather than forking
 //! the widget (ba todo #1266).
@@ -166,7 +171,18 @@ const SUBLABEL_COLOR: Color32 = theme::TEXT_3;
 
 /// Draw a rotary knob for a floating-point value.
 ///
-/// Returns `true` if the value changed.
+/// **Not for plugin editors.** A plugin binds its parameters through
+/// `resonance_plugin::editor_widgets` (`float_knob`, `param_knob`),
+/// which is built on [`knob_themed_edit`] and adds what a parameter
+/// control needs on top of the drawing: the declared skew, the
+/// mandatory double-click reset, typed entry and the one-edit-per-
+/// gesture host announce (code review PUX-01/-06/-11).
+/// `tools/arch-invariants` fails any plugin source that calls this
+/// directly.
+///
+/// Returns the gesture ([`GestureEdit`]); `value` is mutated in place
+/// on every frame the knob moves, and `GestureEdit::value` carries the
+/// same new value (in `range`, not unit space).
 ///
 /// - `value`: current value, mutated in place on drag.
 /// - `range`: allowed min/max.
@@ -183,7 +199,7 @@ pub fn knob(
     sub_label: &str,
     value_text: &str,
     logarithmic: bool,
-) -> bool {
+) -> GestureEdit {
     let knob_radius = 20.0f32;
     let total_width = 64.0f32;
     let total_height = knob_radius * 2.0 + 36.0; // knob + label + value
@@ -193,7 +209,7 @@ pub fn knob(
         Sense::click_and_drag(),
     );
 
-    let changed = handle_knob_input(&response, value, &range, default, logarithmic);
+    let edit = handle_knob_input(ui, &response, value, &range, default, logarithmic);
 
     if ui.is_rect_visible(rect) {
         draw_knob(
@@ -208,49 +224,103 @@ pub fn knob(
         );
     }
 
-    changed
+    edit
+}
+
+/// Unit (`0..1`) position of `value` on the classic knob's axis.
+fn classic_unit(value: f32, range: &std::ops::RangeInclusive<f32>, logarithmic: bool) -> f32 {
+    if logarithmic {
+        let min = range.start().max(0.001);
+        let log_min = min.ln();
+        let log_span = range.end().ln() - log_min;
+        if log_span.abs() < f32::EPSILON {
+            0.0
+        } else {
+            ((value.max(min).ln() - log_min) / log_span).clamp(0.0, 1.0)
+        }
+    } else {
+        normalize(value, range)
+    }
+}
+
+/// The value at unit position `unit` on the classic knob's axis.
+fn classic_value(unit: f32, range: &std::ops::RangeInclusive<f32>, logarithmic: bool) -> f32 {
+    let v = if logarithmic {
+        let min = range.start().max(0.001);
+        let log_min = min.ln();
+        let log_span = range.end().ln() - log_min;
+        (log_min + unit * log_span).exp()
+    } else {
+        range.start() + unit * (range.end() - range.start())
+    };
+    v.clamp(*range.start(), *range.end())
 }
 
 fn handle_knob_input(
+    ui: &egui::Ui,
     response: &Response,
     value: &mut f32,
     range: &std::ops::RangeInclusive<f32>,
     default: f32,
     logarithmic: bool,
-) -> bool {
-    // Double-click to reset to default.
+) -> GestureEdit {
+    // Double-click to reset to default: one finished edit.
     if response.double_clicked() {
         *value = default;
-        return true;
-    }
-
-    if !response.dragged() {
-        return false;
-    }
-    let drag_y = response.drag_delta().y;
-    if drag_y == 0.0 {
-        return false;
-    }
-    let fine = response.ctx.input(|i| i.modifiers.shift);
-
-    // Drag happens in unit space (shared with the themed knob), then
-    // maps back onto the value range — linearly, or along the log axis.
-    if logarithmic {
-        let min = range.start().max(0.001);
-        let log_min = min.ln();
-        let log_span = range.end().ln() - log_min;
-        let unit = if log_span.abs() < f32::EPSILON {
-            0.0
-        } else {
-            (value.max(min).ln() - log_min) / log_span
+        return GestureEdit {
+            value: Some(default),
+            began: true,
+            ended: true,
         };
-        *value = (log_min + knob_drag_unit(unit, drag_y, fine) * log_span).exp();
-    } else {
-        let unit = knob_drag_unit(normalize(*value, range), drag_y, fine);
-        *value = range.start() + unit * (range.end() - range.start());
     }
-    *value = value.clamp(*range.start(), *range.end());
-    true
+
+    // Drag happens in unit space (shared with the themed knob), from a
+    // running position kept for the gesture — see [`drag_gesture`].
+    let unit = classic_unit(*value, range, logarithmic);
+    let mut edit = drag_gesture(ui, response, unit);
+    if let Some(u) = edit.value {
+        *value = classic_value(u, range, logarithmic);
+        edit.value = Some(*value);
+    }
+    edit
+}
+
+/// One frame of a knob's vertical drag, in unit space, gesture-aware.
+///
+/// The drag runs from a position kept in egui memory for the gesture
+/// (keyed by the knob's id), **not** from the caller's current value
+/// re-read each frame. A caller that quantizes — an integer or bool
+/// parameter, which rounds what it is handed — would otherwise snap
+/// every sub-step frame back to where it was, and a normal 1–3 px/frame
+/// drag could never reach the next step (code review PUX-02: the delay's
+/// Sync, Freeze and Gate could not be switched at all). The same
+/// accumulation `HSlider` has always done (`slider.rs`).
+///
+/// Both knob families go through here.
+fn drag_gesture(ui: &egui::Ui, response: &Response, unit: f32) -> GestureEdit {
+    let mut edit = GestureEdit::default();
+    let id = response.id.with("knob_drag_unit");
+    if response.drag_started() {
+        ui.data_mut(|d| d.insert_temp(id, unit.clamp(0.0, 1.0)));
+        edit.began = true;
+    }
+    if response.dragged() {
+        let drag_y = response.drag_delta().y;
+        if drag_y != 0.0 {
+            let fine = ui.input(|i| i.modifiers.shift);
+            let from = ui
+                .data(|d| d.get_temp::<f32>(id))
+                .unwrap_or(unit.clamp(0.0, 1.0));
+            let to = knob_drag_unit(from, drag_y, fine);
+            ui.data_mut(|d| d.insert_temp(id, to));
+            edit.value = Some(to);
+        }
+    }
+    if response.drag_stopped() {
+        ui.data_mut(|d| d.remove::<f32>(id));
+        edit.ended = true;
+    }
+    edit
 }
 
 fn draw_knob(
@@ -430,6 +500,22 @@ impl KnobStyle {
         indicator_inset: 6.0,
     };
 
+    /// The cell every param-bound knob in
+    /// `resonance_plugin::editor_widgets` draws in: the same 64×76 px
+    /// footprint the retired range-mapped [`knob`] took, so the editors
+    /// that moved off it (code review PUX-11) did not reflow — a 40 px
+    /// dial with the value, the label and a sub-label row under it.
+    pub const CAPTIONED: Self = Self {
+        diameter: 40.0,
+        pad_x: 24.0,
+        text_h: 36.0,
+        value_dy: 3.0,
+        label_dy: 15.0,
+        value_font: 10.0,
+        label_font: 9.0,
+        indicator_inset: 5.0,
+    };
+
     /// The full cell this style occupies (dial + text rows). Callers
     /// that swap another widget in for a knob (e.g. a stepper) allocate
     /// this exact size so the swap causes no layout jump.
@@ -467,6 +553,10 @@ pub struct ThemedKnob<'a> {
     /// to the warm token beyond it (the granular delay's >100 %
     /// feedback region). Ignored when `bipolar`.
     pub warm_from: Option<f32>,
+    /// Second caption line under the label (`"pre-model"`, `"dry/wet"`),
+    /// empty for none. Drawn inside the cell only when the style leaves
+    /// room for it — [`KnobStyle::CAPTIONED`] does.
+    pub sub_label: &'a str,
     /// Cell geometry and type scale.
     pub style: KnobStyle,
 }
@@ -481,8 +571,15 @@ impl<'a> ThemedKnob<'a> {
             default_unit,
             bipolar: false,
             warm_from: None,
+            sub_label: "",
             style: KnobStyle::LAVENDER,
         }
+    }
+
+    /// Add a second caption line under the label.
+    pub fn sub_label(mut self, sub_label: &'a str) -> Self {
+        self.sub_label = sub_label;
+        self
     }
 
     /// Fill outward from the centre instead of from the minimum.
@@ -545,7 +642,7 @@ pub fn knob_themed_edit(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> GestureEdit
     let (rect, response) = ui.allocate_exact_size(style.cell(), egui::Sense::click_and_drag());
     let unit = knob.value_unit.clamp(0.0, 1.0);
     if !ui.is_rect_visible(rect) {
-        return themed_knob_gesture(&response, unit, knob.default_unit);
+        return themed_knob_gesture(ui, &response, unit, knob.default_unit);
     }
 
     let center = egui::pos2(rect.center().x, rect.top() + style.diameter * 0.5 + 1.0);
@@ -631,49 +728,80 @@ pub fn knob_themed_edit(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> GestureEdit
         );
     }
 
-    // Value + label below.
+    // Value + label below. Each row shrinks to the cell rather than
+    // being cut off by it (`painter_at` clips): the captioned cell is
+    // 64 px, and an upper-case `SELECTIVITY` or a long readout is wider.
     let text_top = rect.top() + style.diameter;
-    painter.text(
-        egui::pos2(rect.center().x, text_top + style.value_dy),
-        egui::Align2::CENTER_TOP,
-        knob.formatted_value,
+    let max_w = rect.width() - 2.0;
+    let x = rect.center().x;
+    fitted_text(
+        &painter,
+        egui::pos2(x, text_top + style.value_dy),
+        knob.formatted_value.to_string(),
         egui::FontId::monospace(style.value_font),
         theme::TEXT_1,
+        max_w,
     );
-    painter.text(
-        egui::pos2(rect.center().x, text_top + style.label_dy),
-        egui::Align2::CENTER_TOP,
+    fitted_text(
+        &painter,
+        egui::pos2(x, text_top + style.label_dy),
         knob.label.to_uppercase(),
         egui::FontId::proportional(style.label_font),
         theme::TEXT_3,
+        max_w,
     );
-
-    themed_knob_gesture(&response, unit, knob.default_unit)
-}
-
-/// [`themed_knob_input`] with the gesture's start and end.
-fn themed_knob_gesture(response: &Response, unit: f32, default_unit: f32) -> GestureEdit {
-    GestureEdit {
-        value: themed_knob_input(response, unit, default_unit),
-        began: response.drag_started() || response.double_clicked(),
-        ended: response.drag_stopped() || response.double_clicked(),
+    if !knob.sub_label.is_empty() {
+        fitted_text(
+            &painter,
+            egui::pos2(x, text_top + style.label_dy + style.label_font + 1.5),
+            knob.sub_label.to_string(),
+            egui::FontId::proportional((style.label_font - 1.0).max(7.5)),
+            theme::TEXT_3,
+            max_w,
+        );
     }
+
+    themed_knob_gesture(ui, &response, unit, knob.default_unit)
 }
 
-/// Vertical drag / double-click handling of a themed knob, in unit
-/// space. Shares [`knob_drag_unit`] with the range-mapped [`knob`].
-fn themed_knob_input(response: &Response, unit: f32, default_unit: f32) -> Option<f32> {
+/// Paint `text` centred under `top`, shrunk (down to 6.5 pt) to fit
+/// `max_w` when it is wider at `font`'s size.
+fn fitted_text(
+    painter: &egui::Painter,
+    top: Pos2,
+    text: String,
+    font: egui::FontId,
+    color: Color32,
+    max_w: f32,
+) {
+    let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
+    let width = galley.size().x;
+    let galley = if width > max_w && width > 0.0 {
+        let size = (font.size * max_w / width).max(6.5);
+        painter.layout_no_wrap(text, egui::FontId::new(size, font.family), color)
+    } else {
+        galley
+    };
+    let pos = egui::pos2(top.x - galley.size().x * 0.5, top.y);
+    painter.galley(pos, galley, color);
+}
+
+/// A themed knob's input this frame: a double-click reset (one finished
+/// edit) or a frame of its drag gesture ([`drag_gesture`]).
+fn themed_knob_gesture(
+    ui: &egui::Ui,
+    response: &Response,
+    unit: f32,
+    default_unit: f32,
+) -> GestureEdit {
     if response.double_clicked() {
-        return Some(default_unit.clamp(0.0, 1.0));
+        return GestureEdit {
+            value: Some(default_unit.clamp(0.0, 1.0)),
+            began: true,
+            ended: true,
+        };
     }
-    if response.dragged() {
-        let drag_y = response.drag_delta().y;
-        if drag_y != 0.0 {
-            let fine = response.ctx.input(|i| i.modifiers.shift);
-            return Some(knob_drag_unit(unit, drag_y, fine));
-        }
-    }
-    None
+    drag_gesture(ui, response, unit)
 }
 
 fn arc(

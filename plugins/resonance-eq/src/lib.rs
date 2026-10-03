@@ -20,7 +20,7 @@ pub mod presets;
 pub mod response_curve;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use analyzer::{AnalyzerState, StereoAnalyzers};
 use dsp::EqDsp;
@@ -36,6 +36,9 @@ pub struct ResonanceEq {
     /// plugin's extra state, so the identity survives closing the window
     /// (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     dsp: Option<EqDsp>,
     /// Per-sample smoother for the output gain knob. Lives on the plugin
     /// struct (not inside the FloatParam) because Smoother::next() needs
@@ -89,6 +92,7 @@ impl ResonancePlugin for ResonanceEq {
     fn new() -> Self {
         Self {
             params: Arc::new(EqParams::default()),
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             dsp: None,
             output_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(20.0)),
@@ -206,12 +210,17 @@ impl ResonancePlugin for ResonanceEq {
         Some(self.presets.clone())
     }
 
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        self.editor_announcer.attach(host);
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::EqEditorFactory::new(
             self.params.clone(),
             self.analyzer_state.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

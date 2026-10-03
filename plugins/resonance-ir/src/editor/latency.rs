@@ -65,7 +65,7 @@ pub fn draw(ui: &mut egui::Ui, app: &IrEditorApp) {
                     let value = min + offset as i32;
                     let label = param.display(value as f64);
                     if ui.selectable_label(value == current, label).clicked() {
-                        param.set_value(value);
+                        resonance_plugin::editor_widgets::commit_plain(ui.ctx(), param, value as f64);
                     }
                 }
             });

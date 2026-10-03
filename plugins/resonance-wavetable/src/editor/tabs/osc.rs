@@ -2,6 +2,7 @@
 //! per-osc warp and the oscillator interaction), then unison, sub/noise and
 //! global.
 
+use resonance_plugin::editor_widgets;
 use plugin_gui_core::{egui, widgets};
 
 use crate::dsp::warp::{Warp, WarpMode};
@@ -10,7 +11,6 @@ use crate::editor::display_waves::{self, DisplayTable};
 use crate::editor::theme;
 use crate::editor::viz::{frame_strip, waveform};
 use crate::editor::WavetableEditorApp;
-use resonance_plugin::param::Param;
 
 use super::{choice_cycle, choice_segmented, float_knob, float_slider, int_knob, readout};
 
@@ -109,7 +109,9 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         if let Some(requested) = app.pending_user_load[osc] {
             if user.generation >= requested {
                 if user.generation == requested && user.error.is_none() && user.is_loaded() {
-                    osc_params.wavetable.set_plain(USER_WAVETABLE_INDEX as f64);
+                    // The user's own Load…, now landed: one host edit.
+                    let p = &osc_params.wavetable;
+                    editor_widgets::commit_plain(ui.ctx(), p, USER_WAVETABLE_INDEX as f64);
                 }
                 app.pending_user_load[osc] = None;
             }
@@ -150,7 +152,8 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                 .clicked()
                 && wt_idx > 0
             {
-                osc_params.wavetable.set_plain((wt_idx - 1) as f64);
+                let p = &osc_params.wavetable;
+                editor_widgets::commit_plain(ui.ctx(), p, (wt_idx - 1) as f64);
             }
             ui.label(
                 egui::RichText::new(display_waves::selection_name(wt_idx, &user))
@@ -166,7 +169,8 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                 .clicked()
                 && wt_idx < last
             {
-                osc_params.wavetable.set_plain((wt_idx + 1) as f64);
+                let p = &osc_params.wavetable;
+                editor_widgets::commit_plain(ui.ctx(), p, (wt_idx + 1) as f64);
             }
             ui.add_space(6.0);
             if ui
@@ -288,7 +292,8 @@ fn draw_params_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                     })
                     .response;
                 if resp.interact(egui::Sense::click()).clicked() {
-                    osc_params.enabled.set_plain(if enabled { 0.0 } else { 1.0 });
+                    let next = if enabled { 0.0 } else { 1.0 };
+                    editor_widgets::commit_plain(ui.ctx(), &osc_params.enabled, next);
                 }
             });
         });
@@ -433,7 +438,8 @@ fn draw_global_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             })
             .inner;
         if resp.clicked() {
-            app.params.glide_enabled.set_plain(if on { 0.0 } else { 1.0 });
+            let next = if on { 0.0 } else { 1.0 };
+            editor_widgets::commit_plain(ui.ctx(), &app.params.glide_enabled, next);
         }
     });
 }

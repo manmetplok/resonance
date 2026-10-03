@@ -8,7 +8,10 @@
 
 use std::sync::Arc;
 
-use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, RuntimeEditorHandle};
+use resonance_plugin::editor_host::{
+    native_api, with_announcer, EditorOptions, RuntimeEditor, RuntimeEditorHandle,
+};
+use resonance_plugin::EditAnnouncer;
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
 
 use crate::params::DelayParams;
@@ -16,13 +19,19 @@ use crate::viz::DelayViz;
 
 use super::app::DelayEditorApp;
 
-const WINDOW_W: u32 = 1200;
-const WINDOW_H: u32 = 600;
+/// Default window size.
+pub const WINDOW_W: u32 = 1200;
+pub const WINDOW_H: u32 = 600;
+/// Minimum window size: the strip still fits it, three rows deep
+/// (`tests/editor_layout.rs`).
+pub const MIN_W: u32 = 900;
+pub const MIN_H: u32 = 480;
 
 pub struct DelayEditorFactory {
     params: Arc<DelayParams>,
     viz: Arc<DelayViz>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    announcer: EditAnnouncer,
 }
 
 impl DelayEditorFactory {
@@ -30,12 +39,20 @@ impl DelayEditorFactory {
         params: Arc<DelayParams>,
         viz: Arc<DelayViz>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        announcer: EditAnnouncer,
     ) -> Self {
         Self {
             params,
             viz,
             presets,
+            announcer,
         }
+    }
+
+    /// The editor app, unwrapped (the headless test hook drives it with
+    /// its own announcer).
+    pub(crate) fn build_app(&self) -> DelayEditorApp {
+        DelayEditorApp::new(self.params.clone(), self.viz.clone(), self.presets.clone())
     }
 }
 
@@ -53,18 +70,14 @@ impl EditorFactory for DelayEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = DelayEditorApp::new(
-            self.params.clone(),
-            self.viz.clone(),
-            self.presets.clone(),
-        );
+        let app = with_announcer(self.build_app(), self.announcer.clone());
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {
                 title: "Resonance Delay".to_string(),
                 app_id: "com.resonance.delay".to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
-                min_size: (900, 480),
+                min_size: (MIN_W, MIN_H),
                 resizable: true,
             },
         )

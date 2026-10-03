@@ -22,6 +22,29 @@ mod viz;
 
 pub use factory::WavetableEditorFactory;
 
+/// The wavetable editor driven headless at `size` on the FX tab (`fx`)
+/// or the default one, with a recording announcer — for
+/// `tests/editor_*.rs`. Not plugin API.
+#[doc(hidden)]
+pub fn headless_editor(
+    plugin: &crate::ResonanceWavetable,
+    size: (f32, f32),
+    fx: bool,
+) -> resonance_plugin::editor_widgets::headless::HeadlessEditor {
+    let factory = WavetableEditorFactory::new(
+        plugin.params.clone(),
+        plugin.viz.clone(),
+        plugin.presets.clone(),
+        plugin.user_tables.clone(),
+        resonance_plugin::EditAnnouncer::new(),
+    );
+    let mut app = factory.build_app();
+    if fx {
+        app.selected_tab = app::WtTab::Fx;
+    }
+    resonance_plugin::editor_widgets::headless::HeadlessEditor::new(Box::new(app), size)
+}
+
 // Re-exported so the per-tab modules can keep their existing
 // `crate::editor::WavetableEditorApp` import path.
 pub(crate) use app::WavetableEditorApp;

@@ -35,6 +35,7 @@ pub struct AmpEditorFactory {
     /// and held for this plugin's lifetime (no worker at all for an amp
     /// whose editor is never opened).
     tone3000: Mutex<Option<Arc<WorkerHandle>>>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl AmpEditorFactory {
@@ -43,8 +44,10 @@ impl AmpEditorFactory {
         load_request: Arc<AtomicI32>,
         viz: Arc<AmpViz>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             load_request,
             viz,
@@ -84,7 +87,7 @@ impl EditorFactory for AmpEditorFactory {
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Amp".to_string(),
                 app_id: "com.resonance.amp".to_string(),

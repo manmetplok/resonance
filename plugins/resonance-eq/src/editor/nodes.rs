@@ -9,6 +9,8 @@
 //! - Double-click: toggle enabled.
 
 use plugin_gui_core::egui;
+use plugin_gui_core::widgets::GestureEdit;
+use resonance_plugin::editor_widgets::{apply_gesture, commit_plain};
 
 use crate::band::{BandKind, BandMs, BandSlope};
 use crate::editor::response::{color_for_kind, db_to_y, freq_to_x, x_to_freq, y_to_db};
@@ -56,11 +58,21 @@ pub fn draw_and_interact(
         draw_node(ui, pos, snapshot, selected || is_hovered, i);
     }
 
-    // Handle drag lifecycle.
+    // Handle drag lifecycle. A node drag is one gesture on Freq (and
+    // Gain): written every frame, announced to the host once, when it
+    // ends, for each param it moved (PUX-01).
+    let ctx = ui.ctx().clone();
+    let began = GestureEdit {
+        began: true,
+        ..GestureEdit::default()
+    };
     if response.drag_started() {
         if let Some(i) = hover_node {
             app.drag_state = Some(DragState { band_index: i });
             app.selected_band = Some(i);
+            let band = &app.params.bands[i];
+            apply_gesture(&ctx, &band.freq, began, |_| {});
+            apply_gesture(&ctx, &band.gain, began, |_| {});
         } else if let Some(p) = pointer {
             // Click on empty area: deselect.
             if plot.contains(p) {
@@ -75,17 +87,33 @@ pub fn draw_and_interact(
                 let band = &app.params.bands[drag.band_index];
                 let kind = BandKind::from_index(band.kind.value());
                 let new_freq = x_to_freq(p.x, plot.left(), plot.width());
-                band.freq.set_value(new_freq.clamp(20.0, 20_000.0));
+                let moved = GestureEdit {
+                    value: Some(new_freq.clamp(20.0, 20_000.0)),
+                    ..GestureEdit::default()
+                };
+                apply_gesture(&ctx, &band.freq, moved, |v| band.freq.set_value(v));
                 if kind.uses_gain() {
                     let new_gain = y_to_db(p.y, plot.top(), plot.height());
-                    band.gain.set_value(new_gain.clamp(-24.0, 24.0));
+                    let moved = GestureEdit {
+                        value: Some(new_gain.clamp(-24.0, 24.0)),
+                        ..GestureEdit::default()
+                    };
+                    apply_gesture(&ctx, &band.gain, moved, |v| band.gain.set_value(v));
                 }
             }
         }
     }
 
     if response.drag_stopped() {
-        app.drag_state = None;
+        if let Some(drag) = app.drag_state.take() {
+            let band = &app.params.bands[drag.band_index];
+            let ended = GestureEdit {
+                ended: true,
+                ..GestureEdit::default()
+            };
+            apply_gesture(&ctx, &band.freq, ended, |_| {});
+            apply_gesture(&ctx, &band.gain, ended, |_| {});
+        }
     }
 
     // Plain click (no drag) — select the hovered node, or clear selection.
@@ -102,20 +130,39 @@ pub fn draw_and_interact(
     if response.double_clicked() {
         if let Some(i) = hover_node {
             let b = &app.params.bands[i];
-            b.enabled.set_value(!b.enabled.value());
+            let off = if b.enabled.value() { 0.0 } else { 1.0 };
+            commit_plain(&ctx, &b.enabled, off);
         }
     }
 
-    // Scroll adjusts Q of the hovered band.
+    // Scroll adjusts Q of the hovered band: one gesture per scroll,
+    // announced when the wheel stops (or the pointer leaves the node).
+    let mut scrolled = false;
     if let Some(i) = hover_node {
         let scroll = ui.ctx().input(|inp| inp.smooth_scroll_delta.y);
         let uses_q = BandKind::from_index(app.params.bands[i].kind.value()).uses_q();
-        if scroll.abs() > 0.0 && uses_q {
+        if scroll.abs() > 0.0 && uses_q && app.q_scroll.is_none_or(|j| j == i) {
             let b = &app.params.bands[i];
             let q = b.q.value();
             let factor = (scroll * 0.005).exp(); // smooth exponential zoom
             let new_q = (q * factor).clamp(0.1, 10.0);
-            b.q.set_value(new_q);
+            let moved = GestureEdit {
+                value: Some(new_q),
+                began: app.q_scroll.is_none(),
+                ended: false,
+            };
+            apply_gesture(&ctx, &b.q, moved, |v| b.q.set_value(v));
+            app.q_scroll = Some(i);
+            scrolled = true;
+        }
+    }
+    if !scrolled {
+        if let Some(j) = app.q_scroll.take() {
+            let ended = GestureEdit {
+                ended: true,
+                ..GestureEdit::default()
+            };
+            apply_gesture(&ctx, &app.params.bands[j].q, ended, |_| {});
         }
     }
 
@@ -180,12 +227,13 @@ fn context_menu(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize) {
     );
     ui.separator();
 
+    let ctx = ui.ctx().clone();
     let mut kind = BandKind::from_index(band.kind.value());
     ui.label("Type");
     for opt in BandKind::ALL {
         if ui.selectable_label(kind == opt, opt.short_name()).clicked() {
             kind = opt;
-            band.kind.set_value(kind.to_index());
+            commit_plain(&ctx, &band.kind, f64::from(kind.to_index()));
             ui.close();
         }
     }
@@ -193,11 +241,10 @@ fn context_menu(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize) {
     if kind.is_cut() {
         ui.separator();
         ui.label("Slope");
-        let mut slope = BandSlope::from_index(band.slope.value());
+        let slope = BandSlope::from_index(band.slope.value());
         for opt in [BandSlope::Db12, BandSlope::Db24, BandSlope::Db48] {
             if ui.selectable_label(slope == opt, opt.label()).clicked() {
-                slope = opt;
-                band.slope.set_value(slope.to_index());
+                commit_plain(&ctx, &band.slope, f64::from(opt.to_index()));
                 ui.close();
             }
         }
@@ -208,7 +255,7 @@ fn context_menu(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize) {
     let ms = BandMs::from_index(band.ms.value());
     for opt in BandMs::ALL {
         if ui.selectable_label(ms == opt, opt.label()).clicked() {
-            band.ms.set_value(opt.to_index());
+            commit_plain(&ctx, &band.ms, f64::from(opt.to_index()));
             ui.close();
         }
     }
@@ -219,7 +266,7 @@ fn context_menu(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize) {
         .button(if enabled { "Disable" } else { "Enable" })
         .clicked()
     {
-        band.enabled.set_value(!enabled);
+        commit_plain(&ctx, &band.enabled, if enabled { 0.0 } else { 1.0 });
         ui.close();
     }
 }

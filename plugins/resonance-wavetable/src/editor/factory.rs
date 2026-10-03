@@ -26,6 +26,7 @@ pub struct WavetableEditorFactory {
     viz: Arc<WavetableVizState>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
     user_tables: Arc<UserWavetables>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl WavetableEditorFactory {
@@ -34,13 +35,26 @@ impl WavetableEditorFactory {
         viz: Arc<WavetableVizState>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
         user_tables: Arc<UserWavetables>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             viz,
             presets,
             user_tables,
         }
+    }
+
+    /// The editor app, unwrapped (the headless test hook drives it with
+    /// its own announcer).
+    pub(crate) fn build_app(&self) -> WavetableEditorApp {
+        WavetableEditorApp::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+            self.user_tables.clone(),
+        )
     }
 }
 
@@ -61,14 +75,9 @@ impl EditorFactory for WavetableEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = WavetableEditorApp::new(
-            self.params.clone(),
-            self.viz.clone(),
-            self.presets.clone(),
-            self.user_tables.clone(),
-        );
+        let app = self.build_app();
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Wavetable".to_string(),
                 app_id: "com.resonance.wavetable".to_string(),

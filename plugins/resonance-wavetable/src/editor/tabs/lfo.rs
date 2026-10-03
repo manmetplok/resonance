@@ -1,6 +1,7 @@
 //! LFO tab — render LFO 1, 2, 3 each as a card with shape preview and
 //! controls. The selected card gets a brighter LED.
 
+use resonance_plugin::editor_widgets;
 use plugin_gui_core::{egui, widgets};
 
 use crate::editor::theme;
@@ -8,7 +9,6 @@ use crate::editor::viz::lfo_shape;
 use crate::dsp::lfo::{LfoMode, LfoShape, SyncDivision};
 use crate::dsp::modulation::{routing_summary, ModSource};
 use crate::editor::WavetableEditorApp;
-use resonance_plugin::param::Param;
 
 use super::mod_matrix::slots_of;
 use super::{float_knob, int_knob_fmt};
@@ -122,8 +122,13 @@ fn draw_lfo_card(
                             2 => LfoMode::Sync.to_params(),
                             _ => LfoMode::Free.to_params(),
                         };
-                        lfo.sync.set_plain(sync as u8 as f64);
-                        lfo.retrigger.set_plain(retrigger as u8 as f64);
+                        let ctx = ui.ctx();
+                        editor_widgets::commit_plain(ctx, &lfo.sync, f64::from(sync as u8));
+                        editor_widgets::commit_plain(
+                            ctx,
+                            &lfo.retrigger,
+                            f64::from(retrigger as u8),
+                        );
                     }
                 });
             });

@@ -68,6 +68,7 @@ pub fn division_stepper(
     let current = (p.get_plain().round() as i64).clamp(0, max);
     let cell = MACRO_KNOB_STYLE.cell();
     let (rect, _) = ui.allocate_exact_size(cell, egui::Sense::hover());
+    resonance_plugin::editor_widgets::probe(ui, p.id(), rect);
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -148,9 +149,9 @@ pub fn division_stepper(
     );
 
     if prev.clicked() && current > 0 {
-        p.set_plain((current - 1) as f64);
+        resonance_plugin::editor_widgets::commit_plain(ui.ctx(), p, (current - 1) as f64);
     }
     if next.clicked() && current < max {
-        p.set_plain((current + 1) as f64);
+        resonance_plugin::editor_widgets::commit_plain(ui.ctx(), p, (current + 1) as f64);
     }
 }

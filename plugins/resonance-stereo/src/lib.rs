@@ -36,6 +36,9 @@ pub struct ResonanceStereo {
     /// Which preset is loaded and whether it has been edited since;
     /// rides along in the saved state.
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     viz: Arc<StereoViz>,
     dsp: Option<StereoDsp>,
 }
@@ -70,6 +73,7 @@ impl ResonancePlugin for ResonanceStereo {
     fn new() -> Self {
         Self {
             params: Arc::new(StereoParams::default()),
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             viz: StereoViz::new(),
             dsp: None,
@@ -123,12 +127,17 @@ impl ResonancePlugin for ResonanceStereo {
         Some(self.presets.clone())
     }
 
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        self.editor_announcer.attach(host);
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::StereoEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

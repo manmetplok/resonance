@@ -147,3 +147,33 @@ impl Drop for RuntimeEditorHandle {
         }
     }
 }
+
+/// An editor app with the plugin's [`crate::host::EditAnnouncer`] lent to
+/// every frame, so the param-bound controls in
+/// [`crate::editor_widgets`] can tell the host about the user's edits
+/// (code review PUX-01). Build it with [`with_announcer`] in the
+/// factory's `create`, and hand it to [`RuntimeEditor::new`] in place
+/// of the bare app.
+pub struct AnnouncingApp<A: EditorApp> {
+    app: A,
+    announcer: crate::host::EditAnnouncer,
+}
+
+/// Wrap `app` so its controls announce through `announcer`.
+pub fn with_announcer<A: EditorApp>(
+    app: A,
+    announcer: crate::host::EditAnnouncer,
+) -> AnnouncingApp<A> {
+    AnnouncingApp { app, announcer }
+}
+
+impl<A: EditorApp> EditorApp for AnnouncingApp<A> {
+    fn ui(&mut self, ui: &mut plugin_gui_core::egui::Ui) {
+        crate::editor_widgets::install_announcer(ui.ctx(), &self.announcer);
+        self.app.ui(ui);
+    }
+
+    fn on_close(&mut self) {
+        self.app.on_close();
+    }
+}

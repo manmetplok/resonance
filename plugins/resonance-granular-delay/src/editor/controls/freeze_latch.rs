@@ -16,6 +16,7 @@ pub fn freeze_latch(ui: &mut Ui, params: &GranularDelayParams, index: usize) {
     let on = p.get_plain() >= 0.5;
     let size = egui::vec2(96.0, 44.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    resonance_plugin::editor_widgets::probe(ui, p.id(), rect);
     if ui.is_rect_visible(rect) {
         // Glow halo outside the button while engaged.
         if on {
@@ -53,6 +54,6 @@ pub fn freeze_latch(ui: &mut Ui, params: &GranularDelayParams, index: usize) {
         );
     }
     if response.clicked() {
-        p.set_plain(if on { 0.0 } else { 1.0 });
+        resonance_plugin::editor_widgets::commit_plain(ui.ctx(), p, if on { 0.0 } else { 1.0 });
     }
 }

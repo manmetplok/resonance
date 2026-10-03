@@ -43,6 +43,9 @@ pub struct ResonanceGate {
     /// plugin's extra state, so the identity survives closing the
     /// window (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     dsp: Option<GateDsp>,
     /// Detector status shared with the editor: which detector is
     /// running, and what it is doing (ba todo #1314).
@@ -100,6 +103,7 @@ impl ResonancePlugin for ResonanceGate {
     fn new() -> Self {
         Self {
             params: Arc::new(GateParams::default()),
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             dsp: None,
             viz: GateViz::new(),
@@ -179,12 +183,17 @@ impl ResonancePlugin for ResonanceGate {
         Some(self.presets.clone())
     }
 
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        self.editor_announcer.attach(host);
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::GateEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

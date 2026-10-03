@@ -446,6 +446,73 @@ fn plugins_never_name_a_platform_runtime() {
     );
 }
 
+/// Whether `code` (one file, comments stripped, joined) imports the raw
+/// classic knob from the widget kit: `widgets::knob` named directly, or
+/// `knob` as an item of a `widgets::{…}` group.
+fn imports_or_calls_classic_knob(code: &str) -> bool {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut rest = code;
+    while let Some(at) = rest.find("widgets::") {
+        let after = &rest[at + "widgets::".len()..];
+        if after.starts_with("knob") && !after["knob".len()..].starts_with(is_ident) {
+            return true;
+        }
+        if let Some(group) = after.strip_prefix('{') {
+            let end = group.find('}').unwrap_or(group.len());
+            if group[..end]
+                .split(|c: char| !is_ident(c))
+                .any(|item| item == "knob")
+            {
+                return true;
+            }
+        }
+        rest = after;
+    }
+    false
+}
+
+/// code-review-2026-10-02 PUX-11: "Converge on one `ThemedKnob`-based
+/// binding in `editor_widgets` that has gestures, typed entry and skew.
+/// Add an arch-invariant that no plugin calls `widgets::knob(`
+/// directly." The classic range-mapped knob takes its range, default
+/// and curve as arguments, so a plugin calling it restates `params.rs`
+/// (audit finding F4) and gets none of what the binding adds: the
+/// declared skew, the mandatory reset, typed entry and the one-edit-
+/// per-gesture host announce (PUX-01). Plugins draw knobs through
+/// `resonance_plugin::editor_widgets::{float_knob, param_knob}`.
+///
+/// Exercised 2026-10-03: added `let _ = plugin_gui_core::widgets::knob(`
+/// … `);` to `plugins/resonance-gate/src/editor/widgets.rs` → failed on
+/// that file; then `use plugin_gui_core::widgets::{chip_button, knob};`
+/// alone → failed; both reverted.
+#[test]
+fn plugins_draw_knobs_only_through_the_param_binding() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    for p in packages().iter().filter(|p| p.is_plugin(&root)) {
+        let mut files = Vec::new();
+        rust_files(&p.dir.join("src"), &mut files);
+        for file in files {
+            let code: String = code_lines(&file)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect::<Vec<_>>()
+                .join("\n");
+            if imports_or_calls_classic_knob(&code) {
+                violations.push(format!(
+                    "{}: uses `plugin_gui_core::widgets::knob` — bind the param through \
+                     `resonance_plugin::editor_widgets::{{float_knob, param_knob}}`",
+                    file.strip_prefix(&root).unwrap_or(&file).display()
+                ));
+            }
+        }
+    }
+    report(
+        "PUX-11: plugins draw knobs through the one param binding, never the raw classic knob",
+        &violations,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Plugin reach into resonance-common (ARCH-07)
 // ---------------------------------------------------------------------------

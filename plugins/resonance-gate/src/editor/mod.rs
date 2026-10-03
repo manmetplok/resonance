@@ -22,6 +22,17 @@ mod widgets;
 
 pub use factory::GateEditorFactory;
 
+/// The gate editor driven headless at `size`, with a recording
+/// announcer — for `tests/editor_*.rs`. Not plugin API.
+#[doc(hidden)]
+pub fn headless_editor(
+    plugin: &crate::ResonanceGate,
+    size: (f32, f32),
+) -> resonance_plugin::editor_widgets::headless::HeadlessEditor {
+    let app = GateEditorApp::new(plugin.params.clone(), plugin.viz.clone(), plugin.presets.clone());
+    resonance_plugin::editor_widgets::headless::HeadlessEditor::new(Box::new(app), size)
+}
+
 use std::sync::Arc;
 
 use resonance_plugin::preset_ui::preset_bar;

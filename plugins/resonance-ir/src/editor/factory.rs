@@ -32,6 +32,7 @@ pub struct IrEditorFactory {
     load_request: Arc<AtomicI32>,
     viz: Arc<IrViz>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl IrEditorFactory {
@@ -42,8 +43,10 @@ impl IrEditorFactory {
         load_request: Arc<AtomicI32>,
         viz: Arc<IrViz>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             ir_name,
             ir_info,
@@ -82,7 +85,7 @@ impl EditorFactory for IrEditorFactory {
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
         };
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance IR".to_string(),
                 app_id: "com.resonance.ir".to_string(),

@@ -1,12 +1,12 @@
 //! Modulation matrix tab — numbered rows of source → destination with a
 //! bipolar amount slider per row.
 
+use resonance_plugin::editor_widgets;
 use plugin_gui_core::{egui, widgets};
 
 use crate::editor::theme;
 use crate::editor::WavetableEditorApp;
 use crate::dsp::modulation::{ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
-use resonance_plugin::param::Param;
 
 use super::{float_knob, float_slider, int_knob, readout};
 
@@ -138,7 +138,8 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                     );
                     ui.add_space(6.0);
 
-                    // Source.
+                    // Source. A pick is one host edit.
+                    let ctx = ui.ctx().clone();
                     draw_mtx_pill(
                         ui,
                         "src",
@@ -147,7 +148,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                         &SOURCE_NAMES,
                         |v| ModSource::from_int(v as i32).unavailable_reason(),
                         theme::WARM,
-                        |v| slot.source.set_plain(v as f64),
+                        |v| editor_widgets::commit_plain(&ctx, &slot.source, v as f64),
                         160.0,
                     );
 
@@ -168,7 +169,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                         &DEST_NAMES,
                         |v| ModDest::from_int(v as i32).unavailable_reason(),
                         theme::ACCENT,
-                        |v| slot.destination.set_plain(v as f64),
+                        |v| editor_widgets::commit_plain(&ctx, &slot.destination, v as f64),
                         180.0,
                     );
 
@@ -222,7 +223,7 @@ fn draw_sample_hold_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let sync = app.params.mod_sh.sync.value();
                 if let Some(i) = widgets::segmented(ui, &["Free", "Sync"], sync as usize) {
-                    app.params.mod_sh.sync.set_plain(i as f64);
+                    editor_widgets::commit_plain(ui.ctx(), &app.params.mod_sh.sync, i as f64);
                 }
             });
         });

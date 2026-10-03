@@ -5,13 +5,13 @@
 //! knob rather than a fork of it, so what is left to pin here is what
 //! the granular editor actually decides: the two cell styles (they must
 //! keep the exact footprint the strip layout and the division stepper
-//! were built around) and the mapping between a parameter's plain range
-//! and the unit space the shared widget speaks.
+//! were built around) and that each knob travels along its param's own
+//! declared curve.
 
 #![cfg(feature = "editor")]
 
 use resonance_granular_delay::editor::widgets::{
-    plain_of_unit, unit_of_plain, MACRO_KNOB_SIZE, MACRO_KNOB_STYLE, TEXTURE_KNOB_SIZE,
+    feedback_warm_from, float_at, MACRO_KNOB_SIZE, MACRO_KNOB_STYLE, TEXTURE_KNOB_SIZE,
     TEXTURE_KNOB_STYLE,
 };
 use resonance_granular_delay::params::GranularDelayParams;
@@ -42,29 +42,26 @@ fn texture_tier_is_smaller_than_the_macro_tier() {
     };
 }
 
+/// Every knob travels along its param's own declared curve (code review
+/// PUX-05): the strip used a linear plain-to-unit mapping, so the skewed
+/// Filter put 20-500 Hz into about 5 px of arc. The binding is the
+/// param's `normalized_value` / `set_normalized`, which is the whole
+/// contract, so check a skewed param's midpoint is not the linear one.
 #[test]
-fn plain_and_unit_round_trip() {
-    // Bipolar pitch range.
-    assert_eq!(unit_of_plain(-24.0, 24.0, 0.0), 0.5);
-    assert_eq!(unit_of_plain(-24.0, 24.0, -24.0), 0.0);
-    assert_eq!(unit_of_plain(-24.0, 24.0, 24.0), 1.0);
-    assert_eq!(plain_of_unit(-24.0, 24.0, 0.5), 0.0);
-
-    for unit in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
-        let plain = plain_of_unit(20.0, 2000.0, unit);
-        let back = unit_of_plain(20.0, 2000.0, plain);
-        assert!((back - unit).abs() < 1e-6, "{unit} -> {plain} -> {back}");
+fn knobs_bind_through_the_declared_skew() {
+    let params = GranularDelayParams::default();
+    for i in [2usize, 7, 8, 15, 21] {
+        let p = float_at(&params, i).expect("a knob param");
+        p.set_normalized(0.5);
+        let mid = p.value();
+        let linear_mid = (p.range().min() + p.range().max()) * 0.5;
+        assert!(
+            (mid - linear_mid).abs() > 1.0,
+            "{}: travel 0.5 lands on the linear midpoint {linear_mid}",
+            resonance_plugin::Param::id(p)
+        );
+        assert!((p.normalized_value() - 0.5).abs() < 1e-4);
     }
-}
-
-#[test]
-fn plain_and_unit_clamp_out_of_range_values() {
-    assert_eq!(unit_of_plain(0.0, 1.1, 5.0), 1.0);
-    assert_eq!(unit_of_plain(0.0, 1.1, -5.0), 0.0);
-    assert_eq!(plain_of_unit(0.0, 1.1, 2.0), 1.1);
-    assert_eq!(plain_of_unit(0.0, 1.1, -2.0), 0.0);
-    // A degenerate range must not divide by zero.
-    assert!(unit_of_plain(1.0, 1.0, 1.0).is_finite());
 }
 
 /// The Feedback knob marks its over-unity zone from plain 1.0 (100 %)
@@ -73,20 +70,16 @@ fn plain_and_unit_clamp_out_of_range_values() {
 #[test]
 fn feedback_over_unity_zone_starts_at_one_hundred_percent() {
     let params = GranularDelayParams::default();
-    let p = params.param_at(4);
-    assert_eq!(p.name(), "Feedback");
-
-    let min = p.min_plain() as f32;
-    let max = p.max_plain() as f32;
-    let warm_from = unit_of_plain(min, max, 1.0);
+    let p = &params.feedback;
+    let warm_from = feedback_warm_from(&params);
     assert!(
-        max > 1.0,
-        "the feedback range no longer reaches over unity ({min}..{max})"
+        p.range().max() > 1.0,
+        "the feedback range no longer reaches over unity"
     );
     assert!(
-        (plain_of_unit(min, max, warm_from) - 1.0).abs() < 1e-5,
+        (p.plain_at_normalized(warm_from) - 1.0).abs() < 1e-5,
         "warm zone starts at {} instead of plain 1.0",
-        plain_of_unit(min, max, warm_from)
+        p.plain_at_normalized(warm_from)
     );
     assert!(warm_from > 0.0 && warm_from < 1.0);
 }

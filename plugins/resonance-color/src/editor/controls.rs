@@ -22,18 +22,13 @@ use super::theme;
 /// Segmented selector bound to a choice `IntParam`: one segment per
 /// declared label, so it offers exactly the values the parameter holds.
 fn choice_segmented(ui: &mut egui::Ui, param: &IntParam) {
-    let labels = param.choices().unwrap_or(&[]);
-    let min = param.range().min();
-    let selected = usize::try_from(param.value() - min).unwrap_or(0);
     ui.vertical(|ui| {
         ui.label(
             egui::RichText::new(param.name())
                 .size(10.0)
                 .color(theme::TEXT_DIM),
         );
-        if let Some(i) = widgets::segmented(ui, labels, selected) {
-            param.set_plain(f64::from(min + i as i32));
-        }
+        editor_widgets::choice_segmented(ui, param, &widgets::SegmentedStyle::LAVENDER);
     });
 }
 

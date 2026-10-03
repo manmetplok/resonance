@@ -29,19 +29,22 @@
 //! The granular-specific composites — the division stepper and the
 //! freeze latch — live in [`super::controls`].
 //!
-//! Every setter goes through `Param::set_plain`, the same GUI→host
-//! path the other editors use (the CLAP bridge picks the new value up
-//! and emits the host param event), so host automation and editor
-//! edits stay consistent. All colors are design-system v1 lavender
-//! tokens (alpha shaping via `gamma_multiply` only — no new raw
-//! colors).
+//! Every control goes through `resonance_plugin::editor_widgets`, the
+//! fleet's one param binding (code review PUX-01/-05/-06/-11): a knob
+//! travels along its param's own declared curve (`normalized_value` /
+//! `set_normalized` — the linear plain↔unit mapping this file had threw
+//! away the skew on Time, Size, Density, Spray and Filter, so 20–500 Hz
+//! of the filter sat in about 5 px of arc), resets to the declared
+//! default, takes a typed value on its readout, and every edit is
+//! announced to the host as one undoable step. All colors are
+//! design-system v1 lavender tokens (alpha shaping via `gamma_multiply`
+//! only — no new raw colors).
 
 use egui::Ui;
 use plugin_gui_core::egui;
-use plugin_gui_core::widgets::{
-    chip_styled, knob_themed, segmented_styled, Chip, ChipStyle, KnobStyle, SegmentedStyle,
-    ThemedKnob,
-};
+use plugin_gui_core::widgets::{ChipStyle, KnobStyle, SegmentedStyle};
+use resonance_plugin::editor_widgets::{self, ParamKnob};
+use resonance_plugin::{FloatParam, Param};
 
 use crate::params::GranularDelayParams;
 
@@ -79,16 +82,29 @@ const fn granular_knob_style(diameter: f32, value_font: f32, label_font: f32) ->
 // Knobs
 // ---------------------------------------------------------------------------
 
-/// Position of a plain parameter value on its linear range, in the
-/// unit (`0..1`) space the shared themed knob works in.
-pub fn unit_of_plain(min: f32, max: f32, value: f32) -> f32 {
-    let span = (max - min).max(f32::EPSILON);
-    ((value - min) / span).clamp(0.0, 1.0)
-}
-
-/// The plain value a unit knob position maps back to.
-pub fn plain_of_unit(min: f32, max: f32, unit: f32) -> f32 {
-    (min + unit.clamp(0.0, 1.0) * (max - min)).clamp(min, max)
+/// The continuous (`FloatParam`) parameter at `index`, typed — the knobs
+/// need its `FloatRange` (the declared skew), which `param_at`'s
+/// `&dyn Param` cannot carry. `None` for a switch or a choice.
+pub fn float_at(params: &GranularDelayParams, index: usize) -> Option<&FloatParam> {
+    Some(match index {
+        2 => &params.time_ms,
+        4 => &params.feedback,
+        7 => &params.grain_size_ms,
+        8 => &params.density_hz,
+        11 => &params.pitch,
+        13 => &params.spread_cents,
+        14 => &params.texture,
+        15 => &params.spray_ms,
+        16 => &params.size_jitter,
+        17 => &params.level_jitter,
+        18 => &params.reverse_prob,
+        21 => &params.filter_hz,
+        22 => &params.diffusion,
+        23 => &params.pan_spread,
+        24 => &params.width,
+        25 => &params.mix,
+        _ => return None,
+    })
 }
 
 /// Macro-tier (56 px) knob bound to a param; bipolar centre-out arc
@@ -113,18 +129,23 @@ pub fn texture_knob_labeled(
     knob_param(ui, params, index, TEXTURE_KNOB_STYLE, None, Some(label));
 }
 
+/// Where the Feedback knob's warm over-unity zone starts: plain 1.0
+/// (100 %) on the param's own travel.
+pub fn feedback_warm_from(params: &GranularDelayParams) -> f32 {
+    params.feedback.range().normalize(1.0)
+}
+
 /// Macro knob with the 100–110 % over-unity arc zone marked in the
 /// warm token (the Feedback knob, design doc #264 req-5).
 pub fn feedback_knob(ui: &mut Ui, params: &GranularDelayParams, index: usize) {
-    let p = params.param_at(index);
-    // Over-unity begins at plain 1.0 (100 %).
-    let warm_from = unit_of_plain(p.min_plain() as f32, p.max_plain() as f32, 1.0);
+    let warm_from = feedback_warm_from(params);
     knob_param(ui, params, index, MACRO_KNOB_STYLE, Some(warm_from), None);
 }
 
-/// Shared param-bound knob body: linear plain↔unit mapping onto the
-/// shared themed knob, which owns the drag feel (drag to edit, Shift =
-/// fine, double-click resets to the param default).
+/// Shared param-bound knob body: the fleet's binding over the shared
+/// themed knob, which owns the drag feel (drag to edit, Shift = fine,
+/// double-click resets to the param default, click the readout to
+/// type).
 fn knob_param(
     ui: &mut Ui,
     params: &GranularDelayParams,
@@ -133,26 +154,14 @@ fn knob_param(
     warm_from: Option<f32>,
     label: Option<&str>,
 ) {
-    let p = params.param_at(index);
-    let min = p.min_plain() as f32;
-    let max = p.max_plain() as f32;
-    let val = p.get_plain() as f32;
-    let display = p.display(val as f64);
-
-    let knob = ThemedKnob::new(
-        label.unwrap_or(p.name()),
-        unit_of_plain(min, max, val),
-        &display,
-        unit_of_plain(min, max, p.default_plain() as f32),
-    )
-    // Bipolar arc when the param range spans zero (Pitch).
-    .bipolar(min < 0.0 && max > 0.0)
-    .warm_from(warm_from)
-    .style(style);
-
-    if let Some(unit) = knob_themed(ui, &knob) {
-        p.set_plain(f64::from(plain_of_unit(min, max, unit)));
-    }
+    let Some(p) = float_at(params, index) else {
+        debug_assert!(false, "param {index} is not a knob");
+        return;
+    };
+    let knob = ParamKnob::new(p, label.unwrap_or(p.name()))
+        .style(style)
+        .warm_from(warm_from);
+    editor_widgets::param_knob(ui, knob);
 }
 
 // ---------------------------------------------------------------------------
@@ -188,17 +197,10 @@ fn segmented(
     labels: &'static [&'static str],
     vertical: bool,
 ) {
-    let p = params.param_at(index);
-    let current = (p.get_plain().round() as usize).min(labels.len().saturating_sub(1));
     let style = SegmentedStyle::COMPACT.vertical(vertical);
-    // Re-clicking the current segment is not a write: the shared control
-    // reports every click, and a redundant `set_plain` would push a
-    // pointless param event at the host.
-    if let Some(picked) = segmented_styled(ui, labels, current, &style) {
-        if picked != current {
-            p.set_plain(picked as f64);
-        }
-    }
+    // Re-clicking the current segment writes nothing (the binding
+    // checks), so no pointless param event reaches the host.
+    editor_widgets::param_segmented(ui, params.param_at(index), labels, &style);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,14 +217,7 @@ pub fn param_chip(
     label: &str,
     enabled: bool,
 ) {
-    let p = params.param_at(index);
-    let on = p.get_plain() >= 0.5;
-    let chip = Chip::new(label, on)
-        .enabled(enabled)
-        .style(ChipStyle::COMPACT);
-    if chip_styled(ui, &chip) {
-        p.set_plain(if on { 0.0 } else { 1.0 });
-    }
+    editor_widgets::param_chip(ui, params.param_at(index), label, enabled, ChipStyle::COMPACT);
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +227,7 @@ pub fn param_chip(
 /// Compact combo box for enumerated parameters (the Root/Scale
 /// selects). `labels` must be a cached static list (view-performance
 /// rules: no per-frame option building) covering the param's plain
-/// range `0..labels.len()`.
+/// range `0..labels.len()`. A pick announces.
 pub fn param_choice(
     ui: &mut Ui,
     params: &GranularDelayParams,
@@ -242,16 +237,15 @@ pub fn param_choice(
 ) {
     let p = params.param_at(index);
     let current = (p.get_plain().round() as usize).min(labels.len().saturating_sub(1));
-    egui::ComboBox::from_id_salt(p.id())
+    let shown = egui::ComboBox::from_id_salt(p.id())
         .width(width)
-        .selected_text(
-            egui::RichText::new(labels[current]).size(10.0),
-        )
+        .selected_text(egui::RichText::new(labels[current]).size(10.0))
         .show_ui(ui, |ui| {
             for (i, label) in labels.iter().enumerate() {
                 if ui.selectable_label(i == current, *label).clicked() {
-                    p.set_plain(i as f64);
+                    editor_widgets::commit_plain(ui.ctx(), p, i as f64);
                 }
             }
         });
+    editor_widgets::probe(ui, p.id(), shown.response.rect);
 }

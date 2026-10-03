@@ -3,13 +3,14 @@
 //! chorus card also carries its mode selector (Classic / Juno I, II, I+II /
 //! Ensemble).
 
+use resonance_plugin::editor_widgets;
 use plugin_gui_core::{egui, widgets};
 
 use crate::dsp::effects::ChorusMode;
 use crate::editor::theme;
 use crate::editor::viz::scope;
 use crate::editor::WavetableEditorApp;
-use resonance_plugin::param::{BoolParam, Param};
+use resonance_plugin::param::BoolParam;
 
 use super::{float_knob, int_knob};
 
@@ -47,13 +48,12 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             &mut cols[0],
             "Chorus",
             "1",
-            app.params.chorus.enabled.value(),
-            |on| app.params.chorus.enabled.set_plain(on),
+            &app.params.chorus.enabled,
             |ui| {
                 let chorus = &app.params.chorus;
                 let mode = ChorusMode::from_int(chorus.mode.value());
                 if let Some(i) = widgets::segmented(ui, &ChorusMode::LABELS, mode as usize) {
-                    chorus.mode.set_plain(i as f64);
+                    editor_widgets::commit_plain(ui.ctx(), &chorus.mode, i as f64);
                 }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
@@ -79,8 +79,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             &mut cols[1],
             "Delay",
             "2",
-            app.params.delay.enabled.value(),
-            |on| app.params.delay.enabled.set_plain(on),
+            &app.params.delay.enabled,
             |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
@@ -96,8 +95,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             &mut cols[2],
             "Distortion",
             "3",
-            app.params.distortion.enabled.value(),
-            |on| app.params.distortion.enabled.set_plain(on),
+            &app.params.distortion.enabled,
             |ui| {
                 let dist = &app.params.distortion;
                 ui.horizontal(|ui| {
@@ -161,7 +159,7 @@ fn bool_toggle(ui: &mut egui::Ui, label: &str, param: &BoolParam) {
         })
         .inner;
     if resp.clicked() {
-        param.set_plain(if on { 0.0 } else { 1.0 });
+        editor_widgets::commit_plain(ui.ctx(), param, if on { 0.0 } else { 1.0 });
     }
 }
 
@@ -169,10 +167,10 @@ fn draw_fx_card(
     ui: &mut egui::Ui,
     name: &str,
     slot: &str,
-    enabled: bool,
-    mut on_toggle: impl FnMut(f64),
+    enabled_param: &dyn resonance_plugin::Param,
     body: impl FnOnce(&mut egui::Ui),
 ) {
+    let enabled = enabled_param.get_plain() >= 0.5;
     let avail = ui.available_width();
     let stroke_color = if enabled {
         theme::ACCENT
@@ -217,7 +215,8 @@ fn draw_fx_card(
                 let core_color = if enabled { theme::GOOD } else { theme::TEXT_4 };
                 ui.painter().circle_filled(r.center(), 2.5, core_color);
                 if resp.clicked() {
-                    on_toggle(if enabled { 0.0 } else { 1.0 });
+                    let next = if enabled { 0.0 } else { 1.0 };
+                    editor_widgets::commit_plain(ui.ctx(), enabled_param, next);
                 }
             });
         });
