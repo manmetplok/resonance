@@ -175,9 +175,15 @@ impl WavetableParams {
             // Analog instability
             analog: AnalogParams::new(),
 
-            // Envelopes
-            amp_env: EnvParams::new("amp", "Amp", 0.005, 0.3, 0.8, 0.3),
-            mod_env: EnvParams::new("mod", "Mod", 0.01, 0.5, 0.0, 0.5),
+            // Envelopes. Attack/decay/release are rescaled for DSP2-12
+            // (FU-D1b1) from the pre-rescale defaults (0.005, 0.3, 0.8,
+            // 0.3) / (0.01, 0.5, 0.0, 0.5) by the same factors as the
+            // factory presets — see
+            // `presets/rescale_envelope_times_dsp2_12.py` — so the
+            // `Init` preset (`presets/init.json`, itself rescaled the
+            // same way) stays a no-op against these declared defaults.
+            amp_env: EnvParams::new("amp", "Amp", 0.007332, 1.562, 0.8, 1.865),
+            mod_env: EnvParams::new("mod", "Mod", 0.01466, 3.407, 0.0, 3.108),
 
             // Filter
             filter: FilterParams::new(),
