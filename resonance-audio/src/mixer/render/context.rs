@@ -342,6 +342,7 @@ pub(crate) fn run_fx_chain(
                         right: &mut r[..frames],
                     }];
                     inst.0.process_multi_with_key(&mut outs, key, frames);
+                    inst.0.publish_out_events();
                     true
                 },
             );

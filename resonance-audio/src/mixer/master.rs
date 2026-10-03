@@ -87,7 +87,7 @@ pub(super) fn apply_master_fx_chain(
                 if slot_stage == FadeStage::Dry {
                     continue;
                 }
-                let Some(mut inst) = slot.try_lock() else {
+                let Some(mut inst) = slot.try_lock_counted() else {
                     continue;
                 };
                 latch_transport(&mut inst, transport_snap);
@@ -107,6 +107,7 @@ pub(super) fn apply_master_fx_chain(
                             right: &mut r[..frames],
                         }];
                         inst.0.process_multi_with_key(&mut outs, key, frames);
+                        inst.0.publish_out_events();
                         true
                     },
                 );

@@ -239,7 +239,7 @@ fn run_track_chain(
                 if slot_stage == FadeStage::Dry {
                     continue;
                 }
-                let Some(mut inst) = slot.try_lock() else {
+                let Some(mut inst) = slot.try_lock_counted() else {
                     continue;
                 };
                 latch_transport(&mut inst, transport_snap);
@@ -251,6 +251,7 @@ fn run_track_chain(
                     (&mut *slot_dry.0, &mut *slot_dry.1),
                     |l, r| {
                         inst.0.process(l, r, frames);
+                        inst.0.publish_out_events();
                         true
                     },
                 );

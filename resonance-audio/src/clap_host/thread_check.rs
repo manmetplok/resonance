@@ -11,11 +11,18 @@
 //! take the role for each render ([`AudioThreadScope`]), as does the host
 //! around its own audio-thread calls; `is_audio_thread()` reports it.
 //!
-//! `is_main_thread()` answers "not an audio thread". Main-thread calls
-//! come from the engine thread in practice, but also from the scan and
-//! editor paths; answering `false` on any of them would make a checking
-//! plugin refuse a legitimate call, while the only question that matters
-//! for the render pool is the audio one.
+//! `is_main_thread()` answers true only on a thread the host itself made a
+//! main thread ([`mark_main_thread`]) and only outside an audio-thread role
+//! (code review HOST-08). It used to answer "not an audio thread", which
+//! told a plugin's own loader or GUI thread that it was the main thread.
+//! The host marks:
+//! - the engine thread, for life, as it starts;
+//! - whichever thread creates an instance — the engine thread for every
+//!   live one, the scan or a test's thread otherwise
+//!   (`clap_host::create_host_data`);
+//! - an offline renderer's thread, which is the main thread between its
+//!   blocks (`ClapInstance::set_render_mode`, its first call on every
+//!   instance).
 
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -25,6 +32,22 @@ use clap_sys::host::clap_host;
 
 thread_local! {
     static AUDIO_THREAD: Cell<bool> = const { Cell::new(false) };
+    static MAIN_THREAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Declare the calling thread one of the host's main threads for the rest
+/// of its life (see the module doc). Never call it on a render worker.
+#[inline]
+pub(crate) fn mark_main_thread() {
+    MAIN_THREAD.with(|flag| flag.set(true));
+}
+
+/// Whether the calling thread is a host main thread, outside any
+/// audio-thread role — what `clap_host_thread_check.is_main_thread`
+/// answers.
+#[inline]
+pub fn is_main_thread() -> bool {
+    !is_audio_thread() && MAIN_THREAD.with(|flag| flag.get())
 }
 
 /// Declare the calling thread an audio thread for the rest of its life.
@@ -69,7 +92,7 @@ pub fn is_audio_thread() -> bool {
 }
 
 unsafe extern "C" fn host_is_main_thread(_host: *const clap_host) -> bool {
-    !is_audio_thread()
+    is_main_thread()
 }
 
 unsafe extern "C" fn host_is_audio_thread(_host: *const clap_host) -> bool {

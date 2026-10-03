@@ -63,7 +63,7 @@ pub use param_meta::{choice_labels, label_round_trips, unit_from_text, MAX_CHOIC
 use std::ffi::{c_char, c_void, CStr};
 use std::pin::Pin;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU64, AtomicUsize, Ordering};
 
 use clap_sys::ext::gui::{clap_host_gui, CLAP_EXT_GUI};
 use clap_sys::ext::latency::{clap_host_latency, CLAP_EXT_LATENCY};
@@ -180,9 +180,40 @@ pub(super) struct HostData {
     /// transport runs none. Consumed by
     /// [`ClapInstance::service_flush_request`] on the engine thread.
     pub(super) flush_requested: AtomicBool,
+    /// Lock-free summary of everything above that the engine's host-request
+    /// poll consumes (code review HOST-02 / RT-07): set by every host
+    /// callback that latches work for the poll, by a queued preset report,
+    /// and when `process()` / `params.flush` left output parameter events
+    /// behind ([`ClapInstance::publish_out_events`]). The [`PluginSlot`]
+    /// holds a second handle on it, so the poll reads it without taking the
+    /// instance lock — and locks only an instance with something pending,
+    /// instead of every instance after every command. Starts `true`: a new
+    /// instance's kit info is read by its first poll.
+    pub(super) poll_pending: std::sync::Arc<AtomicBool>,
+    /// Serialises the host's own `[main-thread]` calls that may run off the
+    /// engine thread or outside the instance lock (code review HOST-08):
+    /// a state save taken without the instance lock
+    /// ([`state::StateSaveHandle`]) against an offline render's
+    /// `render.set` and activation cycles, which a bounce thread makes
+    /// under the instance lock. Reentrant, because an activation cycle
+    /// nests its own steps. Never taken on an audio thread.
+    pub(super) main_call: parking_lot::ReentrantMutex<()>,
 }
 
 impl HostData {
+    /// Tell the engine's host-request poll this instance has work (see
+    /// `poll_pending`). Any thread; one atomic store.
+    #[inline]
+    pub(super) fn flag_poll(&self) {
+        self.poll_pending.store(true, Ordering::Release);
+    }
+
+    /// Queue a preset report for the engine's poll.
+    pub(super) fn push_preset_report(&self, report: preset_state::PresetHostReport) {
+        self.preset_reports.lock().push(report);
+        self.flag_poll();
+    }
+
     /// Consume a pending `clap_host_gui.closed()` notification.
     /// `Some(was_destroyed)` when one had fired since the last call.
     pub(super) fn take_gui_closed(&self) -> Option<bool> {
@@ -249,6 +280,7 @@ unsafe extern "C" fn host_get_extension(
 unsafe extern "C" fn host_latency_changed(host: *const clap_host) {
     if let Some(data) = host_data_from(host) {
         data.latency_changed.store(true, Ordering::Release);
+        data.flag_poll();
     }
 }
 
@@ -257,6 +289,7 @@ unsafe extern "C" fn host_latency_changed(host: *const clap_host) {
 unsafe extern "C" fn host_request_restart(host: *const clap_host) {
     if let Some(data) = host_data_from(host) {
         data.restart_requested.store(true, Ordering::Release);
+        data.flag_poll();
     }
 }
 
@@ -272,6 +305,7 @@ unsafe extern "C" fn host_gui_closed(host: *const clap_host, was_destroyed: bool
         data.gui_closed_was_destroyed
             .store(was_destroyed, Ordering::Release);
         data.gui_closed.store(true, Ordering::Release);
+        data.flag_poll();
     }
 }
 
@@ -326,6 +360,7 @@ unsafe extern "C" fn host_params_rescan(host: *const clap_host, flags: u32) {
     }
     if let Some(data) = host_data_from(host) {
         data.params_refresh.fetch_or(flags & known, Ordering::AcqRel);
+        data.flag_poll();
     }
 }
 
@@ -337,6 +372,7 @@ unsafe extern "C" fn host_params_clear(_host: *const clap_host, _param_id: u32, 
 unsafe extern "C" fn host_params_request_flush(host: *const clap_host) {
     if let Some(data) = host_data_from(host) {
         data.flush_requested.store(true, Ordering::Release);
+        data.flag_poll();
     }
 }
 
@@ -357,6 +393,7 @@ unsafe extern "C" fn host_request_process(host: *const clap_host) {
 unsafe extern "C" fn host_request_callback(host: *const clap_host) {
     if let Some(data) = host_data_from(host) {
         data.callback_requested.store(true, Ordering::Release);
+        data.flag_poll();
     }
 }
 
@@ -403,7 +440,13 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
         },
         params_refresh: std::sync::atomic::AtomicU32::new(0),
         flush_requested: AtomicBool::new(false),
+        poll_pending: std::sync::Arc::new(AtomicBool::new(true)),
+        main_call: parking_lot::ReentrantMutex::new(()),
     });
+    // The thread that creates an instance is its CLAP main thread: the
+    // engine thread for every live instance, the scan or a test's thread
+    // otherwise (code review HOST-08).
+    thread_check::mark_main_thread();
     let ptr = &*host_data as *const HostData as *mut c_void;
     unsafe {
         let host_data_mut = Pin::get_unchecked_mut(host_data.as_mut());
@@ -433,11 +476,32 @@ pub fn __instance_from_raw_for_test(
     bundle::build_instance(plugin, host_data, sample_rate)
 }
 
+impl ClapInstance {
+    /// Flag the engine's host-request poll when the last `process()` or
+    /// `params.flush` left output parameter events behind (the plugin's own
+    /// edits), so the poll — which no longer locks an instance with
+    /// nothing pending (HOST-02) — folds them. Call after either, under the
+    /// instance lock. Audio-thread safe: a length check and, at most, one
+    /// atomic store.
+    #[inline]
+    pub fn publish_out_events(&self) {
+        if !self.out_param_events.is_empty() {
+            self.host_data.flag_poll();
+        }
+    }
+
+    /// Hold the instance's main-thread call guard (see
+    /// `HostData::main_call`). Never on an audio thread.
+    pub(super) fn main_call_guard(&self) -> parking_lot::ReentrantMutexGuard<'_, ()> {
+        self.host_data.main_call.lock()
+    }
+}
+
 // ---------------------------------------------------------------------------
-// SyncClapInstance — Send + Sync wrapper
+// SyncClapInstance — Send wrapper
 // ---------------------------------------------------------------------------
 
-/// Wrapper that makes [`ClapInstance`] `Send + Sync`.
+/// Wrapper that makes [`ClapInstance`] `Send`.
 ///
 /// SAFETY: This is justified by the CLAP threading contract:
 /// - Lifecycle methods (create/activate/destroy) are called from the engine thread only
@@ -448,10 +512,14 @@ pub fn __instance_from_raw_for_test(
 ///   mutex around this wrapper is what enforces that: `&mut ClapInstance`
 ///   is unreachable without its guard, and every process() call site
 ///   takes the same lock. See `clap_host::params` for the full argument.
+///
+/// Deliberately not `Sync` (code review HOST-08): every cross-thread use
+/// goes through the slot's `Mutex`, which needs only `Send`; a shared
+/// `&SyncClapInstance` on two threads at once is exactly what CLAP's
+/// threading contract forbids.
 pub struct SyncClapInstance(pub ClapInstance);
 
 unsafe impl Send for SyncClapInstance {}
-unsafe impl Sync for SyncClapInstance {}
 
 // ---------------------------------------------------------------------------
 // PluginSlot — one live instance plus the chain state around it
@@ -485,6 +553,15 @@ pub struct PluginSlot {
     /// hatch for a third-party plugin found to misbehave when its
     /// `process()` moves between threads. See [`serial_only_plugin`].
     pub serial_only: bool,
+    /// The instance's `HostData::poll_pending`, readable without the
+    /// instance lock (code review HOST-02): the engine's host-request poll
+    /// locks this slot only when it is set.
+    poll_pending: std::sync::Arc<AtomicBool>,
+    /// Live blocks in which the render found this slot's lock held by
+    /// another thread and so skipped the plugin (code review RT-07). Also
+    /// folded into the process-wide count the DSP-load report prints
+    /// ([`crate::cycle_load::plugin_lock_misses`]).
+    lock_misses: AtomicU64,
 }
 
 /// Plugin ids known to need a fixed audio thread. Empty: none of ours
@@ -538,13 +615,57 @@ impl PluginSlot {
         if serial_only {
             SERIAL_ONLY_SLOTS.fetch_add(1, Ordering::Relaxed);
         }
+        let poll_pending = std::sync::Arc::clone(&instance.host_data.poll_pending);
         Self {
             instance: Mutex::new(SyncClapInstance(instance)),
             bypass: BypassFade::new(),
             bypass_param,
             own_bypass_sent: AtomicI8::new(-1),
             serial_only,
+            poll_pending,
+            lock_misses: AtomicU64::new(0),
         }
+    }
+
+    /// Consume the slot's "the host-request poll has work" flag. The poll
+    /// calls this before locking, and puts the flag back with
+    /// [`Self::flag_poll`] if the lock turns out to be busy, so a request
+    /// raised after the take is never lost: it sets the flag again, for
+    /// the next poll.
+    #[inline]
+    pub fn take_poll_pending(&self) -> bool {
+        self.poll_pending.swap(false, Ordering::AcqRel)
+    }
+
+    /// Whether the host-request poll has work for this slot. One load.
+    #[inline]
+    pub fn poll_pending(&self) -> bool {
+        self.poll_pending.load(Ordering::Acquire)
+    }
+
+    /// Re-raise the poll flag (a poll that could not take the lock).
+    #[inline]
+    pub fn flag_poll(&self) {
+        self.poll_pending.store(true, Ordering::Release);
+    }
+
+    /// The render's `try_lock` on this slot, counting a miss (code review
+    /// RT-07): a live block that cannot take the lock skips the plugin, and
+    /// the miss is what makes that visible. Audio-thread safe: one
+    /// `try_lock`, and two relaxed increments on a miss.
+    #[inline]
+    pub fn try_lock_counted(&self) -> Option<parking_lot::MutexGuard<'_, SyncClapInstance>> {
+        let guard = self.instance.try_lock();
+        if guard.is_none() {
+            self.lock_misses.fetch_add(1, Ordering::Relaxed);
+            crate::cycle_load::record_plugin_lock_miss();
+        }
+        guard
+    }
+
+    /// Live blocks that skipped this slot on a busy lock, ever.
+    pub fn lock_misses(&self) -> u64 {
+        self.lock_misses.load(Ordering::Relaxed)
     }
 
     /// True when the mixer skips this slot entirely this pass: bypassed,

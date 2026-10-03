@@ -238,3 +238,51 @@ fn a_rescan_always_reports_even_with_nothing_to_find() {
         "nothing to find is not a failure"
     );
 }
+
+/// Two different files that declare one CLAP id — a dev `target/bundled`
+/// build beside an installed copy (code review HOST-10). Both are listed,
+/// the scan says so, and a slot gets the file it names rather than
+/// whichever of the two happened to load first.
+#[test]
+fn a_duplicate_plugin_id_is_reported_and_resolved_by_path() {
+    let Some(cdylib) = first_party_cdylib() else {
+        return;
+    };
+    let dir = ScanDir::new("dup-id");
+    // Copies, not links: two real files, as two installs would be.
+    let first = dir.0.join("a-installed.clap");
+    let second = dir.0.join("b-dev.clap");
+    std::fs::copy(&cdylib, &first).expect("copy bundle");
+    std::fs::copy(&cdylib, &second).expect("copy bundle");
+
+    let (tx, rx) = unbounded();
+    let mut bundles: Vec<ClapBundle> = Vec::new();
+    rescan_plugins_in(&dir.dirs(), &mut bundles, &tx);
+    let events = drain(&rx);
+    assert_eq!(bundles.len(), 2, "both files load");
+    let id = bundles[0].descriptors()[0].id.clone();
+
+    let warned = failures_from(&events);
+    assert_eq!(
+        warned,
+        vec![bundles[1].path().to_string()],
+        "one warning, on the second file to declare the id: {events:?}"
+    );
+
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap().to_string_lossy().to_string();
+    for path in [&first, &second] {
+        let idx = resonance_audio::test_support::ensure_bundle(&mut bundles, path, &id)
+            .expect("resolves");
+        assert_eq!(
+            bundles[idx].path(),
+            canonical(path),
+            "the slot instantiates from the file it names"
+        );
+        // An empty id (pick the bundle's first plugin) resolves by path
+        // too, without loading the file a second time.
+        let idx = resonance_audio::test_support::ensure_bundle(&mut bundles, path, "")
+            .expect("resolves");
+        assert_eq!(bundles[idx].path(), canonical(path));
+    }
+    assert_eq!(bundles.len(), 2, "nothing was loaded twice");
+}

@@ -225,14 +225,27 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
 /// cycled, the PDC table is republished so the new latency takes
 /// effect.
 ///
-/// Instances whose lock is held by the audio callback are skipped
-/// without consuming their flag; the next iteration (~16 ms) retries.
+/// Only an instance whose lock-free pending flag is set is locked (code
+/// review HOST-02 / RT-07): the host callbacks, a queued preset report and
+/// output parameter events left by `process()` all raise it
+/// (`PluginSlot::take_poll_pending`). Before, every instance was locked on
+/// every pass — after every command and on every tick — and the audio
+/// thread, which never waits for a plugin lock, skipped whichever plugin
+/// the poll happened to hold: dry audio from an effect, a silent block
+/// from an instrument.
+///
+/// An instance whose lock is held by the audio callback keeps its flag;
+/// the next iteration (~16 ms) retries.
 pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalInstruments) {
     let mut any_restarted = false;
     {
         let plugins_guard = ctx.plugins();
-        for (&instance_id, mutex) in plugins_guard.iter() {
-            let Some(mut inst) = mutex.try_lock() else {
+        for (&instance_id, slot) in plugins_guard.iter() {
+            if !slot.take_poll_pending() {
+                continue;
+            }
+            let Some(mut inst) = slot.try_lock() else {
+                slot.flag_poll();
                 continue;
             };
             // Deliver the plugin's requested main-thread callback first:
@@ -655,6 +668,9 @@ pub(crate) fn handle_set_plugin_param(
             // every `process()` call site takes — across the call, which
             // is what guarantees that. See `clap_host::params`.
             inst.0.flush_pending_params();
+            // Whatever the flush made the plugin report reaches the app
+            // through the host-request poll.
+            inst.0.publish_out_events();
 
             // Tell the app what the plugin CALLS this value (ba todo
             // #1290). The app's parameter cache is filled once, at
@@ -865,14 +881,30 @@ pub(crate) fn handle_close_plugin_editor(ctx: &HandlerCtx, instance_id: PluginIn
     });
 }
 
+/// Sync the plugin's values under the instance lock (a `params.flush`,
+/// cheap), then hand back what `handle` takes from it, for serialising
+/// outside the lock (code review HOST-03): a large state — user
+/// wavetables, a drum kit — took long enough to save that the audio
+/// thread skipped the plugin's blocks while the engine held the lock.
+/// `None` when the lock is busy.
+fn sync_then_unlock<H>(
+    mutex: &parking_lot::Mutex<crate::clap_host::SyncClapInstance>,
+    handle: impl FnOnce(&mut crate::clap_host::ClapInstance) -> H,
+) -> Option<H> {
+    let mut inst = mutex.try_lock()?;
+    // An editor edit made with the transport stopped is in the plugin
+    // but not yet in what it saves (HOST-01).
+    inst.0.sync_plugin_values();
+    inst.0.publish_out_events();
+    Some(handle(&mut inst.0))
+}
+
 pub(crate) fn handle_save_plugin_state(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     if let Some(mutex) = ctx.plugins().get(&instance_id) {
-        if let Some(mut inst) = mutex.try_lock() {
-            // An editor edit made with the transport stopped is in the
-            // plugin but not yet in what it saves (HOST-01).
-            inst.0.sync_plugin_values();
-            let data = inst.0.save_state();
-            if let Some(data) = data {
+        if let Some(handle) = sync_then_unlock(mutex, |inst| inst.state_save_handle()) {
+            // SAFETY: engine thread; the instance stays in `ctx.plugins()`
+            // for the whole command (only the engine thread removes one).
+            if let Some(data) = handle.and_then(|h| unsafe { h.save() }) {
                 let _ = ctx
                     .event_tx
                     .send(AudioEvent::PluginStateSaved { instance_id, data });
@@ -907,14 +939,17 @@ pub(crate) fn handle_load_plugin_state(
 
 pub(crate) fn handle_save_plugin_preset_state(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     if let Some(mutex) = ctx.plugins().get(&instance_id) {
-        if let Some(mut inst) = mutex.try_lock() {
-            inst.0.sync_plugin_values();
-            if let Some((data, preset_form)) = inst.0.save_preset_state() {
+        let handle = sync_then_unlock(mutex, |inst| {
+            (inst.preset_save_handle(), inst.is_first_party())
+        });
+        if let Some((handle, first_party)) = handle {
+            // SAFETY: as in `handle_save_plugin_state`.
+            if let Some((data, preset_form)) = unsafe { handle.save() } {
                 let _ = ctx.event_tx.send(AudioEvent::PluginPresetStateSaved {
                     instance_id,
                     data,
                     preset_form,
-                    first_party: inst.0.is_first_party(),
+                    first_party,
                 });
             }
         } else {
@@ -940,10 +975,7 @@ fn capture_unlocked(
     after: bool,
 ) -> bool {
     // Synced under the lock (a `params.flush`, cheap), saved outside it.
-    let Some(handle) = mutex.try_lock().map(|mut inst| {
-        inst.0.sync_plugin_values();
-        inst.0.state_save_handle()
-    }) else {
+    let Some(handle) = sync_then_unlock(mutex, |inst| inst.state_save_handle()) else {
         return false;
     };
     // SAFETY: engine thread; the instance stays in `ctx.plugins()` for the
@@ -1160,29 +1192,31 @@ pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
     let plugins_guard = ctx.plugins();
     let mut retry = false;
     for (&instance_id, mutex) in plugins_guard.iter() {
-        if let Some(mut inst) = mutex.try_lock() {
-            // What the plugin plays, not what it last reported (HOST-01,
-            // PUX-01): an editor edit the plugin never announced is in its
-            // params, and reaches neither its saved state nor the app's
-            // mirror on its own while the transport is stopped. The flush
-            // brings its saved state in step; the values that moved since
-            // the host last read them go to the app ahead of the states,
-            // on the same channel, so the project file the app writes from
-            // its mirror when the states arrive carries them — not stale
-            // values it would re-send over the blob on reopen.
-            inst.0.sync_plugin_values();
-            let values = inst.0.refresh_param_values(false);
-            if !values.is_empty() {
-                let _ = ctx
-                    .event_tx
-                    .send(AudioEvent::PluginParamValuesChanged { instance_id, values });
-            }
-            if let Some(data) = inst.0.save_state() {
-                states.push((instance_id, data));
-            }
-        } else {
+        // What the plugin plays, not what it last reported (HOST-01,
+        // PUX-01): an editor edit the plugin never announced is in its
+        // params, and reaches neither its saved state nor the app's mirror
+        // on its own while the transport is stopped. The flush brings its
+        // saved state in step; the values that moved since the host last
+        // read them go to the app ahead of the states, on the same
+        // channel, so the project file the app writes from its mirror when
+        // the states arrive carries them — not stale values it would
+        // re-send over the blob on reopen. Both under the lock; the save
+        // itself outside it (HOST-03).
+        let synced = sync_then_unlock(mutex, |inst| {
+            (inst.refresh_param_values(false), inst.state_save_handle())
+        });
+        let Some((values, handle)) = synced else {
             retry = true;
             break;
+        };
+        if !values.is_empty() {
+            let _ = ctx
+                .event_tx
+                .send(AudioEvent::PluginParamValuesChanged { instance_id, values });
+        }
+        // SAFETY: as in `handle_save_plugin_state`.
+        if let Some(data) = handle.and_then(|h| unsafe { h.save() }) {
+            states.push((instance_id, data));
         }
     }
     drop(plugins_guard);
@@ -1195,24 +1229,53 @@ pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
     }
 }
 
-/// Returns the index of the bundle that owns `clap_plugin_id`, loading
-/// the file from disk if needed. `Err` carries the loader's reason; the
-/// caller turns it into a [`AudioEvent::PluginLoadFailed`] naming the
-/// slot that stays empty.
+/// Returns the index of the bundle to instantiate `clap_plugin_id` from,
+/// loading the file from disk if needed. `Err` carries the loader's
+/// reason; the caller turns it into a [`AudioEvent::PluginLoadFailed`]
+/// naming the slot that stays empty.
+///
+/// Keyed by the file first, the id second (code review HOST-10): the same
+/// CLAP id can live in two bundles — a dev `target/bundled` build beside
+/// an installed copy — and the slot must get the one it names. So:
+///
+/// 1. a loaded bundle at `path` (canonicalised, as the scanner stores it)
+///    that has the id — or any loaded bundle at `path`, for an empty id,
+///    which used to re-`dlopen` the file on every add;
+/// 2. else the file at `path`, loaded now, if it exists and has the id;
+/// 3. else any loaded bundle with the id — a project saved before its
+///    plugin moved still finds it;
+/// 4. else the file's own load error (or the bundle it loaded, whose
+///    missing id the caller then reports).
 pub fn ensure_bundle(
     bundles: &mut Vec<ClapBundle>,
     path: &Path,
     clap_plugin_id: &str,
 ) -> Result<usize, PluginBundleError> {
-    if let Some(idx) = bundles
-        .iter()
-        .position(|b| b.descriptors().iter().any(|d| d.id == clap_plugin_id))
-    {
+    let has_id = |b: &ClapBundle| {
+        clap_plugin_id.is_empty() || b.descriptors().iter().any(|d| d.id == clap_plugin_id)
+    };
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canonical_str = canonical.to_string_lossy();
+    let at_path = bundles.iter().position(|b| b.path() == canonical_str);
+    if let Some(idx) = at_path.filter(|&i| has_id(&bundles[i])) {
         return Ok(idx);
     }
-    let bundle = ClapBundle::load(path)?;
-    bundles.push(bundle);
-    Ok(bundles.len() - 1)
+    let loaded = match at_path {
+        Some(idx) => Ok(idx),
+        None => ClapBundle::load(&canonical).map(|bundle| {
+            bundles.push(bundle);
+            bundles.len() - 1
+        }),
+    };
+    if let Ok(idx) = loaded {
+        if has_id(&bundles[idx]) {
+            return Ok(idx);
+        }
+    }
+    if let Some(idx) = bundles.iter().position(|b| has_id(b) && !clap_plugin_id.is_empty()) {
+        return Ok(idx);
+    }
+    Ok(loaded?)
 }
 
 /// Returns the canonical plugin id to instantiate from `bundle`. If the

@@ -573,6 +573,11 @@ impl ClapInstance {
     /// first block and after their last).
     pub fn set_render_mode(&mut self, offline: bool) -> bool {
         use clap_sys::ext::render::{CLAP_RENDER_OFFLINE, CLAP_RENDER_REALTIME};
+        // Every offline renderer calls this on each instance before its
+        // first block: its thread is the CLAP main thread between blocks
+        // (code review HOST-08: `is_main_thread()` answers true only on
+        // threads the host marked).
+        super::thread_check::mark_main_thread();
         if self.render_offline == offline {
             return false;
         }
@@ -584,9 +589,13 @@ impl ClapInstance {
         } else {
             CLAP_RENDER_REALTIME
         };
+        // ... and must not overlap an unlocked state save on the engine
+        // thread (HOST-08).
+        let _main = self.main_call_guard();
         // SAFETY: the vtable is the live plugin's; the caller holds the
         // instance exclusively.
         let accepted = unsafe { set(self.plugin, mode) };
+        drop(_main);
         if accepted {
             self.render_offline = offline;
         }
