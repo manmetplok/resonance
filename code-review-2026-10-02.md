@@ -67,7 +67,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 1 | D1a DSP: mastering/compressor/shared | DSP2-04, -05, -06, -07, -08, -11 (mastering/eq/stereo), -15, -16 | opus | merged | 96e27095 |
 | 1 | D1b DSP: instruments/effects | DSP2-01, -02, -03, -09, -10, -12, -13, -14 | opus | merged | 34c6bd05 |
 | 2 | P2 editor widgets + announce | PUX-01 (widget announce), PUX-02, -03, -05, -06, -08, -11 | opus | running |  |
-| 2 | R2 lock contention | HOST-02/RT-07, HOST-03, HOST-08, HOST-10 | opus | running |  |
+| 2 | R2 lock contention | HOST-02/RT-07, HOST-03, HOST-08, HOST-10 | opus | merged | 2991b9fc |
 | 2 | U1 project lifecycle UX | UX-01, UX-03/STATE2-04, UX-11, UX-12, UX-14, UX-15, UX-16 | opus | merged | c8c79366 |
 | 2 | U2 view correctness | UX-02, UX-06, UX-10, UX-22 | opus | merged | 72ab6819 |
 | 2 | H1 host spec | HOST-05, -06, -09, -11, -12, -13, -15, -16 | opus | running |  |
@@ -119,6 +119,11 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 - *Sound changes approved and merged:*
   - D1b: IR level after resampling; delay wet-path filtering and drive; granular HQ brightness; wavetable retrigger, unison and envelope times; drums anti-aliasing.
   - D1a: compressor louder-channel detection; FIR accuracy and landing time.
+- **FU-R2a:** when a latent FX misses its lock, hold the previous wet output instead of passing dry (today misses are only counted).
+- **FU-R2b:** `bounce/render.rs` doesn't call `publish_out_events` (H1's file).
+- **FU-R2c:** `handle_set_plugin_param` still runs `params.flush` and `value_to_text` under the lock; queue them to the audio thread.
+- **FU-R2d:** `PluginScanFailure` now also carries duplicate-id warnings; give them a separate warning kind in the app.
+- **FU-R2e:** any new host thread that makes main-thread calls must call `thread_check::mark_main_thread()`.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
