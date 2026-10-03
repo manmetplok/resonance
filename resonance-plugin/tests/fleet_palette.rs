@@ -27,19 +27,21 @@
 
 use std::path::{Path, PathBuf};
 
-/// Which of the kit's two rotary-knob families an editor draws from.
+/// Which rotary-knob family an editor draws from.
 ///
-/// They paint in the same palette now, but they are visibly different
-/// controls: the range-mapped `knob` that
-/// `editor_widgets::float_knob` wraps is a 64x76 cell with its caption
-/// above the dial and a click-to-type readout; `knob_themed` is
-/// unit-space, takes its geometry from a `KnobStyle`, and can draw
-/// bipolar and over-unity arcs. One per window is the rule — the audit
-/// called out an editor believed to carry both.
+/// There is one now (code review PUX-11): the themed knob, reached
+/// through `editor_widgets::{float_knob, param_knob}` or, for a control
+/// the binding does not cover, `knob_themed` directly. The range-mapped
+/// classic `widgets::knob` — a different-looking control with its
+/// caption above the dial and no gesture reporting — is what the
+/// nine editors that wrapped it through `float_knob` drew until then;
+/// `tools/arch-invariants` now fails any plugin that calls it, and this
+/// test keeps stating it per editor so a regression reads as one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Knobs {
-    /// `editor_widgets::float_knob` / `widgets::knob`.
+    /// The raw classic `widgets::knob` — no editor may draw it.
     RangeMapped,
+    /// The themed knob: `editor_widgets::float_knob` / `param_knob`, or
     /// `knob_themed` and its `knob_unipolar` / `knob_bipolar` shorthands.
     Themed,
     /// Sliders and chips only — the EQ has no rotary control at all.
@@ -52,17 +54,17 @@ const FLEET: &[(&str, &str, Knobs)] = &[
     (
         "resonance-amp",
         include_str!("../../plugins/resonance-amp/src/editor/theme.rs"),
-        Knobs::RangeMapped,
+        Knobs::Themed,
     ),
     (
         "resonance-compressor",
         include_str!("../../plugins/resonance-compressor/src/editor/theme.rs"),
-        Knobs::RangeMapped,
+        Knobs::Themed,
     ),
     (
         "resonance-delay",
         include_str!("../../plugins/resonance-delay/src/editor/theme.rs"),
-        Knobs::RangeMapped,
+        Knobs::Themed,
     ),
     (
         "resonance-drums",
@@ -77,7 +79,7 @@ const FLEET: &[(&str, &str, Knobs)] = &[
     (
         "resonance-gate",
         include_str!("../../plugins/resonance-gate/src/editor/theme.rs"),
-        Knobs::RangeMapped,
+        Knobs::Themed,
     ),
     (
         "resonance-granular-delay",
@@ -87,17 +89,17 @@ const FLEET: &[(&str, &str, Knobs)] = &[
     (
         "resonance-ir",
         include_str!("../../plugins/resonance-ir/src/editor/theme.rs"),
-        Knobs::RangeMapped,
+        Knobs::Themed,
     ),
     (
         "resonance-mastering",
         include_str!("../../plugins/resonance-mastering/src/editor/theme.rs"),
-        Knobs::RangeMapped,
+        Knobs::Themed,
     ),
     (
         "resonance-reverb",
         include_str!("../../plugins/resonance-reverb/src/editor/theme.rs"),
-        Knobs::RangeMapped,
+        Knobs::Themed,
     ),
     (
         "resonance-wavetable",
@@ -207,17 +209,21 @@ fn each_editor_draws_exactly_the_knob_family_it_should() {
         for file in sources_under(&dir) {
             let src = std::fs::read_to_string(&file).expect("editor source is readable");
             let code = code_of(&src);
-            // The range-mapped family is only reachable through the
-            // param-bound wrapper or the raw widget. A local wrapper of
-            // the same name is not it — the wavetable has one.
-            if (code.contains("editor_widgets") && code.contains("float_knob"))
-                || code.contains("widgets::knob(")
-            {
+            // The range-mapped family is only the raw classic widget.
+            if code.contains("widgets::knob(") {
                 range_mapped.get_or_insert_with(|| file.clone());
             }
-            if ["knob_themed(", "knob_themed_edit(", "knob_unipolar(", "knob_bipolar("]
-                .iter()
-                .any(|call| code.contains(call))
+            if [
+                "knob_themed(",
+                "knob_themed_edit(",
+                "knob_unipolar(",
+                "knob_bipolar(",
+                "editor_widgets::float_knob(",
+                "editor_widgets::param_knob(",
+                "widgets::float_knob(",
+            ]
+            .iter()
+            .any(|call| code.contains(call))
             {
                 themed.get_or_insert_with(|| file.clone());
             }

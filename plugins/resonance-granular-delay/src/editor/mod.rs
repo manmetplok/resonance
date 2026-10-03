@@ -24,4 +24,23 @@ mod theme;
 // the signal-flow strip.
 pub mod widgets;
 
-pub use factory::GranularEditorFactory;
+pub use factory::{GranularEditorFactory, MIN_H, MIN_W, WINDOW_H, WINDOW_W};
+
+/// The granular editor driven headless at `size`, with a recording
+/// announcer — for `tests/editor_*.rs`. Not plugin API.
+#[doc(hidden)]
+pub fn headless_editor(
+    plugin: &crate::ResonanceGranularDelay,
+    size: (f32, f32),
+) -> resonance_plugin::editor_widgets::headless::HeadlessEditor {
+    let factory = GranularEditorFactory::new(
+        plugin.params.clone(),
+        plugin.viz.clone(),
+        plugin.presets.clone(),
+        resonance_plugin::EditAnnouncer::new(),
+    );
+    resonance_plugin::editor_widgets::headless::HeadlessEditor::new(
+        Box::new(factory.build_app()),
+        size,
+    )
+}

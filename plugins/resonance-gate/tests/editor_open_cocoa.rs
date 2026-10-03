@@ -84,6 +84,7 @@ mod live {
             Arc::new(GateParams::default()),
             GateViz::new(),
             PresetSession::new(),
+            resonance_plugin::EditAnnouncer::new(),
         )
     }
 

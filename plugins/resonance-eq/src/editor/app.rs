@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use plugin_gui_core::widgets::{slider as slider_widget, HSlider, SliderStyle};
 use plugin_gui_core::{egui, EditorApp};
+use resonance_plugin::editor_widgets::{self, ParamSlider};
 
 use resonance_plugin::preset_ui::preset_bar;
 use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
@@ -42,6 +42,9 @@ pub(crate) struct EqEditorApp {
     pub(crate) selected_band: Option<usize>,
     /// Currently-dragged band, if any.
     pub(crate) drag_state: Option<nodes::DragState>,
+    /// The band whose Q a scroll over its node is adjusting, while the
+    /// scroll runs: one announced edit per scroll, not per frame.
+    pub(crate) q_scroll: Option<usize>,
     /// The drawn band curve and the band state it was computed from, so
     /// the response is re-evaluated only when a band moved, not on every
     /// 16 ms repaint (ui-work.md §11).
@@ -66,6 +69,7 @@ impl EqEditorApp {
             analyzer_mode: AnalyzerMode::Post,
             selected_band: None,
             drag_state: None,
+            q_scroll: None,
             curve_cache: None,
         }
     }
@@ -135,23 +139,16 @@ fn draw_header(ui: &mut egui::Ui, app: &mut EqEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
-        // Output trim: the shared kit's slider, like the band strip
-        // below it (ba todo #1335). Bipolar, so the fill runs out from
-        // 0 dB. The raw `egui::Slider` this replaces carried an inline
-        // value box you could click and type into; the shared slider has
-        // no such box in any editor, so the number moves to a readout
-        // beside it and exact entry is gone — arrow keys with the slider
-        // focused are the fine adjustment now.
+        // Output trim: the shared kit's slider bound to the param, like
+        // the band strip below it — bipolar from the range, reset to the
+        // declared default on a double-click, the readout beside it
+        // takes a typed value, and the gesture is announced (PUX-01/-06).
         ui.label(egui::RichText::new("Output").color(theme::TEXT_DIM));
-        let mut gain = app.params.output_gain.value();
-        let slider = HSlider::new(OUTPUT_SLIDER_W, gain / OUTPUT_GAIN_DB * 0.5 + 0.5)
-            .bipolar(true)
-            .style(SliderStyle::LAVENDER);
-        if let Some(travel) = slider_widget(ui, &slider) {
-            gain = (travel * 2.0 - 1.0) * OUTPUT_GAIN_DB;
-            app.params.output_gain.set_value(gain);
-        }
-        ui.label(egui::RichText::new(format!("{:+.1} dB", gain)).color(theme::TEXT_DIM));
+        let gain = &app.params.output_gain;
+        editor_widgets::param_slider(ui, ParamSlider::new(gain, OUTPUT_SLIDER_W));
+        let text = gain.display(gain.get_plain());
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        editor_widgets::param_readout(ui, gain, "", &text, 52.0, font, theme::TEXT_DIM);
 
         ui.add_space(16.0);
         ui.separator();
@@ -161,11 +158,8 @@ fn draw_header(ui: &mut egui::Ui, app: &mut EqEditorApp) {
         // estimate, so a move can be judged at matched level. The trim is
         // a function of the bands alone, so the editor computes the same
         // number the DSP applies.
-        let mut auto = app.params.auto_gain.value();
-        if ui.checkbox(&mut auto, "Auto gain").changed() {
-            app.params.auto_gain.set_value(auto);
-        }
-        if auto {
+        editor_widgets::bool_checkbox(ui, &app.params.auto_gain, "Auto gain");
+        if app.params.auto_gain.value() {
             let snaps: [crate::params::BandSnapshot; crate::params::NUM_BANDS] =
                 std::array::from_fn(|i| app.params.bands[i].snapshot());
             let trim = crate::dsp::auto_gain_trim_db(&snaps, VIS_SR);
@@ -185,8 +179,6 @@ const VIS_SR: f32 = 48_000.0;
 /// Width of the header's Output slider, px — `egui::Slider`'s own
 /// default `slider_width`, which is what it was laid out at.
 const OUTPUT_SLIDER_W: f32 = 100.0;
-/// Half-range of the Output trim, dB (it runs `-24..=24`).
-const OUTPUT_GAIN_DB: f32 = 24.0;
 
 /// One button of the Off/Pre/Post analyzer toggle. Renders as a
 /// borderless text button that highlights when selected.

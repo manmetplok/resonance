@@ -1,6 +1,7 @@
 //! ENV / FILTER tab — three envelope cards (Amp / Filter / Mod) on the left
 //! plus a filter panel with type chips and response graph on the right.
 
+use resonance_plugin::editor_widgets;
 use plugin_gui_core::{egui, widgets};
 
 use crate::dsp::filter::FilterType;
@@ -8,7 +9,6 @@ use crate::dsp::filter_models::FilterModel;
 use crate::editor::theme;
 use crate::editor::viz::{envelope, filter_response};
 use crate::editor::WavetableEditorApp;
-use resonance_plugin::param::Param;
 
 use super::float_knob;
 
@@ -144,10 +144,8 @@ fn draw_filter_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                     })
                     .response;
                 if resp.interact(egui::Sense::click()).clicked() {
-                    app.params
-                        .filter
-                        .enabled
-                        .set_plain(if enabled { 0.0 } else { 1.0 });
+                    let next = if enabled { 0.0 } else { 1.0 };
+                    editor_widgets::commit_plain(ui.ctx(), &app.params.filter.enabled, next);
                 }
             });
         });
@@ -157,7 +155,7 @@ fn draw_filter_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         ui.horizontal_wrapped(|ui| {
             for (i, label) in FilterModel::LABELS.iter().enumerate() {
                 if widgets::chip_button(ui, label, i as i32 == model) {
-                    app.params.filter.model.set_plain(i as f64);
+                    editor_widgets::commit_plain(ui.ctx(), &app.params.filter.model, i as f64);
                 }
             }
         });
@@ -169,7 +167,8 @@ fn draw_filter_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             for (i, label) in types.iter().enumerate() {
                 let active = i as i32 == current;
                 if widgets::chip_button(ui, label, active) {
-                    app.params.filter.filter_type.set_plain(i as f64);
+                    let p = &app.params.filter.filter_type;
+                    editor_widgets::commit_plain(ui.ctx(), p, i as f64);
                 }
             }
         });

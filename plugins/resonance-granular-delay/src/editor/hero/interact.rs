@@ -1,12 +1,14 @@
 //! Hero canvas gestures (ba todo #1144, design doc #264 req-2).
 //!
-//! Input only: it reads the pointer against a [`HeroLayout`] and writes
-//! parameters through `Param::set_plain` — the same GUI→host path as
-//! the strip knobs, so host automation records the gestures. The tempo
+//! Input only: it reads the pointer against a [`HeroLayout`], writes
+//! parameters and announces each gesture to the host as one edit
+//! (`editor_widgets::apply_gesture`), as the strip knobs do. The tempo
 //! grid it snaps to comes from [`crate::sync`]; nothing musical is
 //! derived here (ba todo #1265).
 
 use egui::Ui;
+use plugin_gui_core::widgets::GestureEdit;
+use resonance_plugin::editor_widgets::{apply_gesture, commit_plain};
 use resonance_plugin::Param;
 use plugin_gui_core::egui;
 
@@ -30,9 +32,8 @@ pub enum HeroDrag {
 /// Canvas interactions (ba todo #1144, design doc #264 req-2): tap
 /// drag ⇄ delay time (snapping to the division grid while synced),
 /// cloud drag ⇅ Pitch, scroll = Density, double-click on the tap
-/// resets the active time param to its default. All writes go through
-/// `Param::set_plain` — the same GUI→host path as the strip knobs —
-/// so host automation records the gestures. Interaction is scoped to
+/// resets the active time param to its default. Every gesture is one
+/// announced host edit, like the strip knobs'. Interaction is scoped to
 /// the plot rect, so the header/strip widgets are untouched.
 pub fn interact(
     ui: &mut Ui,
@@ -52,12 +53,36 @@ pub fn interact(
     let over_tap = pointer.is_some_and(|p| layout.tap_hit.contains(p));
 
     // Latch the gesture at drag start: the tap hit-zone wins over the
-    // cloud drag when they overlap.
+    // cloud drag when they overlap. Each gesture writes its params every frame and is announced to the
+    // host once, at its end, for each param it moved (PUX-01).
+    let ctx = ui.ctx().clone();
+    let gesture_params = |kind: HeroDrag| -> [&dyn Param; 2] {
+        match kind {
+            HeroDrag::Tap => [&params.time_ms, &params.division],
+            HeroDrag::Cloud => [&params.pitch, &params.pitch],
+        }
+    };
     if response.drag_started() {
-        *drag = Some(if over_tap { HeroDrag::Tap } else { HeroDrag::Cloud });
+        let kind = if over_tap { HeroDrag::Tap } else { HeroDrag::Cloud };
+        *drag = Some(kind);
+        let began = GestureEdit {
+            began: true,
+            ..GestureEdit::default()
+        };
+        for p in gesture_params(kind) {
+            apply_gesture(&ctx, p, began, |_| {});
+        }
     }
     if response.drag_stopped() {
-        *drag = None;
+        if let Some(kind) = drag.take() {
+            let ended = GestureEdit {
+                ended: true,
+                ..GestureEdit::default()
+            };
+            for p in gesture_params(kind) {
+                apply_gesture(&ctx, p, ended, |_| {});
+            }
+        }
     }
 
     // Cursor affordances: horizontal-resize near/while dragging the
@@ -81,7 +106,7 @@ pub fn interact(
         } else {
             &params.time_ms
         };
-        p.set_plain(p.default_plain());
+        commit_plain(&ctx, p, p.default_plain());
         return;
     }
 
@@ -119,14 +144,34 @@ pub fn interact(
     // Scroll over the canvas: fine multiplicative Density steps.
     // `density_sync` (PER-BEAT) has no separate synced-density param
     // in params.rs (its DSP is a declared TODO), so the free-run
-    // density param is the single scroll target in both modes.
+    // density param is the single scroll target in both modes. One
+    // scroll is one gesture, announced once the wheel stops.
+    let scrolling_id = egui::Id::new("granular_hero_density_scroll");
+    let was_scrolling = ctx.data(|d| d.get_temp::<bool>(scrolling_id)).unwrap_or(false);
+    let mut scrolled = false;
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
             let p = &params.density_hz;
             let factor = f64::from((-scroll * 0.0015).exp());
             let next = (p.get_plain() * factor).clamp(p.min_plain(), p.max_plain());
-            p.set_plain(next);
+            let moved = GestureEdit {
+                value: Some(next as f32),
+                began: !was_scrolling,
+                ended: false,
+            };
+            apply_gesture(&ctx, p, moved, |v| p.set_plain(f64::from(v)));
+            scrolled = true;
+        }
+    }
+    if scrolled != was_scrolling {
+        ctx.data_mut(|d| d.insert_temp(scrolling_id, scrolled));
+        if was_scrolling {
+            let ended = GestureEdit {
+                ended: true,
+                ..GestureEdit::default()
+            };
+            apply_gesture(&ctx, &params.density_hz, ended, |_| {});
         }
     }
 }

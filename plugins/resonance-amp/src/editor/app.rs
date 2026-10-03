@@ -67,6 +67,10 @@ pub(crate) struct AmpEditorApp {
     /// The last Tone3000 download THIS editor asked for (the shared worker
     /// serves every editor, so its own `last_downloaded` is not ours).
     pub(crate) my_download: Arc<Mutex<Option<PathBuf>>>,
+    /// The host announcer this frame's context carries (code review
+    /// PUX-01), kept for the model loads that run outside a widget — a
+    /// header step, a Library pick, a finished download.
+    pub(crate) announcer: Option<resonance_plugin::EditAnnouncer>,
 }
 
 impl AmpEditorApp {
@@ -98,6 +102,7 @@ impl AmpEditorApp {
             jobs: Jobs::default(),
             redownload_notice: Arc::new(Mutex::new(None)),
             my_download: Arc::new(Mutex::new(None)),
+            announcer: None,
         };
         // Opening an editor is when the library is brought up to date
         // (activation never scans): on the job thread, so the first frame
@@ -246,6 +251,7 @@ impl AmpEditorApp {
 
 impl EditorApp for AmpEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
+        self.announcer = resonance_plugin::editor_widgets::announcer(ui.ctx());
         theme::apply(ui.ctx());
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));

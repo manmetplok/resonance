@@ -19,8 +19,17 @@ use super::app::GranularEditorApp;
 
 // 1320×700 (ba todo #1136, design doc #264): in family with reverb's
 // 1320×660; the extra height carries the ~400 px hero buffer view.
-const WINDOW_W: u32 = 1320;
-const WINDOW_H: u32 = 700;
+pub const WINDOW_W: u32 = 1320;
+pub const WINDOW_H: u32 = 700;
+
+/// Minimum window size. The width is the control strip's own: its six
+/// signal-flow groups are fixed-width columns in one row (the hero band
+/// above needs the height a second row would take), so the window may
+/// not get narrower than the row — code review PUX-08, where a 1000 px
+/// minimum cut OUTPUT and part of SPACE off. `tests/editor_layout.rs`
+/// holds every control inside the window at this size.
+pub const MIN_W: u32 = super::controls::STRIP_MIN_W.ceil() as u32;
+pub const MIN_H: u32 = 560;
 
 pub struct GranularEditorFactory {
     params: Arc<GranularDelayParams>,
@@ -43,6 +52,12 @@ impl GranularEditorFactory {
             presets,
         }
     }
+
+    /// The editor app, unwrapped (the headless test hook drives it with
+    /// its own announcer).
+    pub(crate) fn build_app(&self) -> GranularEditorApp {
+        GranularEditorApp::new(self.params.clone(), self.viz.clone(), self.presets.clone())
+    }
 }
 
 impl EditorFactory for GranularEditorFactory {
@@ -59,18 +74,14 @@ impl EditorFactory for GranularEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = GranularEditorApp::new(
-            self.params.clone(),
-            self.viz.clone(),
-            self.presets.clone(),
-        );
+        let app = self.build_app();
         let runtime = RuntimeEditor::new(
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Granular Delay".to_string(),
                 app_id: "com.resonance.granular-delay".to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
-                min_size: (1000, 560),
+                min_size: (MIN_W, MIN_H),
                 resizable: true,
             },
         )

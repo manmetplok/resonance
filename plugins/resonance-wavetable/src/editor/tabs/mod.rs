@@ -36,50 +36,20 @@ pub mod osc;
 
 use plugin_gui_core::{egui, widgets};
 
+use resonance_plugin::editor_widgets::{self, ParamKnob, ParamSlider};
 use resonance_plugin::param::{FloatParam, IntParam, Param};
-
-/// A parameter whose range spans zero is drawn centre-out with a centre
-/// tick (pitch, pan, curve, mod amount); everything else fills from the
-/// minimum. Derived from the range so no call site has to claim a
-/// polarity — `filter_keytrack` was drawn bipolar for exactly that reason
-/// until ba todo #1271.
-fn is_bipolar(min: f32, max: f32) -> bool {
-    min < 0.0 && max > 0.0
-}
 
 /// Knob cell bound to a `FloatParam`.
 ///
 /// `label` is the only caller-supplied input: it captions this cell in
 /// this layout (`"Reso"`, `"Fb"`, `"Time L"`), which the 52 px dial has
 /// room for where the parameter's full name (`"Filter Resonance"`) does
-/// not. It is never a fact about the parameter.
+/// not. It is never a fact about the parameter. The fleet's binding
+/// (`editor_widgets::param_knob`) reads travel, skew, default, polarity
+/// and readout off the param, takes typed entry on the readout and
+/// announces each gesture to the host (code review PUX-01/-06/-11).
 pub(crate) fn float_knob(ui: &mut egui::Ui, label: &str, param: &FloatParam) {
-    let range = param.range();
-    let value_text = param.display(param.value() as f64);
-    let knob = widgets::ThemedKnob::new(
-        label,
-        param.normalized_value(),
-        &value_text,
-        param.default_normalized(),
-    )
-    .bipolar(is_bipolar(range.min(), range.max()));
-    if let Some(travel) = widgets::knob_themed(ui, &knob) {
-        param.set_normalized(travel);
-    }
-}
-
-/// Where an integer value sits on its control's 0..1 travel. `IntRange`
-/// has only a linear variant, so this is the whole mapping.
-fn int_travel(param: &IntParam, value: i32) -> f32 {
-    param.range().normalize(value) as f32
-}
-
-/// The integer a 0..1 control position maps to — the inverse of
-/// [`int_travel`].
-fn int_at_travel(param: &IntParam, travel: f32) -> i32 {
-    let range = param.range();
-    let (min, max) = (range.min(), range.max());
-    min + (travel.clamp(0.0, 1.0) * (max - min) as f32).round() as i32
+    editor_widgets::param_knob(ui, ParamKnob::new(param, label));
 }
 
 /// Knob cell bound to an `IntParam`, with the readout produced by `fmt`
@@ -96,44 +66,24 @@ pub(crate) fn int_knob_fmt(
     fmt: impl Fn(i32) -> String,
 ) {
     let value_text = fmt(param.value());
-    int_knob_inner(ui, label, param, &value_text);
+    editor_widgets::param_knob(ui, ParamKnob::new(param, label).value_text(value_text));
 }
 
 /// Knob cell bound to an `IntParam`, showing the parameter's own display.
+/// The drag accumulates through the gesture, so it steps on an ordinary
+/// drag (code review PUX-02: dist Mode, OS, Coarse, Voices, the LFO and
+/// S&H divisions only answered fast flicks).
 pub(crate) fn int_knob(ui: &mut egui::Ui, label: &str, param: &IntParam) {
-    let value_text = param.display(param.get_plain());
-    int_knob_inner(ui, label, param, &value_text);
-}
-
-fn int_knob_inner(ui: &mut egui::Ui, label: &str, param: &IntParam, value_text: &str) {
-    let range = param.range();
-    let knob = widgets::ThemedKnob::new(
-        label,
-        int_travel(param, param.value()),
-        value_text,
-        int_travel(param, param.default_value()),
-    )
-    .bipolar(is_bipolar(range.min() as f32, range.max() as f32));
-    if let Some(travel) = widgets::knob_themed(ui, &knob) {
-        param.set_plain(f64::from(int_at_travel(param, travel)));
-    }
+    editor_widgets::param_knob(ui, ParamKnob::new(param, label));
 }
 
 /// Horizontal slider bound to a `FloatParam`, `width` px wide.
 ///
 /// Same contract as [`float_knob`]: the groove is the parameter's own
-/// travel and the polarity comes from its range.
+/// travel, the polarity comes from its range, a double-click resets to
+/// the declared default (PUX-06) and the drag is one announced edit.
 pub(crate) fn float_slider(ui: &mut egui::Ui, width: f32, param: &FloatParam) {
-    let range = param.range();
-    let bipolar = is_bipolar(range.min(), range.max());
-    // The editor's own `slider_unit` was the shared `HSlider` with the
-    // `bipolar` flag already curried in (ba todo #1335); this is the same
-    // widget, and the "never sees a plain value" rule the fork's doc
-    // stated is a property of this binding, not of the drawing code.
-    let slider = widgets::HSlider::new(width, param.normalized_value()).bipolar(bipolar);
-    if let Some(travel) = widgets::slider(ui, &slider) {
-        param.set_normalized(travel);
-    }
+    editor_widgets::param_slider(ui, ParamSlider::new(param, width));
 }
 
 /// Segmented selector bound to a choice `IntParam` (one declared with
@@ -141,12 +91,7 @@ pub(crate) fn float_slider(ui: &mut egui::Ui, width: f32, param: &FloatParam) {
 /// control can offer exactly the values the parameter holds and nothing
 /// else.
 pub(crate) fn choice_segmented(ui: &mut egui::Ui, param: &IntParam) {
-    let labels = param.choices().unwrap_or(&[]);
-    let min = param.range().min();
-    let selected = usize::try_from(param.value() - min).unwrap_or(0);
-    if let Some(i) = widgets::segmented(ui, labels, selected) {
-        param.set_plain(f64::from(min + i as i32));
-    }
+    editor_widgets::choice_segmented(ui, param, &widgets::SegmentedStyle::LAVENDER);
 }
 
 /// A single chip bound to a choice `IntParam` that shows the current
@@ -163,7 +108,7 @@ pub(crate) fn choice_cycle(ui: &mut egui::Ui, param: &IntParam) {
         } else {
             value + 1
         };
-        param.set_plain(f64::from(next));
+        editor_widgets::commit_plain(ui.ctx(), param, f64::from(next));
     }
 }
 

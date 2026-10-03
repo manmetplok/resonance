@@ -45,6 +45,17 @@ impl WavetableEditorFactory {
             user_tables,
         }
     }
+
+    /// The editor app, unwrapped (the headless test hook drives it with
+    /// its own announcer).
+    pub(crate) fn build_app(&self) -> WavetableEditorApp {
+        WavetableEditorApp::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+            self.user_tables.clone(),
+        )
+    }
 }
 
 impl EditorFactory for WavetableEditorFactory {
@@ -64,12 +75,7 @@ impl EditorFactory for WavetableEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = WavetableEditorApp::new(
-            self.params.clone(),
-            self.viz.clone(),
-            self.presets.clone(),
-            self.user_tables.clone(),
-        );
+        let app = self.build_app();
         let runtime = RuntimeEditor::new(
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {

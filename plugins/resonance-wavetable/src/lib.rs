@@ -4,7 +4,7 @@ use std::sync::Arc;
 use resonance_plugin::*;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 pub mod dsp;
 pub mod params;
 pub mod presets;

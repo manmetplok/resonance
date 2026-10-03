@@ -33,8 +33,13 @@ pub(crate) enum LoadKind {
 /// records a use (D10: a project-open restore never does) and clears a
 /// stale re-download notice.
 pub(crate) fn load_slot(app: &AmpEditorApp, slot: u32, kind: LoadKind) {
+    let changed = app.params.file_select.value() != slot as i32;
     app.params.file_select.set_value(slot as i32);
     app.load_request.store(slot as i32, Ordering::Release);
+    // The user's pick: one undoable edit for the host (PUX-01).
+    if let (true, Some(a)) = (changed, &app.announcer) {
+        a.announce(resonance_plugin::Param::id(&app.params.file_select));
+    }
     *app.redownload_notice.lock() = None;
     if kind == LoadKind::Pick {
         let id = app.params.library.read().by_slot(slot).map(|e| e.id.clone());
@@ -86,12 +91,16 @@ pub(crate) fn download_done(app: &AmpEditorApp) -> DownloadDone {
     let params = app.params.clone();
     let load_request = app.load_request.clone();
     let mine = app.my_download.clone();
+    let announcer = app.announcer.clone();
     Arc::new(move |entry: &Entry| {
         *mine.lock() = Some(entry.path.clone());
         if let Some(slot) = entry.slot {
             params.file_select.set_value(slot as i32);
             load_request.store(slot as i32, Ordering::Release);
             let _ = params.library.record_use(&entry.id);
+            if let Some(a) = &announcer {
+                a.announce(resonance_plugin::Param::id(&params.file_select));
+            }
         }
     })
 }

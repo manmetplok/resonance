@@ -11,14 +11,15 @@
 //!
 //! The kit provides:
 //!
-//! - two rotary-knob families — a range-mapped [`knob`] (64x76 cell,
-//!   caption above the dial, wrapped by
-//!   `resonance_plugin::editor_widgets::float_knob`) and the
-//!   configurable [`knob_themed`] family (unit-space, [`KnobStyle`]
-//!   geometry, bipolar and over-unity arcs), of which [`knob_unipolar`]
-//!   / [`knob_bipolar`] are the default-styled shorthands. Both paint in
-//!   the one canonical palette since ba todo #1338; what still differs is
-//!   geometry and capability, not colour. No editor mixes the two;
+//! - the rotary knob: the configurable [`knob_themed`] family
+//!   (unit-space, [`KnobStyle`] geometry, bipolar and over-unity arcs,
+//!   an optional sub-label), of which [`knob_unipolar`] / [`knob_bipolar`]
+//!   are the default-styled shorthands. It is the one knob every plugin
+//!   editor draws (code review PUX-11), through
+//!   `resonance_plugin::editor_widgets::{float_knob, param_knob}`.
+//!   The older range-mapped [`knob`] (caption above the dial, no
+//!   gesture state of its own before PUX-02) stays only as a building
+//!   block; `tools/arch-invariants` fails a plugin that calls it;
 //! - [`chip_button`] / [`chip_styled`] — the pill-shaped discrete
 //!   toggle, styled by [`ChipStyle`];
 //! - [`segmented`] / [`segmented_styled`] — a one-of-N strip of chips,
@@ -27,7 +28,8 @@
 //!   and the configurable [`slider`], styled by [`SliderStyle`].
 //!
 //! The configurable knob and slider each have a gesture-aware twin,
-//! [`knob_themed_edit`] / [`slider_edit`], which return a [`GestureEdit`]:
+//! [`knob_themed_edit`] / [`slider_edit`] (and [`knob`] reports one
+//! too), which return a [`GestureEdit`]:
 //! the new value *and* whether the user's gesture began or ended this
 //! frame. An editor that tells its host about edits (CLAP undo) needs the
 //! end of a drag, not every frame of it — one drag is one undoable edit.
@@ -37,8 +39,11 @@
 //! `resonance_plugin::editor_widgets`, keeping this crate free of
 //! plugin-framework dependencies.
 //!
-//! Both families drag through [`knob_drag_unit`], so every knob in
-//! every plugin answers the same mouse gesture the same way. A plugin
+//! Both knobs drag through [`knob_drag_unit`], so every knob in every
+//! plugin answers the same mouse gesture the same way, and both run the
+//! drag from a position kept for the whole gesture, so a caller that
+//! quantizes (an int or bool param) still steps on a slow drag
+//! (PUX-02). A plugin
 //! that needs a different size, a bipolar centre tick or an extra arc
 //! zone configures [`ThemedKnob`] / [`KnobStyle`] rather than forking
 //! the widget (ba todo #1266).

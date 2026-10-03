@@ -20,7 +20,7 @@ pub mod presets;
 pub mod response_curve;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use analyzer::{AnalyzerState, StereoAnalyzers};
 use dsp::EqDsp;

@@ -116,6 +116,19 @@ pub fn commit_plain(ctx: &egui::Context, param: &dyn Param, plain: f64) {
     }
 }
 
+/// A user action that writes several params at once (an assistant's
+/// "Apply suggestions"): run `apply`, then announce every param in
+/// `params` it changed — one edit per param that moved.
+pub fn apply_and_announce(ctx: &egui::Context, params: &[&dyn Param], apply: impl FnOnce()) {
+    let before: Vec<f64> = params.iter().map(|p| p.get_plain()).collect();
+    apply();
+    for (p, b) in params.iter().zip(before) {
+        if p.get_plain() != b {
+            announce_edit(ctx, *p);
+        }
+    }
+}
+
 fn gesture_id(param: &dyn Param) -> egui::Id {
     egui::Id::new(("resonance_param_gesture", param.id()))
 }
@@ -559,18 +572,28 @@ pub fn param_slider(ui: &mut egui::Ui, slider: ParamSlider<'_>) -> GestureEdit {
     edit
 }
 
-/// A param's value text in a `width`-px box that turns into a text field
-/// when clicked (typed entry; see the module docs). `text` is what to
-/// show — normally `param.display(param.get_plain())`.
+/// A param's value text in a `width`-px box, one text row tall (a
+/// label's height), that turns into a text field when clicked (typed
+/// entry; see the module docs). `text` is the value to show — normally
+/// `param.display(param.get_plain())` — and seeds the entry; `caption`
+/// (empty for none) is drawn in front of it (`Thr -20.0 dB`) but is not
+/// part of what the user edits.
 pub fn param_readout(
     ui: &mut egui::Ui,
     param: &dyn Param,
+    caption: &str,
     text: &str,
     width: f32,
     font: egui::FontId,
     color: egui::Color32,
 ) {
-    let height = font.size + 6.0;
+    let shown = if caption.is_empty() {
+        text.to_string()
+    } else {
+        format!("{caption} {text}")
+    };
+    let galley = ui.painter().layout_no_wrap(shown, font, color);
+    let height = galley.size().y;
     if let Some(entry) = open_entry(ui, param) {
         draw_entry(ui, param, entry, egui::vec2(width, height));
         return;
@@ -578,8 +601,7 @@ pub fn param_readout(
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     probe(ui, &format!("{}.value", param.id()), rect);
     if ui.is_rect_visible(rect) {
-        ui.painter_at(rect)
-            .text(rect.left_center(), egui::Align2::LEFT_CENTER, text, font, color);
+        ui.painter_at(rect).galley(rect.left_top(), galley, color);
     }
     open_entry_on_click(ui, param, &response, text);
 }

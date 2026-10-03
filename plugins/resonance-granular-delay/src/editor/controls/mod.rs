@@ -162,6 +162,23 @@ const GROUP_W: [f32; 6] = [172.0, 330.0, 186.0, 246.0, 160.0, 186.0];
 const GROUP_GAP: f32 = 4.0;
 /// Group frame content height inside the 246 px band.
 const GROUP_H: f32 = 222.0;
+/// Leading space before the first group.
+const STRIP_LEAD: f32 = 4.0;
+/// The bottom panel's own side margins around the strip.
+const PANEL_MARGIN_X: f32 = 8.0;
+
+/// The narrowest window the strip fits: every group's fixed width, the
+/// gaps between them, the lead-in and the panel's margins. The editor's
+/// minimum window width (PUX-08).
+pub const STRIP_MIN_W: f32 = {
+    let mut w = 0.0;
+    let mut i = 0;
+    while i < GROUP_W.len() {
+        w += GROUP_W[i];
+        i += 1;
+    }
+    w + GROUP_GAP * (GROUP_W.len() as f32 - 1.0) + STRIP_LEAD + 2.0 * PANEL_MARGIN_X
+};
 
 /// Draw the whole signal-flow strip (bespoke layout per group; the
 /// declarative [`GROUPS`] table above stays the tested coverage map).
@@ -170,7 +187,7 @@ pub fn draw(ui: &mut Ui, params: &GranularDelayParams, viz: &GranularViz) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(GROUP_GAP, 4.0);
-        ui.add_space(4.0);
+        ui.add_space(STRIP_LEAD);
         group_frame(ui, GROUP_W[0], "TIME", |ui| draw_time(ui, params, bpm), true, params);
         group_frame(ui, GROUP_W[1], "GRAINS", |ui| draw_grains(ui, params, bpm), false, params);
         group_frame(ui, GROUP_W[2], "PITCH", |ui| draw_pitch(ui, params), false, params);

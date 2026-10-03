@@ -158,6 +158,7 @@ pub(crate) fn draw(
             .clicked()
         {
             toggle_bypass(params);
+            resonance_plugin::editor_widgets::announce_edit(ui.ctx(), &params.bypass);
         }
 
         ui.add_space(8.0);
@@ -192,17 +193,23 @@ pub(crate) fn draw(
             .range(model.target_range.clone())
             .fixed_decimals(1)
             .suffix(" LUFS");
-        if ui
-            .add(drag)
-            .on_hover_text(
-                "Loudness target drawn on the LUFS meter and the history \
-                 trace. The assistant sets it when you apply its \
-                 suggestions; otherwise it stays where you put it.",
-            )
-            .changed()
-        {
-            set_reference_line_lufs(params, target);
-        }
+        let response = ui.add(drag).on_hover_text(
+            "Loudness target drawn on the LUFS meter and the history \
+             trace. The assistant sets it when you apply its \
+             suggestions; otherwise it stays where you put it.",
+        );
+        // One host edit per drag or typed entry (PUX-01).
+        let edit = plugin_gui_core::widgets::GestureEdit {
+            value: response.changed().then_some(target),
+            began: response.drag_started(),
+            ended: response.drag_stopped() || (response.changed() && !response.dragged()),
+        };
+        resonance_plugin::editor_widgets::apply_gesture(
+            ui.ctx(),
+            &params.target_lufs,
+            edit,
+            |v| set_reference_line_lufs(params, v),
+        );
 
         ui.separator();
         ui.label(egui::RichText::new(model.integrated_text()).color(theme::TEXT));

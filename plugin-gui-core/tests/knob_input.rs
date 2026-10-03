@@ -427,4 +427,50 @@ mod gesture {
         frame(&ctx, vec![egui::Event::PointerMoved(egui::pos2(150.0, 9.0))], &mut both);
         assert!(unit.is_some_and(|v| (v - 0.75).abs() < 0.01), "{unit:?}");
     }
+
+    /// A caller that quantizes what the knob hands it — an int or bool
+    /// parameter, which rounds — still steps on a slow drag (code review
+    /// PUX-02). Both knobs run the drag from a position kept for the
+    /// gesture; before, each frame restarted from the caller's rounded
+    /// value, and 2 px per frame (0.01 of travel) never reached a step.
+    #[test]
+    fn a_quantizing_caller_steps_on_a_slow_drag() {
+        use plugin_gui_core::widgets::knob;
+        // Themed: a 0..1 bool, rounded by the caller.
+        let ctx = egui::Context::default();
+        let mut on = 0.0f32;
+        let mut themed = |ui: &mut egui::Ui| {
+            let edit = knob_themed_edit(ui, &ThemedKnob::new("On", on, "off", 0.0));
+            if let Some(v) = edit.value {
+                on = v.round();
+            }
+            edit
+        };
+        slow_drag(&ctx, &mut themed);
+        assert_eq!(on, 1.0, "the themed knob never stepped");
+
+        // Classic: an integer 0..4, rounded by the caller.
+        let ctx = egui::Context::default();
+        let mut mode = 0.0f32;
+        let mut classic = |ui: &mut egui::Ui| {
+            let mut v = mode;
+            let edit = knob(ui, &mut v, 0.0..=4.0, 0.0, "Mode", "", "", false);
+            mode = v.round();
+            edit
+        };
+        slow_drag(&ctx, &mut classic);
+        assert!(mode >= 2.0, "the classic knob reached {mode}");
+    }
+
+    /// 120 px up in 2 px frames over the knob at the top-left.
+    fn slow_drag(ctx: &egui::Context, widget: &mut dyn FnMut(&mut egui::Ui) -> GestureEdit) {
+        let from = egui::pos2(30.0, 26.0);
+        frame(ctx, Vec::new(), widget);
+        frame(ctx, button(from, true), widget);
+        for i in 1..=60 {
+            let p = from - egui::vec2(0.0, 2.0 * i as f32);
+            frame(ctx, vec![egui::Event::PointerMoved(p)], widget);
+        }
+        frame(ctx, button(from - egui::vec2(0.0, 120.0), false), widget);
+    }
 }
