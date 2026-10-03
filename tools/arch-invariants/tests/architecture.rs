@@ -1329,3 +1329,82 @@ fn engine_common_public_fns_dont_return_result_string() {
         &violations,
     );
 }
+
+// ---------------------------------------------------------------------------
+// View-layer visual polish (code review 2026-10-02, batch U3)
+// ---------------------------------------------------------------------------
+
+/// ux-guidelines.md → Typography: the "never below 11px" promise was
+/// aspirational — 9 and 10px are the real floor in dense chrome (mixer
+/// chips, badges, meter labels), and the doc now says so. What's still
+/// banned is `.size(8)`: it measured below the 4.5:1-at-small-text
+/// readability line for every informational label that used it (code
+/// review UX-07). The two exceptions below are glyphs, not text — a
+/// filled-circle status dot and a caret icon — allow-listed by their
+/// exact line so a future *text* `.size(8)` in either file still trips.
+///
+/// Exercised 2026-10-02: added `.size(8)` to a `text("3")` in
+/// `view/transport.rs` → failed on that line; reverted.
+#[test]
+fn view_text_never_shrinks_below_the_9px_floor() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-app/src/view"), &mut files);
+    let allowed: &[(&str, &str)] = &[
+        ("view/remote_indicator.rs", ".size(8)"),
+        (
+            "view/compose/drumroll/pattern_picker.rs",
+            "theme::icon(theme::fa::CARET_RIGHT).size(8)",
+        ),
+    ];
+    let mut violations = Vec::new();
+    for file in files {
+        let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+        for (n, code) in code_lines(&file) {
+            if !code.contains(".size(8)") {
+                continue;
+            }
+            let is_allowed = allowed
+                .iter()
+                .any(|(f, fragment)| rel.ends_with(f) && code.contains(fragment));
+            if !is_allowed {
+                violations.push(format!(
+                    "{rel}:{n}: text below the 9px floor (ux-guidelines.md → Typography) — raise it, or if this is a glyph/dot rather than legible text, add it to the allow-list"
+                ));
+            }
+        }
+    }
+    report(
+        "ux-guidelines.md → Typography: no view/ text below the 9px floor outside the glyph allow-list",
+        &violations,
+    );
+}
+
+/// ux-guidelines.md → Color Rules: "Never use pure white ... Never use
+/// pure black ... for backgrounds" (code review UX-19). Every prior
+/// `Color::WHITE` / `Color::BLACK` in `view/` was migrated to a theme
+/// token (`TEXT_1`, `ON_ACCENT_TEXT`, ...); this keeps the count at zero.
+///
+/// Exercised 2026-10-02: added `.color(iced::Color::WHITE)` to
+/// `view/transport.rs` → failed on that line; reverted.
+#[test]
+fn view_layer_never_hardcodes_pure_white_or_black() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-app/src/view"), &mut files);
+    let mut violations = Vec::new();
+    for file in files {
+        let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+        for (n, code) in code_lines(&file) {
+            if code.contains("Color::WHITE") || code.contains("Color::BLACK") {
+                violations.push(format!(
+                    "{rel}:{n}: hardcoded pure white/black — add or use a `theme.rs` token instead"
+                ));
+            }
+        }
+    }
+    report(
+        "ux-guidelines.md → Color Rules: no Color::WHITE / Color::BLACK in view/ — use a theme token",
+        &violations,
+    );
+}

@@ -107,3 +107,7 @@ mod pan_knob_drag;
 mod plugin_window_fingerprint;
 #[path = "mixer/mixer_transient_settle.rs"]
 mod mixer_transient_settle;
+#[path = "mixer/theme_contrast.rs"]
+mod theme_contrast;
+#[path = "mixer/format_db_signed.rs"]
+mod format_db_signed;
