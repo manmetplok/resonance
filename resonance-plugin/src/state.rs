@@ -97,8 +97,9 @@ pub fn migrate(state: &mut serde_json::Value, renames: &[ParamRename]) -> u32 {
     let from_version = version_of(state);
     if from_version >= STATE_VERSION || renames.is_empty() {
         // Nothing to do: either current/newer, or the plugin has never
-        // renamed a param id. Still stamp the version so a re-save from
-        // an untouched blob is not mistaken for pre-versioned state.
+        // renamed a param id. The blob is left as it is — its version
+        // included; the next save writes `STATE_VERSION` through
+        // `params_to_json`.
         return from_version;
     }
 

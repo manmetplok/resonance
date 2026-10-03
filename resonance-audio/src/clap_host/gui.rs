@@ -1,5 +1,5 @@
 //! CLAP GUI extension wrapper. Drives the plugin's editor window
-//! through the standard `is_api_supported → create → get_size → show`
+//! through the standard `is_api_supported → create → show`
 //! sequence, negotiating the platform's native window API (Wayland on
 //! Linux, Cocoa on macOS). We don't currently implement the embedding
 //! path — every editor opens as a floating top-level window.
@@ -41,7 +41,7 @@ impl ClapInstance {
     /// Open the plugin's editor window as a floating native window.
     ///
     /// Walks the full CLAP GUI negotiation sequence:
-    /// `is_api_supported` → `create` → `get_size` → `show`. Returns the
+    /// `is_api_supported` → `create` → `show`. Returns the
     /// refusing step as a [`PluginEditorFailure`] on failure; on failure
     /// the plugin is left exactly as it was (a successful `create`
     /// followed by a failing `show` is rolled back with `destroy`). If
@@ -66,18 +66,10 @@ impl ClapInstance {
             if !create(self.plugin, NATIVE_API.as_ptr(), true) {
                 return Err(PluginEditorFailure::CreateFailed);
             }
-            // Best-effort size negotiation (ignore errors — the plugin has
-            // its own preferred size baked into its factory).
-            if let Some(get_size) = (*gui).get_size {
-                let mut w: u32 = 0;
-                let mut h: u32 = 0;
-                get_size(self.plugin, &mut w, &mut h);
-                if let Some(set_size) = (*gui).set_size {
-                    if w > 0 && h > 0 {
-                        set_size(self.plugin, w, h);
-                    }
-                }
-            }
+            // No size negotiation: `get_size` / `set_size` are
+            // `[main-thread & !floating]` in gui.h, and every editor we
+            // open is floating — the plugin sizes its own window (code
+            // review HOST-15).
             let Some(show) = (*gui).show else {
                 // If show isn't exposed, roll back the create.
                 if let Some(destroy) = (*gui).destroy {
