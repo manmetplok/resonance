@@ -19,20 +19,20 @@ impl OscParams {
         default_level: f32,
         default_enabled: bool,
     ) -> Self {
-        let wt_id: &'static str = Box::leak(format!("osc{}_wavetable", num).into_boxed_str());
-        let wt_name: &'static str = Box::leak(format!("Osc {} Wavetable", num).into_boxed_str());
-        let pos_id: &'static str = Box::leak(format!("osc{}_position", num).into_boxed_str());
-        let pos_name: &'static str = Box::leak(format!("Osc {} Position", num).into_boxed_str());
-        let coarse_id: &'static str = Box::leak(format!("osc{}_coarse", num).into_boxed_str());
-        let coarse_name: &'static str = Box::leak(format!("Osc {} Coarse", num).into_boxed_str());
-        let fine_id: &'static str = Box::leak(format!("osc{}_fine", num).into_boxed_str());
-        let fine_name: &'static str = Box::leak(format!("Osc {} Fine", num).into_boxed_str());
-        let level_id: &'static str = Box::leak(format!("osc{}_level", num).into_boxed_str());
-        let level_name: &'static str = Box::leak(format!("Osc {} Level", num).into_boxed_str());
-        let pan_id: &'static str = Box::leak(format!("osc{}_pan", num).into_boxed_str());
-        let pan_name: &'static str = Box::leak(format!("Osc {} Pan", num).into_boxed_str());
-        let en_id: &'static str = Box::leak(format!("osc{}_enabled", num).into_boxed_str());
-        let en_name: &'static str = Box::leak(format!("Osc {} On", num).into_boxed_str());
+        let wt_id: &'static str = super::intern(format!("osc{}_wavetable", num));
+        let wt_name: &'static str = super::intern(format!("Osc {} Wavetable", num));
+        let pos_id: &'static str = super::intern(format!("osc{}_position", num));
+        let pos_name: &'static str = super::intern(format!("Osc {} Position", num));
+        let coarse_id: &'static str = super::intern(format!("osc{}_coarse", num));
+        let coarse_name: &'static str = super::intern(format!("Osc {} Coarse", num));
+        let fine_id: &'static str = super::intern(format!("osc{}_fine", num));
+        let fine_name: &'static str = super::intern(format!("Osc {} Fine", num));
+        let level_id: &'static str = super::intern(format!("osc{}_level", num));
+        let level_name: &'static str = super::intern(format!("Osc {} Level", num));
+        let pan_id: &'static str = super::intern(format!("osc{}_pan", num));
+        let pan_name: &'static str = super::intern(format!("Osc {} Pan", num));
+        let en_id: &'static str = super::intern(format!("osc{}_enabled", num));
+        let en_name: &'static str = super::intern(format!("Osc {} On", num));
 
         Self {
             wavetable: IntParam::new(

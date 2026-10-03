@@ -195,6 +195,8 @@ impl AmpProcessor {
                     // we dropped R entirely (and read it only for
                     // peak metering), making the plugin act as
                     // an L-only effect for stereo signals.
+                    // A centred source is expected; see
+                    // `process_settled` on a one-sided input (DSP2-14).
                     let input = 0.5 * (dry_l + dry_r) * input_gain;
                     let raw = model.process_sample(input) * output_gain * fade_gain;
                     (self.dc_l.process(raw), self.dc_r.process(raw))
@@ -229,6 +231,20 @@ impl AmpProcessor {
             peaks.in_r = peaks.in_r.max(r.abs());
             // The NAM model is mono-by-design (one amp at one mic
             // position): sum L+R so a stereo input contributes both.
+            //
+            // The sum expects a *centred* source (DSP2-14): `0.5·(l+r)`
+            // is unity for a signal on both sides, and that is what a
+            // DI reaches the amp as in Resonance — a mono track (the
+            // default for audio tracks) captures its one input channel
+            // and duplicates it to L/R, and a mono clip plays on both
+            // sides. A signal on one side only (a stereo track with the
+            // guitar on just one of its two inputs) arrives 6 dB low,
+            // which a NAM capture hears as less drive, not just less
+            // level. That case is a track set-up, not a plugin mode:
+            // record the DI on a mono track, or add +6 dB Input Gain.
+            // A louder-channel or per-sample max detector would distort
+            // the waveform the model is driven by, and an input-mode
+            // parameter is not worth a CLAP param for a mis-set track.
             *m = 0.5 * (l + r) * self.input_gain_smoother.next();
         }
         let mono_out = &mut self.mono_out[..n];

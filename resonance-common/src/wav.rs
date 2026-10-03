@@ -69,6 +69,11 @@ pub struct WavChannels {
     pub left: Vec<f32>,
     pub right: Vec<f32>,
     pub stereo: bool,
+    /// The file's own sample rate, before any resampling to the target.
+    /// An impulse-response caller needs it: resampling keeps unit DC
+    /// gain per sample, but an IR's gain is the *sum* of its taps, which
+    /// the caller rescales by `source_rate / target_rate`.
+    pub source_rate: f32,
 }
 
 /// Decode a WAV file from bytes into stereo interleaved f32 samples,
@@ -632,6 +637,7 @@ pub fn decode_wav_channels(
         left,
         right,
         stereo,
+        source_rate,
     })
 }
 

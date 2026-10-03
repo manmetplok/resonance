@@ -305,7 +305,7 @@ impl ResonancePlugin for ResonanceGranularDelay {
             pan_spread: self.params.pan_spread.value(),
             // Quality tiers (ba todo #1083): Lo-fi = linear reads +
             // µ-law + reduced pool, Normal = Hermite, HQ = 6-pt
-            // B-spline + forced anti-alias. Grain-latched, so tier
+            // Lagrange + forced anti-alias. Grain-latched, so tier
             // switches are click-free.
             quality: dsp::QualityTier::from_index(self.params.quality.value()),
             fb_route: dsp::FbRoute::from_index(self.params.fb_route.value()),

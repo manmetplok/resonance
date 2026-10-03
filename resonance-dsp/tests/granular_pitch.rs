@@ -355,7 +355,7 @@ fn render_transposed(source: &[f32], semitones: f32, anti_alias: bool) -> Vec<f3
         mode: SchedulerMode::Sync,
         pitch_semitones: semitones,
         anti_alias,
-        interp: resonance_dsp::InterpQuality::Bspline6,
+        interp: resonance_dsp::InterpQuality::Lagrange6,
         ..GrainParams::default()
     };
     render_seconds(&mut engine, source, &params, 1.0).0

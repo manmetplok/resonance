@@ -24,18 +24,18 @@ impl LfoParams {
         default_depth: f32,
         default_retrigger: bool,
     ) -> Self {
-        let sh_id: &'static str = Box::leak(format!("lfo{}_shape", num).into_boxed_str());
-        let sh_name: &'static str = Box::leak(format!("LFO {} Shape", num).into_boxed_str());
-        let rt_id: &'static str = Box::leak(format!("lfo{}_rate", num).into_boxed_str());
-        let rt_name: &'static str = Box::leak(format!("LFO {} Rate", num).into_boxed_str());
-        let dp_id: &'static str = Box::leak(format!("lfo{}_depth", num).into_boxed_str());
-        let dp_name: &'static str = Box::leak(format!("LFO {} Depth", num).into_boxed_str());
-        let rtr_id: &'static str = Box::leak(format!("lfo{}_retrigger", num).into_boxed_str());
-        let rtr_name: &'static str = Box::leak(format!("LFO {} Retrigger", num).into_boxed_str());
-        let sync_id: &'static str = Box::leak(format!("lfo{}_sync", num).into_boxed_str());
-        let sync_name: &'static str = Box::leak(format!("LFO {} Sync", num).into_boxed_str());
-        let div_id: &'static str = Box::leak(format!("lfo{}_division", num).into_boxed_str());
-        let div_name: &'static str = Box::leak(format!("LFO {} Division", num).into_boxed_str());
+        let sh_id: &'static str = super::intern(format!("lfo{}_shape", num));
+        let sh_name: &'static str = super::intern(format!("LFO {} Shape", num));
+        let rt_id: &'static str = super::intern(format!("lfo{}_rate", num));
+        let rt_name: &'static str = super::intern(format!("LFO {} Rate", num));
+        let dp_id: &'static str = super::intern(format!("lfo{}_depth", num));
+        let dp_name: &'static str = super::intern(format!("LFO {} Depth", num));
+        let rtr_id: &'static str = super::intern(format!("lfo{}_retrigger", num));
+        let rtr_name: &'static str = super::intern(format!("LFO {} Retrigger", num));
+        let sync_id: &'static str = super::intern(format!("lfo{}_sync", num));
+        let sync_name: &'static str = super::intern(format!("LFO {} Sync", num));
+        let div_id: &'static str = super::intern(format!("lfo{}_division", num));
+        let div_name: &'static str = super::intern(format!("LFO {} Division", num));
 
         Self {
             shape: IntParam::new(sh_id, sh_name, 0, IntRange::Linear { min: 0, max: 4 }),

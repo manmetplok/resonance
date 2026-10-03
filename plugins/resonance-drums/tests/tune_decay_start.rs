@@ -1,7 +1,7 @@
 //! Pitch, decay and sample start per pad (drums-plugin-rework.md §7 E8).
 //!
 //! - `pad_N_tune` +12 plays an octave up (and −12 an octave down), by
-//!   fractional playback with Hermite interpolation — on a resident take
+//!   fractional playback (Hermite down, band-limited up) — on a resident take
 //!   and on a streamed one, whose tuned render is bit-identical to the
 //!   resident one (the same frames, read through the head / ring path),
 //!   live with a stepped reader and offline with reader threads.
@@ -239,7 +239,10 @@ fn tuned_playback_has_no_steps() {
     let out = render_kick(&mut s, &params_tuned(12.0), 10_000, None);
     // Max slope of 0.5·sin(2π·600·t) per frame at 48 kHz.
     let slope = 0.5 * std::f32::consts::TAU * 600.0 / SR;
-    for i in 1..out.len() {
+    // Past the onset: a pitched-up voice reads band-limited (DSP2-09),
+    // and the sinc rings by a few percent over the sine's abrupt start
+    // for the kernel's half-width (10 output frames at +12 st).
+    for i in 32..out.len() {
         assert!(
             (out[i] - out[i - 1]).abs() <= slope * 1.05,
             "step {} at {i}",

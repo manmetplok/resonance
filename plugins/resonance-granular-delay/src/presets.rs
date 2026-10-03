@@ -48,7 +48,7 @@ pub const PRESETS: &[PresetEntry] = &[
         json: include_str!("../presets/d_minor_shimmer_cloud.json"),
     },
     // Pitch-Sync (PSOLA) scheduler, semitone quantize, and the HQ
-    // quality tier (B-spline reads + anti-alias).
+    // quality tier (6-point Lagrange reads + anti-alias).
     PresetEntry {
         id: "vocal-doubler-psola-hq",
         name: "Vocal Doubler — PSOLA + HQ",

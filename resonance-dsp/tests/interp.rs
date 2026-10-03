@@ -4,7 +4,7 @@
 
 use resonance_dsp::{
     bspline6, hermite4, lagrange6, read_bspline6_wrapped, read_hermite_wrapped,
-    read_linear_wrapped,
+    read_lagrange6_wrapped, read_linear_wrapped,
 };
 use std::f32::consts::TAU;
 
@@ -280,6 +280,41 @@ fn bspline6_circular_read_wraps_seamlessly() {
 fn bspline6_circular_read_rejects_short_buffers() {
     let buf = vec![0.0_f32; 4]; // power of two but below the 6-pt span
     read_bspline6_wrapped(&buf, 0.5);
+}
+
+// --- Lagrange circular read (HQ tier since DSP2-02). -------------------
+
+/// Peak amplitude of a 10 kHz sine (at 48 kHz) read back at a fixed
+/// fractional offset `frac` from every integer position.
+fn read_peak(read: fn(&[f32], f64) -> f32, frac: f64) -> f32 {
+    let len = 4096_usize;
+    let w = TAU as f64 * 10_000.0 / 48_000.0;
+    let buf: Vec<f32> = (0..len).map(|i| (w * i as f64).sin() as f32).collect();
+    (16..len - 16)
+        .map(|i| read(&buf, i as f64 + frac).abs())
+        .fold(0.0_f32, f32::max)
+}
+
+#[test]
+fn lagrange6_read_keeps_the_passband() {
+    // DSP2-02: a 10 kHz sine through the HQ read loses < 0.5 dB at any
+    // fractional position. The B-spline it replaced lost 3.8 dB.
+    for frac in [0.0, 0.25, 0.5, 0.75] {
+        let peak = read_peak(read_lagrange6_wrapped, frac);
+        let db = 20.0 * peak.log10();
+        assert!(db > -0.5, "frac {frac}: 10 kHz read at {db:.2} dB");
+    }
+    let bspline_db = 20.0 * read_peak(read_bspline6_wrapped, 0.0).log10();
+    assert!(bspline_db < -3.0, "the B-spline droop this replaces: {bspline_db:.2} dB");
+}
+
+#[test]
+fn lagrange6_read_is_exact_at_integers_and_wraps() {
+    let buf: Vec<f32> = (0..16).map(|i| (i as f32 * 0.7).sin()).collect();
+    for i in 0..16 {
+        assert_eq!(read_lagrange6_wrapped(&buf, i as f64), buf[i]);
+        assert_eq!(read_lagrange6_wrapped(&buf, i as f64 + 16.0), buf[i]);
+    }
 }
 
 // --- Linear circular read (Lo-fi tier, ba todo #1083). ----------------

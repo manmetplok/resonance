@@ -49,7 +49,7 @@ pub use hysteresis::{Hysteresis, HysteresisSolver, JaParams};
 pub use granular::{GrainEngine, GrainParams, GrainView, InterpQuality, SchedulerMode, MAX_GRAINS};
 pub use interp::{
     BandlimitedReader, bspline6, hermite4, lagrange6, read_bspline6_wrapped, read_hermite_wrapped,
-    read_linear_wrapped,
+    read_lagrange6_wrapped, read_linear_wrapped,
 };
 pub use lfo::Lfo;
 pub use oversample::{halfband_coefs, Halfband, OversampleFactor, Oversampler};

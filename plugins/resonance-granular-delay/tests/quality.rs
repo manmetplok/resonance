@@ -1,7 +1,7 @@
 //! Quality tiers (ba todo #1083, doc #252 §3/§9): Lo-fi / Normal / HQ.
 //!
 //! Provable tier semantics: on a +12 st transposed sine the aliased
-//! energy orders HQ < Normal < Lo-fi (6-pt B-spline + forced AA vs
+//! energy orders HQ < Normal < Lo-fi (6-pt Lagrange + forced AA vs
 //! Hermite vs linear + µ-law); Lo-fi shows bounded-SNR µ-law
 //! quantization; Lo-fi caps the grain pool at half; and tier switches
 //! mid-stream are click-free and allocation-free.
@@ -162,7 +162,7 @@ fn aliased_energy(quality: i32) -> f32 {
 
 /// The tier ladder is audible where it claims to be: on a +12 st
 /// transposed 15 kHz sine (whose transposed partial folds — see
-/// [`aliased_energy`]), HQ (B-spline + forced AA) has measurably less
+/// [`aliased_energy`]), HQ (Lagrange + forced AA) has measurably less
 /// aliased energy than Normal (Hermite, no AA), and Normal less than
 /// Lo-fi (linear reads + µ-law distortion). Empirical margins are ~4×
 /// per step; the asserts require 2×.
@@ -353,4 +353,35 @@ fn tier_switching_does_not_allocate() {
         "tier switching allocated {} times on the audio path",
         after - before
     );
+}
+
+/// DSP2-02: HQ must not be darker than Normal. At pitch 0 (and a hair
+/// below, which sweeps the fractional read phase without engaging the
+/// upward anti-alias read) a 5 and a 10 kHz partial through HQ must land
+/// within 0.5 dB of Normal. The old quintic B-spline approximated rather
+/// than interpolated — `[1,26,66,26,1]/120` even at integer positions —
+/// and lost ~3.8 dB at 10 kHz, compounding on every recirculation.
+#[test]
+fn hq_keeps_the_passband_of_normal() {
+    let level = |quality: i32, pitch: f32, hz: f32| {
+        let mut plugin = tier_plugin(quality, 250.0, 25.0, pitch);
+        plugin.initialize(SR, 4096);
+        let frames = (2.0 * SR) as usize;
+        let input = sine(frames, hz, 0.5);
+        let mut left = input.clone();
+        let mut right = input;
+        run_blocks(&mut plugin, &mut left, &mut right, 512);
+        let out_hz = hz * 2f32.powf(pitch / 12.0);
+        20.0 * dft_mag(&left[SR as usize..], out_hz).log10()
+    };
+    for pitch in [0.0, -0.07] {
+        for hz in [5_000.0, 10_000.0] {
+            let normal = level(1, pitch, hz);
+            let hq = level(2, pitch, hz);
+            assert!(
+                (hq - normal).abs() < 0.5,
+                "{hz} Hz at {pitch} st: HQ {hq:.2} dB vs Normal {normal:.2} dB"
+            );
+        }
+    }
 }

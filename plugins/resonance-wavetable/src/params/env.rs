@@ -17,16 +17,16 @@ impl EnvParams {
         default_sustain: f32,
         default_release: f32,
     ) -> Self {
-        let a_id: &'static str = Box::leak(format!("{}_attack", prefix).into_boxed_str());
-        let a_name: &'static str = Box::leak(format!("{} Attack", label).into_boxed_str());
-        let d_id: &'static str = Box::leak(format!("{}_decay", prefix).into_boxed_str());
-        let d_name: &'static str = Box::leak(format!("{} Decay", label).into_boxed_str());
-        let s_id: &'static str = Box::leak(format!("{}_sustain", prefix).into_boxed_str());
-        let s_name: &'static str = Box::leak(format!("{} Sustain", label).into_boxed_str());
-        let r_id: &'static str = Box::leak(format!("{}_release", prefix).into_boxed_str());
-        let r_name: &'static str = Box::leak(format!("{} Release", label).into_boxed_str());
-        let c_id: &'static str = Box::leak(format!("{}_curve", prefix).into_boxed_str());
-        let c_name: &'static str = Box::leak(format!("{} Curve", label).into_boxed_str());
+        let a_id: &'static str = super::intern(format!("{}_attack", prefix));
+        let a_name: &'static str = super::intern(format!("{} Attack", label));
+        let d_id: &'static str = super::intern(format!("{}_decay", prefix));
+        let d_name: &'static str = super::intern(format!("{} Decay", label));
+        let s_id: &'static str = super::intern(format!("{}_sustain", prefix));
+        let s_name: &'static str = super::intern(format!("{} Sustain", label));
+        let r_id: &'static str = super::intern(format!("{}_release", prefix));
+        let r_name: &'static str = super::intern(format!("{} Release", label));
+        let c_id: &'static str = super::intern(format!("{}_curve", prefix));
+        let c_name: &'static str = super::intern(format!("{} Curve", label));
 
         Self {
             attack: FloatParam::new(

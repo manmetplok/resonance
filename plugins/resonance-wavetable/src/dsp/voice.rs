@@ -214,6 +214,13 @@ pub struct Voice {
     pub last_osc1_pos: f32,
     pub last_osc2_pos: f32,
     pub last_lfo_phases: [f32; 3],
+
+    /// The first unison sub-voice whose oscillator phases the next
+    /// [`Self::seed_analog`] sets. `trigger()` writes it: 0 for a voice
+    /// that was idle, the previous unison count for a sounding voice that
+    /// was retriggered or stolen, whose running phases must carry on
+    /// (DSP2-03).
+    fresh_phases_from: usize,
 }
 
 impl Voice {
@@ -256,6 +263,7 @@ impl Voice {
             last_osc1_pos: 0.0,
             last_osc2_pos: 0.0,
             last_lfo_phases: [0.0; 3],
+            fresh_phases_from: 0,
         }
     }
 
@@ -280,6 +288,16 @@ impl Voice {
         alternate_value: f32,
     ) {
         let was_idle = self.state == VoiceState::Idle;
+        // A sounding voice (a retrigger, or a steal) carries on from where
+        // its output is (DSP2-03): the amp envelope keeps its level, so the
+        // oscillators, filters, sub and noise must keep their state too —
+        // resetting them under a non-zero envelope was a click, worst
+        // through a resonant low-pass. The level is rescaled by the
+        // velocity ratio so `envelope × velocity` does not step either
+        // (capped at full scale: a much softer note can still dip).
+        if !was_idle && velocity > 1.0e-6 {
+            self.amp_env.level = (self.amp_env.level * self.velocity / velocity).min(1.0);
+        }
         self.state = VoiceState::Playing;
         self.note = note;
         self.velocity = velocity;
@@ -305,18 +323,29 @@ impl Voice {
             self.lfo3.reset_phase();
         }
 
-        self.clear_filters();
-        self.sub = SubOsc::default();
-        self.noise = NoiseGen::default();
+        let old_count = self.unison_count;
+        self.unison_count = unison_count.clamp(1, MAX_UNISON);
+        if was_idle {
+            self.clear_filters();
+            self.sub = SubOsc::default();
+            self.noise = NoiseGen::default();
+            for u in self.unison.iter_mut() {
+                u.reset();
+            }
+            self.fresh_phases_from = 0;
+        } else {
+            // Sounding: keep everything that shapes the waveform. Only
+            // sub-voices the stack just grew by start afresh.
+            for u in self.unison.iter_mut().skip(old_count) {
+                u.reset();
+            }
+            self.fresh_phases_from = old_count;
+        }
         self.filter_dirty = true;
         self.mod_dirty = true;
         self.osc_setup_dirty = true;
 
         // Distribute unison voices
-        self.unison_count = unison_count.clamp(1, MAX_UNISON);
-        for u in 0..MAX_UNISON {
-            self.unison[u].reset();
-        }
         distribute_unison(&mut self.unison, self.unison_count, spread);
     }
 
@@ -334,22 +363,31 @@ impl Voice {
     ///
     /// Called right after [`Self::trigger`] (never after a legato
     /// take-over, whose phases and drift carry on). `phase_random` is the
-    /// `osc_phase_random` knob: each start phase is a uniform draw scaled by
-    /// it, so 0 leaves `trigger`'s reset-to-zero phases exactly as they were
-    /// and 1 is a fully random start — the free-running oscillator of an
-    /// analog poly, where a key finds its VCO wherever it happens to be.
-    /// The draws are the same whatever the knobs say.
+    /// `osc_phase_random` knob: each start phase is the sub-voice's fixed
+    /// [`unison_phase_spread`] offset plus a uniform draw scaled by it, so
+    /// 0 is the fixed spread (sub-voice 0 at phase 0) and 1 is a fully
+    /// random start — the free-running oscillator of an analog poly, where
+    /// a key finds its VCO wherever it happens to be. The draws are the
+    /// same whatever the knobs say. A sounding voice that was retriggered
+    /// keeps its running phases (DSP2-03).
     pub fn seed_analog(&mut self, seed: u32, phase_random: f32, coeffs: &DriftCoeffs) {
         let rng = &mut self.analog_rng;
         *rng = AnalogRng::new(seed);
         self.analog_cutoff = rng.bipolar();
         self.analog_level = rng.bipolar();
         let phase_random = phase_random as f64;
-        for sub in self.unison.iter_mut() {
+        for (i, sub) in self.unison.iter_mut().enumerate() {
             sub.osc1_drift.start(rng, coeffs);
             sub.osc2_drift.start(rng, coeffs);
-            sub.osc1_phase = rng.unit() as f64 * phase_random;
-            sub.osc2_phase = rng.unit() as f64 * phase_random;
+            // Drawn either way, so the stream is the same for every voice.
+            let (p1, p2) = (rng.unit() as f64, rng.unit() as f64);
+            // A retriggered sounding voice keeps its running phases
+            // (DSP2-03); see `fresh_phases_from`.
+            if i >= self.fresh_phases_from {
+                let (s1, s2) = unison_phase_spread(i);
+                sub.osc1_phase = (s1 + p1 * phase_random).fract();
+                sub.osc2_phase = (s2 + p2 * phase_random).fract();
+            }
         }
     }
 
@@ -381,6 +419,24 @@ impl Voice {
         self.amp_env.reset();
         self.mod_env.reset();
     }
+}
+
+/// Fixed start-phase offsets of unison sub-voice `i` for osc1 and osc2, in
+/// cycles (DSP2-13).
+///
+/// With every sub-voice starting at phase 0 the stack was phase-locked at
+/// the onset: a coherent peak about √N above the steady level (the sum is
+/// scaled by 1/√N), then a slow phasey sweep as the detune pulled the
+/// copies apart. Low-discrepancy offsets (multiples of the golden-ratio
+/// and plastic-number conjugates) spread the copies at once without ever
+/// lining up evenly — `i / N` spacing would cancel a saw's lower harmonics
+/// at the onset instead. Sub-voice 0 stays at phase 0, so a single-voice
+/// patch with `osc_phase_random` at 0 starts exactly as before.
+#[inline]
+fn unison_phase_spread(i: usize) -> (f64, f64) {
+    const GOLDEN: f64 = 0.618_033_988_749_894_9;
+    const PLASTIC: f64 = 0.754_877_666_246_692_8;
+    ((i as f64 * GOLDEN).fract(), (i as f64 * PLASTIC).fract())
 }
 
 /// Distribute unison sub-voices symmetrically across the stereo field and

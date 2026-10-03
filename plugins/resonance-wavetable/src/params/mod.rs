@@ -14,6 +14,31 @@ use resonance_plugin::*;
 
 use crate::dsp::modulation::NUM_MOD_SLOTS;
 
+/// A `&'static str` for a parameter id or name built at runtime
+/// (`"osc2_level"`, `"LFO 3 Rate"`, …), which `FloatParam::new` and
+/// friends require.
+///
+/// Each distinct string is leaked once per process and then reused, so
+/// creating more plugin instances does not leak more (DSP2-16: the
+/// per-section constructors used to `Box::leak` a fresh copy of every
+/// id and name on every instantiation). Only called while building
+/// parameters, never on the audio thread.
+pub(crate) fn intern(s: String) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static INTERNED: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let mut set = INTERNED
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(&existing) = set.get(s.as_str()) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(s.into_boxed_str());
+    set.insert(leaked);
+    leaked
+}
+
 pub mod analog;
 pub mod character;
 pub mod env;

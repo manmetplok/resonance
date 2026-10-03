@@ -141,7 +141,7 @@ pub struct GranularDelayParams {
     /// 0 = Lo-fi, 1 = Normal, 2 = HQ (ba todo #1083, doc #252 §3/§9).
     /// Lo-fi: 2-pt linear grain reads, 8-bit µ-law quantization of the
     /// grain streams, grain pool capped at half. Normal: 4-pt Hermite.
-    /// HQ: 6-pt B-spline reads plus the rate-tracked per-grain
+    /// HQ: 6-pt Lagrange reads plus the rate-tracked per-grain
     /// anti-alias lowpass forced on. All ingredients are grain-latched
     /// at spawn, so switching tiers mid-stream is click-free.
     pub quality: IntParam,

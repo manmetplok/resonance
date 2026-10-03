@@ -284,6 +284,22 @@ fn output_matches_golden() {
     // (envelopes, phases, filter and LFOs carry on). Only `glide_u3`, the
     // mono scenario, moved (24306 samples).
     //
+    // And for DSP2-03: retriggering or stealing a *sounding* voice keeps
+    // its oscillator phases, filter, sub and noise state, and rescales
+    // the envelope by the velocity ratio, instead of resetting them under
+    // a non-zero envelope (a click). Only `voice_stealing_u7`, the one
+    // scenario that steals, moved.
+    //
+    // And for DSP2-13: unison sub-voices start at fixed low-discrepancy
+    // phase offsets instead of all at 0 (a coherent onset peak). Every
+    // scenario with unison > 1 moved; `init_single` (sub-voice 0 only,
+    // still at phase 0) did not.
+    //
+    // And for DSP2-12: envelope times are times to target (attack to the
+    // peak, decay to sustain, release to -60 dB) instead of one-pole time
+    // constants, the curve shapes without lengthening, and sustain
+    // glides. Every scenario moved.
+    //
     // Every transform applied to the DSP itself is a caching or hoisting
     // change that re-uses the identical expression, so all of those are
     // bit-exact against the golden — with exactly one deliberate exception:

@@ -63,3 +63,18 @@ fn instances_share_wavetable_storage() {
         );
     }
 }
+
+/// DSP2-16: parameter ids and names built at runtime are interned, so a
+/// second instance reuses the first one's strings instead of leaking its
+/// own copy of every one.
+#[test]
+fn param_ids_and_names_are_shared_between_instances() {
+    use resonance_wavetable::params::{WavetableParams, PARAM_COUNT};
+    let a = WavetableParams::new();
+    let b = WavetableParams::new();
+    for i in 0..PARAM_COUNT {
+        let (pa, pb) = (a.param_at(i), b.param_at(i));
+        assert_eq!(pa.id().as_ptr(), pb.id().as_ptr(), "id {} leaked again", pa.id());
+        assert_eq!(pa.name().as_ptr(), pb.name().as_ptr(), "name {} leaked again", pa.name());
+    }
+}

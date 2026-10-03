@@ -115,3 +115,52 @@ fn reenabling_oscillators_resumes_audio() {
     let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     assert!(peak > 1e-3, "re-enabled oscillator stayed silent");
 }
+
+/// DSP2-16: the control-rate grid (filter/mod refresh every 16 samples,
+/// drift every 64) runs across blocks, so with static parameters the
+/// output does not depend on the block size. It used to restart at each
+/// block's sample 0, so a bounce and a live render in different block
+/// sizes stepped a fast LFO on cutoff at different samples.
+#[test]
+fn output_does_not_depend_on_block_size() {
+    let params = WavetableParams::new();
+    params.filter.enabled.set_value(true);
+    params.filter.cutoff.set_value(1200.0);
+    params.lfo1.rate.set_value(9.0);
+    params.lfo1.depth.set_value(0.8);
+    params.mod_slots[0].source.set_value(1); // LFO1
+    params.mod_slots[0].destination.set_value(5); // filter cutoff
+    params.mod_slots[0].amount.set_value(0.6);
+    params.analog.drift.set_value(0.5);
+    let render_in = |block: usize| {
+        let mut engine = SynthEngine::new();
+        engine.initialize(SR);
+        let total = 24_000usize;
+        let mut out = Vec::with_capacity(total);
+        let mut start = 0;
+        while start < total {
+            let n = block.min(total - start);
+            let events = if start == 0 {
+                vec![NoteEvent::NoteOn {
+                    note: 48,
+                    velocity: 1.0,
+                    timing: 0,
+                }]
+            } else {
+                Vec::new()
+            };
+            let mut left = vec![0.0f32; n];
+            let mut right = vec![0.0f32; n];
+            let mut iter = EventIterator::new(&events);
+            engine.render_block(&mut left, &mut right, n, &params, &mut iter, None);
+            out.extend_from_slice(&left);
+            start += n;
+        }
+        out
+    };
+    let a = render_in(128);
+    let b = render_in(37);
+    assert!(a.iter().fold(0.0f32, |m, s| m.max(s.abs())) > 1e-3, "rendered silence");
+    let diff = a.iter().zip(&b).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
+    assert!(diff < 1e-5, "block 128 vs block 37 differ by {diff:.2e}");
+}

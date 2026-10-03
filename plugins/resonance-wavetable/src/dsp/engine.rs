@@ -37,6 +37,12 @@ pub struct SynthEngine {
     pub(crate) active_len: usize,
     voice_counter: u64,
     pub(crate) sample_rate: f32,
+    /// Running sample count the control-rate ticks (filter/mod refresh
+    /// every `FILTER_COEFF_INTERVAL`, analog drift every `DRIFT_INTERVAL`)
+    /// are taken from. It runs across blocks instead of restarting at each
+    /// block's sample 0, so the tick grid — and so the output — does not
+    /// depend on how the host slices the stream into blocks (DSP2-16).
+    pub(crate) control_clock: u32,
 
     // Global LFO phases (used when retrigger=false)
     pub global_lfo1: crate::dsp::lfo::MultiLfo,
@@ -175,6 +181,7 @@ impl SynthEngine {
             active_len: 0,
             voice_counter: 0,
             sample_rate: 44100.0,
+            control_clock: 0,
             global_lfo1: crate::dsp::lfo::MultiLfo::new(),
             global_lfo2: crate::dsp::lfo::MultiLfo::new(),
             global_lfo3: crate::dsp::lfo::MultiLfo::new(),
@@ -320,6 +327,7 @@ impl SynthEngine {
         }
         self.active_len = 0;
         self.voice_counter = 0;
+        self.control_clock = 0;
         self.last_note = None;
         self.held_len = 0;
         self.analog_rng = AnalogRng::new(ANALOG_SEED);

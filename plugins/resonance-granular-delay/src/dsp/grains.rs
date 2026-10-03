@@ -382,7 +382,7 @@ pub(super) fn base_grain_params(
     let (interp, lofi_quantize, max_polyphony, anti_alias) = match params.quality {
         QualityTier::LoFi => (InterpQuality::Linear, true, LOFI_MAX_GRAINS, false),
         QualityTier::Normal => (InterpQuality::Hermite4, false, MAX_GRAINS, false),
-        QualityTier::Hq => (InterpQuality::Bspline6, false, MAX_GRAINS, true),
+        QualityTier::Hq => (InterpQuality::Lagrange6, false, MAX_GRAINS, true),
     };
 
     GrainParams {

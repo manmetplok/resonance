@@ -156,10 +156,11 @@ impl DelayDsp {
         // tone filters, which stay in the loop deliberately — wide open
         // they are near-transparent, closed in they dull the frozen
         // loop the way the tone knobs promise.
+        let tape = character == 1;
         let (fb_l, fb_r) = if freeze {
             (filt_l, filt_r)
         } else {
-            let drive_amt = if character == 1 {
+            let drive_amt = if tape {
                 1.0 + 3.0 * (drive + 0.1)
             } else {
                 1.0 + 3.0 * drive
@@ -167,6 +168,27 @@ impl DelayDsp {
             let sat_l = (filt_l * drive_amt).tanh() / drive_amt;
             let sat_r = (filt_r * drive_amt).tanh() / drive_amt;
             (sat_l * feedback, sat_r * feedback)
+        };
+
+        // The wet *output* goes through the tone filters and the drive
+        // too (DSP2-10), so they colour the first echo and not only the
+        // repeats: at feedback 0 Hi Cut, Lo Cut and Drive still do what
+        // their labels say. Echo n has passed the filters n times.
+        //
+        // The output shaper is the same unity-slope `tanh(x·d)/d` family
+        // but without the loop's `1 +` floor: `d = 3·drive` (plus the
+        // tape character's 0.1 of drive), which tends to the identity as
+        // `d → 0`, so a Digital delay at Drive 0 has a clean first echo.
+        // The loop keeps its floor — that soft ceiling is what stops a
+        // high-feedback loop running away. Freeze holds unshaped.
+        let out_drive = if tape { 3.0 * (drive + 0.1) } else { 3.0 * drive };
+        let (out_l, out_r) = if freeze || out_drive < 1.0e-4 {
+            (filt_l, filt_r)
+        } else {
+            (
+                (filt_l * out_drive).tanh() / out_drive,
+                (filt_r * out_drive).tanh() / out_drive,
+            )
         };
 
         match routing {
@@ -191,7 +213,7 @@ impl DelayDsp {
             }
         }
 
-        (wet_l, wet_r)
+        (out_l, out_r)
     }
 
     /// Render one process block. Reads per-sample-smoothed
