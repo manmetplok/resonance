@@ -4,6 +4,14 @@ use crate::sync::DIVISION_LABELS;
 
 pub const PARAM_COUNT: usize = 22;
 
+/// `character`'s values, in order (FU-P2a: moved here, off the editor,
+/// via [`IntParam::with_choices`], so the host's automation lane and
+/// the control API's `choices[]` read the same words the editor
+/// shows).
+pub const CHARACTER_LABELS: &[&str] = &["Digital", "Analog"];
+/// `routing`'s values, in order (same follow-up).
+pub const ROUTING_LABELS: &[&str] = &["Stereo", "Ping-Pong", "Dual"];
+
 pub struct DelayParams {
     pub sync: BoolParam,
     /// Delay time as a musical division; reads as "1/8D", never as "8"
@@ -12,7 +20,9 @@ pub struct DelayParams {
     pub time_ms: FloatParam,
     pub feedback: FloatParam,
     pub mix: FloatParam,
+    /// Labelled from [`CHARACTER_LABELS`] via [`IntParam::with_choices`].
     pub character: IntParam,
+    /// Labelled from [`ROUTING_LABELS`] via [`IntParam::with_choices`].
     pub routing: IntParam,
     pub stereo_offset: FloatParam,
     pub hi_cut: FloatParam,
@@ -127,9 +137,11 @@ impl Default for DelayParams {
                 "Character",
                 0,
                 IntRange::Linear { min: 0, max: 1 },
-            ),
+            )
+            .with_choices(CHARACTER_LABELS),
 
-            routing: IntParam::new("routing", "Routing", 0, IntRange::Linear { min: 0, max: 2 }),
+            routing: IntParam::new("routing", "Routing", 0, IntRange::Linear { min: 0, max: 2 })
+                .with_choices(ROUTING_LABELS),
 
             stereo_offset: FloatParam::new(
                 "stereo_offset",
