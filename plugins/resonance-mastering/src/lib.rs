@@ -49,6 +49,9 @@ pub struct ResonanceMastering {
     /// plugin's extra state, so the identity survives closing the window
     /// (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     chain: Option<Chain>,
 }
 
@@ -89,6 +92,7 @@ impl ResonancePlugin for ResonanceMastering {
             params: Arc::new(MasteringParams::default()),
             // The assistant's target choice rides along with the preset
             // identity (warmth-width-depth.md §7.4).
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets: resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(
                 assistant::AssistantStateSaver::new(viz.clone()),
             ),
@@ -149,12 +153,17 @@ impl ResonancePlugin for ResonanceMastering {
         Some(self.presets.clone())
     }
 
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        self.editor_announcer.attach(host);
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::MasteringEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

@@ -26,6 +26,7 @@ pub struct WavetableEditorFactory {
     viz: Arc<WavetableVizState>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
     user_tables: Arc<UserWavetables>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl WavetableEditorFactory {
@@ -34,8 +35,10 @@ impl WavetableEditorFactory {
         viz: Arc<WavetableVizState>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
         user_tables: Arc<UserWavetables>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             viz,
             presets,
@@ -68,7 +71,7 @@ impl EditorFactory for WavetableEditorFactory {
             self.user_tables.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Wavetable".to_string(),
                 app_id: "com.resonance.wavetable".to_string(),

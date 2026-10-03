@@ -26,6 +26,7 @@ pub struct GranularEditorFactory {
     params: Arc<GranularDelayParams>,
     viz: Arc<GranularViz>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl GranularEditorFactory {
@@ -33,8 +34,10 @@ impl GranularEditorFactory {
         params: Arc<GranularDelayParams>,
         viz: Arc<GranularViz>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             viz,
             presets,
@@ -62,7 +65,7 @@ impl EditorFactory for GranularEditorFactory {
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Granular Delay".to_string(),
                 app_id: "com.resonance.granular-delay".to_string(),

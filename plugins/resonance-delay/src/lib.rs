@@ -10,7 +10,7 @@ pub mod sync;
 pub mod viz;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use dsp::DelayDsp;
 use params::{DelayParams, DelaySmoothers, PARAM_COUNT};
@@ -25,6 +25,9 @@ pub struct ResonanceDelay {
     presets: Arc<resonance_plugin::presets::PresetSession>,
     smoothers: DelaySmoothers,
     viz: Arc<DelayViz>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: EditAnnouncer,
     dsp: Option<DelayDsp>,
     sample_rate: f32,
 }
@@ -59,6 +62,7 @@ impl ResonancePlugin for ResonanceDelay {
             presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             smoothers: DelaySmoothers::new(),
             viz: DelayViz::new(),
+            editor_announcer: EditAnnouncer::new(),
             dsp: None,
             sample_rate: 48_000.0,
         }
@@ -214,7 +218,12 @@ impl ResonancePlugin for ResonanceDelay {
             self.params.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
+    }
+
+    fn set_host(&mut self, host: Arc<HostHandle>) {
+        self.editor_announcer.attach(host);
     }
 }
 

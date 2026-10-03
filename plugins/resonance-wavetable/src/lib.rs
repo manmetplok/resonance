@@ -27,6 +27,9 @@ pub struct ResonanceWavetable {
     /// plugin's extra state, so the identity survives closing the window
     /// (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     engine: SynthEngine,
     /// Shared audio-thread → UI-thread visualisation state. Lives as long as
     /// the plugin instance. Cloned into the editor factory when the host
@@ -80,6 +83,7 @@ impl ResonancePlugin for ResonanceWavetable {
             params: Arc::new(WavetableParams::new()),
             // The preset identity wraps the user-table saver: chaining is
             // why `with_extra` exists.
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets: resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(user_tables.clone()),
             engine: SynthEngine::new(),
             viz: Arc::new(WavetableVizState::new()),
@@ -158,6 +162,10 @@ impl ResonancePlugin for ResonanceWavetable {
         Some(self.presets.clone())
     }
 
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        self.editor_announcer.attach(host);
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::WavetableEditorFactory::new(
@@ -165,6 +173,7 @@ impl ResonancePlugin for ResonanceWavetable {
             self.viz.clone(),
             self.presets.clone(),
             self.user_tables.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

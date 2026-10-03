@@ -17,6 +17,7 @@ pub struct StereoEditorFactory {
     params: Arc<StereoParams>,
     viz: Arc<StereoViz>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl StereoEditorFactory {
@@ -24,8 +25,10 @@ impl StereoEditorFactory {
         params: Arc<StereoParams>,
         viz: Arc<StereoViz>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             viz,
             presets,
@@ -53,7 +56,7 @@ impl EditorFactory for StereoEditorFactory {
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Stereo".to_string(),
                 app_id: "com.resonance.stereo".to_string(),

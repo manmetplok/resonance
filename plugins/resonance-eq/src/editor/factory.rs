@@ -20,6 +20,7 @@ pub struct EqEditorFactory {
     params: Arc<EqParams>,
     analyzer: Arc<AnalyzerState>,
     presets: Arc<PresetSession>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl EqEditorFactory {
@@ -27,8 +28,10 @@ impl EqEditorFactory {
         params: Arc<EqParams>,
         analyzer: Arc<AnalyzerState>,
         presets: Arc<PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             analyzer,
             presets,
@@ -59,7 +62,7 @@ impl EditorFactory for EqEditorFactory {
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance EQ".to_string(),
                 app_id: "com.resonance.eq".to_string(),

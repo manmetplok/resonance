@@ -34,6 +34,7 @@ pub struct MasteringEditorFactory {
     params: Arc<MasteringParams>,
     viz: Arc<MasteringViz>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl MasteringEditorFactory {
@@ -41,8 +42,10 @@ impl MasteringEditorFactory {
         params: Arc<MasteringParams>,
         viz: Arc<MasteringViz>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             viz,
             presets,
@@ -70,7 +73,7 @@ impl EditorFactory for MasteringEditorFactory {
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Mastering".to_string(),
                 app_id: "com.resonance.mastering".to_string(),

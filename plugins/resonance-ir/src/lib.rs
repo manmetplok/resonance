@@ -32,6 +32,9 @@ pub struct ResonanceIr {
     /// chained in front of this plugin's own `IrExtraState` so both ride
     /// along in `save_state` (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     /// Audio-thread-only smoothers. Lives outside the shared `Arc<IrParams>`
     /// so the audio thread can mutate smoother state through `&mut self`.
     smoothers: IrSmoothers,
@@ -127,6 +130,7 @@ impl ResonancePlugin for ResonanceIr {
         ));
         Self {
             params,
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets,
             smoothers: IrSmoothers::new(),
             viz: IrViz::new(),
@@ -152,6 +156,7 @@ impl ResonancePlugin for ResonanceIr {
     }
 
     fn set_host(&mut self, host: Arc<HostHandle>) {
+        self.editor_announcer.attach(host.clone());
         self.host = Some(host);
     }
 
@@ -310,6 +315,7 @@ impl ResonancePlugin for ResonanceIr {
             self.load_request.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

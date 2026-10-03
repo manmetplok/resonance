@@ -36,11 +36,15 @@ pub struct ReverbEditorFactory {
     params: Arc<ReverbParams>,
     viz: Arc<ReverbViz>,
     presets: Arc<PresetSession>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl ReverbEditorFactory {
-    pub fn new(params: Arc<ReverbParams>, viz: Arc<ReverbViz>, presets: Arc<PresetSession>) -> Self {
+    pub fn new(params: Arc<ReverbParams>, viz: Arc<ReverbViz>, presets: Arc<PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
+    ) -> Self {
         Self {
+            announcer,
             params,
             viz,
             presets,
@@ -68,7 +72,7 @@ impl EditorFactory for ReverbEditorFactory {
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Reverb".to_string(),
                 app_id: "com.resonance.reverb".to_string(),

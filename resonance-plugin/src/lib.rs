@@ -36,7 +36,7 @@ pub mod preset_ui;
 // Re-export core types for convenient use
 pub use clap_bridge::ClapBridge;
 pub use formatters::*;
-pub use host::HostHandle;
+pub use host::{EditAnnouncer, HostHandle};
 pub use loader::{rescan_directory, Mailbox};
 /// The `RUST_LOG`-unset filter, shared by the app binary and every bundle.
 pub use logging::DEFAULT_LOG_FILTER;

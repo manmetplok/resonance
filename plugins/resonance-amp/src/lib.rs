@@ -43,6 +43,9 @@ pub struct ResonanceAmp {
     /// chained in front of this plugin's own `AmpExtraState` so both ride
     /// along in `save_state` (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Handed to the editor so its controls announce edits to the host
+    /// (attached in `set_host`).
+    editor_announcer: resonance_plugin::EditAnnouncer,
     /// Lock-free meters + scope + transfer curve + tuner state shared
     /// with the editor.
     viz: Arc<AmpViz>,
@@ -87,6 +90,7 @@ impl ResonanceAmp {
 
         Self {
             params,
+            editor_announcer: resonance_plugin::EditAnnouncer::new(),
             presets,
             viz: AmpViz::new(),
             tuner: None,
@@ -312,6 +316,10 @@ impl ResonancePlugin for ResonanceAmp {
         Some(Arc::new(AmpParamText(self.params.clone())))
     }
 
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        self.editor_announcer.attach(host);
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::AmpEditorFactory::new(
@@ -319,6 +327,7 @@ impl ResonancePlugin for ResonanceAmp {
             self.load_request.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.editor_announcer.clone(),
         )))
     }
 }

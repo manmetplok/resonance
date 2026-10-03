@@ -23,6 +23,7 @@ pub struct GateEditorFactory {
     params: Arc<GateParams>,
     viz: Arc<GateViz>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    announcer: resonance_plugin::EditAnnouncer,
 }
 
 impl GateEditorFactory {
@@ -30,8 +31,10 @@ impl GateEditorFactory {
         params: Arc<GateParams>,
         viz: Arc<GateViz>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        announcer: resonance_plugin::EditAnnouncer,
     ) -> Self {
         Self {
+            announcer,
             params,
             viz,
             presets,
@@ -59,7 +62,7 @@ impl EditorFactory for GateEditorFactory {
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
-            app,
+            resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Gate".to_string(),
                 app_id: "com.resonance.gate".to_string(),
