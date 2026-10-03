@@ -166,4 +166,23 @@ impl Resonance {
             self.transport.loop_enabled,
         )
     }
+
+    /// Test-only: the CPU readout's polled load (code review UX-11).
+    #[doc(hidden)]
+    pub fn test_cpu_load(&self) -> Option<crate::state::CpuLoad> {
+        self.transport.cpu_load
+    }
+
+    /// Test-only: publish a DSP load on the engine handle as the mix
+    /// callback would (the next tick polls it).
+    #[doc(hidden)]
+    pub fn test_publish_dsp_load(&self, smoothed: f32, peak: f32) {
+        self.engine.__set_dsp_load_for_test(smoothed, peak);
+    }
+
+    /// Test-only: whether the BPM field holds uncommitted text.
+    #[doc(hidden)]
+    pub fn test_bpm_editing(&self) -> bool {
+        self.transport.bpm_editing
+    }
 }

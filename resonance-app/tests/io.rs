@@ -125,3 +125,5 @@ mod hermetic_user_state;
 mod preset_name_collisions;
 #[path = "io/track_color_persist.rs"]
 mod track_color_persist;
+#[path = "io/project_lifecycle_ux.rs"]
+mod project_lifecycle_ux;

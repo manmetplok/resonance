@@ -519,6 +519,18 @@ pub enum RecoveryChoice {
     Cancel,
 }
 
+/// A button on the unsaved-changes dialog a project switch (Open, New)
+/// raises over unsaved changes (code review UX-01).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchChoice {
+    /// Save (through Save As when untitled), then switch.
+    Save,
+    /// Switch, dropping the unsaved changes.
+    Discard,
+    /// Stay on the open project.
+    Cancel,
+}
+
 #[derive(Debug, Clone)]
 pub enum UiMessage {
     SwitchView(ViewMode),
@@ -541,10 +553,23 @@ pub enum UiMessage {
     /// User clicked "New Project" in the startup modal.
     StartNewProject,
     /// Replace the open project with a fresh, untitled empty one (the New
-    /// Project command) — the control API's `project.new` path. Refused
-    /// while the project has unsaved changes, a load or save is running,
-    /// or an offline render owns the engine.
+    /// Project command). Over unsaved changes it asks first (the
+    /// Save / Don't save / Cancel dialog, code review UX-01); refused while
+    /// a load or save is running, or an offline render owns the engine.
     NewEmptyProject,
+    /// Arm (`Some(name)`) or disarm (`None`) the inline "Delete?" confirm
+    /// on a user track preset's row in the add-track menu (code review
+    /// UX-14). The confirm's own button sends
+    /// `TrackMessage::DeleteUserPreset`.
+    ArmPresetDelete(Option<String>),
+    /// The pointer entered (`true`) or left (`false`) the transport's BPM
+    /// field (code review UX-15).
+    BpmFieldHovered(bool),
+    /// A mouse press landed while the BPM field holds uncommitted text.
+    /// Unless the pointer is over the field, the press was elsewhere and
+    /// the field reverts to the song tempo (iced's `text_input` has no
+    /// blur callback — the `inline_rename` pattern).
+    BpmFieldPointer,
     /// Select (highlight) a track in the arrange view, or deselect all.
     /// Whether the click replaces or extends the multi-selection is read
     /// from the live modifier state ([`ModifiersChanged`]).
@@ -730,6 +755,9 @@ impl UiMessage {
             | Self::DismissError
             | Self::StartNewProject
             | Self::NewEmptyProject
+            | Self::ArmPresetDelete(..)
+            | Self::BpmFieldHovered(..)
+            | Self::BpmFieldPointer
             | Self::SelectTrack(..)
             | Self::SelectBus(..)
             | Self::WindowResized(..)

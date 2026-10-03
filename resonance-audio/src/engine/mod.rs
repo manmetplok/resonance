@@ -1262,6 +1262,29 @@ impl AudioEngine {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// The realtime mix callback's load as `(smoothed, window_peak)`
+    /// fractions of the cycle budget, as [`crate::cycle_load`] publishes
+    /// them every mix call — for the app's CPU readout. `None` until a
+    /// mix call has published one (no audio callback has run yet).
+    pub fn dsp_load(&self) -> Option<(f32, f32)> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let smoothed = self.shared.dsp_load_ema_bits.load(Relaxed);
+        let peak = self.shared.dsp_load_peak_bits.load(Relaxed);
+        if smoothed == 0 && peak == 0 {
+            return None;
+        }
+        Some((f32::from_bits(smoothed), f32::from_bits(peak)))
+    }
+
+    /// Test-only hook: publish a DSP load as the mix callback would, so
+    /// app tests can drive the CPU readout without an audio stream.
+    #[doc(hidden)]
+    pub fn __set_dsp_load_for_test(&self, smoothed: f32, peak: f32) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.shared.dsp_load_ema_bits.store(smoothed.to_bits(), Relaxed);
+        self.shared.dsp_load_peak_bits.store(peak.to_bits(), Relaxed);
+    }
+
     /// Test-only hook: force the output-stream-lost flag so app tests
     /// can drive the banner logic without a real backend callback.
     #[doc(hidden)]

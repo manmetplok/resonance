@@ -134,6 +134,8 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     crate::update::plugin_preset_ui::poll_visible_lists(r);
     crate::update::plugin::flush_step_state(r, false);
     poll_engine_health(r);
+    poll_cpu_load(r);
+    r.banners.expire_history_notice(std::time::Instant::now());
     // A save the engine never answered must not wedge every later one
     // (code review STATE2-02).
     if let Some(task) = crate::update::project_io::check_save_watchdog(r) {
@@ -179,6 +181,16 @@ fn poll_engine_health(r: &mut Resonance) {
     } else {
         EngineHealth::Ok
     };
+}
+
+/// Poll the mix callback's published DSP load into the transport's CPU
+/// readout (code review UX-11). Lock-free atomics on the engine handle;
+/// the view only reads the copy.
+fn poll_cpu_load(r: &mut Resonance) {
+    r.transport.cpu_load = r
+        .engine
+        .dsp_load()
+        .map(|(smoothed, peak)| crate::state::CpuLoad { smoothed, peak });
 }
 
 /// Re-enumerate hardware MIDI ports periodically so a freshly

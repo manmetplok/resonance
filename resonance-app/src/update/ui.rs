@@ -43,9 +43,11 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::OpenAddTrackMenu => {
             r.ui.mixer.add_track_menu_open = true;
+            r.ui.mixer.preset_delete_armed = None;
         }
         UiMessage::CloseAddTrackMenu => {
             r.ui.mixer.add_track_menu_open = false;
+            r.ui.mixer.preset_delete_armed = None;
         }
         UiMessage::ToggleReferencePanel => {
             r.ui.mixer.reference_panel_open = !r.ui.mixer.reference_panel_open;
@@ -71,21 +73,29 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             return project_io::save_project_as_dialog();
         }
         UiMessage::NewEmptyProject => {
-            if r.session.dirty {
-                r.banners.error_message =
-                    Some("Save the project first: it has unsaved changes".into());
-                return Task::none();
-            }
             if r.io.loading || r.io.saving || r.io.save_state.is_some() {
                 return Task::none();
             }
             if r.refuse_project_switch_during_render() {
                 return Task::none();
             }
-            crate::update::project_io::instantiate_builtin(
+            // Over unsaved changes this asks Save / Don't save / Cancel
+            // rather than refusing (code review UX-01, UX-04).
+            return crate::update::project_io::request_switch(
                 r,
-                crate::update::project_io::BuiltinTemplateId::Empty,
+                crate::state::ProjectSwitch::NewEmpty,
             );
+        }
+        UiMessage::ArmPresetDelete(name) => {
+            r.ui.mixer.preset_delete_armed = name;
+        }
+        UiMessage::BpmFieldHovered(hovered) => {
+            r.transport.bpm_hovered = hovered;
+        }
+        UiMessage::BpmFieldPointer => {
+            if !r.transport.bpm_hovered {
+                r.transport.revert_bpm_text();
+            }
         }
         UiMessage::SelectTrack(id) => {
             // A track and a bus can't both be selected — the inspector
@@ -342,4 +352,17 @@ fn set_view(r: &mut Resonance, mode: ViewMode) -> Task<Message> {
 fn leave_view(r: &mut Resonance) -> Task<Message> {
     r.ui.mixer.reset_chain_ui();
     crate::update::inline_rename::commit(r)
+}
+
+/// A press anywhere while the BPM field holds uncommitted text (code review
+/// UX-15): [`UiMessage::BpmFieldPointer`] decides by hover whether it was
+/// off the field.
+pub fn bpm_pointer_event(event: &iced::Event) -> Option<Message> {
+    match event {
+        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_))
+        | iced::Event::Touch(iced::touch::Event::FingerPressed { .. }) => {
+            Some(Message::Ui(UiMessage::BpmFieldPointer))
+        }
+        _ => None,
+    }
 }

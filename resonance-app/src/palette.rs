@@ -237,7 +237,7 @@ pub fn flush_recent(r: &mut Resonance, force: bool) {
 fn command_row(r: &Resonance, id: CommandId, ranges: Vec<(usize, usize)>) -> PaletteRow {
     PaletteRow {
         item: PaletteItem::Command(id),
-        name: id.display_name().to_string(),
+        name: command_row_name(r, id),
         ranges,
         breadcrumb: id.breadcrumb(),
         glyph: id.glyph(),
@@ -246,6 +246,21 @@ fn command_row(r: &Resonance, id: CommandId, ranges: Vec<(usize, usize)>) -> Pal
             Available::Yes => None,
             Available::No(reason) => Some(reason),
         },
+    }
+}
+
+/// A command row's label. Undo / Redo name the edit they would step over
+/// ("Undo delete bus", code review UX-12); the label is appended to the
+/// display name, so the match highlight ranges still line up.
+fn command_row_name(r: &Resonance, id: CommandId) -> String {
+    let label = match id {
+        CommandId::Undo => r.session.undo.undo_label(),
+        CommandId::Redo => r.session.undo.redo_label(),
+        _ => None,
+    };
+    match label {
+        Some(label) => format!("{} {label}", id.display_name()),
+        None => id.display_name().to_string(),
     }
 }
 

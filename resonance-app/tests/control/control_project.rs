@@ -566,3 +566,50 @@ fn a_pending_template_instantiation_blocks_further_lifecycle_ops() {
         );
     }
 }
+
+// ---------------- untitled undo (code review STATE2-04) ----------------
+
+/// An agent's `project.new` → `track.add` → `edit.undo` removes the track:
+/// an untitled project's history is anchored to the session scratch dir, so
+/// the edits the MCP instructions promise are undoable really are.
+#[test]
+fn an_untitled_project_from_project_new_undoes_agent_edits() {
+    use resonance_audio::types::AudioCommand;
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    let job = started_job(roundtrip(&mut app, Request::without_params(1, "project.new")));
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert_eq!(job_status(&mut app, job).state, JobState::Done);
+    assert_eq!(app.test_project_path(), None);
+    while rx.try_recv().is_ok() {}
+
+    let added: serde_json::Value =
+        roundtrip(&mut app, request(2, "track.add", json!({ "kind": "audio" })))
+            .result()
+            .expect("track.add succeeds");
+    let id = added["track_id"].as_u64().expect("a track id");
+    while let Ok(cmd) = rx.try_recv() {
+        if let AudioCommand::AddTrack { id, .. } = cmd {
+            app.test_apply_engine_event(AudioEvent::TrackAdded { track_id: id });
+        }
+    }
+    assert!(app.test_registry().tracks.iter().any(|t| t.id == id));
+
+    let status: serde_json::Value = roundtrip(&mut app, Request::without_params(3, "edit.status"))
+        .result()
+        .expect("edit.status succeeds");
+    assert_eq!(status["can_undo"], true, "status: {status}");
+
+    let undone: serde_json::Value = roundtrip(&mut app, Request::without_params(4, "edit.undo"))
+        .result()
+        .expect("edit.undo succeeds");
+    assert_eq!(undone["undone"], "add track", "undo result: {undone}");
+    while let Ok(cmd) = rx.try_recv() {
+        if let AudioCommand::RemoveTrack { track_id } = cmd {
+            app.test_apply_engine_event(AudioEvent::TrackRemoved { track_id });
+        }
+    }
+    assert!(
+        !app.test_registry().tracks.iter().any(|t| t.id == id),
+        "the track is gone"
+    );
+}

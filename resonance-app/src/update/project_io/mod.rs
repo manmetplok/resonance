@@ -21,6 +21,7 @@ use resonance_audio::types::*;
 
 use crate::message::*;
 use crate::project::{LoadedProject, SaveCollector};
+use crate::state::ProjectSwitch;
 use crate::Resonance;
 
 pub use autosave::{should_autosave, tick_autosave, AutosaveGate};
@@ -97,6 +98,9 @@ pub enum ProjectIoMessage {
         path: std::path::PathBuf,
         recover: bool,
     },
+    /// The user's answer to the unsaved-changes dialog a GUI Open / New
+    /// raised (code review UX-01).
+    SwitchChoice(SwitchChoice),
 }
 
 impl ProjectIoMessage {
@@ -127,7 +131,8 @@ impl ProjectIoMessage {
             | Self::ExportChordSheet
             | Self::ChordSheetPathSelected(..)
             | Self::RecoveryChoice(..)
-            | Self::OpenResolved { .. } => UndoAction::Skip,
+            | Self::OpenResolved { .. }
+            | Self::SwitchChoice(..) => UndoAction::Skip,
         }
     }
 }
@@ -220,7 +225,12 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.io.project_path = Some(path);
             return start_save(r);
         }
-        ProjectIoMessage::SavePathSelected(None) => {}
+        ProjectIoMessage::SavePathSelected(None) => {
+            // "Save" on the unsaved-changes dialog of an untitled project
+            // went through Save As; cancelling that dialog cancels the
+            // switch too — the work stays open, nothing is lost.
+            r.modals.switch_after_save = None;
+        }
         ProjectIoMessage::OpenProject => {
             if r.refuse_project_switch_during_render() {
                 return Task::none();
@@ -238,10 +248,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             // succeeds (`ProjectLoaded(Ok)`): a failed open must leave
             // the still-open project tied to its own folder.
             let path = std::path::PathBuf::from(path);
-            if recovery::prompt_before_open(r, &path) {
-                return Task::none();
-            }
-            return start_open(r, path);
+            return request_switch(r, ProjectSwitch::Open(path));
         }
         ProjectIoMessage::OpenPathSelected(None) => {}
         ProjectIoMessage::OpenRecent(path) => {
@@ -261,10 +268,10 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 crate::recent::remove(&mut r.io.recent_projects, &path);
                 return Task::none();
             }
-            if recovery::prompt_before_open(r, &path) {
-                return Task::none();
-            }
-            return start_open(r, path);
+            return request_switch(r, ProjectSwitch::Open(path));
+        }
+        ProjectIoMessage::SwitchChoice(choice) => {
+            return answer_switch(r, choice);
         }
         ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
             finish_save_write(r);
@@ -305,6 +312,15 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 if let Some(ref path) = r.io.project_path {
                     crate::recent::add(&mut r.io.recent_projects, path);
                 }
+                if let Some(switch) = r.modals.switch_after_save.take() {
+                    // Still dirty: the save missed a late edit. Ask again
+                    // rather than switch over it.
+                    if r.session.dirty {
+                        r.modals.confirm_switch = Some(switch);
+                        return Task::none();
+                    }
+                    return perform_switch(r, switch);
+                }
                 if let Some(id) = r.modals.quit_after_save.take() {
                     // Still dirty: the save missed a late edit. Ask again
                     // rather than close over it.
@@ -322,6 +338,9 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             finish_save_write(r);
             if !autosave {
                 r.io.save_capture_revision = None;
+                // The save the switch waited on failed: stay put, with the
+                // error showing, rather than switch over unsaved work.
+                r.modals.switch_after_save = None;
             }
             if !autosave {
                 r.control.jobs.fail_token(
@@ -434,6 +453,60 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
 /// Start an async disk open of `path` under a fresh open token. The path
 /// is only adopted when the load succeeds, and only if no later open has
 /// replaced this one in the meantime (FU-A1a).
+/// A GUI request to replace the open project (Open, New). Over unsaved
+/// changes it parks the request behind the Save / Don't save / Cancel
+/// dialog instead of discarding them (code review UX-01); otherwise it
+/// switches right away. The control API's `project.open` / `project.new`
+/// don't come here — they answer `needs_confirmation`.
+pub(crate) fn request_switch(r: &mut Resonance, switch: ProjectSwitch) -> Task<Message> {
+    if r.session.dirty && r.io.has_active_project {
+        r.modals.confirm_switch = Some(switch);
+        return Task::none();
+    }
+    perform_switch(r, switch)
+}
+
+/// The user's answer to the unsaved-changes dialog.
+fn answer_switch(r: &mut Resonance, choice: SwitchChoice) -> Task<Message> {
+    let Some(switch) = r.modals.confirm_switch.take() else {
+        return Task::none();
+    };
+    match choice {
+        SwitchChoice::Cancel => Task::none(),
+        SwitchChoice::Discard => perform_switch(r, switch),
+        SwitchChoice::Save => {
+            // An untitled project's Save is a Save As: the switch waits for
+            // that dialog and the save it starts (`ProjectSaved(Ok)`), and
+            // is dropped if either is cancelled or fails.
+            r.modals.switch_after_save = Some(switch);
+            r.update(Message::ProjectIo(ProjectIoMessage::SaveProject))
+        }
+    }
+}
+
+/// Carry out a project switch, re-checking what may have changed since it
+/// was asked for (a render started, a load or save began).
+fn perform_switch(r: &mut Resonance, switch: ProjectSwitch) -> Task<Message> {
+    if r.refuse_project_switch_during_render() {
+        return Task::none();
+    }
+    match switch {
+        ProjectSwitch::Open(path) => {
+            if recovery::prompt_before_open(r, &path) {
+                return Task::none();
+            }
+            start_open(r, path)
+        }
+        ProjectSwitch::NewEmpty => {
+            if r.io.loading || r.io.saving || r.io.save_state.is_some() {
+                return Task::none();
+            }
+            instantiate_builtin(r, BuiltinTemplateId::Empty);
+            Task::none()
+        }
+    }
+}
+
 fn start_open(r: &mut Resonance, path: std::path::PathBuf) -> Task<Message> {
     r.io.open_token = r.io.open_token.wrapping_add(1);
     r.io.pending_open_path = Some(path.clone());
@@ -646,6 +719,37 @@ fn finish_save_write(r: &mut Resonance) {
 /// `None` when the platform has no data directory.
 pub(crate) fn autosave_scratch_dir(r: &Resonance) -> Option<std::path::PathBuf> {
     autosave_scratch_root().map(|root| root.join(r.session_id()))
+}
+
+/// Give an untitled project that just landed (Ctrl+N, a template, a
+/// recovered untitled session) a home for its clip WAVs: this session's
+/// [`autosave_scratch_dir`], created now and handed to the engine as its
+/// project dir, and remembered as `io.untitled_anchor`.
+///
+/// Two things depend on it (code review UX-03, STATE2-04):
+///
+/// - **Undo.** A snapshot names a clip's audio only by
+///   `audio/clip_<id>.wav`, persisted by `PersistClipWavs` into the
+///   engine's project dir and reloaded from the anchor on restore, so an
+///   untitled project could record no history until its first Save As.
+/// - **Where recordings and imports stream.** Before this the engine kept
+///   whatever dir it had: the previously open project's folder, or the
+///   replay's `""` (the process cwd) for a built-in template.
+///
+/// The dir is the one the autosave already writes to, so the two share a
+/// clip id space and files; it is removed on a clean quit, and its WAVs
+/// carry over into the bundle on the first Save As ([`recovery::after_save`]).
+pub(crate) fn anchor_untitled_project(r: &mut Resonance) {
+    r.io.untitled_anchor = None;
+    let Some(dir) = autosave_scratch_dir(r) else {
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!("untitled project scratch dir {}: {e}", dir.display());
+        return;
+    }
+    let _ = r.engine.send(AudioCommand::SetProjectDir(dir.clone()));
+    r.io.untitled_anchor = Some(dir);
 }
 
 /// Parent of every session's [`autosave_scratch_dir`].

@@ -25,6 +25,9 @@ pub enum Overlay {
     /// startup and progress ones.
     Palette,
     ConfirmQuit,
+    /// Save / Don't save / Cancel before a GUI Open or New replaces a
+    /// project with unsaved changes (code review UX-01).
+    ConfirmProjectSwitch,
     ConfirmDeleteTrack,
     BounceDialog,
     ExportDialog,
@@ -90,6 +93,9 @@ impl Overlay {
             | Overlay::SelectionBar => return None,
             Overlay::Palette => Message::Ui(UiMessage::ClosePalette),
             Overlay::ConfirmQuit => Message::Ui(UiMessage::CancelQuit),
+            Overlay::ConfirmProjectSwitch => {
+                Message::ProjectIo(ProjectIoMessage::SwitchChoice(SwitchChoice::Cancel))
+            }
             Overlay::ConfirmDeleteTrack => Message::Track(TrackMessage::CancelRemoveTrack),
             Overlay::BounceDialog => Message::Track(TrackMessage::Bounce(BounceMessage::Cancel)),
             Overlay::ExportDialog => Message::Export(ExportMessage::Close),
@@ -140,6 +146,8 @@ impl Resonance {
             Overlay::Palette
         } else if self.modals.confirm_quit.is_some() {
             Overlay::ConfirmQuit
+        } else if self.modals.confirm_switch.is_some() {
+            Overlay::ConfirmProjectSwitch
         } else if self.modals.confirm_delete_track.is_some() {
             Overlay::ConfirmDeleteTrack
         } else if self.modals.bounce_dialog.is_some() {

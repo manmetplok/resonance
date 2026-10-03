@@ -304,6 +304,14 @@ impl crate::Resonance {
             }));
         }
 
+        // Typed-but-uncommitted BPM text reverts on a press off the field
+        // (code review UX-15) — the same no-blur-callback workaround.
+        if self.transport.bpm_editing {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::ui::bpm_pointer_event(&event)
+            }));
+        }
+
         // A generic plugin window's title-bar drag ends when the window
         // loses focus: its release is then delivered elsewhere, and the
         // window would otherwise stay stuck to the pointer.

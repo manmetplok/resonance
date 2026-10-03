@@ -251,6 +251,12 @@ pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
         let path = r.io.project_path.clone();
         crate::update::replay_loaded_project(r, loaded);
         r.io.project_path = path;
+        if r.io.project_path.is_none() {
+            // Untitled: anchor its clips (and its undo history) to the
+            // session's scratch dir, not the template / recovered folder
+            // the replay pointed the engine at (code review UX-03).
+            crate::update::project_io::anchor_untitled_project(r);
+        }
         r.io.loading = false;
         // Re-send Bank Select + Program Change for every
         // external-instrument track from its restored config, so a

@@ -736,6 +736,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             handle_save_track_as_preset(r, track_id, name, overwrite);
         }
         TrackMessage::DeleteUserPreset(name) => {
+            r.ui.mixer.preset_delete_armed = None;
             if let Err(e) = crate::presets::delete_user_preset(&name) {
                 r.banners.error_message = Some(format!("Delete preset: {e}"));
             }

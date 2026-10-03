@@ -115,9 +115,6 @@ impl CommandId {
             DeleteSelectedTrack if r.ui.interaction.selected_track.is_none() => {
                 Available::No("Select a track first")
             }
-            NewProject if r.io.has_active_project && r.session.dirty => {
-                Available::No("Save first: the project has unsaved changes")
-            }
             NewProject | OpenProject if r.io.loading || r.io.saving || r.io.save_state.is_some() => {
                 Available::No("A project load or save is in progress")
             }
