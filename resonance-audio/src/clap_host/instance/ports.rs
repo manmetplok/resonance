@@ -29,6 +29,9 @@ use super::StereoBufMut;
 /// bed), and it bounds what a plugin's claim can make us allocate.
 pub(crate) const MAX_PORTS: usize = 64;
 pub(crate) const MAX_PORT_CHANNELS: u32 = 64;
+/// Distinct scratch channels backing unconnected outputs, at most (32 KiB
+/// each at the 8192-frame activation maximum).
+const MAX_SCRATCH_CHANNELS: usize = 64;
 
 /// Pre-allocated `clap_audio_buffer` arrays and their channel backing for
 /// one plugin instance.
@@ -45,10 +48,15 @@ pub(crate) struct PortBuffers {
     out_ptrs: Vec<*mut f32>,
     in_offset: Vec<usize>,
     out_offset: Vec<usize>,
-    /// One write target per flat output channel the caller may not back:
-    /// empty for the main port's first two channels (the caller always
-    /// passes a main pair), `max_frames` long for every other.
+    /// Write targets for the output channels the caller may not back
+    /// (every one but the main port's first two — the caller always passes
+    /// a main pair), `max_frames` long each. One per channel up to
+    /// [`MAX_SCRATCH_CHANNELS`]; past that the rest share the last, so a
+    /// plugin declaring hundreds of channels costs bounded memory.
     out_scratch: Vec<Vec<f32>>,
+    /// Flat output channel → its `out_scratch` entry (unused for the main
+    /// pair).
+    out_scratch_index: Vec<usize>,
     /// What an unconnected input channel reads: zeros, re-zeroed for the
     /// block's frames before each call it is used in.
     silence: Vec<f32>,
@@ -81,15 +89,15 @@ impl PortBuffers {
         let in_total: usize = in_channels.iter().map(|&n| n as usize).sum();
         let out_total: usize = out_channels.iter().map(|&n| n as usize).sum();
 
-        let mut out_scratch = Vec::with_capacity(out_total);
+        let mut out_scratch: Vec<Vec<f32>> = Vec::new();
+        let mut out_scratch_index = Vec::with_capacity(out_total);
         for (p, &n) in out_channels.iter().enumerate() {
             for c in 0..n {
                 let caller_backed = p == 0 && c < 2;
-                out_scratch.push(if caller_backed {
-                    Vec::new()
-                } else {
-                    vec![0.0; max_frames]
-                });
+                if !caller_backed && out_scratch.len() < MAX_SCRATCH_CHANNELS {
+                    out_scratch.push(vec![0.0; max_frames]);
+                }
+                out_scratch_index.push(out_scratch.len().saturating_sub(1));
             }
         }
         // Any input channel other than the main pair (a key port, a
@@ -111,6 +119,7 @@ impl PortBuffers {
             in_offset,
             out_offset,
             out_scratch,
+            out_scratch_index,
             silence: if needs_silence {
                 vec![0.0; max_frames]
             } else {
@@ -170,7 +179,7 @@ impl PortBuffers {
                 self.out_ptrs[off + c] = match (outputs.get_mut(p), c) {
                     (Some(pair), 0) => pair.left.as_mut_ptr(),
                     (Some(pair), 1) => pair.right.as_mut_ptr(),
-                    _ => self.out_scratch[off + c].as_mut_ptr(),
+                    _ => self.out_scratch[self.out_scratch_index[off + c]].as_mut_ptr(),
                 };
             }
             self.out_bufs[p] = clap_audio_buffer {
