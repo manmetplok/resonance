@@ -104,6 +104,111 @@ fn every_command_builds_a_message() {
 }
 
 // ---------------------------------------------------------------------------
+// UX-21: selection-scoped mixer actions registered in the palette
+// ---------------------------------------------------------------------------
+
+/// code review UX-21: these actions already existed as context-menu /
+/// track-header entries but had no palette command, so they were
+/// unreachable by keyboard and invisible to search. Each must be
+/// unavailable with no selection and available (building the same message
+/// its existing GUI entry point sends) once the right thing is selected.
+#[test]
+fn ux21_selection_scoped_commands_gate_on_selection_and_resolve_their_target() {
+    use resonance_audio::types::TrackType;
+
+    let (mut app, _task) = Resonance::new_for_test();
+    app.test_add_track(1, TrackType::Audio);
+    app.test_add_bus(1, "Reverb");
+
+    // No selection at all: every one of these is unavailable.
+    for id in [
+        CommandId::BounceInPlaceSelected,
+        CommandId::RenameSelected,
+        CommandId::DeleteSelectedBus,
+        CommandId::ToggleFxBypassSelected,
+        CommandId::ToggleMonoSelected,
+        CommandId::SaveSelectedTrackAsPreset,
+    ] {
+        assert!(
+            !id.availability(&app).is_yes(),
+            "{id:?} should require a selection"
+        );
+        assert!(id.to_message(&app).is_none(), "{id:?} has no target yet");
+    }
+
+    // A track is selected: the track-scoped ones resolve against it.
+    app.test_select_track(1);
+    assert!(CommandId::BounceInPlaceSelected.availability(&app).is_yes());
+    assert!(matches!(
+        CommandId::BounceInPlaceSelected.to_message(&app),
+        Some(Message::Track(TrackMessage::BounceInPlace(1)))
+    ));
+    assert!(CommandId::ToggleMonoSelected.availability(&app).is_yes());
+    assert!(matches!(
+        CommandId::ToggleMonoSelected.to_message(&app),
+        Some(Message::Track(TrackMessage::ToggleTrackMono(1)))
+    ));
+    assert!(CommandId::SaveSelectedTrackAsPreset.availability(&app).is_yes());
+    assert!(matches!(
+        CommandId::SaveSelectedTrackAsPreset.to_message(&app),
+        Some(Message::Track(TrackMessage::OpenSavePresetPrompt(1)))
+    ));
+    assert!(CommandId::RenameSelected.availability(&app).is_yes());
+    assert!(matches!(
+        CommandId::RenameSelected.to_message(&app),
+        Some(Message::Ui(UiMessage::BeginRename(
+            resonance_app::state::RenameTarget::Track(1),
+            resonance_app::state::RenameSurface::Strip
+        )))
+    ));
+    assert!(CommandId::ToggleFxBypassSelected.availability(&app).is_yes());
+    assert!(matches!(
+        CommandId::ToggleFxBypassSelected.to_message(&app),
+        Some(Message::Track(TrackMessage::ToggleTrackFxBypass(1)))
+    ));
+    // The bus-only command stays unavailable while a track is selected.
+    assert!(!CommandId::DeleteSelectedBus.availability(&app).is_yes());
+
+    // A bus is selected instead: the shared commands flip to the bus
+    // target, and the track-only ones (bounce, mono, save-preset) go back
+    // to unavailable.
+    let _ = app.update(Message::Ui(UiMessage::SelectBus(Some(1))));
+    assert!(CommandId::DeleteSelectedBus.availability(&app).is_yes());
+    assert!(matches!(
+        CommandId::DeleteSelectedBus.to_message(&app),
+        Some(Message::Bus(BusMessage::RemoveBus(1)))
+    ));
+    assert!(CommandId::RenameSelected.availability(&app).is_yes());
+    assert!(matches!(
+        CommandId::RenameSelected.to_message(&app),
+        Some(Message::Ui(UiMessage::BeginRename(
+            resonance_app::state::RenameTarget::Bus(1),
+            resonance_app::state::RenameSurface::Strip
+        )))
+    ));
+    assert!(CommandId::ToggleFxBypassSelected.availability(&app).is_yes());
+    assert!(matches!(
+        CommandId::ToggleFxBypassSelected.to_message(&app),
+        Some(Message::Bus(BusMessage::ToggleBusFxBypass(1)))
+    ));
+    assert!(!CommandId::BounceInPlaceSelected.availability(&app).is_yes());
+    assert!(!CommandId::ToggleMonoSelected.availability(&app).is_yes());
+    assert!(!CommandId::SaveSelectedTrackAsPreset.availability(&app).is_yes());
+}
+
+/// `AddExternalInstrumentTrack` needs no selection — same shape as the
+/// other `Add*Track` commands.
+#[test]
+fn ux21_add_external_instrument_track_always_available() {
+    let (app, _task) = Resonance::new_for_test();
+    assert!(CommandId::AddExternalInstrumentTrack.availability(&app).is_yes());
+    assert!(matches!(
+        CommandId::AddExternalInstrumentTrack.to_message(&app),
+        Some(Message::Track(TrackMessage::AddExternalInstrumentTrack))
+    ));
+}
+
+// ---------------------------------------------------------------------------
 // KeyChord parse / format
 // ---------------------------------------------------------------------------
 

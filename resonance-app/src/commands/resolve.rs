@@ -102,6 +102,9 @@ impl CommandId {
             {
                 Available::No("Select a track first")
             }
+            ToggleMonitorSelected if r.ui.interaction.selected_track.is_none() => {
+                Available::No("Select a track first")
+            }
             ToggleArmSelected
                 if !r
                     .ui
@@ -114,6 +117,27 @@ impl CommandId {
             }
             DeleteSelectedTrack if r.ui.interaction.selected_track.is_none() => {
                 Available::No("Select a track first")
+            }
+            BounceInPlaceSelected | SaveSelectedTrackAsPreset
+                if r.ui.interaction.selected_track.is_none() =>
+            {
+                Available::No("Select a track first")
+            }
+            ToggleMonoSelected if r.ui.interaction.selected_track.is_none() => {
+                Available::No("Select a track first")
+            }
+            RenameSelected
+                if r.ui.mixer.selected_bus.is_none() && r.ui.interaction.selected_track.is_none() =>
+            {
+                Available::No("Select a track or bus first")
+            }
+            DeleteSelectedBus if r.ui.mixer.selected_bus.is_none() => {
+                Available::No("Select a bus first")
+            }
+            ToggleFxBypassSelected
+                if r.ui.mixer.selected_bus.is_none() && r.ui.interaction.selected_track.is_none() =>
+            {
+                Available::No("Select a track or bus first")
             }
             NewProject | OpenProject if r.io.loading || r.io.saving || r.io.save_state.is_some() => {
                 Available::No("A project load or save is in progress")
@@ -254,6 +278,9 @@ impl CommandId {
             ToggleMuteSelected => Message::Track(TrackMessage::ToggleMuteSelected),
             ToggleSoloSelected => Message::Track(TrackMessage::ToggleSoloSelected),
             ToggleArmSelected => Message::Track(TrackMessage::ToggleArmSelected),
+            ToggleMonitorSelected => Message::Track(TrackMessage::ToggleMonitor(
+                r.ui.interaction.selected_track?,
+            )),
             DeleteSelectedTrack => {
                 Message::Track(TrackMessage::RequestRemoveTrack(r.ui.interaction.selected_track?))
             }
@@ -316,6 +343,9 @@ impl CommandId {
 
             AddAudioTrack => Message::Track(TrackMessage::AddTrack),
             AddInstrumentTrack => Message::Track(TrackMessage::AddInstrumentTrack),
+            AddExternalInstrumentTrack => {
+                Message::Track(TrackMessage::AddExternalInstrumentTrack)
+            }
             AddVocalTrack => Message::Track(TrackMessage::AddVocalTrack),
             AddBus => Message::Bus(BusMessage::AddBus),
             OpenAddTrackMenu => Message::Ui(UiMessage::OpenAddTrackMenu),
@@ -323,6 +353,39 @@ impl CommandId {
             GroupSelectedTracks => Message::Group(GroupMessage::CreateGroupFromSelection),
             FreezeSelectedTracks => Message::Freeze(FreezeMessage::FreezeSelectedTracks),
             FreezeAllTracks => Message::Freeze(FreezeMessage::FreezeAllTracks),
+            BounceInPlaceSelected => {
+                Message::Track(TrackMessage::BounceInPlace(r.ui.interaction.selected_track?))
+            }
+            // Bus wins when both happen to carry a stale id — a bus and a
+            // track selection are mutually exclusive in the UI, but this
+            // keeps the precedence explicit rather than accidental.
+            RenameSelected => {
+                let (target, surface) = if let Some(id) = r.ui.mixer.selected_bus {
+                    (crate::state::RenameTarget::Bus(id), crate::state::RenameSurface::Strip)
+                } else {
+                    (
+                        crate::state::RenameTarget::Track(r.ui.interaction.selected_track?),
+                        crate::state::RenameSurface::Strip,
+                    )
+                };
+                Message::Ui(UiMessage::BeginRename(target, surface))
+            }
+            DeleteSelectedBus => Message::Bus(BusMessage::RemoveBus(r.ui.mixer.selected_bus?)),
+            ToggleFxBypassSelected => {
+                if let Some(id) = r.ui.mixer.selected_bus {
+                    Message::Bus(BusMessage::ToggleBusFxBypass(id))
+                } else {
+                    Message::Track(TrackMessage::ToggleTrackFxBypass(
+                        r.ui.interaction.selected_track?,
+                    ))
+                }
+            }
+            ToggleMonoSelected => {
+                Message::Track(TrackMessage::ToggleTrackMono(r.ui.interaction.selected_track?))
+            }
+            SaveSelectedTrackAsPreset => Message::Track(TrackMessage::OpenSavePresetPrompt(
+                r.ui.interaction.selected_track?,
+            )),
 
             CommandPalette => {
                 Message::Ui(UiMessage::OpenPalette(crate::palette::PaletteMode::Commands))

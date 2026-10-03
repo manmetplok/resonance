@@ -229,6 +229,7 @@ command_ids! {
     // --- Mixer ---
     AddAudioTrack,
     AddInstrumentTrack,
+    AddExternalInstrumentTrack,
     AddVocalTrack,
     AddDrumTrack,
     AddBus,
@@ -240,7 +241,17 @@ command_ids! {
     ToggleMuteSelected,
     ToggleSoloSelected,
     ToggleArmSelected,
+    ToggleMonitorSelected,
     DeleteSelectedTrack,
+    // --- Mixer: code review UX-21 additions (selection-scoped actions
+    // that already existed as context-menu entries but weren't
+    // reachable from the palette). ---
+    BounceInPlaceSelected,
+    RenameSelected,
+    DeleteSelectedBus,
+    ToggleFxBypassSelected,
+    ToggleMonoSelected,
+    SaveSelectedTrackAsPreset,
     RescanPlugins,
     ShowMissingPlugins,
     // The selected plugin's presets (plugin-preset-library.md §6.6).
@@ -295,11 +306,14 @@ impl CommandId {
                 CommandCategory::ComposeVocal
             }
 
-            AddAudioTrack | AddInstrumentTrack | AddVocalTrack | AddBus | OpenAddTrackMenu
-            | ToggleMasterFxBypass | GroupSelectedTracks | FreezeSelectedTracks
-            | FreezeAllTracks | AddDrumTrack | ToggleMuteSelected | ToggleSoloSelected
-            | ToggleArmSelected | DeleteSelectedTrack | RescanPlugins | ShowMissingPlugins
-            | PreviousPluginPreset | NextPluginPreset | BrowsePluginPresets => {
+            AddAudioTrack | AddInstrumentTrack | AddExternalInstrumentTrack | AddVocalTrack
+            | AddBus | OpenAddTrackMenu | ToggleMasterFxBypass | GroupSelectedTracks
+            | FreezeSelectedTracks | FreezeAllTracks | AddDrumTrack | ToggleMuteSelected
+            | ToggleSoloSelected | ToggleArmSelected | ToggleMonitorSelected
+            | DeleteSelectedTrack | BounceInPlaceSelected | RenameSelected | DeleteSelectedBus
+            | ToggleFxBypassSelected | ToggleMonoSelected | SaveSelectedTrackAsPreset
+            | RescanPlugins | ShowMissingPlugins | PreviousPluginPreset | NextPluginPreset
+            | BrowsePluginPresets => {
                 CommandCategory::Mixer
             }
 
@@ -381,6 +395,7 @@ impl CommandId {
 
             AddAudioTrack => "Add Audio Track",
             AddInstrumentTrack => "Add Instrument Track",
+            AddExternalInstrumentTrack => "Add External Instrument Track",
             AddVocalTrack => "Add Vocal Track",
             AddDrumTrack => "Add Drum Track",
             AddBus => "Add Bus",
@@ -392,7 +407,14 @@ impl CommandId {
             ToggleMuteSelected => "Mute Selected Tracks",
             ToggleSoloSelected => "Solo Selected Tracks",
             ToggleArmSelected => "Arm Selected Tracks",
+            ToggleMonitorSelected => "Toggle Input Monitor (Selected Track)",
             DeleteSelectedTrack => "Delete Selected Track…",
+            BounceInPlaceSelected => "Bounce Selected Track in Place",
+            RenameSelected => "Rename Selected Track or Bus",
+            DeleteSelectedBus => "Delete Selected Bus",
+            ToggleFxBypassSelected => "Toggle FX Bypass (Selected)",
+            ToggleMonoSelected => "Toggle Mono (Selected Track)",
+            SaveSelectedTrackAsPreset => "Save Selected Track as Preset…",
             RescanPlugins => "Rescan Plugins",
             ShowMissingPlugins => "Show Missing Plugins",
             PreviousPluginPreset => "Previous Preset",
@@ -441,20 +463,23 @@ impl CommandId {
             }
             TransportToggleMetronome => fa::METRONOME,
             TransportToggleLoop | PlayheadToLoopStart | PlayheadToLoopEnd
-            | SetLoopStartAtPlayhead | SetLoopEndAtPlayhead | LoopSectionAtPlayhead => {
-                fa::ARROW_ROTATE_LEFT
-            }
+            | SetLoopStartAtPlayhead | SetLoopEndAtPlayhead | LoopSectionAtPlayhead
+            | LoopSelection => fa::REPEAT,
             PrevMarker | NextMarker | AddMarkerAtPlayhead => fa::FLAG,
             PreviousPluginPreset => fa::BACKWARD_STEP,
             NextPluginPreset => fa::FORWARD_STEP,
-            Undo | Redo => fa::ARROW_ROTATE_LEFT,
+            Undo => fa::ARROW_ROTATE_LEFT,
+            Redo => fa::ARROW_ROTATE_RIGHT,
             ZoomIn => fa::MAGNIFYING_GLASS_PLUS,
             ZoomOut => fa::MAGNIFYING_GLASS_MINUS,
             TogglePerformanceMode | ExitPerformanceMode => fa::GUITAR,
-            FreezeSelectedTracks | FreezeAllTracks => fa::SNOWFLAKE,
+            FreezeSelectedTracks | FreezeAllTracks | BounceInPlaceSelected => fa::SNOWFLAKE,
             AddVocalTrack => fa::MICROPHONE,
-            AddInstrumentTrack => fa::MUSIC,
+            AddInstrumentTrack | AddExternalInstrumentTrack => fa::MUSIC,
             AddAudioTrack => fa::WAVE_SQUARE,
+            DeleteSelectedBus => fa::TRASH,
+            ToggleFxBypassSelected => fa::POWER_OFF,
+            ToggleMonitorSelected => fa::EAR_LISTEN,
             OpenProject => fa::FOLDER_OPEN,
             SaveProject | SaveProjectAs => fa::FLOPPY_DISK,
             BounceToWav => fa::COMPACT_DISC,
@@ -515,7 +540,15 @@ impl CommandId {
             ToggleMuteSelected => &["silence", "mute"],
             ToggleSoloSelected => &["isolate", "solo"],
             ToggleArmSelected => &["record arm", "enable recording"],
+            ToggleMonitorSelected => &["input monitor", "listen", "ear"],
             DeleteSelectedTrack => &["remove", "trash"],
+            AddExternalInstrumentTrack => &["hardware", "midi", "synth", "new track"],
+            BounceInPlaceSelected => &["render", "freeze", "commit"],
+            RenameSelected => &["name", "label"],
+            DeleteSelectedBus => &["remove", "trash", "return", "aux"],
+            ToggleFxBypassSelected => &["bypass", "effects", "disable"],
+            ToggleMonoSelected => &["stereo", "channel", "collapse"],
+            SaveSelectedTrackAsPreset => &["preset", "template", "save track"],
             RescanPlugins => &["clap", "scan", "refresh"],
             ShowMissingPlugins => &["clap", "unavailable"],
             PreviousPluginPreset | NextPluginPreset => &["plugin", "patch", "program", "step"],
