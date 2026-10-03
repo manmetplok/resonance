@@ -132,6 +132,16 @@ impl ResonancePlugin for ResonanceColor {
         self.editor_announcer.attach(host);
     }
 
+    fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {
+        // The params are shared, so a host reads a live instance's real
+        // values (not just display text) while the plugin is in the
+        // audio processor — FU-P1a: without this, a third-party host
+        // that never flushes between blocks sees a stale mirror for
+        // any value an editor edit moved while the transport is
+        // stopped.
+        Some(Arc::new(ColorParamText(self.params.clone())))
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::ColorEditorFactory::new(
@@ -140,6 +150,27 @@ impl ResonancePlugin for ResonanceColor {
             self.presets.clone(),
             self.editor_announcer.clone(),
         )))
+    }
+}
+
+/// Parameter text and live values over the shared `ColorParams`, for the
+/// CLAP bridge while the plugin is active (FU-P1a).
+struct ColorParamText(Arc<ColorParams>);
+
+impl resonance_plugin::ParamTextSource for ColorParamText {
+    fn display(&self, index: usize, value: f64) -> Option<String> {
+        (index < PARAM_COUNT).then(|| self.0.param_at(index).display(value))
+    }
+
+    fn parse(&self, index: usize, text: &str) -> Option<f64> {
+        if index >= PARAM_COUNT {
+            return None;
+        }
+        self.0.param_at(index).parse(text)
+    }
+
+    fn live_value(&self, index: usize) -> Option<f64> {
+        (index < PARAM_COUNT).then(|| self.0.param_at(index).get_plain())
     }
 }
 

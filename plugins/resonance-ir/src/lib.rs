@@ -170,6 +170,15 @@ impl ResonancePlugin for ResonanceIr {
         self.host = Some(host);
     }
 
+    fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {
+        // FU-P1a: the params are shared, so a host reads a live
+        // instance's real values while the plugin is in the audio
+        // processor — without this, a third-party host that never
+        // flushes between blocks sees a stale mirror for any value an
+        // editor edit moved while the transport is stopped.
+        Some(Arc::new(IrParamText(self.params.clone())))
+    }
+
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.sample_rate = sample_rate;
         // This is where a latency-mode change becomes real: the host has
@@ -327,6 +336,27 @@ impl ResonancePlugin for ResonanceIr {
             self.presets.clone(),
             self.editor_announcer.clone(),
         )))
+    }
+}
+
+/// Parameter text and live values over the shared `IrParams`, for the
+/// CLAP bridge while the plugin is active (FU-P1a).
+struct IrParamText(Arc<IrParams>);
+
+impl resonance_plugin::ParamTextSource for IrParamText {
+    fn display(&self, index: usize, value: f64) -> Option<String> {
+        (index < params::PARAM_COUNT).then(|| self.0.param_at(index).display(value))
+    }
+
+    fn parse(&self, index: usize, text: &str) -> Option<f64> {
+        if index >= params::PARAM_COUNT {
+            return None;
+        }
+        self.0.param_at(index).parse(text)
+    }
+
+    fn live_value(&self, index: usize) -> Option<f64> {
+        (index < params::PARAM_COUNT).then(|| self.0.param_at(index).get_plain())
     }
 }
 

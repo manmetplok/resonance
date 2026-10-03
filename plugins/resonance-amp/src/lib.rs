@@ -349,6 +349,14 @@ impl resonance_plugin::ParamTextSource for AmpParamText {
         }
         self.0.param_at(index).parse(text)
     }
+
+    /// FU-P1a: every param, not just `file_select` — a third-party host
+    /// that never flushes between blocks otherwise sees a stale mirror
+    /// for any value an editor edit moved while the transport is
+    /// stopped.
+    fn live_value(&self, index: usize) -> Option<f64> {
+        (index < params::PARAM_COUNT).then(|| self.0.param_at(index).get_plain())
+    }
 }
 
 /// Persists the model reference (state v2: `model_path` + optional
