@@ -431,4 +431,12 @@ pub struct ClapAudioProcessor<'a, P: ResonancePlugin> {
     /// Pre-allocated buffer for input events — notes *and* MIDI controllers,
     /// interleaved in host order (avoids audio-thread allocation).
     pub(crate) input_events: Vec<PluginEvent>,
+    /// Parameter changes timed inside the block (`time > 0`), as
+    /// `(time, slot, value)` in host order. `process()` splits the block
+    /// at each one so the plugin sees the value from that sample on
+    /// (code review HOST-06). Pre-allocated like `input_events`.
+    pub(crate) timed_params: Vec<(u32, usize, f64)>,
+    /// The activation sample rate, to advance the transport position
+    /// handed to each sub-block of a split block.
+    pub(crate) sample_rate: f64,
 }

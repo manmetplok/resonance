@@ -95,6 +95,10 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             // events, because a dropped NoteOff is a note stuck forever
             // while one reallocation is a single glitch that never repeats.
             input_events: Vec::with_capacity(1024),
+            // Same policy as `input_events`: a host automating many params
+            // at a fine cadence fills this once, then it is only cleared.
+            timed_params: Vec::with_capacity(1024),
+            sample_rate: audio_config.sample_rate,
         })
     }
 
@@ -108,6 +112,10 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         if frames == 0 {
             return Ok(ProcessStatus::ContinueIfNotQuiet);
         }
+        // Whatever the plugin does to the FP environment (every
+        // first-party plugin sets FTZ/DAZ in `process`) is undone when
+        // this returns: the thread is the host's (code review HOST-16).
+        let _fp_env = FpEnvGuard::save();
 
         // A render mode the host set while the plugin was in here
         // (`render.set` is main-thread; the plugin is not): it applies
@@ -119,6 +127,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 
         // Handle input events: param changes, note events, MIDI controllers.
         self.input_events.clear();
+        self.timed_params.clear();
         for event in events.input {
             if let Some(core_event) = event.as_core_event() {
                 use clack_plugin::events::spaces::CoreEventSpace;
@@ -131,18 +140,24 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                                 .find_slot(clap_id.get())
                                 .filter(|&s| !self.shared.param_metas[s].is_read_only)
                             {
-                                // Applied instantly, block-quantized — the
-                                // bridge does not smooth automation. Plugins
-                                // de-zipper by feeding their `Smoother`s from
-                                // param values at the start of `process()`;
-                                // see the smoothing contract on
-                                // `Param::set_plain`.
-                                let param = self.plugin.param(slot);
-                                param.set_plain(value);
-                                // The landed value, not the wire value —
-                                // see the note in `clap_bridge/params.rs`.
-                                self.shared.set_value(slot, param.get_plain());
-                                self.shared.note_host_param_change(slot);
+                                let time = e.header().time();
+                                if time > 0 && (time as usize) < frames {
+                                    // Timed inside the block: the block is
+                                    // split there, so the plugin runs the
+                                    // samples before it on the old value
+                                    // (code review HOST-06).
+                                    self.timed_params.push((time, slot, value));
+                                } else {
+                                    // At the block start (or past its end,
+                                    // which a conforming host never sends):
+                                    // applied before the plugin runs.
+                                    // Plugins de-zipper by feeding their
+                                    // `Smoother`s from param values at the
+                                    // start of each `process()` call; see
+                                    // the smoothing contract on
+                                    // `Param::set_plain`.
+                                    self.apply_param(slot, value);
+                                }
                             }
                         }
                     }
@@ -339,8 +354,6 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             })
         });
 
-        let mut event_iter = EventIterator::mixed(&self.input_events);
-
         // Effect path: read the input (port 0 of the input audio buffers)
         // into scratch. The plugin sees the input pre-loaded in its
         // `outputs[0]` buffer because the legacy effect contract is
@@ -382,9 +395,9 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // Read the external sidechain (key) signal, if this plugin declares
         // one, into the key scratch. Always stereo-shaped: a mono key port is
         // mirrored into both channels so detectors read either uniformly.
-        // `key` is `None` for plugins without a sidechain port, or when the
-        // host did not connect it for this block.
-        let key = if let Some(sc_index) =
+        // `key_connected` is false for plugins without a sidechain port, or
+        // when the host did not connect it for this block.
+        let key_connected = if let Some(sc_index) =
             sidechain_port_index(P::INPUT_CHANNELS, P::SIDECHAIN_INPUT)
         {
             let key_left = &mut self.key_left[..frames];
@@ -406,12 +419,9 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     }
                 }
             }
-            connected.then_some(KeyBuffer {
-                left: &self.key_left[..frames],
-                right: &self.key_right[..frames],
-            })
+            connected
         } else {
-            None
+            false
         };
 
         // Zero every output scratch pair for this frame range, then seed
@@ -425,27 +435,77 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             }
         }
 
-        // Build a transient slice of OutputBuffer views over the scratch.
-        // Uses a stack array to avoid heap allocation on the audio thread.
-        // `new_shared` refuses a layout with more ports than the array
-        // holds, so a plugin cannot get this far with one (PLG-09).
-        let mut port_views_arr: [std::mem::MaybeUninit<OutputBuffer<'_>>; MAX_OUTPUT_PORTS] =
-            [const { std::mem::MaybeUninit::uninit() }; MAX_OUTPUT_PORTS];
-        let mut port_views_len = 0;
-        for (l, r) in self.output_scratch.iter_mut() {
-            port_views_arr[port_views_len].write(OutputBuffer {
-                left: &mut l[..frames],
-                right: &mut r[..frames],
-            });
-            port_views_len += 1;
-        }
-        // SAFETY: the loop above initialized exactly the first
-        // `port_views_len` elements.
-        let port_views = unsafe { port_views_arr[..port_views_len].assume_init_mut() };
-
         self.host_handle.begin_process();
-        self.plugin
-            .process_with_key(port_views, key, frames, &mut event_iter, tempo);
+        // One plugin call per stretch between timed param changes — just
+        // one when there are none, which is every block a host sends
+        // without in-block automation. Each stretch sees its own slice of
+        // the buffers, its own events re-based to its start, and the
+        // transport advanced to it, exactly as if the host had sent that
+        // many smaller blocks (code review HOST-06).
+        let mut start = 0usize;
+        let mut next_param = 0usize;
+        let mut next_event = 0usize;
+        while start < frames {
+            while let Some(&(time, slot, value)) = self.timed_params.get(next_param) {
+                if time as usize > start {
+                    break;
+                }
+                self.apply_param(slot, value);
+                next_param += 1;
+            }
+            let end = self
+                .timed_params
+                .get(next_param)
+                .map_or(frames, |&(time, _, _)| (time as usize).min(frames));
+            // The events inside this stretch, re-based to its start. The
+            // last stretch also takes any a host timed past the block end.
+            let first_event = next_event;
+            while let Some(event) = self.input_events.get_mut(next_event) {
+                if end < frames && event.timing() as usize >= end {
+                    break;
+                }
+                shift_timing(event, start as u32);
+                next_event += 1;
+            }
+            let mut event_iter = EventIterator::mixed(&self.input_events[first_event..next_event]);
+            let stretch_tempo = tempo.map(|t| TempoInfo {
+                song_pos_beats: t.song_pos_beats
+                    + start as f64 / self.sample_rate * f64::from(t.bpm) / 60.0,
+                ..t
+            });
+            let key = key_connected.then(|| KeyBuffer {
+                left: &self.key_left[start..end],
+                right: &self.key_right[start..end],
+            });
+
+            // Build a transient slice of OutputBuffer views over the
+            // scratch. Uses a stack array to avoid heap allocation on the
+            // audio thread. `new_shared` refuses a layout with more ports
+            // than the array holds, so a plugin cannot get this far with
+            // one (PLG-09).
+            let mut port_views_arr: [std::mem::MaybeUninit<OutputBuffer<'_>>; MAX_OUTPUT_PORTS] =
+                [const { std::mem::MaybeUninit::uninit() }; MAX_OUTPUT_PORTS];
+            let mut port_views_len = 0;
+            for (l, r) in self.output_scratch.iter_mut() {
+                port_views_arr[port_views_len].write(OutputBuffer {
+                    left: &mut l[start..end],
+                    right: &mut r[start..end],
+                });
+                port_views_len += 1;
+            }
+            // SAFETY: the loop above initialized exactly the first
+            // `port_views_len` elements.
+            let port_views = unsafe { port_views_arr[..port_views_len].assume_init_mut() };
+
+            self.plugin.process_with_key(
+                port_views,
+                key,
+                end - start,
+                &mut event_iter,
+                stretch_tempo,
+            );
+            start = end;
+        }
         // A rescan the plugin asked for during the block announces values
         // it may have just moved: publish them first, so the host's
         // re-read cannot overtake them (the push-back above ran before
@@ -547,6 +607,16 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 }
 
 impl<P: ResonancePlugin> ClapAudioProcessor<'_, P> {
+    /// Land one host parameter change: into the plugin, then the value
+    /// the plugin actually took into the shared mirror (see the note in
+    /// `clap_bridge/params.rs`), flagged as a host change. Audio thread.
+    fn apply_param(&mut self, slot: usize, value: f64) {
+        let param = self.plugin.param(slot);
+        param.set_plain(value);
+        self.shared.set_value(slot, param.get_plain());
+        self.shared.note_host_param_change(slot);
+    }
+
     /// Copy a state load published into `shared` while active into the
     /// plugin: the re-sync described at its call site in `process()`.
     /// The audio-processor `params.flush` runs it too, so a host that
@@ -674,6 +744,92 @@ fn reconcile_params<P: ResonancePlugin>(plugin: &P, shared: &ClapShared<'_>) {
     } else {
         for i in 0..count {
             shared.set_value(i, plugin.param(i).get_plain());
+        }
+    }
+}
+
+/// Move an event's timing back by `by` samples: re-base it to the start
+/// of the stretch of a split block it is delivered in.
+fn shift_timing(event: &mut PluginEvent, by: u32) {
+    let timing = match event {
+        PluginEvent::Note(NoteEvent::NoteOn { timing, .. })
+        | PluginEvent::Note(NoteEvent::NoteOff { timing, .. })
+        | PluginEvent::Note(NoteEvent::Choke { timing, .. })
+        | PluginEvent::Control(ControlEvent::ControlChange { timing, .. })
+        | PluginEvent::Control(ControlEvent::ChannelPressure { timing, .. })
+        | PluginEvent::Control(ControlEvent::PolyPressure { timing, .. })
+        | PluginEvent::Control(ControlEvent::PitchBend { timing, .. }) => timing,
+    };
+    *timing = timing.saturating_sub(by);
+}
+
+/// The calling thread's floating-point control state (MXCSR on x86,
+/// FPCR on AArch64), saved on construction and put back on drop.
+///
+/// A plugin's `process()` sets flush-to-zero / denormals-are-zero for
+/// its own DSP; left set, that changes the numerics of whatever the host
+/// runs next on its thread (code review HOST-16). Two register accesses;
+/// no allocation, no syscall.
+struct FpEnvGuard {
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64"))]
+    saved: u64,
+}
+
+impl FpEnvGuard {
+    #[inline]
+    fn save() -> Self {
+        #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+        {
+            let mut csr: u32 = 0;
+            // SAFETY: `stmxcsr` stores the SSE control/status register
+            // into the 4 bytes behind the pointer, which is a live local.
+            unsafe {
+                core::arch::asm!(
+                    "stmxcsr [{p}]",
+                    p = in(reg) &mut csr as *mut u32,
+                    options(nostack, preserves_flags)
+                );
+            }
+            Self { saved: u64::from(csr) }
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            let fpcr: u64;
+            // SAFETY: reads this thread's FP control register only.
+            unsafe {
+                core::arch::asm!("mrs {}, fpcr", out(reg) fpcr, options(nomem, nostack, preserves_flags));
+            }
+            Self { saved: fpcr }
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))]
+        {
+            Self {}
+        }
+    }
+}
+
+impl Drop for FpEnvGuard {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+        {
+            let csr = self.saved as u32;
+            // SAFETY: `ldmxcsr` loads the value this thread had before
+            // the plugin ran — a valid MXCSR, since we read it back.
+            unsafe {
+                core::arch::asm!(
+                    "ldmxcsr [{p}]",
+                    p = in(reg) &csr as *const u32,
+                    options(nostack, preserves_flags, readonly)
+                );
+            }
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: writes back this thread's own earlier FPCR value.
+            unsafe {
+                core::arch::asm!("msr fpcr, {}", in(reg) self.saved, options(nomem, nostack, preserves_flags));
+            }
         }
     }
 }
