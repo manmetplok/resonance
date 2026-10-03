@@ -26,9 +26,10 @@
 //!
 //! Every param-bound knob — [`float_knob`] and [`param_knob`] — is the
 //! themed knob (`widgets::knob_themed_edit`). The range-mapped classic
-//! knob the fleet's other nine editors drew is not reachable from a
-//! plugin any more (`tools/arch-invariants` fails a plugin source that
-//! calls `widgets::knob(`). [`float_knob`] keeps that knob's 64×76 cell
+//! knob the fleet's other nine editors drew is gone (FU-P2f): nothing
+//! called it any more (`tools/arch-invariants`'s
+//! `plugins_draw_knobs_only_through_the_param_binding` guarded its
+//! absence first). [`float_knob`] keeps that knob's old 64×76 cell
 //! ([`KnobStyle::CAPTIONED`]) and its sub-label, so nothing reflowed.
 //!
 //! Every knob here:

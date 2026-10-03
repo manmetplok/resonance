@@ -17,9 +17,9 @@
 //!   are the default-styled shorthands. It is the one knob every plugin
 //!   editor draws (code review PUX-11), through
 //!   `resonance_plugin::editor_widgets::{float_knob, param_knob}`.
-//!   The older range-mapped [`knob`] (caption above the dial, no
-//!   gesture state of its own before PUX-02) stays only as a building
-//!   block; `tools/arch-invariants` fails a plugin that calls it;
+//!   The older range-mapped classic knob (caption above the dial, no
+//!   gesture state of its own before PUX-02) is gone (FU-P2f): nothing
+//!   called it any more once the fleet converged on this one;
 //! - [`chip_button`] / [`chip_styled`] — the pill-shaped discrete
 //!   toggle, styled by [`ChipStyle`];
 //! - [`segmented`] / [`segmented_styled`] — a one-of-N strip of chips,
@@ -56,8 +56,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::theme::lavender as theme;
-use egui::{self, Color32, Pos2, Rect, Response, Sense, Stroke, Vec2};
-use std::f32::consts::PI;
+use egui::{self, Color32, Pos2, Response, Vec2};
 
 pub mod chip;
 pub mod library;
@@ -103,14 +102,6 @@ pub struct GestureEdit {
 }
 
 // ---------------------------------------------------------------------------
-// Rotary knob
-// ---------------------------------------------------------------------------
-
-/// Arc sweep: 270° starting at 135° (bottom-left) to -45° (bottom-right).
-const ARC_START: f32 = 135.0 * PI / 180.0;
-const ARC_END: f32 = ARC_START + 270.0 * PI / 180.0;
-
-// ---------------------------------------------------------------------------
 // Knob drag feel — one rule for the whole platform
 // ---------------------------------------------------------------------------
 
@@ -152,139 +143,6 @@ pub fn knob_drag_unit(unit: f32, drag_y: f32, fine: bool) -> f32 {
     (unit - drag_y * speed).clamp(0.0, 1.0)
 }
 
-// Knob colours — canonical palette tokens, not freehand colours, so a
-// knob reads the same in every editor (ba todo #1338). This family used
-// to paint a blue `#4a9ecf` arc from a private constant, which no palette
-// swap could reach: the gate is on the lavender palette and still drew
-// blue knobs, and so did the other eight editors that draw from here.
-//
-// The dial keeps one more text tier than the themed family below (a
-// sub-label under the caption), so its caption starts a tier higher —
-// TEXT_2/TEXT_3 rather than TEXT_3/TEXT_4, which at 1.7:1 on BG_2 would
-// not be readable.
-const TRACK_COLOR: Color32 = theme::LINE;
-const ARC_COLOR: Color32 = theme::ACCENT;
-const DOT_COLOR: Color32 = theme::TEXT_1;
-const TEXT_COLOR: Color32 = theme::TEXT_1;
-const LABEL_COLOR: Color32 = theme::TEXT_2;
-const SUBLABEL_COLOR: Color32 = theme::TEXT_3;
-
-/// Draw a rotary knob for a floating-point value.
-///
-/// **Not for plugin editors.** A plugin binds its parameters through
-/// `resonance_plugin::editor_widgets` (`float_knob`, `param_knob`),
-/// which is built on [`knob_themed_edit`] and adds what a parameter
-/// control needs on top of the drawing: the declared skew, the
-/// mandatory double-click reset, typed entry and the one-edit-per-
-/// gesture host announce (code review PUX-01/-06/-11).
-/// `tools/arch-invariants` fails any plugin source that calls this
-/// directly.
-///
-/// Returns the gesture ([`GestureEdit`]); `value` is mutated in place
-/// on every frame the knob moves, and `GestureEdit::value` carries the
-/// same new value (in `range`, not unit space).
-///
-/// - `value`: current value, mutated in place on drag.
-/// - `range`: allowed min/max.
-/// - `default`: value to reset to on double-click.
-/// - `label`: title above the knob.
-/// - `value_text`: formatted string shown below the knob.
-/// - `logarithmic`: if true, drag maps logarithmically.
-pub fn knob(
-    ui: &mut egui::Ui,
-    value: &mut f32,
-    range: std::ops::RangeInclusive<f32>,
-    default: f32,
-    label: &str,
-    sub_label: &str,
-    value_text: &str,
-    logarithmic: bool,
-) -> GestureEdit {
-    let knob_radius = 20.0f32;
-    let total_width = 64.0f32;
-    let total_height = knob_radius * 2.0 + 36.0; // knob + label + value
-
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(total_width, total_height),
-        Sense::click_and_drag(),
-    );
-
-    let edit = handle_knob_input(ui, &response, value, &range, default, logarithmic);
-
-    if ui.is_rect_visible(rect) {
-        draw_knob(
-            ui,
-            rect,
-            *value,
-            &range,
-            knob_radius,
-            label,
-            sub_label,
-            value_text,
-        );
-    }
-
-    edit
-}
-
-/// Unit (`0..1`) position of `value` on the classic knob's axis.
-fn classic_unit(value: f32, range: &std::ops::RangeInclusive<f32>, logarithmic: bool) -> f32 {
-    if logarithmic {
-        let min = range.start().max(0.001);
-        let log_min = min.ln();
-        let log_span = range.end().ln() - log_min;
-        if log_span.abs() < f32::EPSILON {
-            0.0
-        } else {
-            ((value.max(min).ln() - log_min) / log_span).clamp(0.0, 1.0)
-        }
-    } else {
-        normalize(value, range)
-    }
-}
-
-/// The value at unit position `unit` on the classic knob's axis.
-fn classic_value(unit: f32, range: &std::ops::RangeInclusive<f32>, logarithmic: bool) -> f32 {
-    let v = if logarithmic {
-        let min = range.start().max(0.001);
-        let log_min = min.ln();
-        let log_span = range.end().ln() - log_min;
-        (log_min + unit * log_span).exp()
-    } else {
-        range.start() + unit * (range.end() - range.start())
-    };
-    v.clamp(*range.start(), *range.end())
-}
-
-fn handle_knob_input(
-    ui: &egui::Ui,
-    response: &Response,
-    value: &mut f32,
-    range: &std::ops::RangeInclusive<f32>,
-    default: f32,
-    logarithmic: bool,
-) -> GestureEdit {
-    // Double-click to reset to default: one finished edit.
-    if response.double_clicked() {
-        *value = default;
-        return GestureEdit {
-            value: Some(default),
-            began: true,
-            ended: true,
-        };
-    }
-
-    // Drag happens in unit space (shared with the themed knob), from a
-    // running position kept for the gesture — see [`drag_gesture`].
-    let unit = classic_unit(*value, range, logarithmic);
-    let mut edit = drag_gesture(ui, response, unit);
-    if let Some(u) = edit.value {
-        *value = classic_value(u, range, logarithmic);
-        edit.value = Some(*value);
-    }
-    edit
-}
-
 /// One frame of a knob's vertical drag, in unit space, gesture-aware.
 ///
 /// The drag runs from a position kept in egui memory for the gesture
@@ -321,128 +179,6 @@ fn drag_gesture(ui: &egui::Ui, response: &Response, unit: f32) -> GestureEdit {
         edit.ended = true;
     }
     edit
-}
-
-fn draw_knob(
-    ui: &egui::Ui,
-    rect: Rect,
-    value: f32,
-    range: &std::ops::RangeInclusive<f32>,
-    radius: f32,
-    label: &str,
-    sub_label: &str,
-    value_text: &str,
-) {
-    let painter = ui.painter_at(rect);
-
-    // Label above the knob.
-    let label_pos = Pos2::new(rect.center().x, rect.min.y + 2.0);
-    painter.text(
-        label_pos,
-        egui::Align2::CENTER_TOP,
-        label,
-        egui::FontId::proportional(10.0),
-        LABEL_COLOR,
-    );
-
-    // Sub-label below the label.
-    let sub_y = if sub_label.is_empty() { 0.0 } else { 10.0 };
-    if !sub_label.is_empty() {
-        let sub_pos = Pos2::new(rect.center().x, rect.min.y + 13.0);
-        painter.text(
-            sub_pos,
-            egui::Align2::CENTER_TOP,
-            sub_label,
-            egui::FontId::proportional(8.0),
-            SUBLABEL_COLOR,
-        );
-    }
-
-    // Knob center.
-    let center = Pos2::new(rect.center().x, rect.min.y + 14.0 + sub_y + radius);
-    let track_width = 3.0f32;
-    let arc_width = 3.5f32;
-
-    // Background arc.
-    draw_arc(
-        &painter,
-        center,
-        radius,
-        ARC_START,
-        ARC_END,
-        track_width,
-        TRACK_COLOR,
-    );
-
-    // Value arc.
-    let normalized = normalize(value, range);
-    let value_angle = ARC_START + normalized * (ARC_END - ARC_START);
-    if normalized > 0.001 {
-        draw_arc(
-            &painter,
-            center,
-            radius,
-            ARC_START,
-            value_angle,
-            arc_width,
-            ARC_COLOR,
-        );
-    }
-
-    // Indicator dot at the value position.
-    let dot_radius_offset = radius - 1.0;
-    let dot_x = center.x + dot_radius_offset * value_angle.cos();
-    let dot_y = center.y - dot_radius_offset * value_angle.sin();
-    painter.circle_filled(Pos2::new(dot_x, dot_y), 2.5, DOT_COLOR);
-
-    // Value text below the knob.
-    let value_pos = Pos2::new(rect.center().x, center.y + radius + 4.0);
-    painter.text(
-        value_pos,
-        egui::Align2::CENTER_TOP,
-        value_text,
-        egui::FontId::monospace(9.0),
-        TEXT_COLOR,
-    );
-}
-
-fn normalize(value: f32, range: &std::ops::RangeInclusive<f32>) -> f32 {
-    let span = range.end() - range.start();
-    if span.abs() < f32::EPSILON {
-        return 0.0;
-    }
-    ((value - range.start()) / span).clamp(0.0, 1.0)
-}
-
-fn draw_arc(
-    painter: &egui::Painter,
-    center: Pos2,
-    radius: f32,
-    start: f32,
-    end: f32,
-    width: f32,
-    color: Color32,
-) {
-    let segments = 48;
-    let span = end - start;
-    let step = span / segments as f32;
-    // One owned, exactly-sized Vec per arc per frame is the floor here:
-    // epaint's `PathShape` stores `points: Vec<Pos2>` by value, so a
-    // borrowed/reused buffer would have to be cloned into it anyway.
-    // What we avoid is the old shape per segment — 48 `line_segment`
-    // calls pushed 48 `Shape`s into the paint list per arc; a single
-    // `Shape::line` polyline is one shape, one allocation, and
-    // tessellates with proper joins instead of butt-end overlaps.
-    let points: Vec<Pos2> = (0..=segments)
-        .map(|i| {
-            let angle = start + step * i as f32;
-            Pos2::new(
-                center.x + radius * angle.cos(),
-                center.y - radius * angle.sin(),
-            )
-        })
-        .collect();
-    painter.add(egui::Shape::line(points, Stroke::new(width, color)));
 }
 
 // ---------------------------------------------------------------------------
@@ -846,9 +582,9 @@ fn arc(
         return;
     }
     let steps = (((b - a).abs() / 5.0).ceil() as usize).max(2);
-    // One owned, exactly-sized Vec per arc is the floor here, same as
-    // `draw_arc` above: epaint's `PathShape` owns `points: Vec<Pos2>`,
-    // so the polyline has to be handed over by value — a reused scratch
+    // One owned, exactly-sized Vec per arc is the floor here: epaint's
+    // `PathShape` owns `points: Vec<Pos2>`, so the polyline has to be
+    // handed over by value — a reused scratch
     // buffer (or a `SmallVec`) would be copied into a fresh Vec anyway.
     // What it does buy is one `Shape` per arc instead of one per
     // segment, with proper joins.

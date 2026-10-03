@@ -1,12 +1,13 @@
 //! The platform-wide knob drag feel (ba todo #1266).
 //!
-//! Both knob families — the classic range-mapped `knob` and the themed
-//! `knob_themed` one the lavender editors use — resolve a vertical drag
-//! through `knob_drag_unit`. These tests pin the numbers, because the
-//! whole point of the shared helper is that a plugin cannot quietly
-//! grow its own drag feel again: the granular delay used to answer the
-//! same gesture at 0.008 per pixel (0.002 with Shift) while everything
-//! else ran at 0.005.
+//! `knob_themed` — the one knob family every plugin editor draws
+//! through (code review PUX-11, FU-P2f: the classic range-mapped
+//! `knob` it used to share this with is gone) — resolves a vertical
+//! drag through `knob_drag_unit`. These tests pin the numbers, because
+//! the whole point of the shared helper is that a plugin cannot
+//! quietly grow its own drag feel again: the granular delay used to
+//! answer the same gesture at 0.008 per pixel (0.002 with Shift) while
+//! everything else ran at 0.005.
 
 use plugin_gui_core::widgets::{
     knob_drag_unit, KnobStyle, KNOB_DRAG_SPEED, KNOB_DRAG_SPEED_FINE,
@@ -430,13 +431,17 @@ mod gesture {
 
     /// A caller that quantizes what the knob hands it — an int or bool
     /// parameter, which rounds — still steps on a slow drag (code review
-    /// PUX-02). Both knobs run the drag from a position kept for the
-    /// gesture; before, each frame restarted from the caller's rounded
-    /// value, and 2 px per frame (0.01 of travel) never reached a step.
+    /// PUX-02). The themed knob runs the drag from a position kept for
+    /// the gesture (shared with the slider, `drag_gesture`); before,
+    /// each frame restarted from the caller's rounded value, and 2 px
+    /// per frame (0.01 of travel) never reached a step. The classic
+    /// knob this also used to cover was removed (FU-P2f): no plugin
+    /// calls it any more (`tools/arch-invariants`'s
+    /// `plugins_draw_knobs_only_through_the_param_binding`), only the
+    /// themed family is reachable from an editor.
     #[test]
     fn a_quantizing_caller_steps_on_a_slow_drag() {
-        use plugin_gui_core::widgets::knob;
-        // Themed: a 0..1 bool, rounded by the caller.
+        // A 0..1 bool, rounded by the caller.
         let ctx = egui::Context::default();
         let mut on = 0.0f32;
         let mut themed = |ui: &mut egui::Ui| {
@@ -448,18 +453,6 @@ mod gesture {
         };
         slow_drag(&ctx, &mut themed);
         assert_eq!(on, 1.0, "the themed knob never stepped");
-
-        // Classic: an integer 0..4, rounded by the caller.
-        let ctx = egui::Context::default();
-        let mut mode = 0.0f32;
-        let mut classic = |ui: &mut egui::Ui| {
-            let mut v = mode;
-            let edit = knob(ui, &mut v, 0.0..=4.0, 0.0, "Mode", "", "", false);
-            mode = v.round();
-            edit
-        };
-        slow_drag(&ctx, &mut classic);
-        assert!(mode >= 2.0, "the classic knob reached {mode}");
     }
 
     /// 120 px up in 2 px frames over the knob at the top-left.
