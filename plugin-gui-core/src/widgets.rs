@@ -728,34 +728,62 @@ pub fn knob_themed_edit(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> GestureEdit
         );
     }
 
-    // Value + label below.
+    // Value + label below. Each row shrinks to the cell rather than
+    // being cut off by it (`painter_at` clips): the captioned cell is
+    // 64 px, and an upper-case `SELECTIVITY` or a long readout is wider.
     let text_top = rect.top() + style.diameter;
-    painter.text(
-        egui::pos2(rect.center().x, text_top + style.value_dy),
-        egui::Align2::CENTER_TOP,
-        knob.formatted_value,
+    let max_w = rect.width() - 2.0;
+    let x = rect.center().x;
+    fitted_text(
+        &painter,
+        egui::pos2(x, text_top + style.value_dy),
+        knob.formatted_value.to_string(),
         egui::FontId::monospace(style.value_font),
         theme::TEXT_1,
+        max_w,
     );
-    painter.text(
-        egui::pos2(rect.center().x, text_top + style.label_dy),
-        egui::Align2::CENTER_TOP,
+    fitted_text(
+        &painter,
+        egui::pos2(x, text_top + style.label_dy),
         knob.label.to_uppercase(),
         egui::FontId::proportional(style.label_font),
         theme::TEXT_3,
+        max_w,
     );
-
     if !knob.sub_label.is_empty() {
-        painter.text(
-            egui::pos2(rect.center().x, text_top + style.label_dy + style.label_font + 1.5),
-            egui::Align2::CENTER_TOP,
-            knob.sub_label,
+        fitted_text(
+            &painter,
+            egui::pos2(x, text_top + style.label_dy + style.label_font + 1.5),
+            knob.sub_label.to_string(),
             egui::FontId::proportional((style.label_font - 1.0).max(7.5)),
             theme::TEXT_3,
+            max_w,
         );
     }
 
     themed_knob_gesture(ui, &response, unit, knob.default_unit)
+}
+
+/// Paint `text` centred under `top`, shrunk (down to 6.5 pt) to fit
+/// `max_w` when it is wider at `font`'s size.
+fn fitted_text(
+    painter: &egui::Painter,
+    top: Pos2,
+    text: String,
+    font: egui::FontId,
+    color: Color32,
+    max_w: f32,
+) {
+    let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
+    let width = galley.size().x;
+    let galley = if width > max_w && width > 0.0 {
+        let size = (font.size * max_w / width).max(6.5);
+        painter.layout_no_wrap(text, egui::FontId::new(size, font.family), color)
+    } else {
+        galley
+    };
+    let pos = egui::pos2(top.x - galley.size().x * 0.5, top.y);
+    painter.galley(pos, galley, color);
 }
 
 /// A themed knob's input this frame: a double-click reset (one finished
