@@ -3,7 +3,7 @@
 //! neither may allocate. The old implementation built two `Vec`s and ran
 //! a stable sort per `lra_lu` call — this test pins the fix by counting
 //! heap traffic through a wrapping global allocator while the hot path
-//! runs on a fully populated (60-minute) meter.
+//! runs on a populated meter.
 //!
 //! Kept in its own test binary so the counter only ever observes this
 //! test; the armed flag is thread-local so harness threads can't trip it.
@@ -47,8 +47,8 @@ static ALLOCATOR: CountingAlloc = CountingAlloc;
 
 #[test]
 fn push_and_lra_readout_do_not_touch_the_heap() {
-    // Fill the meter to its 60-minute block cap so the readout walks the
-    // largest distribution a session can accumulate, spread across the
+    // Populate the meter so the readout walks a
+    // large distribution, spread across the
     // whole loudness range (worst case for the old sort path).
     let mut meter = LraMeter::new();
     for i in 0..3600_u32 {
@@ -61,7 +61,7 @@ fn push_and_lra_readout_do_not_touch_the_heap() {
     ARMED.with(|a| a.set(true));
     let mut acc = 0.0_f32;
     for i in 0..1000_u32 {
-        // Interleave pushes (dropped past the cap, still exercised) with
+        // Interleave pushes with
         // per-block readouts, mimicking the audio callback's cadence.
         meter.push_short_term_mean_square(10.0_f64.powf((-23.0 + 0.691) / 10.0));
         acc += meter.lra_lu();

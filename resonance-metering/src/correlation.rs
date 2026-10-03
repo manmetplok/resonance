@@ -49,8 +49,11 @@ impl CorrelationMeter {
     pub fn push_stereo(&mut self, left: &[f32], right: &[f32]) {
         let n = left.len().min(right.len());
         for i in 0..n {
-            let l = left[i] as f64;
-            let r = right[i] as f64;
+            // A non-finite sample would poison the running sums for good
+            // (NaN - NaN never cancels when it leaves the window), so it
+            // counts as silence.
+            let l = finite_or_zero(left[i]);
+            let r = finite_or_zero(right[i]);
 
             let old_ll = self.ring_ll[self.pos];
             let old_rr = self.ring_rr[self.pos];
@@ -98,6 +101,15 @@ impl CorrelationMeter {
             return 0.0;
         }
         compute_correlation(self.sum_ll, self.sum_rr, self.sum_lr)
+    }
+}
+
+#[inline]
+fn finite_or_zero(x: f32) -> f64 {
+    if x.is_finite() {
+        x as f64
+    } else {
+        0.0
     }
 }
 

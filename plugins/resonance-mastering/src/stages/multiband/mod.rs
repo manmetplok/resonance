@@ -22,6 +22,19 @@
 //! multiband disabled (the compressors and band trims stay out of it,
 //! as they are while disabled). At unity everywhere nothing of this
 //! runs, and the stage is exactly what it was without it.
+//!
+//! # Switching on and off (DSP2-05)
+//!
+//! Enabling and disabling crossfade over [`ENABLE_RAMP_MS`] between the
+//! processed bands and the plain split (whose sum is the delayed input),
+//! and band trims ramp over [`GAIN_RAMP_MS`]. When the crossover restarts
+//! after idling, its filters refill from silence for one FIR window,
+//! during which `band_3 = delayed_input − y3` carries nearly the whole
+//! mix; the stage then stays on the plain split (no compression, trims or
+//! width) until the bands are real, and only then fades the processing
+//! in. A freshly built or reset stage starts in its configured state with
+//! no ramp: its delay line restarted along with the filters, so the bands
+//! are consistent from the first sample.
 
 pub mod delay;
 pub mod lowpass;
@@ -29,7 +42,7 @@ pub mod lowpass;
 use std::sync::Arc;
 
 use crate::stages::glue_compressor::{GlueCompressor, GlueCompressorConfig};
-use crate::stages::linear_phase_eq::DesignWorker;
+use crate::stages::linear_phase_eq::{DesignWorker, FirGeometry};
 use delay::DelayLine;
 use lowpass::LinearPhaseLowpass;
 use resonance_dsp::db_to_linear;
@@ -39,6 +52,10 @@ use super::retarget;
 
 /// Ramp length of the per-band width smoothers, in milliseconds.
 const WIDTH_RAMP_MS: f32 = 10.0;
+/// Crossfade length of the enable / disable switch, in milliseconds.
+pub const ENABLE_RAMP_MS: f32 = 10.0;
+/// Ramp length of the per-band output trims, in milliseconds.
+pub const GAIN_RAMP_MS: f32 = 10.0;
 
 /// Number of frequency bands.
 pub const NUM_BANDS: usize = 4;
@@ -158,6 +175,26 @@ pub struct Multiband {
     /// sample. `width_tgt` mirrors the last requested target.
     width_sm: [Smoother; NUM_BANDS],
     width_tgt: [f32; NUM_BANDS],
+
+    /// Amount of processing (compression + trims) mixed over the plain
+    /// split: 0 = off, 1 = on. Ramped on every enable / disable.
+    wet_sm: Smoother,
+    wet_tgt: f32,
+    /// Per-band output trims (linear), ramped.
+    gain_sm: [Smoother; NUM_BANDS],
+    gain_tgt: [f32; NUM_BANDS],
+    /// Samples the crossover still needs to refill after a restart.
+    settle_left: usize,
+    /// One crossover window: how long a restart takes to refill.
+    settle_len: usize,
+    /// False until the first chunk after construction / [`Self::reset`],
+    /// which snaps to the configured state instead of ramping.
+    primed: bool,
+    /// Uncompressed copies of the four bands, for the enable crossfade.
+    dry_l: [Vec<f32>; NUM_BANDS],
+    dry_r: [Vec<f32>; NUM_BANDS],
+    /// Per-sample wet amount for the current chunk while it ramps.
+    wet_buf: Vec<f32>,
 }
 
 impl Multiband {
@@ -202,6 +239,19 @@ impl Multiband {
                 sm
             }),
             width_tgt: [1.0; NUM_BANDS],
+            wet_sm: ramp(sample_rate, ENABLE_RAMP_MS, 0.0),
+            wet_tgt: 0.0,
+            gain_sm: std::array::from_fn(|_| ramp(sample_rate, GAIN_RAMP_MS, 1.0)),
+            gain_tgt: [1.0; NUM_BANDS],
+            settle_left: 0,
+            settle_len: {
+                let g = FirGeometry::for_sample_rate(sample_rate);
+                g.latency() + g.group_delay
+            },
+            primed: false,
+            dry_l: std::array::from_fn(|_| vec![0.0; max_buffer]),
+            dry_r: std::array::from_fn(|_| vec![0.0; max_buffer]),
+            wet_buf: vec![0.0; max_buffer],
         }
     }
 
@@ -219,6 +269,14 @@ impl Multiband {
             sm.reset(1.0);
             *tgt = 1.0;
         }
+        self.wet_sm.reset(0.0);
+        self.wet_tgt = 0.0;
+        for sm in self.gain_sm.iter_mut() {
+            sm.reset(1.0);
+        }
+        self.gain_tgt = [1.0; NUM_BANDS];
+        self.settle_left = 0;
+        self.primed = false;
     }
 
     /// Stage latency in samples (identical to one linear-phase lowpass;
@@ -315,8 +373,22 @@ impl Multiband {
             return;
         }
 
+        let first = !self.primed;
+        self.primed = true;
+        if first {
+            // A fresh or reset stage starts as configured, no ramps.
+            self.wet_tgt = if cfg.enabled { 1.0 } else { 0.0 };
+            self.wet_sm.reset(self.wet_tgt);
+            for b in 0..NUM_BANDS {
+                self.gain_tgt[b] = band_gain(cfg.bands[b].gain_db);
+                self.gain_sm[b].reset(self.gain_tgt[b]);
+            }
+        }
+
         let widening = self.width_active();
-        let splitting = cfg.enabled || widening;
+        // A disable keeps the split running until its fade-out is done.
+        let processing = cfg.enabled || self.wet_sm.current() != 0.0;
+        let splitting = processing || widening;
         let just_split = splitting && !self.was_splitting;
         self.was_splitting = splitting;
 
@@ -338,13 +410,20 @@ impl Multiband {
             // The crossovers idled during bypass, so their streaming
             // state is stale. Restart them from silence: the subtraction
             // topology sums the four bands to the delayed input for any
-            // filter state, so the output stays continuous — the band
-            // boundaries just settle over one FIR length instead of
-            // leaking pre-bypass audio into the compressors.
+            // filter state, so the output stays continuous. The band
+            // boundaries are wrong until the filters refill, though, so
+            // hold the processing off until then (the delay line kept
+            // running, so this is not needed on the first chunk, where
+            // both start from silence together).
             self.xo1.reset();
             self.xo2.reset();
             self.xo3.reset();
+            if !first {
+                self.settle_left = self.settle_len;
+            }
         }
+        let settling = self.settle_left > 0;
+        self.settle_left = self.settle_left.saturating_sub(frames);
 
         // Keep the crossover filters in sync with the current config.
         self.xo1.set_cutoff(cfg.crossover_hz[0]);
@@ -353,16 +432,105 @@ impl Multiband {
 
         self.run_crossover_network(left, right, frames);
         self.build_band_signals(frames);
-        if cfg.enabled {
-            self.compress_bands(cfg, frames);
+
+        let wet_target = if cfg.enabled && !settling { 1.0 } else { 0.0 };
+        if wet_target == 1.0 && self.wet_sm.current() == 0.0 {
+            // Fading in from fully off: the band compressors last ran
+            // who knows when (they are skipped while off), so start
+            // them clean, exactly like a fresh stage.
+            for c in self.band_comps.iter_mut() {
+                c.reset();
+            }
         }
-        if widening {
+        retarget(&mut self.wet_sm, &mut self.wet_tgt, wet_target);
+        for b in 0..NUM_BANDS {
+            let g = band_gain(cfg.bands[b].gain_db);
+            retarget(&mut self.gain_sm[b], &mut self.gain_tgt[b], g);
+        }
+        self.process_bands(cfg, frames);
+        if widening && !settling {
             self.widen_bands(frames);
         }
-        // Disabled, the multiband contributes only its split: no band
-        // trims (the compressors were skipped above).
-        let unity = MultibandConfig::default();
-        self.sum_bands(if cfg.enabled { cfg } else { &unity }, left, right, frames);
+        self.sum_bands(left, right, frames);
+    }
+
+    /// Compress and trim the four bands, crossfaded against the plain
+    /// split by the wet amount. Fully off, the bands are left as split
+    /// (bit-for-bit what a disabled stage always produced); fully on,
+    /// each band is compressed and trimmed in place, exactly as before
+    /// the crossfade existed.
+    fn process_bands(&mut self, cfg: &MultibandConfig, frames: usize) {
+        let ramping = self.wet_sm.current() != self.wet_tgt;
+        if !ramping && self.wet_tgt == 0.0 {
+            // Off: the trims are inaudible, so let them land.
+            for sm in self.gain_sm.iter_mut() {
+                sm.skip(frames as u32);
+            }
+            return;
+        }
+        if ramping {
+            for w in self.wet_buf[..frames].iter_mut() {
+                *w = self.wet_sm.next();
+            }
+            let Self {
+                y1_l,
+                y1_r,
+                y2_l,
+                y2_r,
+                y3_l,
+                y3_r,
+                xd_l,
+                xd_r,
+                dry_l,
+                dry_r,
+                ..
+            } = self;
+            let bands: [(&[f32], &[f32]); NUM_BANDS] =
+                [(y1_l, y1_r), (y2_l, y2_r), (y3_l, y3_r), (xd_l, xd_r)];
+            for (b, (l, r)) in bands.into_iter().enumerate() {
+                dry_l[b][..frames].copy_from_slice(&l[..frames]);
+                dry_r[b][..frames].copy_from_slice(&r[..frames]);
+            }
+        }
+        self.compress_bands(cfg, frames);
+
+        let Self {
+            y1_l,
+            y1_r,
+            y2_l,
+            y2_r,
+            y3_l,
+            y3_r,
+            xd_l,
+            xd_r,
+            dry_l,
+            dry_r,
+            gain_sm,
+            gain_tgt,
+            wet_buf,
+            ..
+        } = self;
+        let bands: [(&mut [f32], &mut [f32]); NUM_BANDS] =
+            [(y1_l, y1_r), (y2_l, y2_r), (y3_l, y3_r), (xd_l, xd_r)];
+        for (b, (l, r)) in bands.into_iter().enumerate() {
+            let (l, r) = (&mut l[..frames], &mut r[..frames]);
+            let sm = &mut gain_sm[b];
+            if ramping {
+                let (dl, dr) = (&dry_l[b][..frames], &dry_r[b][..frames]);
+                for i in 0..frames {
+                    let g = sm.next();
+                    let w = wet_buf[i];
+                    l[i] = dl[i] + (l[i] * g - dl[i]) * w;
+                    r[i] = dr[i] + (r[i] * g - dr[i]) * w;
+                }
+            } else if gain_tgt[b] != 1.0 || sm.current() != 1.0 {
+                for i in 0..frames {
+                    let g = sm.next();
+                    l[i] *= g;
+                    r[i] *= g;
+                }
+            }
+        }
     }
 
     /// True while any band's width is off unity or still ramping.
@@ -491,30 +659,25 @@ impl Multiband {
         }
     }
 
-    /// Stage 4: trim each band by its output gain and add the four band
-    /// scratch buffers back into the caller's stereo buffers.
+    /// Stage 4: add the four (processed) band buffers back into the
+    /// caller's stereo buffers.
     ///
-    /// The trim lives here rather than inside the band compressor so it
-    /// is a property of the *band*, not of its compressor: it works with
-    /// the compressor off, which is what makes the stage usable as a
-    /// static four-band tone balancer. At the default 0 dB every gain is
-    /// exactly 1.0 and the sum is unchanged.
-    fn sum_bands(&self, cfg: &MultibandConfig, left: &mut [f32], right: &mut [f32], frames: usize) {
-        let g = [
-            band_gain(cfg.bands[0].gain_db),
-            band_gain(cfg.bands[1].gain_db),
-            band_gain(cfg.bands[2].gain_db),
-            band_gain(cfg.bands[3].gain_db),
-        ];
+    /// Band trims were applied in [`Self::process_bands`], so they are a
+    /// property of the *band*, not of its compressor: they work with the
+    /// compressor off, which is what makes the stage usable as a static
+    /// four-band tone balancer.
+    fn sum_bands(&self, left: &mut [f32], right: &mut [f32], frames: usize) {
         for i in 0..frames {
-            left[i] = self.y1_l[i] * g[0]
-                + self.y2_l[i] * g[1]
-                + self.y3_l[i] * g[2]
-                + self.xd_l[i] * g[3];
-            right[i] = self.y1_r[i] * g[0]
-                + self.y2_r[i] * g[1]
-                + self.y3_r[i] * g[2]
-                + self.xd_r[i] * g[3];
+            left[i] = self.y1_l[i] + self.y2_l[i] + self.y3_l[i] + self.xd_l[i];
+            right[i] = self.y1_r[i] + self.y2_r[i] + self.y3_r[i] + self.xd_r[i];
         }
     }
+}
+
+/// A linear smoother at `value`, ramping over `ms`.
+fn ramp(sample_rate: f32, ms: f32, value: f32) -> Smoother {
+    let mut sm = Smoother::new(SmoothingStyle::Linear(ms));
+    sm.set_sample_rate(sample_rate);
+    sm.reset(value);
+    sm
 }

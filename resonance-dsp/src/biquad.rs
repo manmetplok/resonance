@@ -7,8 +7,17 @@
 //! Reference: "Cookbook formulae for audio EQ biquad filter coefficients"
 //! by Robert Bristow-Johnson. All formulas are bilinear-transformed
 //! analog prototypes normalized by a0.
+//!
+//! [`Biquad`] designs in f32 (kept bit-stable: every IIR golden depends on
+//! it). [`BiquadCoeffs`] carries the same formulas in f64 for offline
+//! consumers that need the *designed* response rather than that of the
+//! f32 filter — the mastering FIR designers: at low
+//! frequencies and high sample rates `a1 ≈ -2`, `a2 ≈ 1` and the f32
+//! rounding of the coefficients alone moves the response by up to ~1 dB
+//! (20 Hz high-pass, 5 Hz, 192 kHz).
 
 use std::f32::consts::PI;
+use std::f64::consts::PI as PI_F64;
 
 /// A single second-order IIR section. Stores both the normalized
 /// coefficients and the delay line state.
@@ -72,6 +81,27 @@ impl Biquad {
         self.b2 = b2;
         self.a1 = a1;
         self.a2 = a2;
+    }
+
+    /// Round f64 design coefficients into this filter. Leaves the
+    /// delay-line state untouched.
+    pub fn assign_coeffs(&mut self, c: BiquadCoeffs) {
+        self.b0 = c.b0 as f32;
+        self.b1 = c.b1 as f32;
+        self.b2 = c.b2 as f32;
+        self.a1 = c.a1 as f32;
+        self.a2 = c.a2 as f32;
+    }
+
+    /// This filter's (f32) coefficients, widened to f64.
+    pub fn coeffs(&self) -> BiquadCoeffs {
+        BiquadCoeffs {
+            b0: self.b0 as f64,
+            b1: self.b1 as f64,
+            b2: self.b2 as f64,
+            a1: self.a1 as f64,
+            a2: self.a2 as f64,
+        }
     }
 
     /// Process one sample through the biquad (DF1 transposed).
@@ -245,22 +275,15 @@ impl Biquad {
         self.assign_normalized(nb0, nb1, 0.0, na0, na1, 0.0);
     }
 
-    /// Evaluate |H(e^{jω})| at a given frequency for offline analysis
-    /// (e.g. rendering the response curve in the editor). Pure function of
-    /// the current coefficients; does not touch state.
+    /// Evaluate |H(e^{jω})| of this (f32) filter at a given frequency for
+    /// offline analysis (e.g. rendering the response curve in the editor).
+    /// Pure function of the current coefficients; does not touch state.
+    ///
+    /// Evaluated in f64 in the sin²(ω/2) form, so it is the true response
+    /// of the filter as it runs. For the response of the *design* (free of
+    /// f32 coefficient rounding), use [`BiquadCoeffs::magnitude`].
     pub fn magnitude(&self, freq: f32, sr: f32) -> f32 {
-        // Transfer function: H(z) = (b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2)
-        // Evaluate at z = e^{jω} where ω = 2π f / sr.
-        let w = 2.0 * PI * freq / sr;
-        let (s1, c1) = w.sin_cos();
-        let (s2, c2) = (2.0 * w).sin_cos();
-        let num_re = self.b0 + self.b1 * c1 + self.b2 * c2;
-        let num_im = -self.b1 * s1 - self.b2 * s2;
-        let den_re = 1.0 + self.a1 * c1 + self.a2 * c2;
-        let den_im = -self.a1 * s1 - self.a2 * s2;
-        let num_mag_sq = num_re * num_re + num_im * num_im;
-        let den_mag_sq = den_re * den_re + den_im * den_im;
-        (num_mag_sq / den_mag_sq.max(1e-30)).sqrt()
+        self.coeffs().magnitude(freq as f64, sr as f64) as f32
     }
 
     fn assign_normalized(&mut self, b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) {
@@ -270,6 +293,229 @@ impl Biquad {
         self.b2 = b2 * inv_a0;
         self.a1 = a1 * inv_a0;
         self.a2 = a2 * inv_a0;
+    }
+}
+
+/// Normalized biquad coefficients in f64 (`a0` is the implicit 1.0): the
+/// RBJ cookbook designs, and an accurate magnitude evaluation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BiquadCoeffs {
+    pub b0: f64,
+    pub b1: f64,
+    pub b2: f64,
+    pub a1: f64,
+    pub a2: f64,
+}
+
+impl Default for BiquadCoeffs {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl BiquadCoeffs {
+    /// The unity transfer function.
+    pub const IDENTITY: Self = Self {
+        b0: 1.0,
+        b1: 0.0,
+        b2: 0.0,
+        a1: 0.0,
+        a2: 0.0,
+    };
+
+    /// Peaking bell EQ. `gain_db` positive = boost, negative = cut.
+    pub fn bell(sr: f64, freq: f64, q: f64, gain_db: f64) -> Self {
+        let (freq, q) = clamp_params_f64(sr, freq, q);
+        let a = 10.0_f64.powf(gain_db / 40.0);
+        let w0 = 2.0 * PI_F64 * freq / sr;
+        let (sin_w0, cos_w0) = w0.sin_cos();
+        let alpha = sin_w0 / (2.0 * q);
+
+        let b0 = 1.0 + alpha * a;
+        let b1 = -2.0 * cos_w0;
+        let b2 = 1.0 - alpha * a;
+        let a0 = 1.0 + alpha / a;
+        let a1 = -2.0 * cos_w0;
+        let a2 = 1.0 - alpha / a;
+        Self::normalized(b0, b1, b2, a0, a1, a2)
+    }
+
+    /// Low shelf. `gain_db` boost/cut in the low band; `freq` is the shelf
+    /// midpoint; `q` shapes the transition (0.707 = maximally flat).
+    pub fn low_shelf(sr: f64, freq: f64, q: f64, gain_db: f64) -> Self {
+        let (freq, q) = clamp_params_f64(sr, freq, q);
+        let a = 10.0_f64.powf(gain_db / 40.0);
+        let w0 = 2.0 * PI_F64 * freq / sr;
+        let (sin_w0, cos_w0) = w0.sin_cos();
+        let alpha = sin_w0 / (2.0 * q);
+        let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+
+        let b0 = a * ((a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
+        let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0);
+        let b2 = a * ((a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
+        let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+        let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0);
+        let a2 = (a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
+        Self::normalized(b0, b1, b2, a0, a1, a2)
+    }
+
+    /// High shelf. Mirror of [`BiquadCoeffs::low_shelf`].
+    pub fn high_shelf(sr: f64, freq: f64, q: f64, gain_db: f64) -> Self {
+        let (freq, q) = clamp_params_f64(sr, freq, q);
+        let a = 10.0_f64.powf(gain_db / 40.0);
+        let w0 = 2.0 * PI_F64 * freq / sr;
+        let (sin_w0, cos_w0) = w0.sin_cos();
+        let alpha = sin_w0 / (2.0 * q);
+        let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+
+        let b0 = a * ((a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
+        let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0);
+        let b2 = a * ((a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
+        let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+        let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_w0);
+        let a2 = (a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
+        Self::normalized(b0, b1, b2, a0, a1, a2)
+    }
+
+    /// 12 dB/oct (2nd order) high-pass.
+    pub fn high_pass(sr: f64, freq: f64, q: f64) -> Self {
+        let (freq, q) = clamp_params_f64(sr, freq, q);
+        let w0 = 2.0 * PI_F64 * freq / sr;
+        let (sin_w0, cos_w0) = w0.sin_cos();
+        let alpha = sin_w0 / (2.0 * q);
+
+        let b0 = (1.0 + cos_w0) * 0.5;
+        let b1 = -(1.0 + cos_w0);
+        let b2 = (1.0 + cos_w0) * 0.5;
+        let a0 = 1.0 + alpha;
+        let a1 = -2.0 * cos_w0;
+        let a2 = 1.0 - alpha;
+        Self::normalized(b0, b1, b2, a0, a1, a2)
+    }
+
+    /// 12 dB/oct (2nd order) low-pass.
+    pub fn low_pass(sr: f64, freq: f64, q: f64) -> Self {
+        let (freq, q) = clamp_params_f64(sr, freq, q);
+        let w0 = 2.0 * PI_F64 * freq / sr;
+        let (sin_w0, cos_w0) = w0.sin_cos();
+        let alpha = sin_w0 / (2.0 * q);
+
+        let b0 = (1.0 - cos_w0) * 0.5;
+        let b1 = 1.0 - cos_w0;
+        let b2 = (1.0 - cos_w0) * 0.5;
+        let a0 = 1.0 + alpha;
+        let a1 = -2.0 * cos_w0;
+        let a2 = 1.0 - alpha;
+        Self::normalized(b0, b1, b2, a0, a1, a2)
+    }
+
+    /// Second-order all-pass: unity magnitude, phase falling through −π
+    /// at `freq`; `q` sets how fast (higher = narrower transition).
+    pub fn all_pass(sr: f64, freq: f64, q: f64) -> Self {
+        let (freq, q) = clamp_params_f64(sr, freq, q);
+        let w0 = 2.0 * PI_F64 * freq / sr;
+        let (sin_w0, cos_w0) = w0.sin_cos();
+        let alpha = sin_w0 / (2.0 * q);
+
+        let b0 = 1.0 - alpha;
+        let b1 = -2.0 * cos_w0;
+        let b2 = 1.0 + alpha;
+        let a0 = 1.0 + alpha;
+        let a1 = -2.0 * cos_w0;
+        let a2 = 1.0 - alpha;
+        Self::normalized(b0, b1, b2, a0, a1, a2)
+    }
+
+    /// Band-pass with a constant 0 dB peak at `freq`.
+    pub fn band_pass(sr: f64, freq: f64, q: f64) -> Self {
+        let (freq, q) = clamp_params_f64(sr, freq, q);
+        let w0 = 2.0 * PI_F64 * freq / sr;
+        let (sin_w0, cos_w0) = w0.sin_cos();
+        let alpha = sin_w0 / (2.0 * q);
+        Self::normalized(alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha)
+    }
+
+    /// 6 dB/oct (1st order) low-pass, as a biquad with `b2 = a2 = 0`.
+    pub fn first_order_low_pass(sr: f64, freq: f64) -> Self {
+        let (freq, _) = clamp_params_f64(sr, freq, 1.0);
+        Self::first_order_analog(sr, 0.0, 1.0, 1.0 / (2.0 * PI_F64 * freq), 1.0, freq)
+    }
+
+    /// 6 dB/oct (1st order) high-pass.
+    pub fn first_order_high_pass(sr: f64, freq: f64) -> Self {
+        let (freq, _) = clamp_params_f64(sr, freq, 1.0);
+        let tau = 1.0 / (2.0 * PI_F64 * freq);
+        Self::first_order_analog(sr, tau, 0.0, tau, 1.0, freq)
+    }
+
+    /// Bilinear transform of the first-order analog section
+    /// `H(s) = (b1·s + b0) / (a1·s + a0)`, with `s` in rad/s, prewarped so
+    /// the digital response equals the analog one exactly at
+    /// `prewarp_hz` (clamped below Nyquist).
+    ///
+    /// This is the one first-order design every other first-order shape
+    /// here reduces to, and the route for sections whose analog zero or
+    /// pole lies *above* Nyquist (an "air" shelf with a 40 kHz corner):
+    /// the bilinear map sends every left-half-plane pole inside the unit
+    /// circle whatever its frequency, so such a section is always stable,
+    /// and the prewarp point decides where in the audible band the digital
+    /// curve tracks the analog one. With `a0 / a1 > 0` (a left-half-plane
+    /// pole) the result is stable for any sample rate.
+    pub fn first_order_analog(
+        sr: f64,
+        b1: f64,
+        b0: f64,
+        a1: f64,
+        a0: f64,
+        prewarp_hz: f64,
+    ) -> Self {
+        let nyquist = (sr * 0.5).max(20.0);
+        let fw = prewarp_hz.clamp(1.0, nyquist * 0.95);
+        let w = 2.0 * PI_F64 * fw;
+        // s = K (1 - z^-1) / (1 + z^-1), K chosen so ω_analog(fw) maps to fw.
+        let k = w / (PI_F64 * fw / sr).tan();
+        let nb0 = b1 * k + b0;
+        let nb1 = b0 - b1 * k;
+        let na0 = a1 * k + a0;
+        let na1 = a0 - a1 * k;
+        Self::normalized(nb0, nb1, 0.0, na0, na1, 0.0)
+    }
+
+    /// |H(e^{jω})| at `freq`.
+    pub fn magnitude(&self, freq: f64, sr: f64) -> f64 {
+        let half_w = PI_F64 * freq / sr;
+        let s = half_w.sin();
+        self.magnitude_at_sin2(s * s)
+    }
+
+    /// |H(e^{jω})| given `phi = sin²(ω/2)`, so a caller evaluating many
+    /// sections at one frequency computes the sine once.
+    ///
+    /// Uses `|P(e^{jω})|² = (p0+p1+p2)² − 4(p0·p1 + 4·p0·p2 + p1·p2)·φ +
+    /// 16·p0·p2·φ²`. The `cos ω` form instead subtracts nearly equal terms
+    /// (`1 + a1 cos ω + a2 cos 2ω` with `a1 ≈ −2`, `a2 ≈ 1`) at low
+    /// frequencies; here the small DC term `p0+p1+p2` is formed directly.
+    #[inline]
+    pub fn magnitude_at_sin2(&self, phi: f64) -> f64 {
+        #[inline]
+        fn power(p0: f64, p1: f64, p2: f64, phi: f64) -> f64 {
+            let dc = p0 + p1 + p2;
+            dc * dc - 4.0 * (p0 * p1 + 4.0 * p0 * p2 + p1 * p2) * phi + 16.0 * p0 * p2 * phi * phi
+        }
+        let num = power(self.b0, self.b1, self.b2, phi).max(0.0);
+        let den = power(1.0, self.a1, self.a2, phi).max(1e-300);
+        (num / den).sqrt()
+    }
+
+    fn normalized(b0: f64, b1: f64, b2: f64, a0: f64, a1: f64, a2: f64) -> Self {
+        let inv_a0 = 1.0 / a0;
+        Self {
+            b0: b0 * inv_a0,
+            b1: b1 * inv_a0,
+            b2: b2 * inv_a0,
+            a1: a1 * inv_a0,
+            a2: a2 * inv_a0,
+        }
     }
 }
 
@@ -285,3 +531,13 @@ fn clamp_params(sr: f32, freq: f32, q: f32) -> (f32, f32) {
     (f, q)
 }
 
+/// f64 twin of [`clamp_params`].
+fn clamp_params_f64(sr: f64, freq: f64, q: f64) -> (f64, f64) {
+    // Floor the Nyquist estimate so a zero/negative/NaN sample rate
+    // can't produce an inverted clamp range — `clamp(10.0, x)` panics
+    // when `x < 10.0` (and on NaN bounds).
+    let nyquist = (sr * 0.5).max(20.0);
+    let f = freq.clamp(10.0, nyquist * 0.995);
+    let q = q.max(0.05);
+    (f, q)
+}

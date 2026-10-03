@@ -350,15 +350,22 @@ impl EqDsp {
                 self.auto_gain_valid = false;
                 // A kind change restarts the band's stages from zero (below),
                 // which on loud material is a click. Keep the old stages
-                // running as they are and crossfade out of them. Only when
-                // they were producing something: from a bypassed band there
-                // is nothing to fade from. A second change mid-fade starts
-                // over from the current (new) stages. Moving a band between
-                // Stereo, Mid and Side repurposes its stages the same way.
+                // running as they are and crossfade out of them. A second
+                // change mid-fade starts over from the current (new) stages.
+                // Moving a band between Stereo, Mid and Side repurposes its
+                // stages the same way.
+                //
+                // Switching the band on or off is the same move (DSP2-11):
+                // bypassing a +12 dB bell or a 48 dB/oct cut used to cut over
+                // in one sample. Off, the old stages fade out into the dry
+                // signal; on, a bypassed band "runs" zero stages, which is
+                // the dry signal, so the restarted stages fade in from it.
                 let kind_changed = self.last_snapshot[i]
                     .is_some_and(|p| p.kind != snapshot.kind || p.ms != snapshot.ms);
+                let enable_changed =
+                    self.last_snapshot[i].is_some_and(|p| p.enabled != snapshot.enabled);
                 let prev_n = self.active_stages[i];
-                if kind_changed && prev_n > 0 {
+                if (kind_changed && prev_n > 0) || enable_changed {
                     for ch in 0..2 {
                         self.fade_stages[ch][i] = self.channels[ch][i];
                     }

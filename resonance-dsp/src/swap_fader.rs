@@ -16,9 +16,23 @@
 //! provides the matching drop-it-elsewhere thread. If the channel is
 //! momentarily full, the payload is parked in one of a few inline slots
 //! and re-offered on the next retirement (or via
-//! [`SwapFader::take_retired`]). Without a sink the fader keeps its
-//! historical drop-in-place behaviour, which is only appropriate for
-//! payloads whose `Drop` is trivial (e.g. `SwapFader<f32>`).
+//! [`SwapFader::take_retired`]). Without a sink, a payload whose `Drop`
+//! is trivial (e.g. `SwapFader<f32>`) is simply dropped; any other payload
+//! is parked and the owner collects it with [`SwapFader::take_retired`].
+//!
+//! # Never dropping on the audio thread (DSP2-15)
+//!
+//! [`SwapFader::try_begin_swap`] and [`SwapFader::try_begin_clear`] admit a
+//! swap only when every payload it may displace — the superseded pending
+//! one now, the active one when its fade-out ends — has a free parking
+//! slot to fall back on, so no retirement can end in a drop. Otherwise they
+//! refuse and hand the payload back (the caller keeps it and retries on a
+//! later block). The infallible [`SwapFader::begin_swap`] /
+//! [`SwapFader::begin_clear`] use the same admission; a payload they have
+//! to refuse has nowhere to go but a drop, which only happens when the
+//! janitor has been unreachable for many swaps and is counted in
+//! [`SwapFader::overflow_drops`]. Heap payloads should use the `try_*`
+//! forms.
 
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 
@@ -50,6 +64,9 @@ pub struct SwapFader<T> {
     /// [`SwapFader::take_retired`]; anything still parked when the fader
     /// itself drops is freed with it, off the audio thread.
     retired: [Option<T>; RETIRED_SLOTS],
+    /// Payloads the infallible `begin_*` forms had to drop in place
+    /// because no retirement was possible (diagnostics).
+    overflow_drops: u64,
 }
 
 impl<T> SwapFader<T> {
@@ -65,6 +82,7 @@ impl<T> SwapFader<T> {
             fade_step: 1.0 / fade_samples as f32,
             retire_tx: None,
             retired: [None, None, None, None],
+            overflow_drops: 0,
         }
     }
 
@@ -92,6 +110,10 @@ impl<T> SwapFader<T> {
     /// are occupied too — i.e. a dead janitor thread.
     fn retire(&mut self, payload: T) {
         if self.retire_tx.is_none() {
+            if std::mem::needs_drop::<T>() {
+                // No sink: keep it for the owner's `take_retired`.
+                self.park(payload);
+            }
             return;
         }
         self.flush_parked();
@@ -126,9 +148,30 @@ impl<T> SwapFader<T> {
                 return;
             }
         }
-        // Every parking slot is taken and the channel is still refusing:
-        // the janitor has been unreachable for many blocks. Dropping
-        // here — the pre-retirement behaviour — is the last resort.
+        // Every parking slot is taken and the channel is still refusing.
+        // The `try_*` / `begin_*` admission rules this out on the audio
+        // thread; only `install` (initialize time) can get here.
+    }
+
+    /// Whether a swap or clear may be admitted now: every payload it can
+    /// displace (the pending one and the active one) has a free parking
+    /// slot behind it, so none of their retirements can end in a drop.
+    /// Trivially-dropped payloads are always admitted.
+    fn can_admit(&mut self) -> bool {
+        if !std::mem::needs_drop::<T>() {
+            return true;
+        }
+        self.flush_parked();
+        let held = usize::from(self.pending.is_some()) + usize::from(self.active.is_some());
+        let free = self.retired.iter().filter(|s| s.is_none()).count();
+        free >= held
+    }
+
+    /// Payloads the infallible [`Self::begin_swap`] / [`Self::begin_clear`]
+    /// had to drop on the audio thread because nothing could take them
+    /// (a dead janitor); 0 in normal operation.
+    pub fn overflow_drops(&self) -> u64 {
+        self.overflow_drops
     }
 
     /// Install a payload directly, with no crossfade and no fade-in.
@@ -156,7 +199,29 @@ impl<T> SwapFader<T> {
     /// fade-in the fade-out starts from the current gain. So continuous
     /// retargeting (e.g. automated delay time) keeps the gain moving by
     /// at most one fade step per sample, and the latest payload lands.
+    ///
+    /// Uses [`Self::try_begin_swap`]'s admission; a payload it has to
+    /// refuse is dropped here and counted in [`Self::overflow_drops`].
     pub fn begin_swap(&mut self, payload: T) {
+        if let Err(refused) = self.try_begin_swap(payload) {
+            self.overflow_drops += 1;
+            drop(refused);
+        }
+    }
+
+    /// [`Self::begin_swap`] that never drops on the audio thread: when a
+    /// payload this swap would displace could not be retired safely (the
+    /// janitor is behind and the parking slots are full) the swap is
+    /// refused and `payload` handed back, to retry on a later block.
+    pub fn try_begin_swap(&mut self, payload: T) -> Result<(), T> {
+        if !self.can_admit() {
+            return Err(payload);
+        }
+        self.swap_admitted(payload);
+        Ok(())
+    }
+
+    fn swap_admitted(&mut self, payload: T) {
         if let Some(old) = self.pending.take() {
             self.retire(old);
         }
@@ -190,7 +255,27 @@ impl<T> SwapFader<T> {
     /// Fade the active payload out and leave nothing active (an IR
     /// cleared by a preset). A pending payload is dropped (retired); a
     /// fade already running carries on and lands on nothing.
+    ///
+    /// Refused (a no-op, counted in [`Self::overflow_drops`]) under the
+    /// same condition as [`Self::try_begin_clear`].
     pub fn begin_clear(&mut self) {
+        if !self.try_begin_clear() {
+            self.overflow_drops += 1;
+        }
+    }
+
+    /// [`Self::begin_clear`] that never drops on the audio thread: false,
+    /// and nothing changes, when the payloads it would displace could not
+    /// be retired safely. Retry on a later block.
+    pub fn try_begin_clear(&mut self) -> bool {
+        if !self.can_admit() {
+            return false;
+        }
+        self.clear_admitted();
+        true
+    }
+
+    fn clear_admitted(&mut self) {
         if let Some(old) = self.pending.take() {
             self.retire(old);
         }

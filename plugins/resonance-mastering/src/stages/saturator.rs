@@ -172,6 +172,13 @@ pub struct Saturator {
     curve_tgt: f32,
     /// The mode the stage state belongs to; a change restarts it.
     active_mode: SatMode,
+    /// Mode-switch fade (DSP2-11): multiplies the wet share like the
+    /// enable crossfade. A `sat_mode` change ramps it to 0 on the old
+    /// mode, swaps modes (restarting their state) once it is there, and
+    /// ramps back to 1 on the new one — instead of jumping from one
+    /// voicing's output to a freshly restarted other one in one sample.
+    switch_sm: Smoother,
+    switch_tgt: f32,
     /// Drive (dB) and curve the cached mode values were computed for
     /// (NaN forces the first compute).
     mode_key: (f32, f32),
@@ -211,11 +218,14 @@ impl Saturator {
             curve_sm: Smoother::new(SmoothingStyle::Linear(RAMP_MS)),
             curve_tgt: f32::NAN,
             active_mode: SatMode::Blend,
+            switch_sm: Smoother::new(SmoothingStyle::Linear(RAMP_MS)),
+            switch_tgt: 1.0,
             mode_key: (f32::NAN, f32::NAN),
             mode_drive_lin: 1.0,
             mode_gain: 1.0,
             mode_curve: Curve::Tanh,
         };
+        s.switch_sm.reset(1.0);
         s.set_sample_rate(sample_rate);
         s
     }
@@ -243,6 +253,7 @@ impl Saturator {
         self.mix_sm.set_sample_rate(sample_rate);
         self.enable_sm.set_sample_rate(sample_rate);
         self.curve_sm.set_sample_rate(sample_rate);
+        self.switch_sm.set_sample_rate(sample_rate);
         self.mode_l = ModeChannel::new(sample_rate);
         self.mode_r = ModeChannel::new(sample_rate);
     }
@@ -272,6 +283,8 @@ impl Saturator {
         self.curve_sm.reset(0.0);
         self.curve_tgt = f32::NAN;
         self.mode_key = (f32::NAN, f32::NAN);
+        self.switch_sm.reset(1.0);
+        self.switch_tgt = 1.0;
     }
 
     /// Restart the filter and ADAA state of both paths: on (re)engage,
@@ -346,8 +359,25 @@ impl Saturator {
             retarget(&mut self.curve_sm, &mut self.curve_tgt, curve);
         }
         if cfg.mode != self.active_mode {
-            self.restart_state();
-            self.active_mode = cfg.mode;
+            // Silent (never ran, or fully faded out): swap at once.
+            // Otherwise fade the old mode out first; the swap happens on
+            // the block where that fade has landed.
+            // `fading_out`: the wet path was audible in the previous block.
+            let audible = fading_out;
+            if !audible || self.switch_sm.current() == 0.0 {
+                self.restart_state();
+                self.active_mode = cfg.mode;
+                if audible {
+                    retarget(&mut self.switch_sm, &mut self.switch_tgt, 1.0);
+                } else {
+                    self.switch_sm.reset(1.0);
+                    self.switch_tgt = 1.0;
+                }
+            } else {
+                retarget(&mut self.switch_sm, &mut self.switch_tgt, 0.0);
+            }
+        } else {
+            retarget(&mut self.switch_sm, &mut self.switch_tgt, 1.0);
         }
         let enable_target = if cfg.enabled { 1.0 } else { 0.0 };
         retarget(&mut self.enable_sm, &mut self.enable_tgt, enable_target);
@@ -360,8 +390,8 @@ impl Saturator {
             return;
         }
 
-        if cfg.mode != SatMode::Blend {
-            self.process_mode(left, right, cfg.mode);
+        if self.active_mode != SatMode::Blend {
+            self.process_mode(left, right, self.active_mode);
             return;
         }
 
@@ -387,7 +417,7 @@ impl Saturator {
             let drive = self.drive_lin;
             let inv_drive = self.inv_drive;
             let character = self.character_sm.next() as f64;
-            let mix = self.mix_sm.next() * self.enable_sm.next();
+            let mix = self.mix_sm.next() * self.enable_sm.next() * self.switch_sm.next();
 
             let l1 = self.hf_shelf_l.process(dry_l);
             let r1 = self.hf_shelf_r.process(dry_r);
@@ -433,7 +463,7 @@ impl Saturator {
             // Blend.
             let _ = self.character_sm.next();
             let mix = self.mix_sm.next();
-            let e = self.enable_sm.next();
+            let e = self.enable_sm.next() * self.switch_sm.next();
             let (dl, dr) = (left[i], right[i]);
             let (drive, gain, c) = (self.mode_drive_lin, self.mode_gain, self.mode_curve);
             let wl = self.mode_l.process(mode, &c, dl, drive, gain, mix);

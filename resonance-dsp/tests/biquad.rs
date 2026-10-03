@@ -193,3 +193,122 @@ fn first_order_analog_section_with_a_pole_above_nyquist_is_stable() {
         assert!(peak < 8.0, "output ran away: {peak}");
     }
 }
+
+// ---- DSP2-07: magnitude accuracy at low frequencies / high rates ----
+
+/// Independent f64 reference: the RBJ prototype coefficients and a direct
+/// complex evaluation of H(e^{jw}), both in f64.
+fn reference_db(kind: &str, sr: f64, f0: f64, q: f64, g: f64, f: f64) -> f64 {
+    use std::f64::consts::PI;
+    let w0 = 2.0 * PI * f0 / sr;
+    let (sn, cs) = w0.sin_cos();
+    let al = sn / (2.0 * q);
+    let a = 10f64.powf(g / 40.0);
+    let sa = 2.0 * a.sqrt() * al;
+    let (b0, b1, b2, a0, a1, a2) = match kind {
+        "hp" => ((1.0 + cs) / 2.0, -(1.0 + cs), (1.0 + cs) / 2.0, 1.0 + al, -2.0 * cs, 1.0 - al),
+        "lp" => ((1.0 - cs) / 2.0, 1.0 - cs, (1.0 - cs) / 2.0, 1.0 + al, -2.0 * cs, 1.0 - al),
+        "bell" => (1.0 + al * a, -2.0 * cs, 1.0 - al * a, 1.0 + al / a, -2.0 * cs, 1.0 - al / a),
+        "ls" => (
+            a * ((a + 1.0) - (a - 1.0) * cs + sa),
+            2.0 * a * ((a - 1.0) - (a + 1.0) * cs),
+            a * ((a + 1.0) - (a - 1.0) * cs - sa),
+            (a + 1.0) + (a - 1.0) * cs + sa,
+            -2.0 * ((a - 1.0) + (a + 1.0) * cs),
+            (a + 1.0) + (a - 1.0) * cs - sa,
+        ),
+        "hs" => (
+            a * ((a + 1.0) + (a - 1.0) * cs + sa),
+            -2.0 * a * ((a - 1.0) + (a + 1.0) * cs),
+            a * ((a + 1.0) + (a - 1.0) * cs - sa),
+            (a + 1.0) - (a - 1.0) * cs + sa,
+            2.0 * ((a - 1.0) - (a + 1.0) * cs),
+            (a + 1.0) - (a - 1.0) * cs - sa,
+        ),
+        _ => unreachable!(),
+    };
+    let w = 2.0 * PI * f / sr;
+    let (s1, c1) = w.sin_cos();
+    let (s2, c2) = (2.0 * w).sin_cos();
+    let nr = b0 + b1 * c1 + b2 * c2;
+    let ni = -b1 * s1 - b2 * s2;
+    let dr = a0 + a1 * c1 + a2 * c2;
+    let di = -a1 * s1 - a2 * s2;
+    10.0 * ((nr * nr + ni * ni) / (dr * dr + di * di)).log10()
+}
+
+fn coeffs(kind: &str, sr: f64, f0: f64, q: f64, g: f64) -> resonance_dsp::BiquadCoeffs {
+    use resonance_dsp::BiquadCoeffs as C;
+    match kind {
+        "hp" => C::high_pass(sr, f0, q),
+        "lp" => C::low_pass(sr, f0, q),
+        "bell" => C::bell(sr, f0, q, g),
+        "ls" => C::low_shelf(sr, f0, q, g),
+        "hs" => C::high_shelf(sr, f0, q, g),
+        _ => unreachable!(),
+    }
+}
+
+const CASES: &[(&str, f64, f64, f64)] = &[
+    ("hp", 20.0, 0.707, 0.0),
+    ("hp", 1_000.0, 0.707, 0.0),
+    ("lp", 20.0, 0.707, 0.0),
+    ("lp", 18_000.0, 0.707, 0.0),
+    ("bell", 30.0, 2.0, 12.0),
+    ("bell", 3_000.0, 1.0, -9.0),
+    ("ls", 25.0, 0.707, 6.0),
+    ("hs", 10_000.0, 0.707, -6.0),
+];
+
+/// Log sweep from 5 Hz to just under Nyquist.
+fn sweep(sr: f64) -> impl Iterator<Item = f64> {
+    let (lo, hi) = (5.0f64, sr * 0.499);
+    (0..=400).map(move |i| lo * (hi / lo).powf(i as f64 / 400.0))
+}
+
+#[test]
+fn f64_design_magnitude_matches_reference_from_5hz_to_nyquist() {
+    for &sr in &[48_000.0, 96_000.0, 192_000.0] {
+        for &(kind, f0, q, g) in CASES {
+            let c = coeffs(kind, sr, f0, q, g);
+            for f in sweep(sr) {
+                let want = reference_db(kind, sr, f0, q, g, f);
+                let got = 20.0 * c.magnitude(f, sr).log10();
+                assert!(
+                    (got - want).abs() < 0.05,
+                    "{kind} {f0} Hz @ {sr}: {f:.1} Hz got {got:.3} dB, want {want:.3} dB"
+                );
+            }
+        }
+    }
+}
+
+/// `Biquad::magnitude` must be the true response of the f32 filter: the
+/// same f32 coefficients evaluated in f64. The old f32 evaluation was off
+/// by 1.6 dB at 5 Hz for a 20 Hz high-pass at 48 kHz, and by more at
+/// higher rates.
+#[test]
+fn f32_filter_magnitude_has_no_evaluation_cancellation() {
+    use std::f64::consts::PI;
+    for &sr in &[48_000.0f32, 96_000.0, 192_000.0] {
+        let mut b = Biquad::identity();
+        b.set_high_pass(sr, 20.0, 0.707);
+        let (b0, b1, b2) = (b.b0 as f64, b.b1 as f64, b.b2 as f64);
+        let (a1, a2) = (b.a1 as f64, b.a2 as f64);
+        for f in sweep(sr as f64) {
+            let w = 2.0 * PI * f / sr as f64;
+            let (s1, c1) = w.sin_cos();
+            let (s2, c2) = (2.0 * w).sin_cos();
+            let nr = b0 + b1 * c1 + b2 * c2;
+            let ni = -b1 * s1 - b2 * s2;
+            let dr = 1.0 + a1 * c1 + a2 * c2;
+            let di = -a1 * s1 - a2 * s2;
+            let want = 10.0 * ((nr * nr + ni * ni) / (dr * dr + di * di)).log10();
+            let got = 20.0 * (b.magnitude(f as f32, sr) as f64).log10();
+            assert!(
+                (got - want).abs() < 0.01,
+                "hp 20 Hz @ {sr}: {f:.1} Hz got {got:.3} dB, want {want:.3} dB"
+            );
+        }
+    }
+}

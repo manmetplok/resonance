@@ -11,8 +11,19 @@
 //! log-domain formulation). No RMS blend, no sidechain HPF — those are
 //! adequate in a dedicated track compressor but are not what you want
 //! on a mastering bus where the detector must stay honest.
+//!
+//! Makeup and mix ramp over [`RAMP_MS`] instead of stepping at block
+//! rate, and enabling the stage crossfades dry → compressed over the same
+//! time (DSP2-08): without it the full makeup landed on the first sample
+//! while the gain reduction was still building over the attack.
 
 use resonance_dsp::{db_to_linear, linear_to_db, soft_knee_gain_reduction_db, Ballistics};
+use resonance_plugin::{Smoother, SmoothingStyle};
+
+use super::retarget;
+
+/// Ramp length of the makeup / mix smoothers and of the enable fade, ms.
+pub const RAMP_MS: f32 = 10.0;
 
 /// Plain-data snapshot of the compressor's current parameter values.
 /// Built once per audio block from the atomic plugin params.
@@ -69,6 +80,21 @@ pub struct GlueCompressor {
     last_gain: f32,
     /// `enabled` of the previous block, to detect the disable edge.
     was_enabled: bool,
+    /// Makeup gain in dB, and the parallel mix, ramped per sample.
+    /// `*_tgt` mirror the last requested targets.
+    makeup_sm: Smoother,
+    makeup_tgt: f32,
+    mix_sm: Smoother,
+    mix_tgt: f32,
+    /// False until the first block after construction / [`Self::reset`],
+    /// which snaps to the configured state instead of ramping.
+    primed: bool,
+}
+
+fn ramp(sample_rate: f32) -> Smoother {
+    let mut sm = Smoother::new(SmoothingStyle::Linear(RAMP_MS));
+    sm.set_sample_rate(sample_rate);
+    sm
 }
 
 impl GlueCompressor {
@@ -82,6 +108,11 @@ impl GlueCompressor {
             residual_gain: 1.0,
             last_gain: 1.0,
             was_enabled: false,
+            makeup_sm: ramp(sample_rate),
+            makeup_tgt: 0.0,
+            mix_sm: ramp(sample_rate),
+            mix_tgt: 1.0,
+            primed: false,
         };
         c.set_sample_rate(sample_rate);
         c
@@ -91,6 +122,8 @@ impl GlueCompressor {
         self.sample_rate = sr;
         // GR meter decays ~250 ms visually.
         self.meter_decay = (-1.0_f32 / (0.25 * sr)).exp();
+        self.makeup_sm.set_sample_rate(sr);
+        self.mix_sm.set_sample_rate(sr);
     }
 
     pub fn reset(&mut self) {
@@ -100,6 +133,7 @@ impl GlueCompressor {
         self.residual_gain = 1.0;
         self.last_gain = 1.0;
         self.was_enabled = false;
+        self.primed = false;
     }
 
     /// Process a stereo block in place. Leaves audio unchanged if the
@@ -110,6 +144,9 @@ impl GlueCompressor {
         right: &mut [f32],
         cfg: &GlueCompressorConfig,
     ) {
+        let first = !self.primed;
+        self.primed = true;
+        let mix_target = cfg.mix.clamp(0.0, 1.0);
         if !cfg.enabled {
             // Drain internal state and let the GR meter decay so the
             // UI falls back to 0 dB promptly and re-enabling the stage
@@ -128,6 +165,23 @@ impl GlueCompressor {
             self.fade_out_disabled(left, right, cfg);
             return;
         }
+        if first {
+            // A fresh or reset stage starts as configured, no ramps.
+            self.makeup_tgt = cfg.makeup_db;
+            self.makeup_sm.reset(cfg.makeup_db);
+            self.mix_tgt = mix_target;
+            self.mix_sm.reset(mix_target);
+        } else if !self.was_enabled {
+            // Enable edge: fade the compressed path in from dry, so the
+            // makeup arrives together with the gain reduction rather
+            // than as a step ahead of it.
+            self.makeup_tgt = cfg.makeup_db;
+            self.makeup_sm.reset(cfg.makeup_db);
+            self.mix_sm.reset(0.0);
+            self.mix_tgt = 0.0;
+        }
+        retarget(&mut self.makeup_sm, &mut self.makeup_tgt, cfg.makeup_db);
+        retarget(&mut self.mix_sm, &mut self.mix_tgt, mix_target);
         self.was_enabled = true;
 
         let ballistics = Ballistics::from_times(self.sample_rate, cfg.attack_ms, cfg.release_ms);
@@ -136,8 +190,11 @@ impl GlueCompressor {
         let half_knee = knee * 0.5;
         let ratio = cfg.ratio.max(1.0);
         let slope = 1.0 - 1.0 / ratio;
-        let makeup_lin = db_to_linear(cfg.makeup_db);
-        let mix = cfg.mix.clamp(0.0, 1.0);
+        // At rest the smoothers return their targets exactly, so the
+        // steady state is bit-for-bit the unsmoothed computation.
+        let makeup_ramping = self.makeup_sm.current() != self.makeup_tgt;
+        let mut makeup_lin = db_to_linear(self.makeup_tgt);
+        let mut mix = self.mix_tgt;
         let threshold = cfg.threshold_db;
 
         let frames = left.len().min(right.len());
@@ -173,6 +230,10 @@ impl GlueCompressor {
             }
 
             // Apply gain reduction + makeup, blend parallel.
+            if makeup_ramping {
+                makeup_lin = db_to_linear(self.makeup_sm.next());
+            }
+            mix = self.mix_sm.next();
             let apply_lin = db_to_linear(-self.gr_db) * makeup_lin;
             let wet_l = l * apply_lin;
             let wet_r = r * apply_lin;

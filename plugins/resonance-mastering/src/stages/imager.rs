@@ -69,6 +69,12 @@ pub struct Imager {
     /// biquad's streaming state when filtering (re)starts, so a
     /// re-enable doesn't replay a transient out of stale state.
     was_filtering: bool,
+    /// Side-HPF crossfade (DSP2-11): the share of the filtered side,
+    /// ramping 0 ↔ 1 when `side_hpf_on` toggles, so switching the
+    /// filter mid-signal fades between the raw and the filtered side
+    /// instead of cutting the sub-bass side over in one sample.
+    hpf_sm: Smoother,
+    hpf_tgt: f32,
 }
 
 impl Imager {
@@ -77,6 +83,8 @@ impl Imager {
         width_sm.set_sample_rate(sample_rate);
         let mut enable_sm = Smoother::new(SmoothingStyle::Linear(RAMP_MS));
         enable_sm.set_sample_rate(sample_rate);
+        let mut hpf_sm = Smoother::new(SmoothingStyle::Linear(RAMP_MS));
+        hpf_sm.set_sample_rate(sample_rate);
         Self {
             sample_rate,
             side_hpf: Biquad::identity(),
@@ -88,6 +96,8 @@ impl Imager {
             primed: false,
             was_enabled: false,
             was_filtering: false,
+            hpf_sm,
+            hpf_tgt: f32::NAN,
         }
     }
 
@@ -100,6 +110,8 @@ impl Imager {
         self.primed = false;
         self.was_enabled = false;
         self.was_filtering = false;
+        self.hpf_sm.reset(0.0);
+        self.hpf_tgt = f32::NAN;
     }
 
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &ImagerConfig) {
@@ -113,12 +125,16 @@ impl Imager {
         }
 
         let width = cfg.width.clamp(0.0, 2.0);
+        let hpf_target = if cfg.side_hpf_on { 1.0 } else { 0.0 };
         if cfg.enabled && !self.was_enabled {
             // (Re)engage. The width smoother snaps to the current
             // value — ramping in from whatever it held when the stage
-            // was last audible would be meaningless.
+            // was last audible would be meaningless. So does the HPF
+            // share: the enable crossfade covers the engage.
             self.width_sm.reset(width);
             self.width_tgt = width;
+            self.hpf_sm.reset(hpf_target);
+            self.hpf_tgt = hpf_target;
             if !self.primed {
                 // Very first block: engage instantly, there is no
                 // running audio to click against.
@@ -127,6 +143,7 @@ impl Imager {
             }
         } else {
             retarget(&mut self.width_sm, &mut self.width_tgt, width);
+            retarget(&mut self.hpf_sm, &mut self.hpf_tgt, hpf_target);
         }
         let enable_target = if cfg.enabled { 1.0 } else { 0.0 };
         retarget(&mut self.enable_sm, &mut self.enable_tgt, enable_target);
@@ -141,7 +158,9 @@ impl Imager {
             return;
         }
 
-        let filtering = cfg.side_hpf_on;
+        // The filter runs while it is on or still fading out.
+        let hpf_ramping = self.hpf_sm.current() != self.hpf_tgt;
+        let filtering = cfg.side_hpf_on || hpf_ramping;
         if filtering && !self.was_filtering {
             // Filtering (re)starts: the biquad's z1/z2 still hold the
             // side signal from before the bypass, which would replay
@@ -156,7 +175,10 @@ impl Imager {
             let r = right[i];
             let mid = 0.5 * (l + r);
             let mut side = 0.5 * (l - r);
-            if filtering {
+            if hpf_ramping {
+                let h = self.hpf_sm.next();
+                side += (self.side_hpf.process(side) - side) * h;
+            } else if filtering {
                 side = self.side_hpf.process(side);
             }
             side *= self.width_sm.next();

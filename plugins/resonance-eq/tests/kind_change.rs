@@ -104,3 +104,59 @@ fn kind_change_settles_on_the_new_kind() {
     assert!(err < 1e-3, "after the fade the band is not the new kind: max diff {err}");
 }
 
+/// Render a loud low tone through band 2 configured as `kind`, toggling
+/// `enabled` at each block in `toggles` (starting enabled).
+fn render_toggled(kind: i32, slope: i32, toggles: &[usize], blocks: usize) -> Vec<f32> {
+    let params = EqParams::default();
+    let band = &params.bands[2];
+    band.enabled.set_value(true);
+    band.freq.set_value(150.0);
+    band.gain.set_value(12.0);
+    band.q.set_value(1.0);
+    band.kind.set_value(kind);
+    band.slope.set_value(slope);
+
+    let mut dsp = EqDsp::new(SR);
+    let mut gain = unity();
+    let mut out = Vec::with_capacity(blocks * BLOCK);
+    let mut on = true;
+    for b in 0..blocks {
+        if toggles.contains(&b) {
+            on = !on;
+            band.enabled.set_value(on);
+        }
+        dsp.update_from_params(&params);
+        let t = b * BLOCK;
+        let mut l: Vec<f32> = (0..BLOCK)
+            .map(|i| AMP * (std::f32::consts::TAU * TONE_HZ * (t + i) as f32 / SR).sin())
+            .collect();
+        let mut r = l.clone();
+        dsp.process_stereo(&mut l, &mut r, &mut gain);
+        out.extend_from_slice(&l);
+    }
+    out
+}
+
+/// DSP2-11: switching a band off or on crossfades like a kind change.
+/// Bypassing a +12 dB bell or a 48 dB/oct cut used to cut over in one
+/// sample, a step of most of the signal.
+#[test]
+fn band_enable_toggle_crossfades_instead_of_clicking() {
+    // (kind, slope): +12 dB bell, and a 48 dB/oct low cut above the tone.
+    for (kind, slope) in [(0, 0), (3, 2)] {
+        let (off_at, on_at) = (40, 80);
+        let out = render_toggled(kind, slope, &[off_at, on_at], 120);
+        let steady = max_step(&out[(off_at - 1) * BLOCK..off_at * BLOCK])
+            .max(max_step(&out[(on_at - 1) * BLOCK..on_at * BLOCK]));
+        assert!(steady > 0.005, "kind {kind}: rendered (near) silence");
+        for (name, at) in [("off", off_at), ("on", on_at)] {
+            let seam = &out[at * BLOCK - 1..at * BLOCK + 960];
+            let seam_step = max_step(seam);
+            assert!(
+                seam_step < steady * 1.5,
+                "kind {kind}: switching {name} clicked — step {seam_step:.4} vs \
+                 {steady:.4} for the steady tone"
+            );
+        }
+    }
+}

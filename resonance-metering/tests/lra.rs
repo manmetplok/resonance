@@ -38,3 +38,21 @@ fn step_from_quiet_to_loud_has_lra_near_the_step() {
     // Expected LRA ≈ 10 LU (the step height); allow a generous band.
     assert!(v > 5.0 && v < 15.0, "LRA = {v}");
 }
+
+/// DSP2-06: the meter used to cap the session at 3600 pushes and drop the
+/// rest. The bounce measurer pushes at 10 Hz, so a 12-minute export only
+/// measured its first 6 minutes. Six minutes at -20 LUFS then six at -30
+/// must read as the ~10 LU range of the whole export; the capped meter
+/// saw only the constant first half and reported ~0.
+#[test]
+fn long_session_is_not_truncated() {
+    let mut lra = LraMeter::new();
+    for _ in 0..3600 {
+        lra.push_short_term_mean_square(lufs_to_ms(-20.0));
+    }
+    for _ in 0..3600 {
+        lra.push_short_term_mean_square(lufs_to_ms(-30.0));
+    }
+    let v = lra.lra_lu();
+    assert!((v - 10.0).abs() < 0.2, "LRA = {v}, expected ~10 LU");
+}

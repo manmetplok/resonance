@@ -1,9 +1,14 @@
 //! Core compressor DSP: detector → static gain computer → ballistics →
 //! apply → makeup → mix.
 //!
-//! Topology is a classic log-domain feed-forward compressor. Mono sum of
-//! the stereo input optionally runs through a sidechain high-pass, then
-//! feeds both a fast peak envelope and a 30 ms RMS envelope. A detector
+//! Topology is a classic log-domain feed-forward compressor. Each channel
+//! of the detector input (the key when one is connected, else the input)
+//! optionally runs through its own sidechain high-pass; the louder of the
+//! two filtered channels then feeds both a fast peak envelope and a 30 ms
+//! RMS envelope. Tracking the louder channel rather than the mono sum
+//! measures the actual level whatever the stereo image: a mono sum reads
+//! hard-panned material 6 dB low and anti-phase material near silence
+//! (DSP2-04), the same reason the mastering glue compressor does this. A detector
 //! blend parameter crossfades between the two in dB space and hands the
 //! result to a static soft-knee gain computer that returns a target GR
 //! in dB. That target is smoothed with separate attack and release
@@ -76,8 +81,9 @@ pub struct CompressorDsp {
     /// a mode switch.
     auto_release: bool,
 
-    /// Sidechain high-pass biquad, applied to the mono detector signal.
-    sc_hpf: Biquad,
+    /// Sidechain high-pass biquads, one per detector channel.
+    sc_hpf_l: Biquad,
+    sc_hpf_r: Biquad,
 
     /// Accumulator that decides when to push a GR sample into the viz ring.
     history_accum: u32,
@@ -124,7 +130,8 @@ impl CompressorDsp {
             gr_fast_db: 0.0,
             gr_slow_db: 0.0,
             auto_release: false,
-            sc_hpf: Biquad::identity(),
+            sc_hpf_l: Biquad::identity(),
+            sc_hpf_r: Biquad::identity(),
             history_accum: 0,
             in_peak: 0.0,
             out_peak: 0.0,
@@ -156,7 +163,8 @@ impl CompressorDsp {
         self.gr_db = 0.0;
         self.gr_fast_db = 0.0;
         self.gr_slow_db = 0.0;
-        self.sc_hpf.reset();
+        self.sc_hpf_l.reset();
+        self.sc_hpf_r.reset();
         self.history_accum = 0;
         self.in_peak = 0.0;
         self.out_peak = 0.0;
@@ -269,10 +277,13 @@ impl CompressorDsp {
         // disabled we bypass by using an identity biquad (same coefficient
         // path, effectively a no-op).
         if sc_hpf_on {
-            self.sc_hpf
+            self.sc_hpf_l
+                .set_high_pass(self.sample_rate, sc_hpf_freq, 0.707);
+            self.sc_hpf_r
                 .set_high_pass(self.sample_rate, sc_hpf_freq, 0.707);
         } else {
-            self.sc_hpf.set_identity();
+            self.sc_hpf_l.set_identity();
+            self.sc_hpf_r.set_identity();
         }
 
         let half_knee = knee * 0.5;
@@ -294,32 +305,36 @@ impl CompressorDsp {
             let l = left[i];
             let r = right[i];
 
-            // Detection signal: mono sum of the KEY when one is
-            // connected, else of this track's own input, routed through
-            // the optional sidechain HPF. HPF is biquad; an identity
-            // biquad returns the sample unchanged with a tiny state cost.
-            // A key shorter than the block reads as silence rather than
-            // panicking — the host is supposed to hand over a full-length
-            // buffer, but a truncated one must degrade.
-            let mono = match key {
-                Some((kl, kr)) => {
-                    0.5 * (kl.get(i).copied().unwrap_or(0.0)
-                        + kr.get(i).copied().unwrap_or(0.0))
-                }
-                None => 0.5 * (l + r),
+            // Detection signal: the KEY when one is connected, else this
+            // track's own input, each channel through the optional
+            // sidechain HPF, then the louder channel. HPF is biquad; an
+            // identity biquad returns the sample unchanged with a tiny
+            // state cost. A key shorter than the block reads as silence
+            // rather than panicking — the host is supposed to hand over a
+            // full-length buffer, but a truncated one must degrade.
+            let (dl, dr) = match key {
+                Some((kl, kr)) => (
+                    kl.get(i).copied().unwrap_or(0.0),
+                    kr.get(i).copied().unwrap_or(0.0),
+                ),
+                None => (l, r),
             };
-            let det_sample = self.sc_hpf.process(mono);
+            let hl = self.sc_hpf_l.process(dl);
+            let hr = self.sc_hpf_r.process(dr);
             // A non-finite detector sample reads as silence — the
             // envelopes below release naturally instead of latching
-            // NaN. The biquad's delay line was just poisoned by that
-            // same sample, so clear it too; the HPF re-settling over a
+            // NaN. The biquads' delay lines were just poisoned by that
+            // same sample, so clear them too; the HPF re-settling over a
             // few samples is nothing next to a latched NaN. Guarded on
             // the filter OUTPUT so one branch covers both a bad input
             // sample and delay-line state that was already latched.
-            let det_sample = if det_sample.is_finite() {
-                det_sample
+            // Checked per channel before the max: `f32::max` drops a NaN,
+            // which would hide a poisoned filter instead of clearing it.
+            let det_sample = if hl.is_finite() && hr.is_finite() {
+                hl.abs().max(hr.abs())
             } else {
-                self.sc_hpf.reset();
+                self.sc_hpf_l.reset();
+                self.sc_hpf_r.reset();
                 0.0
             };
 

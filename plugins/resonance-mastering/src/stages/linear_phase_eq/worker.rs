@@ -8,12 +8,23 @@
 //! buffered, so a write never waits on a read).
 //!
 //! Determinism: the moment a new filter takes effect never depends on
-//! the worker. [`StereoFir`] stages the change on the hop boundary right
-//! after the request, exactly where the inline design used to land it.
-//! If the worker's spectrum for those bands is ready by then it is
-//! copied in; otherwise the same design runs inline, on an identically
-//! built designer, so the output is bit-identical either way and an
-//! offline bounce renders the same as a live pass.
+//! the worker. [`StereoFir`] stages the change on the first hop boundary
+//! at least [`StereoFir::min_lead`] samples (half a hop) after the
+//! request — a pure function of the sample count, so it is the same live
+//! and offline. If the worker's spectrum for those bands is ready by then
+//! it is copied in; otherwise the same design runs inline, on an
+//! identically built designer, so the output is bit-identical either way
+//! and an offline bounce renders the same as a live pass.
+//!
+//! The lead is what keeps the inline design rare (DSP2-15): landing on
+//! the very next boundary gave the worker anything from one sample to a
+//! hop, so a request made just before a boundary was always designed on
+//! the audio thread (~4097 bins × bands × 2 `sin` plus two 8192-point
+//! FFTs at 48 kHz, more at higher rates). Half a hop (≈ 43 ms at any
+//! rate) is far more than a design takes, so the inline path now only
+//! runs when the worker thread was starved of CPU for that long. It is
+//! kept as the last resort rather than deferring again, because a
+//! deferral would make the landing time depend on thread scheduling.
 //!
 //! Real-time safety: the audio thread only copies into / out of slots
 //! it claims with a single compare-and-swap (it never waits: a slot the
@@ -320,8 +331,10 @@ pub struct StereoFir {
     inline: SpectrumDesigner,
     client: Option<DesignClient>,
     generation: u64,
-    /// Requested design waiting for the next hop boundary.
+    /// Requested design waiting for its hop boundary.
     pending: Option<Request>,
+    /// Samples the pending design must still wait before it may land.
+    lead_left: usize,
     worker_designs: u64,
     inline_designs: u64,
 }
@@ -349,6 +362,7 @@ impl StereoFir {
             client: worker.map(|w| w.register(geometry, sample_rate, part)),
             generation: 0,
             pending: None,
+            lead_left: 0,
             worker_designs: 0,
             inline_designs: 0,
         }
@@ -361,6 +375,13 @@ impl StereoFir {
     /// Per-channel latency in samples.
     pub fn latency(&self) -> usize {
         self.left.latency()
+    }
+
+    /// The least time, in samples, between a [`Self::request`] and the
+    /// hop boundary its design lands on: half a hop. Gives the worker
+    /// that long to deliver before the inline fallback would run.
+    pub fn min_lead(&self) -> usize {
+        self.left.geometry().hop / 2
     }
 
     /// Clear the streaming state; keeps the filter. A pending design
@@ -406,9 +427,10 @@ impl StereoFir {
         (self.worker_designs, self.inline_designs)
     }
 
-    /// Ask for a filter for `bands`, to crossfade in on the next hop
-    /// boundary. Returns false (and does nothing) while an earlier
-    /// request is still waiting — at most one change per hop.
+    /// Ask for a filter for `bands`, to crossfade in on the first hop
+    /// boundary at least [`Self::min_lead`] samples away. Returns false
+    /// (and does nothing) while an earlier request is still waiting — at
+    /// most one change per hop.
     pub fn request(&mut self, bands: &[BandConfig; NUM_BANDS]) -> bool {
         if self.pending.is_some() {
             return false;
@@ -422,11 +444,12 @@ impl StereoFir {
             client.post(req);
         }
         self.pending = Some(req);
+        self.lead_left = self.min_lead();
         true
     }
 
     /// Process one stereo block in place, landing a pending design on
-    /// the hop boundary it reaches first.
+    /// the first hop boundary it reaches once its lead has run out.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         let n = left.len().min(right.len());
         let mut pos = 0;
@@ -445,10 +468,21 @@ impl StereoFir {
             self.left.process_in_place(&mut left[pos..pos + pre]);
             self.right.process_in_place(&mut right[pos..pos + pre]);
             pos += pre;
+            self.lead_left = self.lead_left.saturating_sub(pre);
             if pos == n {
                 return;
             }
-            self.land_pending();
+            if self.lead_left == 0 {
+                self.land_pending();
+            } else {
+                // Too soon after the request: let this boundary pass
+                // (the push that runs its iteration) and wait for the
+                // next one.
+                self.left.process_in_place(&mut left[pos..pos + 1]);
+                self.right.process_in_place(&mut right[pos..pos + 1]);
+                pos += 1;
+                self.lead_left = self.lead_left.saturating_sub(1);
+            }
         }
     }
 

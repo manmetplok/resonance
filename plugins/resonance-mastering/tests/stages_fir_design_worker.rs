@@ -93,6 +93,35 @@ fn eq_uses_the_worker_when_it_has_time() {
     );
 }
 
+/// DSP2-15: a request made just before a hop boundary used to land on
+/// that boundary, giving the worker a few samples — so it was designed
+/// inline, on the audio thread, every time. It now waits for the first
+/// boundary at least half a hop away, which the worker easily makes.
+#[test]
+fn a_request_just_before_a_boundary_gives_the_worker_time() {
+    use resonance_mastering::stages::linear_phase_eq::StereoFir;
+    let worker = DesignWorker::spawn();
+    let mut fir = StereoFir::new(SR, Some(&worker));
+    let hop = fir.geometry().hop;
+    assert_eq!(fir.min_lead(), hop / 2);
+    // Run until the next iteration is 8 samples away.
+    let until = fir.iteration_countdowns()[0].min(fir.iteration_countdowns()[1]);
+    let (mut l, mut r) = (vec![0.1f32; until - 8], vec![0.1f32; until - 8]);
+    fir.process(&mut l, &mut r);
+    assert!(fir.request(&bell(6.0)));
+    // Across the near boundary: too soon, nothing lands.
+    let (mut l, mut r) = (vec![0.1f32; 64], vec![0.1f32; 64]);
+    fir.process(&mut l, &mut r);
+    assert!(fir.is_pending(), "landed {} samples after the request", 56);
+    assert_eq!(fir.design_counts(), (0, 0));
+    // The worker has had (wall-clock) time; the next boundary lands it.
+    std::thread::sleep(Duration::from_millis(200));
+    let (mut l, mut r) = (vec![0.1f32; hop + 64], vec![0.1f32; hop + 64]);
+    fir.process(&mut l, &mut r);
+    assert!(!fir.is_pending());
+    assert_eq!(fir.design_counts(), (1, 0), "(worker, inline) designs");
+}
+
 fn crossover_cfg(block: usize) -> MultibandConfig {
     let mut cfg = MultibandConfig {
         enabled: true,
