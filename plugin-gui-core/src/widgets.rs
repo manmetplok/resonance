@@ -745,7 +745,7 @@ pub fn knob_themed_edit(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> GestureEdit
     fitted_text(
         &painter,
         egui::pos2(x, text_top + style.label_dy),
-        knob.label.to_uppercase(),
+        cached_uppercase(knob.label),
         egui::FontId::proportional(style.label_font),
         theme::TEXT_3,
         max_w,
@@ -762,6 +762,30 @@ pub fn knob_themed_edit(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> GestureEdit
     }
 
     themed_knob_gesture(ui, &response, unit, knob.default_unit)
+}
+
+/// `label.to_uppercase()`, memoised per label text (PUX-12): every
+/// themed knob upper-cased its caption on every painted frame — a
+/// Unicode-aware case fold that recomputes to the same bytes every
+/// time, since a knob's label never changes across frames. The set of
+/// distinct labels in one editor is small and fixed (one per
+/// parameter), so this cache never grows unbounded.
+fn cached_uppercase(label: &str) -> String {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    }
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(upper) = cache.get(label) {
+            upper.clone()
+        } else {
+            let upper = label.to_uppercase();
+            cache.insert(label.to_string(), upper.clone());
+            upper
+        }
+    })
 }
 
 /// Paint `text` centred under `top`, shrunk (down to 6.5 pt) to fit

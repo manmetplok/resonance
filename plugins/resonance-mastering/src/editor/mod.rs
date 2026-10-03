@@ -121,7 +121,7 @@ impl MasteringEditorApp {
 
 impl EditorApp for MasteringEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
-        theme::apply(ui.ctx());
+        theme::apply_once(ui.ctx());
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
 

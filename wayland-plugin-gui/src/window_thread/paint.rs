@@ -1,5 +1,6 @@
 //! Per-frame paint / redraw logic and EGL surface management.
 
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use plugin_gui_core::repaint::{plan_repaint, RepaintPlan};
@@ -164,7 +165,10 @@ pub(super) fn paint_frame(
         },
     );
     let csd = state.needs_csd();
-    let title = state.title.clone();
+    // Borrowed, not cloned (PUX-12): `title` only ever needs to outlive
+    // this call's `run_ui` closure, and `state.egui_ctx` (a disjoint
+    // field) is the only part of `state` that closure also touches.
+    let title: &str = &state.title;
     let layout = FrameLayout::new(w as f32, h as f32);
 
     let mut events = std::mem::take(&mut state.pending_events);
@@ -175,10 +179,7 @@ pub(super) fn paint_frame(
     // injector. No effect unless the env var is set; gated to CSD mode (where
     // the button exists).
     if csd {
-        if let Some(target) = std::env::var("WPG_TEST_CLOSE_AT")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-        {
+        if let Some(target) = wpg_test_close_at() {
             static FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             static FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             let n = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -224,7 +225,7 @@ pub(super) fn paint_frame(
     let mut csd_close = false;
     let full_output = state.egui_ctx.run_ui(raw_input, |ui| {
         if csd {
-            if draw_csd_frame(ui, &title, layout, app) {
+            if draw_csd_frame(ui, title, layout, app) {
                 csd_close = true;
             }
         } else {
@@ -264,14 +265,10 @@ pub(super) fn paint_frame(
     // By default the *first* painted frame is captured; set WPG_DUMP_FRAME_AT
     // to a frame number (1-based) to capture a later, fully-settled frame
     // instead (the first frame can predate the font atlas / app layout).
-    if let Ok(path) = std::env::var("WPG_DUMP_FRAME") {
+    if let Some(path) = wpg_dump_frame_path() {
         static FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        let target = std::env::var("WPG_DUMP_FRAME_AT")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(1)
-            .max(1);
+        let target = wpg_dump_frame_at();
         let n = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if n >= target && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
             let mut buf = vec![0u8; (pw * ph * 4) as usize];
@@ -286,7 +283,7 @@ pub(super) fn paint_frame(
                     glow::PixelPackData::Slice(Some(&mut buf)),
                 );
             }
-            let _ = dump_ppm(&path, pw as u32, ph as u32, &buf);
+            let _ = dump_ppm(path, pw as u32, ph as u32, &buf);
         }
     }
 
@@ -327,4 +324,41 @@ pub(super) fn paint_frame(
     }
 
     Ok(())
+}
+
+/// Dev-only: `WPG_TEST_CLOSE_AT`, read once per process instead of once
+/// per painted frame (PUX-12 — `std::env::var` is a syscall-backed
+/// lookup, not a constant-time read, and this ran on every frame
+/// whether or not CSD mode was even active).
+fn wpg_test_close_at() -> Option<u32> {
+    static CACHE: OnceLock<Option<u32>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        std::env::var("WPG_TEST_CLOSE_AT")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+    })
+}
+
+/// Dev-only: `WPG_DUMP_FRAME`, read once per process (PUX-12). Leaked
+/// rather than re-allocated per frame — a debug flag read at most once
+/// per process is exactly what `Box::leak` is for.
+fn wpg_dump_frame_path() -> Option<&'static str> {
+    static CACHE: OnceLock<Option<&'static str>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        std::env::var("WPG_DUMP_FRAME")
+            .ok()
+            .map(|s| &*Box::leak(s.into_boxed_str()))
+    })
+}
+
+/// Dev-only: `WPG_DUMP_FRAME_AT`, read once per process (PUX-12).
+fn wpg_dump_frame_at() -> u32 {
+    static CACHE: OnceLock<u32> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        std::env::var("WPG_DUMP_FRAME_AT")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(1)
+            .max(1)
+    })
 }

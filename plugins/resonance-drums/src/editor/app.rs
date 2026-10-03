@@ -825,7 +825,7 @@ pub(crate) const STATUS_H: f32 = 28.0;
 
 impl EditorApp for DrumsEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
-        theme::apply(ui.ctx());
+        theme::apply_once(ui.ctx());
         controls::lend_gestures(ui.ctx(), &self.gestures);
         self.poll_jobs();
         self.poll_downloads();

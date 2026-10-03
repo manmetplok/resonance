@@ -8,21 +8,28 @@
 //! editor's deliberate 10 Hz meter, egui's ~500 ms text-caret blink.
 //! The scheduling decision lives here so both runtimes translate a
 //! finite future delay into a deadline they wake on, identically.
+//!
+//! PUX-04: a 50 ms "repaint soon" threshold also swallowed the fixed
+//! 16/33 ms intervals every editor requested on *every* frame
+//! (`request_repaint_after`), which collapsed to [`RepaintPlan::Now`]
+//! and repainted at the monitor's refresh rate forever — 60/144/240 Hz
+//! for a visible editor, instead of the ~60/30 Hz the editor actually
+//! asked for. egui reports exactly `Duration::ZERO` for a real
+//! `Context::request_repaint()` (an immediate, "something changed"
+//! request); any other value, however small, is a *paced* request from
+//! `request_repaint_after` and is honoured as a deadline, never
+//! collapsed to immediate.
 
 use std::time::{Duration, Instant};
-
-/// Delays under this repaint immediately (within the runtime's normal
-/// frame pacing) instead of via a deadline — the historical behaviour
-/// for "soon" requests, kept unchanged.
-pub const REPAINT_SOON: Duration = Duration::from_millis(50);
 
 /// What a runtime should do about the `repaint_delay` egui reported for
 /// the frame that just painted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepaintPlan {
-    /// Repaint as soon as frame pacing allows (delay under
-    /// [`REPAINT_SOON`]). Supersedes any pending deadline: the frame it
-    /// produces re-reports every request that is still live.
+    /// Repaint as soon as frame pacing allows: `repaint_delay` was
+    /// exactly zero, i.e. a real `Context::request_repaint()`.
+    /// Supersedes any pending deadline: the frame it produces
+    /// re-reports every request that is still live.
     Now,
     /// Repaint no later than this instant.
     At(Instant),
@@ -33,9 +40,12 @@ pub enum RepaintPlan {
 /// Fold the `repaint_delay` of a just-painted frame into the runtime's
 /// pending repaint deadline.
 ///
-/// - Delays under [`REPAINT_SOON`] repaint immediately.
-/// - Finite longer delays become a deadline; the earliest of it and an
-///   already-pending one wins.
+/// - A zero delay (`Context::request_repaint()`) repaints immediately.
+/// - Any other finite delay — including the 16/33 ms an editor requests
+///   every frame to pace its own redraw — becomes a deadline; the
+///   earliest of it and an already-pending one wins. This is what lets
+///   an editor's `request_repaint_after(16ms)` actually cap it at ~60 Hz
+///   instead of the monitor's refresh rate.
 /// - An unschedulable delay (egui uses `Duration::MAX` for "no repaint
 ///   needed"; anything overflowing `Instant` counts) keeps whatever
 ///   deadline was already pending.
@@ -44,7 +54,7 @@ pub fn plan_repaint(
     repaint_after: Duration,
     pending: Option<Instant>,
 ) -> RepaintPlan {
-    if repaint_after < REPAINT_SOON {
+    if repaint_after.is_zero() {
         return RepaintPlan::Now;
     }
     match (pending, now.checked_add(repaint_after)) {

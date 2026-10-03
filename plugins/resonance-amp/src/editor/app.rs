@@ -252,7 +252,7 @@ impl AmpEditorApp {
 impl EditorApp for AmpEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
         self.announcer = resonance_plugin::editor_widgets::announcer(ui.ctx());
-        theme::apply(ui.ctx());
+        theme::apply_once(ui.ctx());
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));
         self.poll_jobs();
