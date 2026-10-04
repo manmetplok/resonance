@@ -158,9 +158,11 @@ pub(super) fn param_value_event_at(param_id: u32, value: f64, time: u32) -> clap
     }
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl ClapInstance {
     /// True when [`ClapInstance::set_param`] has queued changes the
     /// plugin has not seen yet.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn has_pending_params(&self) -> bool {
         !self.pending_params.is_empty()
     }

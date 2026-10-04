@@ -70,8 +70,10 @@ const STATUS_SONG_POSITION: u8 = 0xF2;
 #[derive(Debug, Clone)]
 pub enum MidiClockEvent {
     /// 0xFA — start playback from the beginning of the song.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     Start { arrival: Instant },
     /// 0xFB — resume playback from the current position.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     Continue { arrival: Instant },
     /// 0xFC — stop playback.
     Stop,

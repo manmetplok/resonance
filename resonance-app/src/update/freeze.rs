@@ -632,6 +632,7 @@ impl Resonance {
 // routing / sends) are *not* freeze inputs, so they never reach this path
 // and stay fully live.
 
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl Resonance {
     /// Invalidate a frozen track to [`FreezeStatus::Stale`], keeping the
     /// (now-outdated) cache attached so playback still works until the user
@@ -657,6 +658,7 @@ impl Resonance {
     /// selection). Returns `None` when the track no longer exists. The
     /// fingerprint is order-stable: clips and plugins are folded in a fixed
     /// order so reshuffling the backing `Vec`s never changes the hash.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn compute_track_freeze_fingerprint(&self, track_id: TrackId) -> Option<u64> {
         let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
 
@@ -728,6 +730,7 @@ impl Resonance {
     /// fingerprint captured when its cache was rendered. `false` when the
     /// track isn't frozen (no cache to compare against) or the recompute
     /// fails.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn freeze_inputs_changed(&self, track_id: TrackId) -> bool {
         let Some(cache_ref) = self.freeze.status(track_id).cache_ref().cloned() else {
             return false;
@@ -877,6 +880,7 @@ impl Resonance {
     /// transitioned. Unlike [`invalidate_frozen_track`] (which trusts the
     /// caller that a change happened), this verifies via the fingerprint, so
     /// it's safe to call on changes that may turn out to be no-ops.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn revalidate_frozen_track(&mut self, track_id: TrackId) -> bool {
         if matches!(self.freeze.status(track_id), FreezeStatus::Frozen { .. })
             && self.freeze_inputs_changed(track_id)

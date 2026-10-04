@@ -14,6 +14,7 @@
 //! each `AudioCommand` to the appropriate category handler.
 
 mod dispatch;
+#[cfg(feature = "test-internals")]
 pub(crate) mod test_support;
 
 use std::collections::HashMap;

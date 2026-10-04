@@ -2045,8 +2045,8 @@ const ENGINE_INTERNAL_AUDIO_COMMANDS: &[&str] =
 /// `AudioCommand` the app sends. ARCH2-01 found ~13 commands (and the
 /// stem export's whole event queue) with no caller, maintained and tested
 /// for nobody. Every variant must be named as `AudioCommand::<Variant>`
-/// somewhere in `resonance-app/src` outside `test_support` (which arms
-/// things production never does), or sit in `ORPHANED_AUDIO_COMMANDS` —
+/// somewhere in `resonance-app/src` outside `test_support` and `demo`
+/// (test-only since ARCH2-08; they arm things production never does), or sit in `ORPHANED_AUDIO_COMMANDS` —
 /// and an entry that gains a caller must leave the list.
 ///
 /// Exercised 2026-10-04: added a variant `ArchProbe,` to `AudioCommand`
@@ -2069,7 +2069,11 @@ fn every_audio_command_has_an_app_caller() {
     let mut code = String::new();
     for file in &files {
         let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
-        if rel.split('/').any(|seg| seg.starts_with("test_support")) {
+        // `test_support` and `demo` compile only with the `test-support`
+        // feature (ARCH2-08): a caller there is a test, not the app.
+        if rel.split('/').any(|seg| seg.starts_with("test_support"))
+            || rel == "resonance-app/src/demo.rs"
+        {
             continue;
         }
         for (_, line) in code_lines(file) {

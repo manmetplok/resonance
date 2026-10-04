@@ -42,7 +42,9 @@ pub(crate) mod sends;
 mod track_group;
 mod widgets;
 
+#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
 pub(crate) use bus::fingerprint as bus_fingerprint;
+#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
 pub(crate) use master::fingerprint as master_fingerprint;
 
 use iced::widget::{column, container, row, text, Space};

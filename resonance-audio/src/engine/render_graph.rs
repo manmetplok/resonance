@@ -136,6 +136,7 @@ impl Default for RenderGraph {
     }
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl RenderGraph {
     /// The MIDI clip with `clip_id`, if any.
     pub fn midi_clip(&self, clip_id: ClipId) -> Option<&MidiClip> {
@@ -161,11 +162,13 @@ impl RenderGraph {
     }
 
     /// The track with `track_id`, if any.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn track(&self, track_id: TrackId) -> Option<&Track> {
         self.tracks.get(&track_id).map(|t| &**t)
     }
 
     /// The plugin slot with `instance_id`, if any.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn plugin(&self, instance_id: PluginInstanceId) -> Option<&PluginSlot> {
         self.plugins.get(&instance_id).map(|p| &**p)
     }
@@ -201,6 +204,7 @@ impl std::fmt::Debug for RenderGraphSlot {
     }
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl RenderGraphSlot {
     pub fn new() -> Self {
         Self {
@@ -228,6 +232,7 @@ impl RenderGraphSlot {
 
     /// The current graph as an owned `Arc`, for a reader that keeps it
     /// past a borrow (an offline chunk, a test).
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn load_full(&self) -> Arc<RenderGraph> {
         self.graph.load_full()
     }

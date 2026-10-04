@@ -24,6 +24,7 @@ use crate::types::PluginEditorFailure;
 
 use super::instance::ClapInstance;
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl ClapInstance {
     /// Whether the plugin exposes a GUI that the host can open.
     pub fn has_gui(&self) -> bool {
@@ -34,6 +35,7 @@ impl ClapInstance {
     /// is open. Flipped by [`Self::open_gui`] / [`Self::close_gui`] and
     /// by a plugin-initiated close picked up through
     /// [`Self::take_gui_closed`].
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn gui_open(&self) -> bool {
         self.gui_open
     }

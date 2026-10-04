@@ -46,6 +46,7 @@ pub(crate) struct InputDeviceWorker {
     pending: Arc<Mutex<Pending>>,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl InputDeviceWorker {
     pub(crate) fn new() -> Self {
         Self {
@@ -56,6 +57,7 @@ impl InputDeviceWorker {
 
     /// Swap the enumerator (tests: one that blocks, or one that reports a
     /// fixed device set).
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub(crate) fn set_enumerator(&mut self, enumerate: InputEnumerator) {
         self.enumerate = enumerate;
     }

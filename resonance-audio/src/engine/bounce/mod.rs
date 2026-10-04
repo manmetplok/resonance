@@ -52,6 +52,7 @@ pub use measure::{
     measure_audio_file, measure_decoded, measure_mix, measure_mix_detailed,
     measure_rendered_buffer, measure_rendered_buffer_detailed,
 };
+#[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
 pub(crate) use measure::{measure_audio_spawn, measure_mix_spawn, measure_mix_spawn_after, DecodedInput};
 pub use stem::{render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter};
 pub use stem_export::export_stems;
@@ -194,6 +195,7 @@ pub struct CallbackActivity {
 /// which waiting cannot fix, so the render goes ahead.
 const CALLBACK_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl CallbackActivity {
     /// Mark the callback inside a block until the returned guard drops.
     /// One atomic add and a fence each way: audio-thread safe.
@@ -208,11 +210,13 @@ impl CallbackActivity {
     }
 
     /// Whether a callback is inside a block right now.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn in_flight(&self) -> bool {
         self.seq.load(std::sync::atomic::Ordering::SeqCst) & 1 == 1
     }
 
     /// Blocks the callback has started since the engine came up.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn blocks_started(&self) -> u64 {
         self.seq.load(std::sync::atomic::Ordering::SeqCst).div_ceil(2)
     }
@@ -325,6 +329,7 @@ pub fn freeze_terminal_event(
 /// `Bounce` reporter, so reference-A/B export-exclusion tests that predate the
 /// rename keep exercising the real render path.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn to_wav(
     path: String,
     shared: &Arc<SharedState>,
@@ -357,6 +362,7 @@ pub fn to_wav(
 /// reaches the normalization passes and the cancel / temp-file paths.
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn export_for_test(
     path: String,
     settings: &ExportSettings,

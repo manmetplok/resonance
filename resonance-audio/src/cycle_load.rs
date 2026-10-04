@@ -312,6 +312,7 @@ pub struct CycleLoadMeter {
     pass_cycles: u64,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl CycleLoadMeter {
     pub fn new(verbose: bool) -> Self {
         Self {
@@ -342,6 +343,7 @@ impl CycleLoadMeter {
 
     /// Read the lifetime plugin lock-miss count from `source` instead of
     /// the process-wide [`plugin_lock_misses`] (tests).
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn with_lock_miss_source(mut self, source: fn() -> u64) -> Self {
         self.lock_misses = source;
         self.lock_misses_seen = source();

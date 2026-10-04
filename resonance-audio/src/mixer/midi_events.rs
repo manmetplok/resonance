@@ -102,6 +102,7 @@ fn clip_tick_window(
 ///
 /// Generic over the element so the render graph's `&[Arc<MidiClip>]` and a
 /// test's plain `&[MidiClip]` share one implementation.
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub(super) fn collect_midi_events<C: Borrow<MidiClip>>(
     midi_clips: &[C],
     track_id: TrackId,
@@ -431,6 +432,7 @@ fn push_capped(out: &mut Vec<PendingNoteEvent>, note_ons: &mut usize, event: Pen
 /// Public version of collect_midi_events for the bounce path. Exposed
 /// outside the crate for integration-test access — production callers
 /// stay inside `resonance-audio`.
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn collect_midi_events_bounce<C: Borrow<MidiClip>>(
     midi_clips: &[C],
     track_id: TrackId,

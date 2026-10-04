@@ -85,6 +85,7 @@ use super::{OfflineRenderGuard, MEASURE_BUSY_MSG};
 /// would invite comparing figures that did not all come from the same
 /// pass, which is exactly the error class this command exists to remove.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn measure_mix(
     measure_id: u64,
     targets: Vec<StemSource>,
@@ -114,6 +115,7 @@ pub fn measure_mix(
 /// every rendered target also carries the [`MeasurementDetail`] that
 /// `detail` asks for. The live path ignores `detail`.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn measure_mix_detailed(
     measure_id: u64,
     targets: Vec<StemSource>,
@@ -524,6 +526,7 @@ pub(crate) fn measure_mix_spawn_after(
 /// short-term mean squares can be pushed into the EBU R128 loudness-range
 /// tracker at the 10 Hz the spec expects. A single whole-buffer push would
 /// only ever expose the windows sitting at the very end of the range.
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn measure_rendered_buffer(
     target: StemSource,
     range_start: SamplePos,

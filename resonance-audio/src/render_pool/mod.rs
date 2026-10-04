@@ -191,6 +191,7 @@ thread_local! {
 /// restores [`configured_threads`]' usual answer). Thread-scoped, so
 /// tests running side by side in one binary cannot change each other's
 /// renders.
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn override_threads_on_this_thread(threads: Option<usize>) {
     THREADS_OVERRIDE.with(|o| o.set(threads.map(|n| n.max(1))));
 }
@@ -327,6 +328,7 @@ pub(crate) struct RenderPool {
     caller_sched_published: AtomicBool,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl RenderPool {
     /// Spawn the workers. Allocates; never call on the audio thread.
     pub(crate) fn new(config: PoolConfig) -> Self {
@@ -392,6 +394,7 @@ impl RenderPool {
     }
 
     /// A pool with no workers: every job runs on the caller.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub(crate) fn serial() -> Self {
         Self::new(PoolConfig {
             workers: 0,
@@ -416,6 +419,7 @@ impl RenderPool {
         !self.threads.is_empty() && self.shared.sched_errno.load(Ordering::Relaxed) == 0
     }
 
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub(crate) fn status(&self) -> PoolStatus {
         self.monitor().status()
     }
@@ -432,6 +436,7 @@ impl RenderPool {
     /// The fewest jobs any worker has run since the pool was built (0 for
     /// a pool without workers). Lets a test prove every worker has served
     /// a block. Allocation-free.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub(crate) fn min_worker_jobs(&self) -> u64 {
         self.shared
             .jobs_run
@@ -445,6 +450,7 @@ impl RenderPool {
     /// Test hook: shuffle the order shared jobs are claimed in, from
     /// `seed`, for runs of up to `max_jobs` jobs (0 turns it off), so a
     /// correctness test never depends on scheduling luck. Allocates.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub(crate) fn set_claim_shuffle(&mut self, seed: u64, max_jobs: usize) {
         // `&mut self`: no run can be open, so no worker reads it.
         let shuffle = unsafe { &mut *self.shared.shuffle.get() };

@@ -133,6 +133,7 @@ pub fn import_one_to_pool(
 /// by `Done`, or terminates with `ImportFailed`. Files are independent:
 /// one failure never aborts the rest of the batch — and neither does a
 /// panic (see [`run_pool_import_with`]).
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn run_pool_import(
     jobs: &[(AssetId, String)],
     project_dir: &Path,

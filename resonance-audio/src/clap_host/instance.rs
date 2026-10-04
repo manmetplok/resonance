@@ -177,6 +177,7 @@ pub struct ClapInstance {
     pub(super) transport_valid: bool,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl ClapInstance {
     /// Build the instance from the parts produced by
     /// [`super::ClapBundle::create_instance`]. Internal use only — kept
@@ -274,6 +275,7 @@ impl ClapInstance {
     /// `clap_host_latency.changed`) is then picked up in the same poll.
     /// Whether the plugin has asked for `on_main_thread` since the last
     /// [`run_requested_callback`](Self::run_requested_callback).
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn has_requested_callback(&self) -> bool {
         self.host_data
             .callback_requested
@@ -300,6 +302,7 @@ impl ClapInstance {
     /// the last check. Both are honored the same way — the engine
     /// thread runs [`ClapInstance::restart`] at its next safe point,
     /// which re-reads the latency, then republishes PDC.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn take_host_restart_request(&self) -> bool {
         let (restart, latency) = self.take_host_restart_requests();
         restart || latency
@@ -622,6 +625,7 @@ impl ClapInstance {
     }
 
     /// Whether the plugin was last told to render offline.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn render_offline(&self) -> bool {
         self.render_offline
     }
@@ -666,6 +670,7 @@ impl ClapInstance {
     }
 
     /// Whether the plugin exposes `com.resonance.kit-info` at all.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn has_kit_info(&self) -> bool {
         self.kit_info_ext.is_some()
     }
@@ -842,6 +847,7 @@ impl ClapInstance {
 
     /// Whether [`Self::queue_midi`] reaches this plugin: its note input
     /// takes MIDI 1.0.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn accepts_midi(&self) -> bool {
         self.note_dialect.accepts_midi
     }

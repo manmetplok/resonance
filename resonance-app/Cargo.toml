@@ -29,7 +29,18 @@ time = { workspace = true, features = ["formatting", "parsing"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[features]
+# The test scaffolding: `demo` (seeded fixture projects), `test_support`
+# (the `test_*` accessors and mutators on `Resonance`, which bypass
+# `update()`, undo and the mutation gate) and the hermetic `new_for_test*`
+# constructors, plus the engine internals they reach. Off in every normal
+# build; the crate's own tests turn it on through the self dev-dependency
+# below (code review ARCH2-08), so `cargo build -p resonance-app` ships none
+# of it.
+test-support = ["resonance-audio/test-internals"]
+
 [dev-dependencies]
+resonance-app = { path = ".", features = ["test-support"] }
 # The engine-internals test surface (`resonance_audio::test_support`, ARCH-03)
 # for tests only; resolver 2 keeps it out of `cargo build -p resonance-app`.
 resonance-audio = { path = "../resonance-audio", features = ["test-internals"] }

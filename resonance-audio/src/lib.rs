@@ -9,21 +9,15 @@
 //   reading/writing .mid files used by project save/load.
 //
 // The engine-internals test surface is gated on the `test-internals`
-// feature (ARCH-03). Without it, the helpers that exist only to be
-// re-exported for tests read as dead code; they are not dead, and every
-// build that has the feature on (all test/bench builds of this crate and
-// of resonance-app) still lints unused imports and dead code exactly as
-// before, so silencing the two lints in the featureless build loses
-// nothing.
-//
-// Why crate-level and not per-item `#[cfg_attr(..)]` (code review
-// FU-H3a, re-measured): dropping this line yields 68 warning sites
-// naming 150-odd items — 104 names in the `engine`/`mixer`/`clap_host`
-// re-export lists, ~45 functions / methods / fields only tests reach,
-// and the two harnesses' whole method sets. Gating each would put a
-// feature attribute on most re-export lists in the crate for no lint
-// that the feature-on builds don't already run.
-#![cfg_attr(not(feature = "test-internals"), allow(dead_code, unused_imports))]
+// feature (ARCH-03). The two harness modules (`engine::thread::
+// test_support`, `mixer::test_support`) compile only with it. The items
+// that production code does not reach but the tests do — re-exports kept
+// for `test_support` below, `*_for_test` helpers, introspection methods —
+// carry their own `#[cfg_attr(not(feature = "test-internals"),
+// allow(dead_code | unused_imports))]`, so a featureless build still flags
+// real dead code everywhere else (code review ARCH2-08; this replaced a
+// crate-wide `allow(dead_code, unused_imports)`). A new item that only a
+// test calls gets the same attribute, deliberately.
 pub(crate) mod bypass;
 pub(crate) mod clap_host;
 pub(crate) mod cycle_load;

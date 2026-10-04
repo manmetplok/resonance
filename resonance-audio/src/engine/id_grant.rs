@@ -35,6 +35,7 @@ pub struct ClipIdGrant {
     low_reported: bool,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl ClipIdGrant {
     /// An empty grant: every draw fails until the app sends one.
     pub fn new() -> Self {
@@ -43,6 +44,7 @@ impl ClipIdGrant {
 
     /// A grant holding exactly `range` — for tests that drive
     /// `RecordingState::roll_audio_pass` directly.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn from_range(range: Range<ClipId>) -> Self {
         let mut grant = Self::new();
         grant.extend(range);
@@ -66,6 +68,7 @@ impl ClipIdGrant {
     }
 
     /// Whether no id is left.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn is_empty(&self) -> bool {
         self.ranges.is_empty()
     }

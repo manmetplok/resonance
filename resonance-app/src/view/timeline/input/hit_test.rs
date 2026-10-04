@@ -14,6 +14,7 @@ use super::super::scrollbar::ScrollbarRects;
 use super::super::snap::snap_sample_to_grid_tempo;
 use super::super::TimelineCanvas;
 
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl TimelineCanvas<'_> {
     /// The vertical scrollbar's rects, `None` when the lanes fit. There
     /// is no in-canvas horizontal bar: horizontal scroll is owned by the
@@ -41,6 +42,7 @@ impl TimelineCanvas<'_> {
     /// Test-only: [`scrollbar_rects`](Self::scrollbar_rects) for
     /// `test_support` (VIEW-33).
     #[doc(hidden)]
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn test_scrollbar_rects(&self, bounds: Rectangle) -> Option<ScrollbarRects> {
         self.scrollbar_rects(bounds)
     }

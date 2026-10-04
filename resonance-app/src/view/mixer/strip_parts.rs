@@ -40,6 +40,7 @@ const SLOT_DOT: f32 = 6.0;
 /// characters of name to pay for it, so the line's width budget holds.
 /// The glyph is in the *text* (not only the BAD-pink dot) so the state is
 /// legible without relying on hue, and so a widget-tree test can read it.
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 pub(crate) fn slot_line_label(plugin_name: &str, missing: bool) -> String {
     slot_line_label_in(plugin_name, missing, theme::MIXER_SLOT_LINE_CHARS)
 }

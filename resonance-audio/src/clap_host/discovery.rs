@@ -644,6 +644,7 @@ fn index_all(
 /// # Safety
 /// `factory` is a live `clap_preset_discovery_factory` (from a loaded
 /// bundle's `get_factory`, or a test's), used on this thread only.
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub unsafe fn index_factory(
     factory: *const clap_preset_discovery_factory,
 ) -> Vec<DiscoveredPreset> {

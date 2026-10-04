@@ -603,6 +603,7 @@ pub struct MidiOutputRegistry {
     track_assignments: HashMap<TrackId, String>,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl MidiOutputRegistry {
     pub fn new() -> Self {
         Self {
@@ -722,6 +723,7 @@ impl MidiOutputRegistry {
     /// the CC0, CC32, Program Change ordering. This is a pure encoding
     /// function that matches what the realtime `send_program_change` emits.
     #[doc(hidden)]
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn program_change_bytes(
         channel: u8,
         bank: Option<u16>,
@@ -890,6 +892,7 @@ pub fn encode_nrpn(channel: u8, msb: u8, lsb: u8, value: u16, fourteen_bit: bool
 /// tests under `resonance-audio/tests/`. Stamps the result with a
 /// fresh `Instant::now()` — tests that care about the value can
 /// destructure the event and check it; the rest can ignore it.
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn parse_live_event_for_test(
     raw: &[u8],
     track_id: TrackId,
@@ -906,6 +909,7 @@ pub fn parse_live_event_for_test(
 /// Parse raw control-surface MIDI bytes into a [`LiveControlEvent`].
 /// Exposed for tests under `resonance-audio/tests/`. Stamps the result
 /// with a fresh `Instant::now()`; tests that don't care can ignore it.
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn parse_control_event_for_test(raw: &[u8]) -> Option<LiveControlEvent> {
     parse_control_event(raw, std::time::Instant::now())
 }
