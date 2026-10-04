@@ -22,7 +22,7 @@ use resonance_app::message::{
 };
 use resonance_app::state::{PluginSlotState, ViewMode, PLUGIN_WINDOW_DEFAULT_POSITION};
 use resonance_app::{theme, Resonance};
-use resonance_audio::types::{AudioEvent, ParamInfo, TrackType};
+use resonance_audio::types::{ChainOwner, AudioEvent, ParamInfo, TrackType};
 
 const TRACK: u64 = 1;
 const BUS: u64 = 1;
@@ -186,7 +186,7 @@ fn removing_the_focused_plugin_clears_the_focus() {
     let mut app = app();
     plugin(&mut app, PluginMessage::OpenGenericParams(PLAIN));
     app.test_apply_engine_event(AudioEvent::PluginRemoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: PLAIN,
     });
     assert_eq!(app.test_focused_slot(), None);

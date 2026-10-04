@@ -158,15 +158,9 @@ pub(crate) fn handle_key(
     run_shortcut(r, command, !has_accelerator(chord))
 }
 
-/// How the typing gate learns whether a text field holds focus. `Live`
-/// probes the widget tree (`crate::focus`); the fixed answers exist so
-/// tests can drive a shortcut end to end without a widget tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TypingProbe {
-    #[default]
-    Live,
-    Assume { editing: bool },
-}
+/// How the typing gate learns whether a text field holds focus; held by
+/// `UiTransientState`, so defined in `state` (ARCH2-05).
+pub use crate::state::TypingProbe;
 
 /// Run `command` as a keyboard shortcut: dropped when unavailable, and
 /// probed through the typing gate when it is [`KeyGate::NotWhileTyping`]

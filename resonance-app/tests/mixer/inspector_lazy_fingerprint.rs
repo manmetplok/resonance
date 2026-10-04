@@ -17,7 +17,7 @@ use crate::common::call;
 use resonance_app::message::{ExternalInstrumentMessage as Eim, Message, UiMessage};
 use resonance_app::state::{TrackState, ViewMode};
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioEvent, AuxSend, SendSource, TrackType};
+use resonance_audio::types::{ChainOwner, AudioEvent, AuxSend, SendSource, TrackType};
 use resonance_common::PlaybackSource;
 
 const TRACK: u64 = 1;
@@ -32,7 +32,7 @@ fn app() -> Resonance {
 
 fn plugin_added(track_id: u64) -> AudioEvent {
     AudioEvent::PluginAdded {
-        track_id,
+        owner: ChainOwner::Track(track_id),
         instance_id: PLUGIN,
         plugin_name: "com.resonance.eq".to_owned(),
         clap_plugin_id: "com.resonance.eq".to_owned(),

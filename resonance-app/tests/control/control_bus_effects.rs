@@ -17,7 +17,7 @@
 
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_control::methods::bus::PluginParamsView;
 use resonance_control::methods::track::{AddPluginResult, PluginKind};
 use resonance_control::{ErrorKind, MutationAck};
@@ -102,16 +102,16 @@ fn ids(view: &PluginParamsView) -> Vec<&str> {
 fn hinted(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPluginToBus { id, .. } => Some(id),
+            AudioCommand::AddPlugin { id, .. } => Some(id),
             _ => None,
         })
-        .expect("an AddPluginToBus reached the engine")
+        .expect("a bus AddPlugin reached the engine")
 }
 
 /// The engine echo that supplies a bus plugin's parameter list.
 fn echo(app: &mut Resonance, bus_id: u64, instance_id: u64, plugin_id: &str) {
-    app.test_apply_engine_event(AudioEvent::BusPluginAdded {
-        bus_id,
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Bus(bus_id),
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),
@@ -139,6 +139,8 @@ fn echo(app: &mut Resonance, bus_id: u64, instance_id: u64, plugin_id: &str) {
         ],
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 }
 
@@ -286,12 +288,12 @@ fn removing_by_slot_and_by_occurrence_target_the_right_instance() {
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(
             c,
-            AudioCommand::RemovePluginFromBus { instance_id, .. } if instance_id == second_eq
+            AudioCommand::RemovePlugin { instance_id, .. } if instance_id == second_eq
         )),
         "the engine must be told to unload the second EQ"
     );
-    app.test_apply_engine_event(AudioEvent::BusPluginRemoved {
-        bus_id,
+    app.test_apply_engine_event(AudioEvent::PluginRemoved {
+        owner: ChainOwner::Bus(bus_id),
         instance_id: second_eq,
     });
     assert_eq!(ids(&chain(&mut app, bus_id)), vec!["eq", "compressor"]);
@@ -308,7 +310,7 @@ fn removing_by_slot_and_by_occurrence_target_the_right_instance() {
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(
             c,
-            AudioCommand::RemovePluginFromBus { instance_id, .. } if instance_id == first_eq
+            AudioCommand::RemovePlugin { instance_id, .. } if instance_id == first_eq
         )),
         "slot 0 is the surviving EQ"
     );
@@ -365,7 +367,7 @@ fn moving_an_effect_reorders_the_bus_chain_and_the_app_mirror() {
     .expect("bus.move_effect succeeds");
     let moved = std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::MovePluginInBus {
+            AudioCommand::MovePlugin {
                 instance_id,
                 to_index,
                 ..
@@ -381,8 +383,8 @@ fn moving_an_effect_reorders_the_bus_chain_and_the_app_mirror() {
     );
 
     // The echo replays a move already applied — it must be a no-op.
-    app.test_apply_engine_event(AudioEvent::BusPluginMoved {
-        bus_id,
+    app.test_apply_engine_event(AudioEvent::PluginMoved {
+        owner: ChainOwner::Bus(bus_id),
         instance_id: moved.0,
         to_index: 0,
     });
@@ -417,7 +419,7 @@ fn a_move_past_the_end_clamps_and_a_no_op_move_records_nothing() {
     assert_eq!(app.revision(), before, "no undo entry for a no-op");
     assert!(
         !std::iter::from_fn(|| rx.try_recv().ok())
-            .any(|c| matches!(c, AudioCommand::MovePluginInBus { .. })),
+            .any(|c| matches!(c, AudioCommand::MovePlugin { .. })),
         "and no engine command"
     );
 }
@@ -431,7 +433,7 @@ fn a_move_past_the_end_clamps_and_a_no_op_move_records_nothing() {
 fn bypass_commands(rx: &crossbeam_channel::Receiver<AudioCommand>) -> Vec<bool> {
     std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|c| match c {
-            AudioCommand::SetBusFxBypass { bypassed, .. } => Some(bypassed),
+            AudioCommand::SetFxBypass { bypassed, .. } => Some(bypassed),
             _ => None,
         })
         .collect()
@@ -690,8 +692,8 @@ fn the_whole_drum_bus_sequence_runs_over_the_control_api_alone() {
     )
     .result()
     .expect("bus.remove_effect succeeds");
-    app.test_apply_engine_event(AudioEvent::BusPluginRemoved {
-        bus_id,
+    app.test_apply_engine_event(AudioEvent::PluginRemoved {
+        owner: ChainOwner::Bus(bus_id),
         instance_id,
     });
     assert_eq!(ids(&chain(&mut app, bus_id)), vec!["eq"]);

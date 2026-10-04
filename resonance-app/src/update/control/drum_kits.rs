@@ -16,10 +16,8 @@
 //! (hashing only a kit whose manifest moved), so a kit added since shows
 //! up in a later answer.
 
-use std::path::PathBuf;
-
 use resonance_common::drumkit_library::{self, Entry, EntryStatus, Library, Source};
-use resonance_common::library_marks::{Marks, SharedMarks};
+use resonance_common::library_marks::Marks;
 use resonance_control::ids::TrackId;
 use resonance_control::methods::drum_kits::{
     self, DrumKitEntry, DrumKitList, DrumKitSource, DrumKitStatus, DrumKitUser,
@@ -31,75 +29,10 @@ use resonance_plugin::library_view::{BrowserModel, SOURCE_FACET};
 use super::reply::{failure, success};
 use crate::Resonance;
 
-/// Where the app's `drum_kits.*` handlers find the kit library and the
-/// marks store.
-#[derive(Debug, Clone, Default)]
-pub struct DrumKitLibraryRoots {
-    pub kits: Option<PathBuf>,
-    pub marks: Option<PathBuf>,
-}
-
-/// The opened library and marks, cached across requests.
-#[derive(Default)]
-pub struct DrumKitLibraryCache {
-    pub roots: DrumKitLibraryRoots,
-    library: Option<Library>,
-    marks: Option<SharedMarks>,
-    rescan: super::amp_models::OffThreadRescan,
-}
-
-impl DrumKitLibraryCache {
-    pub fn new(roots: DrumKitLibraryRoots) -> Self {
-        Self {
-            roots,
-            ..Self::default()
-        }
-    }
-
-    /// The library as last indexed. Opened and scanned on first use, so
-    /// the first answer sees what is installed; after that a request
-    /// re-reads `library.json` when it changed (one `stat`) and starts a
-    /// rescan off the update loop (code review STATE2-08; see
-    /// `amp_models::OffThreadRescan`), so a kit added since shows up in a
-    /// later answer.
-    pub fn library(&mut self) -> &Library {
-        let roots = &self.roots;
-        let first = self.library.is_none();
-        let lib = self.library.get_or_insert_with(|| match &roots.kits {
-            Some(r) => Library::open(r),
-            None => Library::empty(),
-        });
-        if let Some(root) = lib.root().map(std::path::Path::to_path_buf) {
-            if first {
-                if let Err(e) = lib.rescan() {
-                    tracing::warn!("drum_kits: library rescan failed: {e}");
-                }
-            } else {
-                lib.reload_if_changed();
-                self.rescan.start("drum-kits", move || {
-                    if let Err(e) = Library::open(root).rescan() {
-                        tracing::warn!("drum_kits: library rescan failed: {e}");
-                    }
-                });
-            }
-        }
-        lib
-    }
-
-    /// The marks store (picking up other processes' writes).
-    pub fn marks(&mut self) -> &SharedMarks {
-        let roots = &self.roots;
-        let marks = self.marks.get_or_insert_with(|| match &roots.marks {
-            Some(d) => SharedMarks::open(d).unwrap_or_else(|e| {
-                tracing::warn!("drum_kits: marks unavailable: {e}");
-                SharedMarks::detached()
-            }),
-            None => SharedMarks::detached(),
-        });
-        marks.refresh();
-        marks
-    }
-}
+/// The library handle and its roots live in `state::library_cache`
+/// (`ControlEndpointState` holds the cache — ARCH2-05); this module stays
+/// their import path.
+pub use crate::state::library_cache::{DrumKitLibraryCache, DrumKitLibraryRoots};
 
 /// Handle a `drum_kits.*` request, or `None` for another namespace.
 pub(super) fn try_handle(app: &mut Resonance, request: &Request) -> Option<Response> {

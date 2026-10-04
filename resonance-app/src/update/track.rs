@@ -567,8 +567,8 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 t.fx_bypassed
             });
             if let Some(bypassed) = new_bypass {
-                let _ = r.engine.send(AudioCommand::SetTrackFxBypass {
-                    track_id: id,
+                let _ = r.engine.send(AudioCommand::SetFxBypass {
+                    owner: resonance_audio::types::ChainOwner::Track(id),
                     bypassed,
                 });
             }

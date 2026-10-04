@@ -1,7 +1,8 @@
 use iced::Task;
-use resonance_audio::types::{AudioCommand, BusId, PluginInstanceId, ScannedPlugin};
+use resonance_audio::types::{AudioCommand, BusId, ChainOwner, PluginInstanceId, ScannedPlugin};
 
 use crate::message::Message;
+use crate::update::chain_edit;
 use crate::util::db_to_gain;
 use crate::Resonance;
 
@@ -31,9 +32,9 @@ pub enum BusMessage {
     /// Add a plugin to a bus whose instance id the *app* chose up front,
     /// mirroring a placeholder slot into `BusState.plugins` immediately
     /// so the caller can address it without waiting for the engine's
-    /// `BusPluginAdded` echo (ba doc #273, todo #1237). The bus twin of
+    /// `PluginAdded` echo (ba doc #273, todo #1237). The bus twin of
     /// [`PluginMessage::AddPluginToTrackWithId`](crate::message::PluginMessage::AddPluginToTrackWithId);
-    /// `engine_events::plugins::bus_added` is idempotent, so the echo
+    /// `engine_events::plugins::added` is idempotent, so the echo
     /// fills the placeholder's params in rather than pushing a
     /// duplicate. The GUI never sends this.
     AddPluginToBusWithId {
@@ -43,10 +44,10 @@ pub enum BusMessage {
     },
     RemovePluginFromBus(BusId, PluginInstanceId),
     /// Reorder a bus's insert chain: move `instance_id` to `to_index`,
-    /// clamped to the last slot. Sends `AudioCommand::MovePluginInBus`
+    /// clamped to the last slot. Sends `AudioCommand::MovePlugin`
     /// AND mirrors the new order into `BusState.plugins`, so a control
     /// client reads its own write back in the same cycle; the engine's
-    /// `BusPluginMoved` echo replays the same move and is then a no-op.
+    /// `PluginMoved` echo replays the same move and is then a no-op.
     MovePluginInBus {
         bus_id: BusId,
         instance_id: PluginInstanceId,
@@ -155,77 +156,29 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
                 b.fx_bypassed
             });
             if let Some(bypassed) = new_bypass {
-                let _ = r.engine
-                    .send(AudioCommand::SetBusFxBypass { bus_id, bypassed });
+                let _ = r.engine.send(AudioCommand::SetFxBypass {
+                    owner: ChainOwner::Bus(bus_id),
+                    bypassed,
+                });
             }
         }
+        // The chain edits are owner-neutral (`update::chain_edit`,
+        // ARCH2-02); these arms only name the owner.
         BusMessage::AddPluginToBus(bus_id, plugin) => {
-            // App-allocated (ARCH-04 D-1); still no eager mirror, same as
-            // the track GUI add — the bus chain waits for `BusPluginAdded`.
-            let id = r.allocate_plugin_id();
-            let _ = r.engine.send(AudioCommand::AddPluginToBus {
-                bus_id,
-                clap_file_path: plugin.clap_file_path,
-                clap_plugin_id: plugin.clap_plugin_id,
-                id,
-            });
+            chain_edit::add(r, ChainOwner::Bus(bus_id), plugin);
         }
         BusMessage::AddPluginToBusWithId {
             bus_id,
             instance_id,
             plugin,
-        } => {
-            let _ = r.engine.send(AudioCommand::AddPluginToBus {
-                bus_id,
-                clap_file_path: plugin.clap_file_path.clone(),
-                clap_plugin_id: plugin.clap_plugin_id.clone(),
-                id: instance_id,
-            });
-            // Mirror the slot NOW with an empty param list, as the
-            // project-load replay does; `bus_added` finds it by
-            // `instance_id` on the echo and fills in params/has_gui
-            // instead of pushing a second one.
-            if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
-                bus.plugins.push(crate::state::PluginSlotState::new(
-                    instance_id,
-                    plugin.name,
-                    plugin.clap_plugin_id,
-                    plugin.clap_file_path,
-                    Vec::new(),
-                    false,
-                ));
-                r.insert_plugin_index(instance_id, crate::state::PluginLocator::Bus(bus_id));
-            }
-        }
+        } => chain_edit::add_with_id(r, ChainOwner::Bus(bus_id), instance_id, plugin),
         BusMessage::MovePluginInBus {
             bus_id,
             instance_id,
             to_index,
-        } => {
-            let _ = r.engine.send(AudioCommand::MovePluginInBus {
-                bus_id,
-                instance_id,
-                to_index,
-            });
-            crate::engine_events::plugins::mirror_bus_plugin_move(
-                r,
-                bus_id,
-                instance_id,
-                to_index,
-            );
-        }
+        } => chain_edit::move_plugin(r, ChainOwner::Bus(bus_id), instance_id, to_index),
         BusMessage::RemovePluginFromBus(bus_id, instance_id) => {
-            // Mirror the removal now, not on the `BusPluginRemoved` echo,
-            // so an undo pressed before the echo lands sees it (STATE-10
-            // shape, ARCH-01 FU-A13c). The echo is owed, so a late one
-            // cannot drop an instance an undo re-added under this id
-            // (A-13h).
-            let _ = r.engine.send(AudioCommand::RemovePluginFromBus {
-                bus_id,
-                instance_id,
-            });
-            r.io.restore_echoes.expect_plugin_removed(instance_id);
-            crate::engine_events::plugins::bus_removed(r, bus_id, instance_id);
+            chain_edit::remove(r, ChainOwner::Bus(bus_id), instance_id);
         }
         BusMessage::RenameBus(bus_id, name) => {
             // Trimmed; an empty or unchanged name never gets here (gated

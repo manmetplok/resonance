@@ -8,7 +8,7 @@ use resonance_audio::types::{InputDeviceInfo, TrackOutput};
 
 use crate::message::{Message, TrackMessage};
 use crate::state::TrackState;
-use crate::view::ui_caches::ChoiceList;
+use crate::state::ui_caches::ChoiceList;
 use crate::view::mixer::picks::{
     MidiChannelChoice, MidiPickerChoice, OutputChoice, PortChoice,
 };

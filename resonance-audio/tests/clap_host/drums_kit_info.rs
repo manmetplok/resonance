@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use resonance_audio::test_support::{ClapBundle, EngineHandlerHarness};
-use resonance_audio::types::{AudioCommand, AudioEvent};
+use resonance_audio::types::{AudioCommand, AudioEvent, ChainOwner};
 use resonance_audio::{Track, TrackId};
 use resonance_common::drum_map::GM_PADS;
 
@@ -19,7 +19,7 @@ fn harness_with(crate_name: &str, plugin_id: &str) -> Option<EngineHandlerHarnes
     let path = plugin_binary(crate_name)?.to_string_lossy().into_owned();
     let mut h = EngineHandlerHarness::new();
     h.push_track(Track::new(TRACK, "T1".to_string()));
-    h.add_plugin(TRACK, path, plugin_id.to_string(), INSTANCE);
+    h.add_plugin(ChainOwner::Track(TRACK), path, plugin_id.to_string(), INSTANCE);
     Some(h)
 }
 

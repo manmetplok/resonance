@@ -11,7 +11,7 @@
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ScannedPlugin, TrackType};
 use resonance_control::methods::track::PluginParamsView;
 use resonance_control::{ErrorKind, MutationAck, Response};
 use crate::common::call;
@@ -154,7 +154,7 @@ fn the_engine_echo_replays_the_same_move_without_disturbing_it() {
         .expect("a MovePlugin reached the engine");
 
     app.test_apply_engine_event(AudioEvent::PluginMoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         to_index: 0,
     });

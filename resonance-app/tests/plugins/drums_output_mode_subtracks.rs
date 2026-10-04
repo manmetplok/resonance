@@ -12,7 +12,7 @@
 use resonance_app::message::{Message, PluginMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::types::{
+use resonance_audio::types::{ChainOwner, 
     AudioEvent, ParamInfo, ParamValueUpdate, PluginInstanceId, TrackType,
 };
 
@@ -55,7 +55,7 @@ fn add(
     params: Vec<ParamInfo>,
 ) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),

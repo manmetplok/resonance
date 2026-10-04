@@ -28,7 +28,7 @@
 
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, TrackType};
 use resonance_control::ids::TrackId as ProtoTrackId;
 use resonance_control::methods::{mixer as mixer_proto, track as track_proto};
 use resonance_control::{Request, Response};
@@ -150,7 +150,7 @@ fn read_param(app: &mut Resonance, name: &str) -> f64 {
 fn reopen(app: &mut Resonance, file: resonance_app::project::ProjectFile) {
     app.test_replay_loaded_project(file);
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: INSTANCE,
         plugin_name: "Test Synth".to_owned(),
         clap_plugin_id: PLUGIN_ID.to_owned(),

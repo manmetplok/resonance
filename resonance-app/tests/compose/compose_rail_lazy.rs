@@ -1,6 +1,6 @@
 //! The Compose right rail is a `lazy` region (code review UX-10). Its key
 //! is a revision over an owned snapshot of what the rail reads
-//! (`view::ui_caches::RevisionMemo`), so it must rebuild after *any*
+//! (`state::ui_caches::RevisionMemo`), so it must rebuild after *any*
 //! change to that state — a UI edit, an undo, a lane switch — and must not
 //! keep showing the pre-edit tree. These tests drive iced's own
 //! `UserInterface` across frames with one shared cache (a `Simulator`

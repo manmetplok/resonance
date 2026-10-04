@@ -45,7 +45,7 @@ use resonance_app::reference::ReferenceMessage;
 use resonance_app::state::ids::{BUS_ID_BASE, CLIP_ID_BASE};
 use resonance_app::{demo, Resonance, TestChain};
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{
+use resonance_audio::types::{ChainOwner, 
     AudioCommand, AudioEvent, ClipId, MidiNote, ScannedPlugin, SendSource, TrackType,
 };
 
@@ -115,8 +115,7 @@ impl FakeEngine {
     }
 
     /// D-1: the engine has no plugin-id counter left. It honours
-    /// whatever id `AddPlugin`/`AddPluginToBus`/`AddPluginToMaster`
-    /// carries, full stop — this just plays that back as the echo.
+    /// whatever id `AddPlugin` carries, for any chain owner, full stop — this just plays that back as the echo.
     fn plugin(&mut self, id: u64) -> u64 {
         id
     }
@@ -198,7 +197,7 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                 });
             }
             AudioCommand::AddPlugin {
-                track_id,
+                owner: ChainOwner::Track(track_id),
                 clap_file_path,
                 clap_plugin_id,
                 id,
@@ -206,7 +205,7 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
             } => {
                 let instance_id = engine.plugin(id);
                 app.test_apply_engine_event(AudioEvent::PluginAdded {
-                    track_id,
+                    owner: ChainOwner::Track(track_id),
                     instance_id,
                     plugin_name: clap_plugin_id.clone(),
                     clap_plugin_id,
@@ -218,15 +217,15 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                     output_port_names: vec!["Main".to_owned()],
                 });
             }
-            AudioCommand::AddPluginToBus {
-                bus_id,
+            AudioCommand::AddPlugin {
+                owner: ChainOwner::Bus(bus_id),
                 clap_file_path,
                 clap_plugin_id,
                 id,
             } => {
                 let instance_id = engine.plugin(id);
-                app.test_apply_engine_event(AudioEvent::BusPluginAdded {
-                    bus_id,
+                app.test_apply_engine_event(AudioEvent::PluginAdded {
+                    owner: ChainOwner::Bus(bus_id),
                     instance_id,
                     plugin_name: clap_plugin_id.clone(),
                     clap_plugin_id,
@@ -234,15 +233,19 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                     params: Vec::new(),
                     has_gui: false,
                     has_sidechain_input: false,
+                    output_port_count: 1,
+                    output_port_names: Vec::new(),
                 });
             }
-            AudioCommand::AddPluginToMaster {
+            AudioCommand::AddPlugin {
+                owner: ChainOwner::Master,
                 clap_file_path,
                 clap_plugin_id,
                 id,
             } => {
                 let instance_id = engine.plugin(id);
-                app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+                app.test_apply_engine_event(AudioEvent::PluginAdded {
+                    owner: ChainOwner::Master,
                     instance_id,
                     plugin_name: clap_plugin_id.clone(),
                     clap_plugin_id,
@@ -250,6 +253,8 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                     params: Vec::new(),
                     has_gui: false,
                     has_sidechain_input: false,
+                    output_port_count: 1,
+                    output_port_names: Vec::new(),
                 });
             }
             AudioCommand::CreateMidiClip {

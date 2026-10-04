@@ -1,16 +1,18 @@
-//! App-side handlers for plugin lifecycle events from the engine —
-//! covers track plugins, bus plugins, master plugins, and the
-//! sub-track auto-creation policy that PluginAdded triggers.
+//! App-side handlers for plugin lifecycle events from the engine — one
+//! set for every chain owner (a track's, a bus's or the master's chain;
+//! code review ARCH2-02), plus the sub-track auto-creation policy that a
+//! track's `PluginAdded` triggers.
 
 use resonance_audio::types::*;
 
 use crate::state::*;
 use crate::Resonance;
 
+/// The `PluginAdded` echo for any chain owner.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn track_added(
+pub(super) fn added(
     r: &mut Resonance,
-    track_id: TrackId,
+    owner: ChainOwner,
     instance_id: PluginInstanceId,
     plugin_name: String,
     clap_plugin_id: String,
@@ -25,10 +27,11 @@ pub(super) fn track_added(
     // not the instance is still wanted (FU-A13d).
     r.io.restore_echoes.settle_plugin_added(instance_id);
     // A diff restore removed this instance after adding it, before this
-    // echo arrived: the engine has already dropped it (ARCH-01 A-13h).
+    // echo arrived: the engine has already dropped it (ARCH-01 A-13h)…
     if r.io.restore_echoes.plugin_removal_owed(instance_id)
-        // …or removed its track (A-13i), which drops the chain with it.
-        || r.io.restore_echoes.track_removal_owed(track_id)
+        // …or removed its track or bus (A-13i), which drops the chain
+        // with it.
+        || owner_removal_owed(r, owner)
     {
         return;
     }
@@ -36,15 +39,11 @@ pub(super) fn track_added(
     // just update its params and has_gui. Otherwise push a new slot.
     let mut inserted = false;
     let mut recovered = false;
-    if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
-        if let Some(slot) = track
-            .plugins
-            .iter_mut()
-            .find(|p| p.instance_id == instance_id)
-        {
+    if let Some(chain) = r.chain_mut(owner) {
+        if let Some(slot) = chain.iter_mut().find(|p| p.instance_id == instance_id) {
             recovered = adopt_live_instance(slot, params, has_gui, has_sidechain_input);
         } else {
-            track.plugins.push(
+            chain.push(
                 PluginSlotState::new(
                     instance_id,
                     plugin_name,
@@ -59,48 +58,48 @@ pub(super) fn track_added(
         }
     }
     if inserted {
-        r.insert_plugin_index(instance_id, PluginLocator::Track(track_id));
+        r.insert_plugin_index(instance_id, owner);
     }
     if recovered {
         let live = r
-            .registry
-            .tracks
-            .iter()
-            .find(|t| t.id == track_id)
-            .and_then(|t| live_slot_index(&t.plugins, instance_id));
+            .chain(owner)
+            .and_then(|chain| live_slot_index(chain, instance_id));
         restore_after_recovery(
             r,
             instance_id,
             live.map(|to_index| AudioCommand::MovePlugin {
-                track_id,
+                owner,
                 instance_id,
                 to_index,
             }),
         );
     }
 
-    // If this plugin was added as part of a preset, load the saved
+    // If this plugin was added as part of a track preset, load the saved
     // plugin state blob (if any). Pop the first entry from the pending
-    // list to stay in order.
-    if let Some((pending_track, ref mut states)) = r.presets.pending_preset_plugin_states {
-        if pending_track == track_id {
-            if let Some(Some(data)) = if states.is_empty() {
-                None
-            } else {
-                Some(states.remove(0))
-            } {
-                let _ = r.engine
-                    .send(AudioCommand::LoadPluginState { instance_id, data });
+    // list to stay in order. Presets are per track; a bus or master add
+    // never carries one.
+    if let ChainOwner::Track(track_id) = owner {
+        if let Some((pending_track, ref mut states)) = r.presets.pending_preset_plugin_states {
+            if pending_track == track_id {
+                if let Some(Some(data)) = if states.is_empty() {
+                    None
+                } else {
+                    Some(states.remove(0))
+                } {
+                    let _ = r.engine
+                        .send(AudioCommand::LoadPluginState { instance_id, data });
+                }
             }
         }
-    }
-    // Clean up once all preset plugin states have been consumed.
-    if r.presets.pending_preset_plugin_states
-        .as_ref()
-        .map(|(_, s)| s.is_empty())
-        .unwrap_or(false)
-    {
-        r.presets.pending_preset_plugin_states = None;
+        // Clean up once all preset plugin states have been consumed.
+        if r.presets.pending_preset_plugin_states
+            .as_ref()
+            .map(|(_, s)| s.is_empty())
+            .unwrap_or(false)
+        {
+            r.presets.pending_preset_plugin_states = None;
+        }
     }
 
     apply_pending_param_overrides(r, instance_id);
@@ -113,11 +112,26 @@ pub(super) fn track_added(
     let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 
-    let mut port_names = output_port_names;
-    port_names.resize_with(output_port_count.max(port_names.len()), String::new);
-    port_names.truncate(output_port_count);
-    r.plugin_mirror.output_ports.insert(instance_id, port_names);
-    ensure_instance_subtracks(r, instance_id);
+    // The port layout, for the sub-track policy. Only a track chain has
+    // sub-tracks ([`ensure_instance_subtracks`] returns at once for any
+    // other owner), so the layout is kept for a track's plugin only.
+    if owner.track_id().is_some() {
+        let mut port_names = output_port_names;
+        port_names.resize_with(output_port_count.max(port_names.len()), String::new);
+        port_names.truncate(output_port_count);
+        r.plugin_mirror.output_ports.insert(instance_id, port_names);
+        ensure_instance_subtracks(r, instance_id);
+    }
+}
+
+/// Whether a diff restore has removed `owner` itself and is still owed
+/// the echo (ARCH-01 A-13i): an echo for a plugin on it is then stale.
+fn owner_removal_owed(r: &Resonance, owner: ChainOwner) -> bool {
+    match owner {
+        ChainOwner::Track(track_id) => r.io.restore_echoes.track_removal_owed(track_id),
+        ChainOwner::Bus(bus_id) => r.io.restore_echoes.bus_removal_owed(bus_id),
+        ChainOwner::Master => false,
+    }
 }
 
 /// Run the sub-track policy ([`ensure_subtracks`]) for one track plugin,
@@ -136,7 +150,7 @@ pub(super) fn track_added(
 /// created with it. Every other multi-output plugin gets its sub-tracks as
 /// soon as it is added, as before.
 pub(crate) fn ensure_instance_subtracks(r: &mut Resonance, instance_id: PluginInstanceId) {
-    let Some(PluginLocator::Track(track_id)) = r.plugin_mirror.index.get(&instance_id).copied()
+    let Some(ChainOwner::Track(track_id)) = r.plugin_mirror.index.get(&instance_id).copied()
     else {
         return;
     };
@@ -200,8 +214,7 @@ fn live_slot_index(chain: &[PluginSlotState], instance_id: PluginInstanceId) -> 
 /// state the slot has been holding for it, and put it back where it
 /// belongs in the engine's chain.
 ///
-/// `reposition` is the chain-specific move command (`MovePlugin` /
-/// `MovePluginInBus` / `MovePluginInMaster`), already aimed at the live
+/// `reposition` is the owner's `MovePlugin`, already aimed at the live
 /// index. The engine clamps and no-ops a move that changes nothing, so
 /// sending it unconditionally costs a command and nothing else.
 ///
@@ -228,8 +241,8 @@ fn restore_after_recovery(
 /// Re-apply the parameter values a project load parked for this plugin
 /// instance (see [`Resonance::pending_plugin_param_overrides`]).
 ///
-/// Called from every `PluginAdded` handler — track, bus, master —
-/// *after* the handler has written the event's `params` into the slot,
+/// Called from the `PluginAdded` handler, for every chain owner,
+/// *after* it has written the event's `params` into the slot,
 /// because that write is exactly what would otherwise clobber the
 /// restored values with the plugin's instantiation-time defaults. This
 /// was the visible half of "plugin parameters are not persisted": a
@@ -291,7 +304,7 @@ fn apply_pending_param_overrides(r: &mut Resonance, instance_id: PluginInstanceI
 /// ports.
 ///
 /// **Why this is its own function:** sub-track creation is a *policy*, not
-/// part of event handling. It is called from `track_added` after PluginAdded,
+/// part of event handling. It is called from [`added`] after PluginAdded,
 /// but the trigger and the action are conceptually separate. Pulling it out
 /// makes the event handler readable and means the policy can be re-run
 /// (e.g. after a project load that lost sub-tracks) without re-dispatching
@@ -365,29 +378,21 @@ fn ensure_subtracks(
 /// The `PluginRemoved` echo. Swallowed when a diff restore or a live
 /// delete already mirrored it — the id may by now be an instance a later
 /// restore re-added (ARCH-01 A-13h) — mirrored otherwise.
-pub(super) fn track_removed_echo(
-    r: &mut Resonance,
-    track_id: TrackId,
-    instance_id: PluginInstanceId,
-) {
+pub(super) fn removed_echo(r: &mut Resonance, owner: ChainOwner, instance_id: PluginInstanceId) {
     if r.io.restore_echoes.settle_plugin_removed(instance_id) {
         return;
     }
-    track_removed(r, track_id, instance_id);
+    removed(r, owner, instance_id);
 }
 
-/// Mirror a track plugin's removal: the slot, its cached blob, parked
-/// params, side-index entry, selection, key route and automation lanes.
-/// Called by the live delete at once (STATE-10 shape, FU-A13c) and by
-/// [`track_removed_echo`] for a removal nobody mirrored yet.
-pub(crate) fn track_removed(
-    r: &mut Resonance,
-    track_id: TrackId,
-    instance_id: PluginInstanceId,
-) {
+/// Mirror a plugin's removal from `owner`'s chain: the slot, its cached
+/// blob, parked params, side-index entry, selection, key route and
+/// automation lanes. Called by the live delete at once (STATE-10 shape,
+/// FU-A13c) and by [`removed_echo`] for a removal nobody mirrored yet.
+pub(crate) fn removed(r: &mut Resonance, owner: ChainOwner, instance_id: PluginInstanceId) {
     r.ui.mixer.forget_plugin(instance_id);
-    if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
-        track.plugins.retain(|p| p.instance_id != instance_id);
+    if let Some(chain) = r.chain_mut(owner) {
+        chain.retain(|p| p.instance_id != instance_id);
     }
     r.plugin_mirror.state_cache.remove(&instance_id);
     r.plugin_mirror.owed_blobs.remove(&instance_id);
@@ -399,10 +404,11 @@ pub(crate) fn track_removed(
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
     crate::update::plugin_preset_ui::forget_instance(r, instance_id);
     r.remove_plugin_index(instance_id);
-    // The engine's `RemovePlugin` arm already dropped this instance's key
-    // route, so only the mirror needs pruning here — but prune it we must,
-    // or the route is written to the next save and reloads onto whatever
-    // plugin later occupies this instance id (ba todo #1311).
+    // The engine's `RemovePlugin` arm drops this instance's key route
+    // itself, on every owner (ARCH2-02), so only the mirror needs pruning
+    // here — but prune it we must, or the route is written to the next
+    // save and reloads onto whatever plugin later occupies this instance
+    // id (ba todo #1311).
     r.sidechain.clear_plugin(instance_id);
     drop_plugin_lanes(r, instance_id);
 }
@@ -436,19 +442,19 @@ pub(crate) fn drop_plugin_lanes(r: &mut Resonance, instance_id: PluginInstanceId
     }
 }
 
-/// Mirror an engine-side chain reorder (`AudioEvent::MovePlugin` ->
-/// `AudioEvent::PluginMoved`, ba todo #1224) onto the app's
-/// `TrackState.plugins`.
+/// Mirror an engine-side chain reorder (`AudioCommand::MovePlugin` ->
+/// `AudioEvent::PluginMoved`, ba todo #1224 / doc #273 todo #1237) onto
+/// the app's chain for `owner`.
 ///
 /// The engine is the source of truth for chain order and reports the slot
 /// the plugin actually landed on *after* its own clamping, so this replays
 /// that index rather than re-deriving it. Mirroring matters beyond the
-/// display: this `Vec`'s order is what project serialization writes, so a
+/// display: the `Vec`'s order is what project serialization writes, so a
 /// reorder only survives save/load if it lands here too. `plugin_mirror.index` is
-/// keyed by track, not by slot, so it needs no update.
-pub(super) fn track_moved(
+/// keyed by owner, not by slot, so it needs no update.
+pub(super) fn moved(
     r: &mut Resonance,
-    track_id: TrackId,
+    owner: ChainOwner,
     instance_id: PluginInstanceId,
     to_index: usize,
 ) {
@@ -456,37 +462,34 @@ pub(super) fn track_moved(
     if r.io.restore_echoes.settle_plugin_moved(instance_id, to_index) {
         return;
     }
-    mirror_track_plugin_move(r, track_id, instance_id, to_index);
+    mirror_plugin_move(r, owner, instance_id, to_index);
 }
 
-/// The mirror itself, shared with the control API's `track.move_effect`
-/// (ba doc #273, todo #1225), which applies the order immediately so a
-/// client can read back what it just set instead of waiting a cycle for
-/// `PluginMoved`. Applying it twice is harmless: the second call finds
-/// the plugin already at `to_index` and returns.
-pub(crate) fn mirror_track_plugin_move(
+/// The mirror itself, shared with the control API's
+/// `track/bus/master.move_effect` (ba doc #273, todo #1225), which applies
+/// the order immediately so a client can read back what it just set
+/// instead of waiting a cycle for `PluginMoved`. Applying it twice is
+/// harmless: the second call finds the plugin already at `to_index` and
+/// returns.
+pub(crate) fn mirror_plugin_move(
     r: &mut Resonance,
-    track_id: TrackId,
+    owner: ChainOwner,
     instance_id: PluginInstanceId,
     to_index: usize,
 ) {
-    let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) else {
+    let Some(chain) = r.chain_mut(owner) else {
         return;
     };
-    let Some(from) = track
-        .plugins
-        .iter()
-        .position(|p| p.instance_id == instance_id)
-    else {
+    let Some(from) = chain.iter().position(|p| p.instance_id == instance_id) else {
         return;
     };
     // `from` was found, so the chain is non-empty and this cannot wrap.
-    let to = to_index.min(track.plugins.len() - 1);
+    let to = to_index.min(chain.len() - 1);
     if from == to {
         return;
     }
-    let slot = track.plugins.remove(from);
-    track.plugins.insert(to, slot);
+    let slot = chain.remove(from);
+    chain.insert(to, slot);
 }
 
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
@@ -581,24 +584,10 @@ pub(super) fn load_failed(
 /// replayed as an app index. A fresh plugin further right that fails
 /// too is still counted here; its own failure runs this again.
 fn reposition_after_missing(r: &mut Resonance, missing: PluginInstanceId) {
-    let Some(&locator) = r.plugin_mirror.index.get(&missing) else {
+    let Some(&owner) = r.plugin_mirror.index.get(&missing) else {
         return;
     };
-    let chain: &[PluginSlotState] = match locator {
-        PluginLocator::Track(track_id) => r
-            .registry
-            .tracks
-            .iter()
-            .find(|t| t.id == track_id)
-            .map_or(&[], |t| t.plugins.as_slice()),
-        PluginLocator::Bus(bus_id) => r
-            .registry
-            .busses
-            .iter()
-            .find(|b| b.id == bus_id)
-            .map_or(&[], |b| b.plugins.as_slice()),
-        PluginLocator::Master => r.master.plugins.as_slice(),
-    };
+    let chain: &[PluginSlotState] = r.chain(owner).unwrap_or(&[]);
     let Some(at) = chain.iter().position(|p| p.instance_id == missing) else {
         return;
     };
@@ -610,23 +599,11 @@ fn reposition_after_missing(r: &mut Resonance, missing: PluginInstanceId) {
         .map(|(i, p)| (p.instance_id, crate::plugin_chain::engine_slot_index(chain, i)))
         .collect();
     for (instance_id, to_index) in moves {
-        let cmd = match locator {
-            PluginLocator::Track(track_id) => AudioCommand::MovePlugin {
-                track_id,
-                instance_id,
-                to_index,
-            },
-            PluginLocator::Bus(bus_id) => AudioCommand::MovePluginInBus {
-                bus_id,
-                instance_id,
-                to_index,
-            },
-            PluginLocator::Master => AudioCommand::MovePluginInMaster {
-                instance_id,
-                to_index,
-            },
-        };
-        let _ = r.engine.send(cmd);
+        let _ = r.engine.send(AudioCommand::MovePlugin {
+            owner,
+            instance_id,
+            to_index,
+        });
         r.io.restore_echoes.expect_plugin_moved(instance_id, to_index);
     }
 }
@@ -1113,295 +1090,6 @@ pub(super) fn preset_identity(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn bus_added(
-    r: &mut Resonance,
-    bus_id: BusId,
-    instance_id: PluginInstanceId,
-    plugin_name: String,
-    clap_plugin_id: String,
-    clap_file_path: String,
-    params: Vec<ParamInfo>,
-    has_gui: bool,
-    has_sidechain_input: bool,
-) {
-    // A diff restore removed this instance, or its whole bus, after
-    // adding it (ARCH-01 A-13h) — see `track_added`.
-    r.io.restore_echoes.settle_plugin_added(instance_id);
-    if r.io.restore_echoes.plugin_removal_owed(instance_id)
-        || r.io.restore_echoes.bus_removal_owed(bus_id)
-    {
-        return;
-    }
-    let mut inserted = false;
-    let mut recovered = false;
-    if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
-        if let Some(slot) = bus
-            .plugins
-            .iter_mut()
-            .find(|p| p.instance_id == instance_id)
-        {
-            recovered = adopt_live_instance(slot, params, has_gui, has_sidechain_input);
-        } else {
-            bus.plugins.push(
-                PluginSlotState::new(
-                    instance_id,
-                    plugin_name,
-                    clap_plugin_id,
-                    clap_file_path,
-                    params,
-                    has_gui,
-                )
-                .with_sidechain_input(has_sidechain_input),
-            );
-            inserted = true;
-        }
-    }
-    if inserted {
-        r.insert_plugin_index(instance_id, PluginLocator::Bus(bus_id));
-    }
-    if recovered {
-        let live = r
-            .registry
-            .busses
-            .iter()
-            .find(|b| b.id == bus_id)
-            .and_then(|b| live_slot_index(&b.plugins, instance_id));
-        restore_after_recovery(
-            r,
-            instance_id,
-            live.map(|to_index| AudioCommand::MovePluginInBus {
-                bus_id,
-                instance_id,
-                to_index,
-            }),
-        );
-    }
-    apply_pending_param_overrides(r, instance_id);
-    crate::update::control::plugin_presets::apply_pending_preset(r, instance_id);
-    let _ = r.engine
-        .send(AudioCommand::SavePluginState { instance_id });
-}
-
-/// Mirror an engine-side bus chain reorder
-/// (`AudioCommand::MovePluginInBus` -> `AudioEvent::BusPluginMoved`, ba
-/// doc #273, todo #1237) onto `BusState.plugins` — the bus twin of
-/// [`track_moved`].
-pub(super) fn bus_moved(
-    r: &mut Resonance,
-    bus_id: BusId,
-    instance_id: PluginInstanceId,
-    to_index: usize,
-) {
-    // A diff restore's reorder, already mirrored (ARCH-01 A-13h).
-    if r.io.restore_echoes.settle_plugin_moved(instance_id, to_index) {
-        return;
-    }
-    mirror_bus_plugin_move(r, bus_id, instance_id, to_index);
-}
-
-/// The mirror itself, shared with the control API's `bus.move_effect`,
-/// which applies the order immediately so a client can read back what it
-/// just set. Applying it twice is harmless: the second call finds the
-/// plugin already at `to_index` and returns.
-pub(crate) fn mirror_bus_plugin_move(
-    r: &mut Resonance,
-    bus_id: BusId,
-    instance_id: PluginInstanceId,
-    to_index: usize,
-) {
-    let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) else {
-        return;
-    };
-    let Some(from) = bus.plugins.iter().position(|p| p.instance_id == instance_id) else {
-        return;
-    };
-    // `from` was found, so the chain is non-empty and this cannot wrap.
-    let to = to_index.min(bus.plugins.len() - 1);
-    if from == to {
-        return;
-    }
-    let slot = bus.plugins.remove(from);
-    bus.plugins.insert(to, slot);
-}
-
-/// The `BusPluginRemoved` echo. Swallowed when a diff restore or a live
-/// delete already mirrored it (ARCH-01 A-13h).
-pub(super) fn bus_removed_echo(
-    r: &mut Resonance,
-    bus_id: BusId,
-    instance_id: PluginInstanceId,
-) {
-    if r.io.restore_echoes.settle_plugin_removed(instance_id) {
-        return;
-    }
-    bus_removed(r, bus_id, instance_id);
-}
-
-/// Mirror a bus plugin's removal. Called by the live delete at once
-/// (STATE-10 shape, FU-A13c) and by [`bus_removed_echo`] for a removal
-/// nobody mirrored yet.
-pub(crate) fn bus_removed(
-    r: &mut Resonance,
-    bus_id: BusId,
-    instance_id: PluginInstanceId,
-) {
-    if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
-        bus.plugins.retain(|p| p.instance_id != instance_id);
-    }
-    r.ui.mixer.forget_plugin(instance_id);
-    r.plugin_mirror.state_cache.remove(&instance_id);
-    r.plugin_mirror.owed_blobs.remove(&instance_id);
-    r.plugin_mirror.kit_info.remove(&instance_id);
-    r.plugin_mirror.output_ports.remove(&instance_id);
-    // Drop the load-time copies too, so a removed slot can neither
-    // resurrect a `plugin_*.bin` nothing references nor lend its parked
-    // parameter list to a later instance that reuses the id.
-    r.presets.pending_plugin_param_overrides.remove(&instance_id);
-    crate::update::plugin_preset_ui::forget_instance(r, instance_id);
-    r.remove_plugin_index(instance_id);
-    drop_route_onto_removed_chain_plugin(r, instance_id);
-    drop_plugin_lanes(r, instance_id);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn master_added(
-    r: &mut Resonance,
-    instance_id: PluginInstanceId,
-    plugin_name: String,
-    clap_plugin_id: String,
-    clap_file_path: String,
-    params: Vec<ParamInfo>,
-    has_gui: bool,
-    has_sidechain_input: bool,
-) {
-    // See `track_added` (ARCH-01 A-13h).
-    r.io.restore_echoes.settle_plugin_added(instance_id);
-    if r.io.restore_echoes.plugin_removal_owed(instance_id) {
-        return;
-    }
-    let mut recovered = false;
-    if let Some(slot) = r
-        .master.plugins
-        .iter_mut()
-        .find(|p| p.instance_id == instance_id)
-    {
-        recovered = adopt_live_instance(slot, params, has_gui, has_sidechain_input);
-    } else {
-        r.master.plugins.push(
-            PluginSlotState::new(
-                instance_id,
-                plugin_name,
-                clap_plugin_id,
-                clap_file_path,
-                params,
-                has_gui,
-            )
-            .with_sidechain_input(has_sidechain_input),
-        );
-        r.insert_plugin_index(instance_id, PluginLocator::Master);
-    }
-    if recovered {
-        let live = live_slot_index(&r.master.plugins, instance_id);
-        restore_after_recovery(
-            r,
-            instance_id,
-            live.map(|to_index| AudioCommand::MovePluginInMaster {
-                instance_id,
-                to_index,
-            }),
-        );
-    }
-    apply_pending_param_overrides(r, instance_id);
-    crate::update::control::plugin_presets::apply_pending_preset(r, instance_id);
-    let _ = r.engine
-        .send(AudioCommand::SavePluginState { instance_id });
-}
-
-/// Mirror an engine-side master chain reorder
-/// (`AudioCommand::MovePluginInMaster` -> `AudioEvent::MasterPluginMoved`)
-/// onto `Resonance::master.plugins` — the master twin of [`bus_moved`].
-pub(super) fn master_moved(r: &mut Resonance, instance_id: PluginInstanceId, to_index: usize) {
-    // A diff restore's reorder, already mirrored (ARCH-01 A-13h).
-    if r.io.restore_echoes.settle_plugin_moved(instance_id, to_index) {
-        return;
-    }
-    mirror_master_plugin_move(r, instance_id, to_index);
-}
-
-/// The mirror itself, shared with the control API's
-/// `master.move_effect`, which applies the order immediately so a client
-/// can read back what it just set. Applying it twice is harmless: the
-/// second call finds the plugin already at `to_index` and returns.
-pub(crate) fn mirror_master_plugin_move(
-    r: &mut Resonance,
-    instance_id: PluginInstanceId,
-    to_index: usize,
-) {
-    let Some(from) = r
-        .master.plugins
-        .iter()
-        .position(|p| p.instance_id == instance_id)
-    else {
-        return;
-    };
-    // `from` was found, so the chain is non-empty and this cannot wrap.
-    let to = to_index.min(r.master.plugins.len() - 1);
-    if from == to {
-        return;
-    }
-    let slot = r.master.plugins.remove(from);
-    r.master.plugins.insert(to, slot);
-}
-
-/// The `MasterPluginRemoved` echo. Swallowed when a diff restore or a
-/// live delete already mirrored it (ARCH-01 A-13h).
-pub(super) fn master_removed_echo(r: &mut Resonance, instance_id: PluginInstanceId) {
-    if r.io.restore_echoes.settle_plugin_removed(instance_id) {
-        return;
-    }
-    master_removed(r, instance_id);
-}
-
-/// Mirror a master plugin's removal. Called by the live delete at once
-/// (STATE-10 shape, FU-A13c) and by [`master_removed_echo`] for a removal
-/// nobody mirrored yet.
-pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
-    r.master.plugins.retain(|p| p.instance_id != instance_id);
-    r.ui.mixer.forget_plugin(instance_id);
-    r.plugin_mirror.state_cache.remove(&instance_id);
-    r.plugin_mirror.owed_blobs.remove(&instance_id);
-    r.plugin_mirror.kit_info.remove(&instance_id);
-    r.plugin_mirror.output_ports.remove(&instance_id);
-    // Drop the load-time copies too, so a removed slot can neither
-    // resurrect a `plugin_*.bin` nothing references nor lend its parked
-    // parameter list to a later instance that reuses the id.
-    r.presets.pending_plugin_param_overrides.remove(&instance_id);
-    crate::update::plugin_preset_ui::forget_instance(r, instance_id);
-    r.remove_plugin_index(instance_id);
-    drop_route_onto_removed_chain_plugin(r, instance_id);
-    drop_plugin_lanes(r, instance_id);
-}
-
-/// Drop the key route onto a plugin that has just come off a **bus** or
-/// the **master** chain, and tell the engine to drop it as well.
-///
-/// The extra command is what separates this from the track case. The
-/// engine's dispatcher drops a route on `RemovePlugin` but *not* on
-/// `RemovePluginFromBus` / `RemovePluginFromMaster`, so pruning only the
-/// mirror would leave the engine still keying an instance id that the
-/// next `bus.add_effect` can be handed — the recycled-id misroute the
-/// engine's own `drop_plugin_route` exists to prevent. `ClearSidechainRoute`
-/// is idempotent (the engine echoes only when a route was present), so
-/// sending it unconditionally costs nothing when there was no route.
-fn drop_route_onto_removed_chain_plugin(r: &mut Resonance, instance_id: PluginInstanceId) {
-    if r.sidechain.clear_plugin(instance_id) {
-        let _ = r.engine.send(AudioCommand::ClearSidechainRoute {
-            plugin: instance_id,
-        });
-    }
-}
-
 /// Reconcile the GUI key-route mirror to the engine's echo (ba todo
 /// #1311). `source: None` means the route was cleared.
 ///
@@ -1428,8 +1116,31 @@ pub(super) fn sidechain_route_changed(
     }
 }
 
-pub(super) fn master_fx_bypass_changed(r: &mut Resonance, bypassed: bool) {
-    r.master.fx_bypassed = bypassed;
+/// The `FxBypassChanged` echo: `owner`'s whole-chain bypass moved.
+///
+/// A track's echo is dropped when the track's removal is still owed
+/// (ARCH-01 A-13i): a late echo of a command sent to the *old*
+/// incarnation of this id — FIFO puts it before the removal a diff restore
+/// or a live delete already mirrored, so it names a track that either no
+/// longer exists or has already been replaced by a fresh one under the
+/// same id, whose own restored value this must not clobber.
+pub(super) fn fx_bypass_changed(r: &mut Resonance, owner: ChainOwner, bypassed: bool) {
+    match owner {
+        ChainOwner::Track(track_id) => {
+            if r.io.restore_echoes.track_removal_owed(track_id) {
+                return;
+            }
+            if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
+                track.fx_bypassed = bypassed;
+            }
+        }
+        ChainOwner::Bus(bus_id) => {
+            if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
+                bus.fx_bypassed = bypassed;
+            }
+        }
+        ChainOwner::Master => r.master.fx_bypassed = bypassed,
+    }
 }
 
 /// Adopt the engine's per-slot bypass echo (ba todo #1305).

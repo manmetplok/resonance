@@ -11,7 +11,7 @@ use resonance_app::state::SubTrackLink;
 use resonance_app::theme::{track_palette_color, TRACK_PALETTE};
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent};
 
 fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
     let mut cmds = Vec::new();
@@ -134,7 +134,7 @@ fn a_sub_track_inherits_its_parents_colour() {
     let custom = [0x12, 0x34, 0x56];
     let _ = app.update(Message::Track(TrackMessage::SetTrackColor(parent, custom)));
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: parent,
+        owner: ChainOwner::Track(parent),
         instance_id: 77,
         plugin_name: "Multi".to_owned(),
         clap_plugin_id: "com.test.multi".to_owned(),

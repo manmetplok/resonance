@@ -39,7 +39,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use resonance_app::project::{self, LoadedProject, ProjectFile};
 use resonance_app::state::PluginSlotState;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, TrackType};
 use crate::common::app_active_project as app;
 
 const TRACK: u64 = 42;
@@ -321,7 +321,7 @@ fn reinstalling_the_plugin_restores_the_original_settings() {
     // This time the engine can instantiate it, and reports the parameter
     // list as instantiated — i.e. at the plugin's own defaults.
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: INSTANCE,
         plugin_name: PLUGIN_NAME.to_owned(),
         clap_plugin_id: PLUGIN_ID.to_owned(),
@@ -406,7 +406,7 @@ fn no_blob_is_written_for_a_slot_that_is_gone() {
 
     // The engine confirms the removal the way it would for any plugin.
     app.test_apply_engine_event(AudioEvent::PluginRemoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: INSTANCE,
     });
 

@@ -13,8 +13,8 @@
 //! # State model
 //!
 //! - `bypassed` is the *target*, written by the engine thread when a
-//!   `SetTrackFxBypass` / `SetBusFxBypass` / `SetMasterFxBypass` /
-//!   `SetPluginBypass` command lands.
+//!   `SetFxBypass` (for any chain owner) / `SetPluginBypass` command
+//!   lands.
 //! - `pos` is where the fade currently sits, in frames, `0` (fully wet)
 //!   ..= `fade_frames(sample_rate)` (fully dry). The audio thread writes
 //!   it once per rendered block, from [`BypassFade::stage`];

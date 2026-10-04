@@ -13,7 +13,7 @@ use resonance_app::message::{Message, PluginMessage};
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{
+use resonance_audio::types::{ChainOwner, 
     AudioCommand, AudioEvent, ParamInfo, ParamValueUpdate, PluginInstanceId, TrackType,
 };
 
@@ -168,7 +168,7 @@ fn a_saved_kit_slot_is_not_re_sent_over_the_blob_on_reopen() {
 
     app.test_replay_loaded_project(file);
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: DRUMS,
         plugin_name: "Drums".to_owned(),
         clap_plugin_id: PLUGIN_ID.to_owned(),

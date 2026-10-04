@@ -15,7 +15,7 @@
 
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, ScannedPlugin};
 use resonance_control::methods::plugin_preset::{PluginPresetSource, PluginPresetsView};
 use resonance_control::{Request, Response};
 use crate::common::{call, roundtrip};
@@ -134,8 +134,7 @@ fn params_at_defaults() -> Vec<ParamInfo> {
 fn hinted(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPluginToBus { id, .. }
-            | AudioCommand::AddPluginToMaster { id, .. } => Some(id),
+            AudioCommand::AddPlugin { id, .. } => Some(id),
             _ => None,
         })
         .expect("an add reached the engine")
@@ -160,8 +159,8 @@ fn add_to_bus(app: &mut Resonance, bus_id: u64, plugin_id: &str) -> u64 {
     );
     assert!(response.error.is_none(), "{:?}", response.error);
     let instance_id = hinted(&rx);
-    app.test_apply_engine_event(AudioEvent::BusPluginAdded {
-        bus_id,
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Bus(bus_id),
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),
@@ -169,6 +168,8 @@ fn add_to_bus(app: &mut Resonance, bus_id: u64, plugin_id: &str) -> u64 {
         params: params_at_defaults(),
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
     instance_id
 }
@@ -183,7 +184,8 @@ fn add_to_master(app: &mut Resonance, plugin_id: &str) -> u64 {
     );
     assert!(response.error.is_none(), "{:?}", response.error);
     let instance_id = hinted(&rx);
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),
@@ -191,6 +193,8 @@ fn add_to_master(app: &mut Resonance, plugin_id: &str) -> u64 {
         params: params_at_defaults(),
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
     instance_id
 }

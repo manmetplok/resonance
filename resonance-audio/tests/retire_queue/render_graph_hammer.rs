@@ -231,7 +231,7 @@ impl Probes {
         shared.retired.retire(track.push_plugin(id));
     }
 
-    /// `AddPluginToBus`'s publish order (`engine/busses.rs`).
+    /// A bus `AddPlugin`'s publish order (`engine/chain.rs`).
     fn add_to_bus(&mut self, shared: &SharedState, bus_id: BusId) {
         if shared.graph.load().bus(bus_id).is_none() {
             return;
@@ -241,7 +241,7 @@ impl Probes {
         shared.edit_bus(bus_id, |b| b.plugin_ids.push(id));
     }
 
-    /// `AddPluginToMaster`'s publish order.
+    /// A master `AddPlugin`'s publish order.
     fn add_to_master(&mut self, shared: &SharedState) {
         let (id, slot) = self.slot(false);
         shared.edit_plugins(|p| p.insert(id, slot));
@@ -686,7 +686,10 @@ impl Engine {
                 if let Some(&(track_id, instance_id)) =
                     removable.get((k as usize * 7) % removable.len().max(1))
                 {
-                    self.dispatch(AudioCommand::RemovePlugin { track_id, instance_id });
+                    self.dispatch(AudioCommand::RemovePlugin {
+                        owner: ChainOwner::Track(track_id),
+                        instance_id,
+                    });
                 }
             }
             19 => {
@@ -694,7 +697,7 @@ impl Engine {
                     plugins.get((k as usize * 11) % plugins.len().max(1))
                 {
                     self.dispatch(AudioCommand::MovePlugin {
-                        track_id,
+                        owner: ChainOwner::Track(track_id),
                         instance_id,
                         to_index: (k % 3) as usize,
                     });
@@ -719,10 +722,13 @@ impl Engine {
                     bus_plugins.get((k as usize * 3) % bus_plugins.len().max(1))
                 {
                     if k % 2 == 0 {
-                        self.dispatch(AudioCommand::RemovePluginFromBus { bus_id, instance_id });
+                        self.dispatch(AudioCommand::RemovePlugin {
+                            owner: ChainOwner::Bus(bus_id),
+                            instance_id,
+                        });
                     } else {
-                        self.dispatch(AudioCommand::MovePluginInBus {
-                            bus_id,
+                        self.dispatch(AudioCommand::MovePlugin {
+                            owner: ChainOwner::Bus(bus_id),
                             instance_id,
                             to_index: 0,
                         });

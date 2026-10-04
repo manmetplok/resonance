@@ -22,7 +22,7 @@
 
 use resonance_audio::types::PluginInstanceId;
 
-use crate::state::{PluginLocator, PluginSlotState};
+use crate::state::{ChainOwner, PluginSlotState};
 use crate::Resonance;
 
 /// One slot the engine could not fill, resolved against the chain it
@@ -32,7 +32,7 @@ use crate::Resonance;
 pub struct MissingPluginSlot {
     pub instance_id: PluginInstanceId,
     /// Which chain carries the slot.
-    pub owner: PluginLocator,
+    pub owner: ChainOwner,
     /// The chain's name as the user sees it — a track or bus name, or
     /// `"Master"`.
     pub owner_label: String,
@@ -62,7 +62,7 @@ impl Resonance {
         for track in self.sorted_tracks() {
             collect_missing(
                 &track.plugins,
-                PluginLocator::Track(track.id),
+                ChainOwner::Track(track.id),
                 &track.name,
                 &mut out,
             );
@@ -70,14 +70,14 @@ impl Resonance {
         for bus in self.sorted_busses() {
             collect_missing(
                 &bus.plugins,
-                PluginLocator::Bus(bus.id),
+                ChainOwner::Bus(bus.id),
                 &bus.name,
                 &mut out,
             );
         }
         collect_missing(
             &self.master.plugins,
-            PluginLocator::Master,
+            ChainOwner::Master,
             "Master",
             &mut out,
         );
@@ -105,7 +105,7 @@ impl Resonance {
 
 fn collect_missing(
     chain: &[PluginSlotState],
-    owner: PluginLocator,
+    owner: ChainOwner,
     owner_label: &str,
     out: &mut Vec<MissingPluginSlot>,
 ) {

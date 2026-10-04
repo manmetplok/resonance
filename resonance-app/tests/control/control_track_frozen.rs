@@ -11,7 +11,7 @@
 
 use resonance_app::state::{FreezeStatus, ViewMode};
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 use resonance_control::methods::track::PluginParamsView;
 use resonance_control::ErrorKind;
@@ -69,7 +69,7 @@ fn app() -> Resonance {
 /// one parameter so `track.set_plugin_param` can address it.
 fn echo_plugin(app: &mut Resonance, instance_id: u64, plugin_id: &str, keyable: bool) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),

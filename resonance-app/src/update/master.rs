@@ -1,7 +1,8 @@
 use iced::Task;
-use resonance_audio::types::{AudioCommand, PluginInstanceId, ScannedPlugin};
+use resonance_audio::types::{AudioCommand, ChainOwner, PluginInstanceId, ScannedPlugin};
 
 use crate::message::Message;
+use crate::update::chain_edit;
 use crate::Resonance;
 
 /// `Message::Master` variants, handled by [`handle`] in this module.
@@ -14,8 +15,8 @@ pub enum MasterMessage {
     /// Add a plugin to the master whose instance id the *app* chose up
     /// front, mirroring a placeholder slot into `Resonance::master.plugins`
     /// immediately so the caller can address it without waiting for the
-    /// engine's `MasterPluginAdded` echo. The master twin of
-    /// [`BusMessage::AddPluginToBusWithId`](crate::message::BusMessage::AddPluginToBusWithId); `engine_events::plugins::master_added`
+    /// engine's `PluginAdded` echo. The master twin of
+    /// [`BusMessage::AddPluginToBusWithId`](crate::message::BusMessage::AddPluginToBusWithId); `engine_events::plugins::added`
     /// is idempotent, so the echo fills the placeholder's params in
     /// rather than pushing a duplicate. The GUI never sends this.
     AddPluginToMasterWithId {
@@ -25,9 +26,9 @@ pub enum MasterMessage {
     RemovePluginFromMaster(PluginInstanceId),
     /// Reorder the master insert chain: move `instance_id` to
     /// `to_index`, clamped to the last slot. Sends
-    /// `AudioCommand::MovePluginInMaster` AND mirrors the new order into
+    /// `AudioCommand::MovePlugin` AND mirrors the new order into
     /// `Resonance::master.plugins`, so a control client reads its own
-    /// write back in the same cycle; the engine's `MasterPluginMoved`
+    /// write back in the same cycle; the engine's `PluginMoved`
     /// echo replays the same move and is then a no-op.
     MovePluginInMaster {
         instance_id: PluginInstanceId,
@@ -58,65 +59,25 @@ pub fn handle(r: &mut Resonance, m: MasterMessage) -> Task<Message> {
     match m {
         MasterMessage::ToggleMasterFxBypass => {
             r.master.fx_bypassed = !r.master.fx_bypassed;
-            let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
+            let _ = r.engine.send(AudioCommand::SetFxBypass {
+                owner: ChainOwner::Master,
                 bypassed: r.master.fx_bypassed,
             });
         }
-        MasterMessage::AddPluginToMaster(plugin) => {
-            // App-allocated (ARCH-04 D-1); still no eager mirror, same as
-            // the track/bus GUI adds — the chain waits for
-            // `MasterPluginAdded`.
-            let id = r.allocate_plugin_id();
-            let _ = r.engine.send(AudioCommand::AddPluginToMaster {
-                clap_file_path: plugin.clap_file_path,
-                clap_plugin_id: plugin.clap_plugin_id,
-                id,
-            });
-        }
+        // The chain edits are owner-neutral (`update::chain_edit`,
+        // ARCH2-02); these arms only name the owner.
+        MasterMessage::AddPluginToMaster(plugin) => chain_edit::add(r, ChainOwner::Master, plugin),
         MasterMessage::AddPluginToMasterWithId {
             instance_id,
             plugin,
-        } => {
-            let _ = r.engine.send(AudioCommand::AddPluginToMaster {
-                clap_file_path: plugin.clap_file_path.clone(),
-                clap_plugin_id: plugin.clap_plugin_id.clone(),
-                id: instance_id,
-            });
-            // Mirror the slot NOW with an empty param list, as the
-            // project-load replay does; `master_added` finds it by
-            // `instance_id` on the echo and fills in params/has_gui
-            // instead of pushing a second one.
-            r.master.plugins.push(crate::state::PluginSlotState::new(
-                instance_id,
-                plugin.name,
-                plugin.clap_plugin_id,
-                plugin.clap_file_path,
-                Vec::new(),
-                false,
-            ));
-            r.insert_plugin_index(instance_id, crate::state::PluginLocator::Master);
-        }
+        } => chain_edit::add_with_id(r, ChainOwner::Master, instance_id, plugin),
         MasterMessage::RemovePluginFromMaster(instance_id) => {
-            // Mirror the removal now, not on the `MasterPluginRemoved`
-            // echo, so an undo pressed before the echo lands sees it
-            // (STATE-10 shape, ARCH-01 FU-A13c). The echo is owed, so a
-            // late one cannot drop an instance an undo re-added under
-            // this id (A-13h).
-            let _ = r.engine
-                .send(AudioCommand::RemovePluginFromMaster { instance_id });
-            r.io.restore_echoes.expect_plugin_removed(instance_id);
-            crate::engine_events::plugins::master_removed(r, instance_id);
+            chain_edit::remove(r, ChainOwner::Master, instance_id);
         }
         MasterMessage::MovePluginInMaster {
             instance_id,
             to_index,
-        } => {
-            let _ = r.engine.send(AudioCommand::MovePluginInMaster {
-                instance_id,
-                to_index,
-            });
-            crate::engine_events::plugins::mirror_master_plugin_move(r, instance_id, to_index);
-        }
+        } => chain_edit::move_plugin(r, ChainOwner::Master, instance_id, to_index),
     }
     Task::none()
 }

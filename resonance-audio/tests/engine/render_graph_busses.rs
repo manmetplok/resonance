@@ -120,8 +120,8 @@ fn bus_and_master_chain_edits_publish_and_retire_the_old_chain() {
     h.sweep_retired();
 
     let pinned = h.render_graph();
-    h.move_plugin_in_bus(DRUMS, 30, 0);
-    h.remove_plugin_from_master(40);
+    h.move_plugin(ChainOwner::Bus(DRUMS), 30, 0);
+    h.remove_plugin(ChainOwner::Master, 40);
     let now = h.render_graph();
     assert_eq!(now.bus(DRUMS).unwrap().plugin_ids, vec![30, 10, 20]);
     assert_eq!(now.master.plugin_ids, vec![50]);
@@ -138,10 +138,10 @@ fn bus_and_master_chain_edits_publish_and_retire_the_old_chain() {
 
     // Moving or removing an instance that is not on the chain changes
     // nothing, so it publishes nothing.
-    h.move_plugin_in_bus(DRUMS, 99, 0);
-    h.remove_plugin_from_bus(DRUMS, 99);
-    h.move_plugin_in_master(99, 0);
-    h.remove_plugin_from_master(99);
+    h.move_plugin(ChainOwner::Bus(DRUMS), 99, 0);
+    h.remove_plugin(ChainOwner::Bus(DRUMS), 99);
+    h.move_plugin(ChainOwner::Master, 99, 0);
+    h.remove_plugin(ChainOwner::Master, 99);
     assert!(Arc::ptr_eq(&h.render_graph(), &now));
     assert!(h.shared().retired.is_empty());
 }

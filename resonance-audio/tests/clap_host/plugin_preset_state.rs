@@ -271,7 +271,7 @@ fn a_worst_case_capture_saves_outside_the_lock() {
 
 mod handlers {
     use resonance_audio::test_support::EngineHandlerHarness;
-    use resonance_audio::types::{AudioCommand, AudioEvent, PluginPresetLocation};
+    use resonance_audio::types::{AudioCommand, AudioEvent, ChainOwner, PluginPresetLocation};
     use resonance_audio::{Track, TrackId};
 
     use crate::plugin_binaries::plugin_binary;
@@ -283,7 +283,7 @@ mod handlers {
         let path = plugin_binary("resonance-gate")?.to_string_lossy().into_owned();
         let mut h = EngineHandlerHarness::new();
         h.push_track(Track::new(TRACK, "T1".to_string()));
-        h.add_plugin(TRACK, path, "com.resonance.gate".to_string(), GATE);
+        h.add_plugin(ChainOwner::Track(TRACK), path, "com.resonance.gate".to_string(), GATE);
         let _ = h.drain_events();
         Some(h)
     }

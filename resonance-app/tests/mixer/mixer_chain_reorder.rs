@@ -19,7 +19,7 @@
 use resonance_app::message::{ChainUiMessage, Message, PluginMessage, UiMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance, TestChain};
-use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ScannedPlugin, TrackType};
 use crate::common::call;
 
 const TRACK: u64 = 1;
@@ -279,7 +279,7 @@ fn pressing_a_caret_reorders_a_bus_chain() {
     press(&mut app, TestChain::Bus(bus_id), 1, true);
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
-            .any(|c| matches!(c, AudioCommand::MovePluginInBus { to_index: 0, .. })),
+            .any(|c| matches!(c, AudioCommand::MovePlugin { to_index: 0, .. })),
         "the engine must be told to reorder its own chain"
     );
     assert_eq!(bus_order(&mut app, bus_id), vec!["compressor", "eq"]);
@@ -295,7 +295,7 @@ fn pressing_a_caret_reorders_the_master_chain() {
     press(&mut app, TestChain::Master, 0, false);
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
-            .any(|c| matches!(c, AudioCommand::MovePluginInMaster { to_index: 1, .. })),
+            .any(|c| matches!(c, AudioCommand::MovePlugin { owner: ChainOwner::Master, to_index: 1, .. })),
         "the engine must be told to reorder its own chain"
     );
     assert_eq!(master_order(&mut app), vec!["compressor", "eq"]);
@@ -363,7 +363,7 @@ fn the_engine_echo_after_a_gui_reorder_is_a_no_op() {
     assert_eq!(track_order(&mut app), vec!["compressor", "eq"]);
 
     app.test_apply_engine_event(AudioEvent::PluginMoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: moved,
         to_index: 0,
     });

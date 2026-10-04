@@ -7,7 +7,8 @@
 //! only when the inputs that feed each label actually change; the view
 //! borrows the cached strings directly.
 //!
-//! Ownership: the cache lives on `Resonance` as a plain field and is
+//! Ownership: the cache lives on `Resonance` (`ui.transport_labels`, so in
+//! `state`, which owns the cache types it holds — ARCH2-05) and is
 //! refreshed by `Resonance::refresh_transport_labels` after every
 //! `update()` dispatch (plus at construction and demo seeding). The
 //! view layer (`view::transport`) only reads it — `refresh` is never

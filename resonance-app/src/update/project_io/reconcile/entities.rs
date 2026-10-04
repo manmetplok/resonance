@@ -108,7 +108,7 @@ impl Reconcile for Tracks {
             apply_track(r, ot, pt);
             let track_id = pt.id;
             let added = replay_plugins(r, fresh(&pt.plugins, &kept), |pp| AudioCommand::AddPlugin {
-                track_id,
+                owner: ChainOwner::Track(track_id),
                 clap_file_path: pp.clap_file_path.clone(),
                 clap_plugin_id: pp.clap_plugin_id.clone(),
                 id: pp.instance_id,
@@ -184,8 +184,8 @@ impl Reconcile for Busses {
             };
             apply_bus(r, ob, pb);
             let bus_id = pb.id;
-            let added = replay_plugins(r, fresh(&pb.plugins, &kept), |pp| AudioCommand::AddPluginToBus {
-                bus_id,
+            let added = replay_plugins(r, fresh(&pb.plugins, &kept), |pp| AudioCommand::AddPlugin {
+                owner: ChainOwner::Bus(bus_id),
                 clap_file_path: pp.clap_file_path.clone(),
                 clap_plugin_id: pp.clap_plugin_id.clone(),
                 id: pp.instance_id,
@@ -200,9 +200,9 @@ impl Reconcile for Busses {
 
 /// The master FX chain and its bypass (`r.master`).
 ///
-/// * After a `ClearAll`: `SetMasterFxBypass`, then every master plugin is
-///   added; the mirror is rebuilt.
-/// * Diff: `SetMasterFxBypass` when it changed; slot names refreshed;
+/// * After a `ClearAll`: the master `SetFxBypass`, then every master
+///   plugin is added; the mirror is rebuilt.
+/// * Diff: `SetFxBypass` when it changed; slot names refreshed;
 ///   each plugin `old` did not have is added to the end of the chain.
 ///
 /// The per-slot bypass, blobs and params of every chain are
@@ -215,11 +215,13 @@ impl Reconcile for Master {
     fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, _ctx: &ReconcileCtx<'_>) {
         let Some(old) = old else {
             r.master.fx_bypassed = new.master_fx_bypassed;
-            let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
+            let _ = r.engine.send(AudioCommand::SetFxBypass {
+                owner: ChainOwner::Master,
                 bypassed: new.master_fx_bypassed,
             });
             r.master.plugins = replay_plugins(r, &new.master_plugins, |pp| {
-                AudioCommand::AddPluginToMaster {
+                AudioCommand::AddPlugin {
+                    owner: ChainOwner::Master,
                     clap_file_path: pp.clap_file_path.clone(),
                     clap_plugin_id: pp.clap_plugin_id.clone(),
                     id: pp.instance_id,
@@ -230,7 +232,8 @@ impl Reconcile for Master {
         apply_master(r, old, new);
         let kept = kept_plugins(Some(old), new);
         let added = replay_plugins(r, fresh(&new.master_plugins, &kept), |pp| {
-            AudioCommand::AddPluginToMaster {
+            AudioCommand::AddPlugin {
+                owner: ChainOwner::Master,
                 clap_file_path: pp.clap_file_path.clone(),
                 clap_plugin_id: pp.clap_plugin_id.clone(),
                 id: pp.instance_id,
@@ -294,8 +297,8 @@ impl Reconcile for TrackOutputs {
 ///   chains were built in that order.
 /// * Diff: the live chain is the kept slots in their old order, then the
 ///   slots the entity domains appended, which is also the engine's order.
-///   Each slot out of place is moved with `MovePlugin` /
-///   `MovePluginInBus` / `MovePluginInMaster` and mirrored at once (see
+///   Each slot out of place is moved with its owner's `MovePlugin` and
+///   mirrored at once (see
 ///   [`order_chain`]).
 ///
 /// Last, on every origin, the plugin side-index is rebuilt from the
@@ -423,8 +426,8 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, order: usize) {
         track_id,
         mono: pt.mono,
     });
-    let _ = r.engine.send(AudioCommand::SetTrackFxBypass {
-        track_id,
+    let _ = r.engine.send(AudioCommand::SetFxBypass {
+        owner: ChainOwner::Track(track_id),
         bypassed: pt.fx_bypassed,
     });
     if let Some(ref device) = pt.input_device_name {
@@ -456,7 +459,7 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, order: usize) {
 
     // Build GUI track state.
     let gui_plugins = replay_plugins(r, &pt.plugins, |pp| AudioCommand::AddPlugin {
-        track_id,
+        owner: ChainOwner::Track(track_id),
         clap_file_path: pp.clap_file_path.clone(),
         clap_plugin_id: pp.clap_plugin_id.clone(),
         id: pp.instance_id,
@@ -549,8 +552,8 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus) {
         bus_id: pb.id,
         muted: pb.muted,
     });
-    let _ = r.engine.send(AudioCommand::SetBusFxBypass {
-        bus_id: pb.id,
+    let _ = r.engine.send(AudioCommand::SetFxBypass {
+        owner: ChainOwner::Bus(pb.id),
         bypassed: pb.fx_bypassed,
     });
     // Return role — the destination half of the saved send graph (ba doc
@@ -565,8 +568,8 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus) {
     let gui_plugins = replay_plugins(
         r,
         &pb.plugins,
-        |pp| AudioCommand::AddPluginToBus {
-            bus_id: pb.id,
+        |pp| AudioCommand::AddPlugin {
+            owner: ChainOwner::Bus(pb.id),
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),
             id: pp.instance_id,
@@ -730,8 +733,8 @@ fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
         });
     }
     if a.fx_bypassed != b.fx_bypassed {
-        let _ = r.engine.send(AudioCommand::SetTrackFxBypass {
-            track_id,
+        let _ = r.engine.send(AudioCommand::SetFxBypass {
+            owner: ChainOwner::Track(track_id),
             bypassed: b.fx_bypassed,
         });
     }
@@ -822,8 +825,8 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
         });
     }
     if a.fx_bypassed != b.fx_bypassed {
-        let _ = r.engine.send(AudioCommand::SetBusFxBypass {
-            bus_id,
+        let _ = r.engine.send(AudioCommand::SetFxBypass {
+            owner: ChainOwner::Bus(bus_id),
             bypassed: b.fx_bypassed,
         });
     }
@@ -854,7 +857,8 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
 fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     if a.master_fx_bypassed != b.master_fx_bypassed {
         r.master.fx_bypassed = b.master_fx_bypassed;
-        let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
+        let _ = r.engine.send(AudioCommand::SetFxBypass {
+            owner: ChainOwner::Master,
             bypassed: b.master_fx_bypassed,
         });
     }
@@ -874,20 +878,20 @@ fn rename_slots(slots: &mut [PluginSlotState], saved: &[ProjectPlugin]) {
 // ---------------------------------------------------------------------------
 
 /// Every plugin instance `file` carries, with the chain that holds it.
-pub(super) fn plugin_owners(file: &ProjectFile) -> HashMap<u64, (PluginLocator, &ProjectPlugin)> {
+pub(super) fn plugin_owners(file: &ProjectFile) -> HashMap<u64, (ChainOwner, &ProjectPlugin)> {
     let mut out = HashMap::new();
     for pt in &file.tracks {
         for pp in &pt.plugins {
-            out.insert(pp.instance_id, (PluginLocator::Track(pt.id), pp));
+            out.insert(pp.instance_id, (ChainOwner::Track(pt.id), pp));
         }
     }
     for pb in &file.busses {
         for pp in &pb.plugins {
-            out.insert(pp.instance_id, (PluginLocator::Bus(pb.id), pp));
+            out.insert(pp.instance_id, (ChainOwner::Bus(pb.id), pp));
         }
     }
     for pp in &file.master_plugins {
-        out.insert(pp.instance_id, (PluginLocator::Master, pp));
+        out.insert(pp.instance_id, (ChainOwner::Master, pp));
     }
     out
 }
@@ -943,8 +947,8 @@ pub(super) fn kept_plugins(old: Option<&ProjectFile>, new: &ProjectFile) -> Hash
         .into_iter()
         .filter(|(id, (owner, pp))| {
             let chain_kept = match owner {
-                PluginLocator::Track(track_id) => tracks.contains(track_id),
-                PluginLocator::Bus(_) | PluginLocator::Master => true,
+                ChainOwner::Track(track_id) => tracks.contains(track_id),
+                ChainOwner::Bus(_) | ChainOwner::Master => true,
             };
             chain_kept
                 && before.get(id).is_some_and(|(was_owner, was)| {
@@ -984,7 +988,7 @@ fn order_live_chains(r: &mut Resonance, old: &ProjectFile, new: &ProjectFile) {
             let track_id = t.id;
             order_chain(&mut t.plugins, &ids(&pt.plugins), &kept, |instance_id, to_index| {
                 let _ = engine.send(AudioCommand::MovePlugin {
-                    track_id,
+                    owner: ChainOwner::Track(track_id),
                     instance_id,
                     to_index,
                 });
@@ -996,8 +1000,8 @@ fn order_live_chains(r: &mut Resonance, old: &ProjectFile, new: &ProjectFile) {
         if let Some(b) = registry.busses.iter_mut().find(|b| b.id == pb.id) {
             let bus_id = b.id;
             order_chain(&mut b.plugins, &ids(&pb.plugins), &kept, |instance_id, to_index| {
-                let _ = engine.send(AudioCommand::MovePluginInBus {
-                    bus_id,
+                let _ = engine.send(AudioCommand::MovePlugin {
+                    owner: ChainOwner::Bus(bus_id),
                     instance_id,
                     to_index,
                 });
@@ -1006,7 +1010,8 @@ fn order_live_chains(r: &mut Resonance, old: &ProjectFile, new: &ProjectFile) {
         }
     }
     order_chain(&mut master.plugins, &ids(&new.master_plugins), &kept, |instance_id, to_index| {
-        let _ = engine.send(AudioCommand::MovePluginInMaster {
+        let _ = engine.send(AudioCommand::MovePlugin {
+            owner: ChainOwner::Master,
             instance_id,
             to_index,
         });

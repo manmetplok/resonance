@@ -2,7 +2,7 @@
 //! signal a track was added (apply) or a per-plugin state was captured
 //! (save).
 
-use resonance_audio::types::{AudioCommand, TrackType};
+use resonance_audio::types::{AudioCommand, ChainOwner, TrackType};
 
 use crate::state::TrackState;
 use crate::Resonance;
@@ -41,7 +41,7 @@ pub(super) fn apply_preset_to_track(
     for pp in &preset.plugins {
         let id = r.allocate_plugin_id();
         let _ = r.engine.send(AudioCommand::AddPlugin {
-            track_id,
+            owner: ChainOwner::Track(track_id),
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),
             id,

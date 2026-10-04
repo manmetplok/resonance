@@ -30,29 +30,9 @@ pub use entities::{migrate_auto_name, sort_plugins_by_saved_order};
 use crate::project::ProjectFile;
 use crate::Resonance;
 
-/// Which restore is running.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Origin {
-    /// A disk load or template instantiate, after `ClearAll`; `old` is
-    /// `None`.
-    DiskLoad,
-    /// An undo/redo: no `ClearAll`, the engine still holds everything, and
-    /// `old` is the live state's file. Every domain diffs against it.
-    Undo,
-}
-
-impl Origin {
-    /// An undo/redo.
-    pub fn is_undo(self) -> bool {
-        matches!(self, Origin::Undo)
-    }
-
-    /// The engine was emptied by `ClearAll` before this restore: a disk
-    /// load. Named for what the domains that read it care about.
-    pub fn after_clear_all(self) -> bool {
-        matches!(self, Origin::DiskLoad)
-    }
-}
+/// Which restore is running. Held in `ProjectIoState::reconcile_trace`,
+/// so defined in `state` (ARCH2-05); this module stays its import path.
+pub use crate::state::project_io::Origin;
 
 /// What a domain may need besides the two files.
 #[derive(Debug, Clone, Copy)]

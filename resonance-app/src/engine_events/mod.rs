@@ -14,7 +14,6 @@ mod external_instrument;
 mod freeze;
 pub(crate) mod midi;
 mod midi_map;
-pub mod performance;
 pub(crate) mod plugins;
 pub(crate) mod pool;
 mod presets;

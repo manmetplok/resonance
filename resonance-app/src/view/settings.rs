@@ -7,7 +7,7 @@ use iced::{alignment, Element, Length};
 use crate::message::*;
 use crate::theme::{self, fa};
 use crate::view::mixer::picks::MidiPickerChoice;
-use crate::view::ui_caches::midi_choices_with_override;
+use crate::state::ui_caches::midi_choices_with_override;
 use crate::Resonance;
 
 pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
@@ -60,7 +60,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let send_toggle = toggle_button(
         "Send MIDI Clock",
         r.devices.midi.midi_clock_send_enabled,
-        Message::Ui(UiMessage::ToggleMidiClockSend),
+        Message::Transport(TransportMessage::ToggleMidiClockSend),
     );
     // Option lists come from `UiViewCaches` — the overlay redraws every
     // tick while open, and rebuilding these Vecs per frame was measured
@@ -75,7 +75,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let send_picker = pick_list(
         send_choices,
         Some(MidiPickerChoice(r.devices.midi.midi_clock_send_device.clone())),
-        |choice| Message::Ui(UiMessage::SetMidiClockSendDevice(choice.0)),
+        |choice| Message::Transport(TransportMessage::SetMidiClockSendDevice(choice.0)),
     )
     .placeholder("MIDI output port...")
     .text_size(12)
@@ -84,7 +84,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let recv_toggle = toggle_button(
         "Receive MIDI Clock",
         r.devices.midi.midi_clock_recv_enabled,
-        Message::Ui(UiMessage::ToggleMidiClockRecv),
+        Message::Transport(TransportMessage::ToggleMidiClockRecv),
     );
     let recv_choices = midi_choices_with_override(
         &r.ui.view_caches.midi_input_choices,
@@ -94,7 +94,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let recv_picker = pick_list(
         recv_choices,
         Some(MidiPickerChoice(r.devices.midi.midi_clock_recv_device.clone())),
-        |choice| Message::Ui(UiMessage::SetMidiClockRecvDevice(choice.0)),
+        |choice| Message::Transport(TransportMessage::SetMidiClockRecvDevice(choice.0)),
     )
     .placeholder("MIDI input port...")
     .text_size(12)
@@ -173,12 +173,12 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let autosave_toggle = toggle_button(
         "Autosave",
         autosave_cfg.enabled,
-        Message::Ui(UiMessage::ToggleAutosave),
+        Message::ProjectIo(ProjectIoMessage::ToggleAutosave),
     );
     let interval_picker = pick_list(
         AUTOSAVE_INTERVALS,
         Some(AutosaveInterval(autosave_cfg.interval_secs)),
-        |choice| Message::Ui(UiMessage::SetAutosaveInterval(choice.0)),
+        |choice| Message::ProjectIo(ProjectIoMessage::SetAutosaveInterval(choice.0)),
     )
     .text_size(12)
     .width(130);

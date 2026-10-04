@@ -32,8 +32,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Identifies one accepted client connection for the lifetime of the app.
-pub type ConnId = u64;
+/// The connection id and the reply channel are state's types (ARCH2-05:
+/// `ControlEndpointState` holds them); this module stays their import
+/// path.
+pub use crate::state::control::{ConnId, ReplySender};
 
 /// Value of the env var that disables the control endpoint entirely.
 pub const NO_CONTROL_ENV: &str = "RESONANCE_NO_CONTROL";
@@ -92,35 +94,6 @@ impl ControlMessage {
 }
 
 /// Non-blocking reply channel to one connection's writer thread.
-///
-/// Cloneable so the update loop can hold it across an async job if a
-/// later todo needs to defer a reply. Sending never blocks (unbounded
-/// channel) and errors (writer gone after a disconnect) are deliberately
-/// swallowed — a reply to a vanished client is a no-op, not a failure.
-#[derive(Clone)]
-pub struct ReplySender(crossbeam_channel::Sender<Response>);
-
-impl ReplySender {
-    /// Send a response to the client. Ignores a closed channel: the
-    /// client already disconnected and nobody is listening.
-    pub fn send(&self, response: Response) {
-        let _ = self.0.send(response);
-    }
-
-    /// A connected (sender, receiver) pair, for tests that act as the
-    /// writer thread and assert on the replies the handler produced.
-    pub fn test_pair() -> (Self, crossbeam_channel::Receiver<Response>) {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        (Self(tx), rx)
-    }
-}
-
-impl std::fmt::Debug for ReplySender {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ReplySender")
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Socket path resolution
 // ---------------------------------------------------------------------------
@@ -244,6 +217,12 @@ impl ControlServer {
     /// The bound socket path.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+impl crate::state::control::ControlListener for ControlServer {
+    fn path(&self) -> &Path {
+        self.path()
     }
 }
 
@@ -388,7 +367,7 @@ fn serve_connection(
                 let message = ControlMessage::Request(ControlRequest {
                     conn,
                     request,
-                    reply: ReplySender(reply_tx.clone()),
+                    reply: ReplySender::new(reply_tx.clone()),
                 });
                 if bridge.unbounded_send(message).is_err() {
                     break;

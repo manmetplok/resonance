@@ -56,7 +56,7 @@ pub(crate) fn view_startup_overlay(r: &Resonance) -> Element<'_, Message> {
     let new_btn = primary_action(
         fa::FLOPPY_DISK,
         "New Project",
-        Some(Message::Ui(UiMessage::StartNewProject)),
+        Some(Message::ProjectIo(ProjectIoMessage::StartNewProject)),
     );
     let open_btn = ghost_action(
         fa::FOLDER_OPEN,

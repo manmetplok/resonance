@@ -16,7 +16,7 @@
 
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioEvent, ParamInfo, SendSource, TrackType};
+use resonance_audio::types::{ChainOwner, AudioEvent, ParamInfo, SendSource, TrackType};
 use resonance_control::{ErrorKind, MutationAck, Request};
 use crate::common::{call, roundtrip};
 
@@ -30,8 +30,8 @@ const COMPRESSOR: &str = "com.resonance.compressor";
 const WAVETABLE: &str = "com.resonance.wavetable";
 
 fn bus_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &str, keyable: bool) {
-    app.test_apply_engine_event(AudioEvent::BusPluginAdded {
-        bus_id: BUS,
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Bus(BUS),
         instance_id,
         plugin_name: clap_plugin_id.to_string(),
         clap_plugin_id: clap_plugin_id.to_string(),
@@ -39,6 +39,8 @@ fn bus_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &str, keyab
         params: Vec::<ParamInfo>::new(),
         has_gui: false,
         has_sidechain_input: keyable,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 }
 
@@ -53,7 +55,8 @@ fn app() -> Resonance {
     app.test_add_bus(BUS, "Bass Bus");
     bus_plugin(&mut app, BUS_SYNTH, WAVETABLE, false);
     bus_plugin(&mut app, BUS_COMP, COMPRESSOR, true);
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id: MASTER_COMP,
         plugin_name: "Compressor".to_string(),
         clap_plugin_id: COMPRESSOR.to_string(),
@@ -61,6 +64,8 @@ fn app() -> Resonance {
         params: Vec::<ParamInfo>::new(),
         has_gui: false,
         has_sidechain_input: true,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
     app
 }
@@ -293,8 +298,8 @@ fn keying_a_bus_plugin_without_a_key_port_is_refused_and_names_the_alternatives(
 fn a_bus_with_no_keyable_plugin_says_so_rather_than_keying_slot_zero() {
     let mut app = app();
     app.test_add_bus(30, "Synth Bus");
-    app.test_apply_engine_event(AudioEvent::BusPluginAdded {
-        bus_id: 30,
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Bus(30),
         instance_id: 301,
         plugin_name: "Wavetable".to_string(),
         clap_plugin_id: WAVETABLE.to_string(),
@@ -302,6 +307,8 @@ fn a_bus_with_no_keyable_plugin_says_so_rather_than_keying_slot_zero() {
         params: Vec::<ParamInfo>::new(),
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 
     let err = call(
@@ -361,7 +368,7 @@ const TRACK_COMP: u64 = 501;
 
 fn track_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &str) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         plugin_name: clap_plugin_id.to_string(),
         clap_plugin_id: clap_plugin_id.to_string(),
@@ -505,7 +512,8 @@ fn an_unqualified_track_clear_drops_the_route_that_exists() {
 #[test]
 fn an_unqualified_master_clear_drops_the_route_that_exists() {
     let mut app = app();
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id: 301,
         plugin_name: "EQ".to_string(),
         clap_plugin_id: EQ.to_string(),
@@ -513,6 +521,8 @@ fn an_unqualified_master_clear_drops_the_route_that_exists() {
         params: Vec::<ParamInfo>::new(),
         has_gui: false,
         has_sidechain_input: true,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
     let _: MutationAck = call(
         &mut app,

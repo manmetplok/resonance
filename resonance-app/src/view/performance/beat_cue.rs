@@ -14,7 +14,7 @@
 //!   drawn over the column while the primed first chord shows (dimmed) on
 //!   the stage behind it, so the first chord is on screen before audio
 //!   starts. The primed position comes from the chord-derivation core
-//!   ([`crate::engine_events::performance`]) — the view never special-cases
+//!   ([`crate::query::performance`]) — the view never special-cases
 //!   the pre-count.
 //!
 //! Per the view-performance rules the geometry is cached and only re-drawn
@@ -22,7 +22,7 @@
 //! count-in number) — never per frame — so a take never drops audio frames.
 //!
 //! [`BeatCueState`] is a pure value derived from the transport + the
-//! [`ChordReadout`](crate::engine_events::performance::ChordReadout); it is
+//! [`ChordReadout`](crate::query::performance::ChordReadout); it is
 //! built by [`BeatCueState::derive`] and is unit-tested headlessly in
 //! `tests/performance_beat_cue.rs`.
 
@@ -35,7 +35,7 @@ use iced::{mouse, Color, Element, Length, Point, Radians, Rectangle, Renderer, T
 
 use resonance_audio::types::TempoMap;
 
-use crate::engine_events::performance::ChordReadout;
+use crate::query::performance::ChordReadout;
 use crate::theme;
 
 /// Side length of the cue canvas, in logical pixels.

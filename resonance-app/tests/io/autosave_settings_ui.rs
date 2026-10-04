@@ -5,7 +5,7 @@
 
 use iced::Size;
 use iced_test::simulator::Simulator;
-use resonance_app::message::{Message, UiMessage};
+use resonance_app::message::{Message, ProjectIoMessage, UiMessage};
 use resonance_app::settings::load_from;
 use resonance_app::state::ViewMode;
 use resonance_app::{theme, Resonance};
@@ -51,7 +51,7 @@ fn the_autosave_row_switches_autosave_and_sets_its_interval() {
     assert!(
         messages
             .iter()
-            .any(|m| matches!(m, Message::Ui(UiMessage::ToggleAutosave))),
+            .any(|m| matches!(m, Message::ProjectIo(ProjectIoMessage::ToggleAutosave))),
         "{messages:?}"
     );
     for m in messages {
@@ -59,13 +59,13 @@ fn the_autosave_row_switches_autosave_and_sets_its_interval() {
     }
     assert!(!app.autosave_settings().enabled);
 
-    let _ = app.update(Message::Ui(UiMessage::ToggleAutosave));
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ToggleAutosave));
     assert!(app.autosave_settings().enabled);
 
     // One test, not two: both persist the same process-wide settings file.
     // (The picker's label is drawn by the pick_list itself, not a text
     // widget the simulator can find; the golden below shows it.)
-    let _ = app.update(Message::Ui(UiMessage::SetAutosaveInterval(120)));
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::SetAutosaveInterval(120)));
     assert_eq!(app.autosave_settings().interval_secs, 120);
 
     // Persisted — into the hermetic config root, never the real one.
@@ -73,11 +73,11 @@ fn the_autosave_row_switches_autosave_and_sets_its_interval() {
         .expect("config dir")
         .join("resonance/settings.json");
     assert!(file.starts_with(resonance_app::user_dirs::hermetic_root().unwrap()));
-    let _ = app.update(Message::Ui(UiMessage::SetAutosaveInterval(45)));
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::SetAutosaveInterval(45)));
     assert_eq!(load_from(&file).autosave.interval_secs, 45);
 
     // A zero interval would autosave on every tick.
-    let _ = app.update(Message::Ui(UiMessage::SetAutosaveInterval(0)));
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::SetAutosaveInterval(0)));
     assert_eq!(app.autosave_settings().interval_secs, 1);
 }
 

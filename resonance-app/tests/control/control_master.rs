@@ -11,7 +11,7 @@
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ScannedPlugin};
 use resonance_control::methods::master::MasterSummary;
 use resonance_control::{ErrorKind, MutationAck, Request};
 use crate::common::{call, roundtrip};
@@ -44,7 +44,8 @@ fn summary_reports_the_real_master_state() {
 fn summary_reports_the_master_insert_chain() {
     let mut app = app();
     // The engine echoes each master plugin as it instantiates it.
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id: 7,
         plugin_name: "Resonance Mastering".to_owned(),
         clap_plugin_id: "com.resonance.mastering".to_owned(),
@@ -52,8 +53,10 @@ fn summary_reports_the_master_insert_chain() {
         params: Vec::new(),
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
-    app.test_apply_engine_event(AudioEvent::MasterFxBypassChanged { bypassed: true });
+    app.test_apply_engine_event(AudioEvent::FxBypassChanged { owner: ChainOwner::Master, bypassed: true });
 
     let view = summary(&mut app);
     assert_eq!(view.plugins.len(), 1);
@@ -228,16 +231,17 @@ fn seed_plugins(app: &mut Resonance) {
 fn hinted(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPluginToMaster { id, .. } => Some(id),
+            AudioCommand::AddPlugin { owner: ChainOwner::Master, id, .. } => Some(id),
             _ => None,
         })
-        .expect("an AddPluginToMaster reached the engine")
+        .expect("a master AddPlugin reached the engine")
 }
 
 /// Mirror the engine's `PluginAdded` echo for the master chain, the way
-/// the real engine does after `AudioCommand::AddPluginToMaster`.
+/// the real engine does after a master `AudioCommand::AddPlugin`.
 fn echo_master_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &str, name: &str) {
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id,
         plugin_name: name.to_owned(),
         clap_plugin_id: clap_plugin_id.to_owned(),
@@ -245,6 +249,8 @@ fn echo_master_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &st
         params: Vec::new(),
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 }
 
@@ -331,11 +337,11 @@ fn remove_effect_by_slot_leaves_the_other_one_renumbered() {
         .expect("master.remove_effect succeeds");
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
-            .any(|c| matches!(c, AudioCommand::RemovePluginFromMaster { instance_id } if instance_id == 1)),
+            .any(|c| matches!(c, AudioCommand::RemovePlugin { owner: ChainOwner::Master, instance_id } if instance_id == 1)),
         "the engine must be told to unload the EQ instance"
     );
 
-    app.test_apply_engine_event(AudioEvent::MasterPluginRemoved { instance_id: 1 });
+    app.test_apply_engine_event(AudioEvent::PluginRemoved { owner: ChainOwner::Master, instance_id: 1 });
     let view = summary(&mut app);
     assert_eq!(view.plugins.len(), 1);
     assert_eq!(view.plugins[0].plugin_id, "com.resonance.mastering");
@@ -359,7 +365,7 @@ fn remove_effect_by_plugin_id_and_occurrence_targets_the_right_instance() {
     .expect("succeeds");
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
-            .any(|c| matches!(c, AudioCommand::RemovePluginFromMaster { instance_id } if instance_id == 2)),
+            .any(|c| matches!(c, AudioCommand::RemovePlugin { owner: ChainOwner::Master, instance_id } if instance_id == 2)),
         "occurrence 1 is the SECOND EQ (instance 2)"
     );
 }
@@ -509,7 +515,7 @@ fn chain_edits_are_recorded_on_the_undo_stack() {
     assert!(
         cmds.iter().any(|c| matches!(
             c,
-            AudioCommand::RemovePluginFromMaster { instance_id: id } if *id == instance_id
+            AudioCommand::RemovePlugin { owner: ChainOwner::Master, instance_id: id } if *id == instance_id
         )),
         "undo must remove the added instance: {cmds:?}"
     );

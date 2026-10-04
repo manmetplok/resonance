@@ -21,7 +21,7 @@
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, ScannedPlugin};
 use resonance_control::methods::master::PluginParamsView;
 use resonance_control::methods::track::{AddPluginResult, PluginKind};
 use resonance_control::{ErrorKind, MutationAck, Request};
@@ -90,10 +90,10 @@ fn value_of(view: &PluginParamsView, slot: usize, param: &str) -> f64 {
 fn hinted(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPluginToMaster { id, .. } => Some(id),
+            AudioCommand::AddPlugin { owner: ChainOwner::Master, id, .. } => Some(id),
             _ => None,
         })
-        .expect("an AddPluginToMaster reached the engine")
+        .expect("a master AddPlugin reached the engine")
 }
 
 /// Add an effect and play the engine's echo back, which is what supplies
@@ -105,7 +105,8 @@ fn add_and_echo(app: &mut Resonance, plugin_id: &str) -> u64 {
     let rx = app.test_capture_engine();
     add(app, plugin_id);
     let instance_id = hinted(&rx);
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),
@@ -151,6 +152,8 @@ fn add_and_echo(app: &mut Resonance, plugin_id: &str) -> u64 {
         ],
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
     instance_id
 }
@@ -476,7 +479,7 @@ fn move_effect_reorders_the_chain_and_reaches_the_engine() {
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(
             c,
-            AudioCommand::MovePluginInMaster { instance_id, to_index: 1 }
+            AudioCommand::MovePlugin { owner: ChainOwner::Master, instance_id, to_index: 1 }
                 if instance_id == mastering
         )),
         "the engine must be told to reorder its own chain"
@@ -488,7 +491,8 @@ fn move_effect_reorders_the_chain_and_reaches_the_engine() {
     );
 
     // The engine's echo replays the same move and changes nothing.
-    app.test_apply_engine_event(AudioEvent::MasterPluginMoved {
+    app.test_apply_engine_event(AudioEvent::PluginMoved {
+        owner: ChainOwner::Master,
         instance_id: mastering,
         to_index: 1,
     });
@@ -523,7 +527,7 @@ fn move_effect_clamps_past_the_end_and_no_ops_in_place() {
     assert_eq!(app.revision(), before, "a no-op records nothing");
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
-            .all(|c| !matches!(c, AudioCommand::MovePluginInMaster { .. })),
+            .all(|c| !matches!(c, AudioCommand::MovePlugin { owner: ChainOwner::Master, .. })),
         "and nothing reaches the engine"
     );
 }
@@ -580,7 +584,7 @@ fn a_reorder_is_undoable_and_persisted_in_order() {
         .collect();
     assert_eq!(saved, vec!["eq", "mastering"]);
 
-    // A-13h: the undo is one `MovePluginInMaster` back on the diff path.
+    // A-13h: the undo is one master `MovePlugin` back on the diff path.
     let rx = app.test_capture_engine();
     let _ = app.update(Message::Undo);
     let cmds: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
@@ -589,7 +593,7 @@ fn a_reorder_is_undoable_and_persisted_in_order() {
         "a reorder undoes on the diff path: {cmds:?}"
     );
     assert!(
-        cmds.iter().any(|c| matches!(c, AudioCommand::MovePluginInMaster { .. })),
+        cmds.iter().any(|c| matches!(c, AudioCommand::MovePlugin { owner: ChainOwner::Master, .. })),
         "undo must move the chain back: {cmds:?}"
     );
     let file = app.test_build_project_file();
@@ -624,7 +628,8 @@ fn the_whole_limiter_sequence_runs_over_the_control_api_alone() {
     assert_eq!(added.slot, 0);
 
     // 2. Its parameter list arrives with the engine echo.
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id,
         plugin_name: "Resonance Mastering".to_owned(),
         clap_plugin_id: "com.resonance.mastering".to_owned(),
@@ -660,6 +665,8 @@ fn the_whole_limiter_sequence_runs_over_the_control_api_alone() {
         ],
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 
     // 3. The stages default to OFF, so an unconfigured mastering plugin
@@ -711,7 +718,8 @@ fn a_parameter_can_be_addressed_by_its_string_key() {
     add(&mut app, "com.resonance.mastering");
     let instance_id = hinted(&rx);
     let lim_on = resonance_plugin::stable_hash("lim_on");
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id,
         plugin_name: "Resonance Mastering".to_owned(),
         clap_plugin_id: "com.resonance.mastering".to_owned(),
@@ -727,6 +735,8 @@ fn a_parameter_can_be_addressed_by_its_string_key() {
         }],
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 
     let rx = app.test_capture_engine();

@@ -474,7 +474,7 @@ fn remove_in_app_instrument(r: &mut Resonance, track_id: TrackId) {
     }
     let instance_id = first.instance_id;
     let _ = r.engine.send(AudioCommand::RemovePlugin {
-        track_id,
+        owner: resonance_audio::types::ChainOwner::Track(track_id),
         instance_id,
     });
 }

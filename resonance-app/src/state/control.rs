@@ -6,9 +6,57 @@
 //! request handlers in `update/control`.
 
 use crate::control_jobs::JobBoard;
-use crate::control_socket::{ConnId, ControlServer};
+use resonance_control::Response;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Identifies one accepted client connection for the lifetime of the app.
+pub type ConnId = u64;
+
+/// Where a handler's reply to one request goes: the connection's writer
+/// thread (`control_socket`).
+///
+/// Cloneable so the update loop can hold it across an async job to defer
+/// a reply. Sending never blocks (unbounded channel) and errors (writer
+/// gone after a disconnect) are deliberately swallowed — a reply to a
+/// vanished client is a no-op, not a failure.
+#[derive(Clone)]
+pub struct ReplySender(crossbeam_channel::Sender<Response>);
+
+impl ReplySender {
+    /// A sender onto `writer`, the connection's reply channel.
+    pub(crate) fn new(writer: crossbeam_channel::Sender<Response>) -> Self {
+        Self(writer)
+    }
+
+    /// Send a response to the client. Ignores a closed channel: the
+    /// client already disconnected and nobody is listening.
+    pub fn send(&self, response: Response) {
+        let _ = self.0.send(response);
+    }
+
+    /// A connected (sender, receiver) pair, for tests that act as the
+    /// writer thread and assert on the replies the handler produced.
+    pub fn test_pair() -> (Self, crossbeam_channel::Receiver<Response>) {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        (Self(tx), rx)
+    }
+}
+
+impl std::fmt::Debug for ReplySender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReplySender")
+    }
+}
+
+/// The running control listener, as state knows it: a handle whose drop
+/// stops the listener (`control_socket::ControlServer` is the one
+/// implementation). State holds it behind this trait so it needs nothing
+/// from the socket module (ARCH2-05).
+pub trait ControlListener: std::fmt::Debug + Send {
+    /// The bound socket path.
+    fn path(&self) -> &std::path::Path;
+}
 
 /// Track kind a `track.add` control request creates (todo #1152).
 /// Drums are instrument tracks with the Drum instrument type; the wire
@@ -48,7 +96,7 @@ pub struct ControlEndpointState {
     /// Listener lifecycle handle. `None` when the endpoint is disabled
     /// (`RESONANCE_NO_CONTROL=1`), failed to bind, or was never started
     /// (tests construct the app without a socket).
-    pub server: Option<ControlServer>,
+    pub server: Option<Box<dyn ControlListener>>,
     /// Live client connections keyed by connection id.
     pub sessions: HashMap<ConnId, ControlSession>,
     /// Async job ledger (todo #1149), shared with the socket threads:
@@ -87,11 +135,11 @@ pub struct ControlEndpointState {
     /// The user's NAM model library and marks, opened once for the
     /// `amp_models.*` handlers (nam-model-library.md §9.3). Its roots are
     /// the machine's in the real app and private temp dirs in a test app.
-    pub amp_library: crate::update::control::AmpLibraryCache,
+    pub amp_library: super::AmpLibraryCache,
     /// The user's drum-kit library and marks, opened once for the
     /// `drum_kits.*` handlers (drums-plugin-rework.md §8); roots as for
     /// [`Self::amp_library`].
-    pub drum_kit_library: crate::update::control::DrumKitLibraryCache,
+    pub drum_kit_library: super::DrumKitLibraryCache,
     /// `*.set_plugin_param` requests whose label the plugin is resolving
     /// (CLAP `text_to_value`, off the update loop), keyed by the token of
     /// their `ResolvePluginParamText`: replied to when the engine answers,
@@ -100,9 +148,9 @@ pub struct ControlEndpointState {
     pub next_label_token: u64,
     /// The reply channel of the request being executed, for a handler that
     /// defers its reply ([`Self::deferred`]).
-    pub current_reply: Option<crate::control_socket::ReplySender>,
+    pub current_reply: Option<ReplySender>,
     /// The connection of the request being executed.
-    pub current_conn: Option<crate::control_socket::ConnId>,
+    pub current_conn: Option<ConnId>,
     /// Set by a handler that took `current_reply` to answer later.
     pub deferred: bool,
 }
@@ -110,9 +158,9 @@ pub struct ControlEndpointState {
 /// A `*.set_plugin_param` waiting on the plugin to say what its label
 /// means: the request to re-run with the answer, and where to reply.
 pub struct PendingLabel {
-    pub conn: crate::control_socket::ConnId,
+    pub conn: ConnId,
     pub request: resonance_control::Request,
-    pub reply: crate::control_socket::ReplySender,
+    pub reply: ReplySender,
     pub deadline: std::time::Instant,
     /// The error to send if the plugin does not recognise the label.
     pub refusal: String,

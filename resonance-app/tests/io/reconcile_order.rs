@@ -20,7 +20,7 @@ use resonance_app::update::project_io::reconcile::{domain_order, Origin, Stage};
 use resonance_app::update::project_io::replay_loaded_project;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{
+use resonance_audio::types::{ChainOwner, 
     AudioCommand, AudioEvent, FadeCurve, ParamInfo, SendSource, TrackType,
 };
 use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind};
@@ -425,7 +425,8 @@ fn app_with_routing() -> Resonance {
     app.test_set_project_path(PathBuf::from("/tmp/resonance-test-a13e.rproj"));
     app.test_push_track(TrackState::new_instrument(KICK, 0));
     app.test_add_bus(BUS, "Bus");
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id: MASTER_COMP,
         plugin_name: "Compressor".to_string(),
         clap_plugin_id: "com.resonance.compressor".to_string(),
@@ -433,6 +434,8 @@ fn app_with_routing() -> Resonance {
         params: vec![threshold_param()],
         has_gui: false,
         has_sidechain_input: true,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
     app.test_apply_engine_event(AudioEvent::AuxSendChanged {
         send_id: SEND,
@@ -482,7 +485,7 @@ fn the_full_path_sends_routing_after_the_master_chain_and_before_the_clips() {
     let pos = |pred: &dyn Fn(&AudioCommand) -> bool| {
         cmds.iter().position(pred).expect("the replay sends it")
     };
-    let master = pos(&|c| matches!(c, AudioCommand::AddPluginToMaster { id: MASTER_COMP, .. }));
+    let master = pos(&|c| matches!(c, AudioCommand::AddPlugin { owner: ChainOwner::Master, id: MASTER_COMP, .. }));
     let send = pos(&|c| matches!(c, AudioCommand::AddAuxSend { id: SEND, dest: BUS, .. }));
     let route = pos(&|c| matches!(c, AudioCommand::SetSidechainRoute { plugin: MASTER_COMP, .. }));
     let clip = pos(&|c| matches!(c, AudioCommand::LoadMidiClipDirect { .. }));
@@ -519,7 +522,7 @@ fn a_diff_undo_sends_routing_after_the_master_and_before_the_clips() {
     let pos = |pred: &dyn Fn(&AudioCommand) -> bool| {
         cmds.iter().position(pred).expect("the diff replay sends it")
     };
-    let master = pos(&|c| matches!(c, AudioCommand::SetMasterFxBypass { bypassed: true }));
+    let master = pos(&|c| matches!(c, AudioCommand::SetFxBypass { owner: ChainOwner::Master, bypassed: true }));
     let bypass = pos(&|c| {
         matches!(c, AudioCommand::SetPluginBypass { instance_id: MASTER_COMP, bypassed: true })
     });
@@ -571,7 +574,7 @@ fn the_full_path_restores_plugin_state_after_every_entity_and_before_routing() {
     let pos = |pred: &dyn Fn(&AudioCommand) -> bool| {
         cmds.iter().position(pred).expect("the replay sends it")
     };
-    let master = pos(&|c| matches!(c, AudioCommand::AddPluginToMaster { id: MASTER_COMP, .. }));
+    let master = pos(&|c| matches!(c, AudioCommand::AddPlugin { owner: ChainOwner::Master, id: MASTER_COMP, .. }));
     let output = pos(&|c| matches!(c, AudioCommand::SetTrackOutput { track_id: KICK, .. }));
     let state = pos(&|c| {
         matches!(c, AudioCommand::LoadPluginState { instance_id: MASTER_COMP, data } if data[..] == [1, 2, 3])
@@ -588,7 +591,8 @@ fn the_full_path_restores_plugin_state_after_every_entity_and_before_routing() {
         !cmds.iter().any(|c| matches!(c, AudioCommand::SetPluginParam { .. })),
         "the overrides wait for the PluginAdded echo: {cmds:?}"
     );
-    fresh.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    fresh.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id: MASTER_COMP,
         plugin_name: "Compressor".to_string(),
         clap_plugin_id: "com.resonance.compressor".to_string(),
@@ -596,6 +600,8 @@ fn the_full_path_restores_plugin_state_after_every_entity_and_before_routing() {
         params: vec![threshold_param()],
         has_gui: false,
         has_sidechain_input: true,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
     assert!(
         drain(&rx).iter().any(|c| matches!(
@@ -635,7 +641,7 @@ fn a_diff_undo_restores_plugin_state_before_routing() {
     let pos = |pred: &dyn Fn(&AudioCommand) -> bool| {
         cmds.iter().position(pred).expect("the diff replay sends it")
     };
-    let master = pos(&|c| matches!(c, AudioCommand::SetMasterFxBypass { bypassed: true }));
+    let master = pos(&|c| matches!(c, AudioCommand::SetFxBypass { owner: ChainOwner::Master, bypassed: true }));
     let state = pos(&|c| matches!(c, AudioCommand::LoadPluginState { instance_id: MASTER_COMP, .. }));
     let bypass = pos(&|c| {
         matches!(c, AudioCommand::SetPluginBypass { instance_id: MASTER_COMP, bypassed: true })
@@ -701,7 +707,7 @@ fn a_diff_undo_removes_edges_before_any_entity_command() {
     let send = pos(&|c| matches!(c, AudioCommand::RemoveAuxSend { send_id: SEND }));
     let route = pos(&|c| matches!(c, AudioCommand::ClearSidechainRoute { plugin: MASTER_COMP }));
     let volume = pos(&|c| matches!(c, AudioCommand::SetTrackVolume { track_id: KICK, .. }));
-    let master = pos(&|c| matches!(c, AudioCommand::SetMasterFxBypass { bypassed: true }));
+    let master = pos(&|c| matches!(c, AudioCommand::SetFxBypass { owner: ChainOwner::Master, bypassed: true }));
     assert!(
         send < route && route < volume && volume < master,
         "{send} < {route} < {volume} < {master}"

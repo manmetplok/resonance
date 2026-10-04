@@ -21,15 +21,54 @@
 //! project-load replay) draws from (ARCH-04 D-1, ba doc #273, todo
 //! #1234). There is no engine-side counter to stay clear of any more:
 //! the engine only ever honours the id it is given, and refuses a
-//! collision (`resonance-audio/src/engine/plugins.rs::handle_add_plugin`
-//! and its bus/master siblings) rather than allocating around it.
+//! collision (`resonance-audio/src/engine/chain.rs::handle_add_plugin`,
+//! one handler for every chain owner) rather than allocating around it.
 
 use resonance_audio::types::PluginInstanceId;
 
-use crate::state::{PluginLocator, PluginSlotState};
+use crate::state::{ChainOwner, PluginSlotState};
 use crate::Resonance;
 
 impl Resonance {
+    /// The insert chain `owner` holds, as the app mirrors it. `None` for a
+    /// track or bus that does not exist; the master chain always does.
+    pub(crate) fn chain(&self, owner: ChainOwner) -> Option<&[PluginSlotState]> {
+        match owner {
+            ChainOwner::Track(track_id) => self
+                .registry
+                .tracks
+                .iter()
+                .find(|t| t.id == track_id)
+                .map(|t| t.plugins.as_slice()),
+            ChainOwner::Bus(bus_id) => self
+                .registry
+                .busses
+                .iter()
+                .find(|b| b.id == bus_id)
+                .map(|b| b.plugins.as_slice()),
+            ChainOwner::Master => Some(self.master.plugins.as_slice()),
+        }
+    }
+
+    /// [`Self::chain`], mutably.
+    pub(crate) fn chain_mut(&mut self, owner: ChainOwner) -> Option<&mut Vec<PluginSlotState>> {
+        match owner {
+            ChainOwner::Track(track_id) => self
+                .registry
+                .tracks
+                .iter_mut()
+                .find(|t| t.id == track_id)
+                .map(|t| &mut t.plugins),
+            ChainOwner::Bus(bus_id) => self
+                .registry
+                .busses
+                .iter_mut()
+                .find(|b| b.id == bus_id)
+                .map(|b| &mut b.plugins),
+            ChainOwner::Master => Some(&mut self.master.plugins),
+        }
+    }
+
     /// Locate a plugin slot on any track, bus, or master by instance id
     /// and run `f` on it. Uses the `plugin_index` side-table to jump
     /// directly to the owning container; falls back to a full scan on
@@ -41,21 +80,21 @@ impl Resonance {
         f: impl FnOnce(&mut PluginSlotState) -> R,
     ) -> Option<R> {
         let result = match self.plugin_mirror.index.get(&instance_id).copied() {
-            Some(PluginLocator::Track(track_id)) => self
+            Some(ChainOwner::Track(track_id)) => self
                 .registry
                 .tracks
                 .iter_mut()
                 .find(|t| t.id == track_id)
                 .and_then(|t| t.plugins.iter_mut().find(|p| p.instance_id == instance_id))
                 .map(f),
-            Some(PluginLocator::Bus(bus_id)) => self
+            Some(ChainOwner::Bus(bus_id)) => self
                 .registry
                 .busses
                 .iter_mut()
                 .find(|b| b.id == bus_id)
                 .and_then(|b| b.plugins.iter_mut().find(|p| p.instance_id == instance_id))
                 .map(f),
-            Some(PluginLocator::Master) => self
+            Some(ChainOwner::Master) => self
                 .master
                 .plugins
                 .iter_mut()
@@ -109,7 +148,7 @@ impl Resonance {
     pub(crate) fn insert_plugin_index(
         &mut self,
         instance_id: PluginInstanceId,
-        locator: PluginLocator,
+        locator: ChainOwner,
     ) {
         self.plugin_mirror.index.insert(instance_id, locator);
     }
@@ -123,13 +162,11 @@ impl Resonance {
 
     /// Allocate a plugin instance id, for EVERY plugin add — GUI, control
     /// API, presets, templates, project-load replay (ARCH-04 D-1). The
-    /// id is sent to the engine as `AudioCommand::AddPlugin`/
-    /// `AddPluginToBus`/`AddPluginToMaster`'s `id` field, which the
-    /// engine honours unconditionally and refuses to reuse
-    /// (`resonance-audio/src/engine/plugins.rs::handle_add_plugin` and
-    /// its bus/master siblings reject a collision with
-    /// `EngineErrorKind::Internal` rather than replacing the live
-    /// instance).
+    /// id is sent to the engine as `AudioCommand::AddPlugin`'s `id`
+    /// field, which the engine honours unconditionally and refuses to
+    /// reuse (`resonance-audio/src/engine/chain.rs::handle_add_plugin`
+    /// rejects a collision with `EngineErrorKind::Internal` rather than
+    /// replacing the live instance, whatever the chain owner).
     ///
     /// Before D-1 this only ran for control-API adds that had to report
     /// their id synchronously (ba doc #273, todo #1234), from a base
@@ -171,20 +208,20 @@ impl Resonance {
             for p in &track.plugins {
                 self.plugin_mirror
                     .index
-                    .insert(p.instance_id, PluginLocator::Track(track.id));
+                    .insert(p.instance_id, ChainOwner::Track(track.id));
             }
         }
         for bus in &self.registry.busses {
             for p in &bus.plugins {
                 self.plugin_mirror
                     .index
-                    .insert(p.instance_id, PluginLocator::Bus(bus.id));
+                    .insert(p.instance_id, ChainOwner::Bus(bus.id));
             }
         }
         for p in &self.master.plugins {
             self.plugin_mirror
                 .index
-                .insert(p.instance_id, PluginLocator::Master);
+                .insert(p.instance_id, ChainOwner::Master);
         }
     }
 }

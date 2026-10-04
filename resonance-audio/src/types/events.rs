@@ -9,7 +9,7 @@ use resonance_metering::MeterSnapshot;
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    ABSource, AssetId, BusId, ChainProbeReport, ClipId, EngineError, EngineErrorKind, F0Frame,
+    ABSource, AssetId, BusId, ChainOwner, ChainProbeReport, ClipId, EngineError, EngineErrorKind, F0Frame,
     FadeCurve, InputDeviceInfo, MidiNote, MixMeasurement, NoteBlob, ParamInfo, PluginInstanceId,
     PluginScanFailure, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin, SendId,
     SendSource, TrackId, WarpAlgorithm, WarpMarker,
@@ -425,8 +425,10 @@ pub enum AudioEvent {
     TakeGroupRemoved {
         group_id: TakeGroupId,
     },
+    /// A plugin instance was added to `owner`'s chain (code review
+    /// ARCH2-02: one event for a track's, a bus's and the master's chain).
     PluginAdded {
-        track_id: TrackId,
+        owner: ChainOwner,
         instance_id: PluginInstanceId,
         plugin_name: String,
         clap_plugin_id: String,
@@ -443,27 +445,37 @@ pub enum AudioEvent {
         /// Number of audio output ports declared by this plugin instance.
         /// `1` for every legacy single-output plugin. Multi-output plugins
         /// (e.g. `resonance-drums`) report a larger number and the app
-        /// auto-creates one sub-track per non-main output port.
+        /// auto-creates one sub-track per non-main output port — on a
+        /// track chain only; a bus or master chain has no sub-tracks.
         output_port_count: usize,
         /// Human-readable name of each output port, same length as
         /// `output_port_count`.
         output_port_names: Vec<String>,
     },
+    /// Echo of [`AudioCommand::RemovePlugin`](super::AudioCommand::RemovePlugin),
+    /// sent whether or not the instance existed.
     PluginRemoved {
-        track_id: TrackId,
+        owner: ChainOwner,
         instance_id: PluginInstanceId,
     },
-    /// A track's insert chain was reordered by
+    /// `owner`'s insert chain was reordered by
     /// [`AudioCommand::MovePlugin`](super::AudioCommand::MovePlugin).
     /// `to_index` is the slot the plugin actually landed on *after*
     /// clamping, so the app can mirror the engine's order rather than
-    /// re-deriving it. The app's `TrackState.plugins` order is what project
+    /// re-deriving it. The app's chain order (`TrackState.plugins`,
+    /// `BusState.plugins`, `Resonance::master.plugins`) is what project
     /// serialization writes, so mirroring this is what makes a reorder
     /// survive save/load.
     PluginMoved {
-        track_id: TrackId,
+        owner: ChainOwner,
         instance_id: PluginInstanceId,
         to_index: usize,
+    },
+    /// Echo of [`AudioCommand::SetFxBypass`](super::AudioCommand::SetFxBypass):
+    /// `owner`'s whole-chain bypass changed.
+    FxBypassChanged {
+        owner: ChainOwner,
+        bypassed: bool,
     },
     PluginsScanned {
         plugins: Vec<ScannedPlugin>,
@@ -479,11 +491,10 @@ pub enum AudioEvent {
     PluginScanFailed {
         failures: Vec<PluginScanFailure>,
     },
-    /// An `AddPlugin` / `AddPluginToBus` / `AddPluginToMaster` that
-    /// produced no instance (ba doc #275 P5, todo #1309).
+    /// An `AddPlugin` that produced no instance (ba doc #275 P5, todo
+    /// #1309).
     ///
-    /// This is the counterpart of
-    /// [`PluginAdded`](Self::PluginAdded)/[`BusPluginAdded`](Self::BusPluginAdded)/[`MasterPluginAdded`](Self::MasterPluginAdded):
+    /// This is the counterpart of [`PluginAdded`](Self::PluginAdded):
     /// exactly one of the two answers every add command. Before it
     /// existed the only answer was a bare [`Error`](Self::Error) string
     /// with no instance in it, so a project loaded on a machine without
@@ -949,33 +960,6 @@ pub enum AudioEvent {
     BusRemoved {
         bus_id: BusId,
     },
-    BusPluginAdded {
-        bus_id: BusId,
-        instance_id: PluginInstanceId,
-        plugin_name: String,
-        clap_plugin_id: String,
-        clap_file_path: String,
-        params: Vec<ParamInfo>,
-        has_gui: bool,
-        /// See `PluginAdded::has_sidechain_input`.
-        has_sidechain_input: bool,
-    },
-    BusPluginRemoved {
-        bus_id: BusId,
-        instance_id: PluginInstanceId,
-    },
-    /// A bus's insert chain was reordered by
-    /// [`AudioCommand::MovePluginInBus`](super::AudioCommand::MovePluginInBus).
-    /// `to_index` is the slot the plugin actually landed on *after*
-    /// clamping, so the app mirrors the engine's order rather than
-    /// re-deriving it. `BusState.plugins` order is what project
-    /// serialization writes, so mirroring this is what makes a bus
-    /// reorder survive save/load.
-    BusPluginMoved {
-        bus_id: BusId,
-        instance_id: PluginInstanceId,
-        to_index: usize,
-    },
 
     // -- Aux sends + return busses --
     /// A bus's return-role flag changed (see `AudioCommand::SetBusRole`).
@@ -1007,35 +991,6 @@ pub enum AudioEvent {
         reason: String,
     },
 
-    // -- Master FX events --
-    MasterPluginAdded {
-        instance_id: PluginInstanceId,
-        plugin_name: String,
-        clap_plugin_id: String,
-        clap_file_path: String,
-        params: Vec<ParamInfo>,
-        has_gui: bool,
-        /// See `PluginAdded::has_sidechain_input`.
-        has_sidechain_input: bool,
-    },
-    MasterPluginRemoved {
-        instance_id: PluginInstanceId,
-    },
-    /// The master insert chain was reordered by
-    /// [`AudioCommand::MovePluginInMaster`](super::AudioCommand::MovePluginInMaster).
-    /// `to_index` is the slot the plugin actually landed on *after*
-    /// clamping, so the app mirrors the engine's order rather than
-    /// re-deriving it. The order of `Resonance::master_plugins` is what
-    /// project serialization writes, so mirroring this is what makes a
-    /// master reorder survive save/load.
-    MasterPluginMoved {
-        instance_id: PluginInstanceId,
-        to_index: usize,
-    },
-    TrackFxBypassChanged {
-        track_id: TrackId,
-        bypassed: bool,
-    },
     /// Echo of `AudioCommand::SetTrackPlaybackSource` (doc #257): the
     /// track's external-instrument playback source changed. Emitted only
     /// when the track exists, so the app mirror never records a mode for
@@ -1043,13 +998,6 @@ pub enum AudioEvent {
     TrackPlaybackSourceChanged {
         track_id: TrackId,
         source: PlaybackSource,
-    },
-    BusFxBypassChanged {
-        bus_id: BusId,
-        bypassed: bool,
-    },
-    MasterFxBypassChanged {
-        bypassed: bool,
     },
     /// Echo of [`AudioCommand::SetPluginBypass`](super::AudioCommand::SetPluginBypass):
     /// one chain slot's bypass changed (ba doc #275 finding X3). Emitted

@@ -1,7 +1,8 @@
 use iced::Task;
-use resonance_audio::types::AudioCommand;
+use resonance_audio::types::{AudioCommand, ChainOwner};
 
 use crate::message::{Message, PluginMessage};
+use crate::update::chain_edit;
 use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
@@ -23,59 +24,18 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                     bypassed,
                 });
         }
+        // The chain edits are owner-neutral (`update::chain_edit`,
+        // ARCH2-02); these arms only name the owner.
         PluginMessage::AddPluginToTrack(track_id, plugin) => {
-            // App-allocated (ARCH-04 D-1), but still fire-and-forget: no
-            // placeholder is mirrored, so the mixer shows nothing until
-            // the engine's `PluginAdded` echo lands — same as before D-1,
-            // only the id's origin changed.
-            let id = r.allocate_plugin_id();
-            let _ = r.engine.send(AudioCommand::AddPlugin {
-                track_id,
-                clap_file_path: plugin.clap_file_path,
-                clap_plugin_id: plugin.clap_plugin_id,
-                id,
-            });
+            chain_edit::add(r, ChainOwner::Track(track_id), plugin);
         }
         PluginMessage::AddPluginToTrackWithId {
             track_id,
             instance_id,
             plugin,
-        } => {
-            let _ = r.engine.send(AudioCommand::AddPlugin {
-                track_id,
-                clap_file_path: plugin.clap_file_path.clone(),
-                clap_plugin_id: plugin.clap_plugin_id.clone(),
-                id: instance_id,
-            });
-            // Mirror the slot NOW, with an empty param list, exactly as
-            // the project-load replay does (`replay_plugins`). The
-            // engine's `PluginAdded` echo finds this slot by
-            // `instance_id` and fills in `params`/`has_gui` instead of
-            // pushing a second one, so no duplicate appears.
-            if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
-                track.plugins.push(crate::state::PluginSlotState::new(
-                    instance_id,
-                    plugin.name,
-                    plugin.clap_plugin_id,
-                    plugin.clap_file_path,
-                    Vec::new(),
-                    false,
-                ));
-                r.insert_plugin_index(instance_id, crate::state::PluginLocator::Track(track_id));
-            }
-        }
+        } => chain_edit::add_with_id(r, ChainOwner::Track(track_id), instance_id, plugin),
         PluginMessage::RemovePluginFromTrack(track_id, instance_id) => {
-            // Mirror the removal now, not on the `PluginRemoved` echo, so
-            // an undo pressed before the echo lands sees it (STATE-10
-            // shape, ARCH-01 FU-A13c). The echo is owed, so a late one
-            // cannot drop an instance an undo re-added under this id
-            // (A-13h).
-            let _ = r.engine.send(AudioCommand::RemovePlugin {
-                track_id,
-                instance_id,
-            });
-            r.io.restore_echoes.expect_plugin_removed(instance_id);
-            crate::engine_events::plugins::track_removed(r, track_id, instance_id);
+            chain_edit::remove(r, ChainOwner::Track(track_id), instance_id);
         }
         PluginMessage::MovePluginInTrack {
             track_id,
@@ -103,22 +63,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                     Ok(slot) => slot as usize,
                     Err(_) => return Task::none(),
                 };
-            let _ = r.engine.send(AudioCommand::MovePlugin {
-                track_id,
-                instance_id,
-                to_index,
-            });
-            // Mirror it now rather than waiting for `PluginMoved`: the
-            // app's `Vec` order is what the mixer draws and what project
-            // serialization writes, and a control client must be able to
-            // read back the order it just set. `track_moved` replays the
-            // same move on the echo and no-ops when it already matches.
-            crate::engine_events::plugins::mirror_track_plugin_move(
-                r,
-                track_id,
-                instance_id,
-                to_index,
-            );
+            chain_edit::move_plugin(r, ChainOwner::Track(track_id), instance_id, to_index);
         }
         PluginMessage::ReplacePlugin {
             instance_id,

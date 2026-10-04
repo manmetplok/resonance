@@ -17,7 +17,7 @@
 //! * a delay that outgrows its line hands its history to the new one.
 //!
 //! The first half drives `LatencyComp` directly; the second runs the real
-//! `SetTrackFxBypass` handler and the engine's `refresh_latency_comp`
+//! `SetFxBypass` handler and the engine's `refresh_latency_comp`
 //! against a latent fake plugin, rendering through the real callback.
 
 use std::ffi::c_void;
@@ -169,7 +169,7 @@ fn delays_match_ignores_retained_pass_through_lines() {
 }
 
 // ---------------------------------------------------------------------------
-// End to end: SetTrackFxBypass on a latent chain, real handler + callback
+// End to end: SetFxBypass on a latent track chain, real handler + callback
 // ---------------------------------------------------------------------------
 
 /// Latency the fake reports, in frames.
@@ -277,7 +277,10 @@ fn project(latent: &[(TrackId, PluginInstanceId)]) -> (EngineHandlerHarness, Mix
 /// Bypass (or re-engage) `track_id`'s chain the way the engine loop does:
 /// the handler, then the comp republish.
 fn set_chain_bypass(h: &mut EngineHandlerHarness, cb: &MixAudioHarness, track_id: TrackId, bypassed: bool) {
-    h.dispatch(AudioCommand::SetTrackFxBypass { track_id, bypassed });
+    h.dispatch(AudioCommand::SetFxBypass {
+        owner: ChainOwner::Track(track_id),
+        bypassed,
+    });
     h.refresh_latency_comp();
     cb.adopt_latency_comp(h.published_latency_comp());
 }

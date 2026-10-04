@@ -35,7 +35,7 @@
 use resonance_app::message::{Message, PluginMessage, UiMessage};
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::{Resonance, TestChain};
-use resonance_audio::types::{
+use resonance_audio::types::{ChainOwner, 
     AudioCommand, AudioEvent, ParamInfo, PluginInstanceId, ScannedPlugin, TrackType,
 };
 
@@ -115,7 +115,7 @@ fn refuse(app: &mut Resonance, instance_id: PluginInstanceId, plugin_id: &str) {
 /// The engine's answer for a plugin it did instantiate.
 fn accept(app: &mut Resonance, instance_id: PluginInstanceId, plugin_id: &str) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),
@@ -675,7 +675,7 @@ fn a_missing_plugin_on_a_bus_is_replaced_the_same_way() {
     let cmds: Vec<AudioCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert!(
         cmds.iter()
-            .any(|c| matches!(c, AudioCommand::AddPluginToBus { bus_id, .. } if *bus_id == BUS)),
+            .any(|c| matches!(c, AudioCommand::AddPlugin { owner: ChainOwner::Bus(bus_id), .. } if *bus_id == BUS)),
         "and it is the BUS add command that is sent, not the track one: {cmds:?}"
     );
 }

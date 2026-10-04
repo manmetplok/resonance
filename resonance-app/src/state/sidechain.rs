@@ -17,12 +17,9 @@
 //!
 //! **Pruning is one-sided here, unlike aux sends.** The engine already
 //! drops routes on `RemoveTrack` / `RemoveBus` (source gone) and on
-//! `RemovePlugin` (target gone), so the mirror only has to keep up — it
-//! does not have to tell the engine. The one exception is a plugin taken
-//! off a *bus* or the *master* chain: `RemovePluginFromBus` /
-//! `RemovePluginFromMaster` do not drop the route engine-side, so
-//! [`Resonance`](crate::Resonance) sends an explicit `ClearSidechainRoute`
-//! when it prunes one of those. See `engine_events::plugins`.
+//! `RemovePlugin` (target gone — on a track, a bus or the master alike
+//! since ARCH2-02), so the mirror only has to keep up; it does not have
+//! to tell the engine. See `engine_events::plugins::removed`.
 
 use resonance_audio::types::{PluginInstanceId, SendSource, SidechainRoute};
 

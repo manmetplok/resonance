@@ -1,5 +1,5 @@
 //! Reordering a BUS's insert chain — `Bus::move_plugin` behind
-//! `AudioCommand::MovePluginInBus` (ba doc #273, todo #1237).
+//! `AudioCommand::MovePlugin { owner: ChainOwner::Bus(_), .. }` (ba doc #273, todo #1237).
 //!
 //! The bus twin of `track_plugin_move.rs`, and a different shape
 //! underneath: a bus chain is a plain `Vec<PluginInstanceId>` on the
@@ -9,7 +9,7 @@
 //! clamp, and the "not on this chain" answer.
 
 use resonance_audio::test_support::affects_latency;
-use resonance_audio::types::{AudioCommand, Bus};
+use resonance_audio::types::{AudioCommand, Bus, ChainOwner};
 
 fn bus_with(ids: &[u64]) -> Bus {
     let mut bus = Bus::new(1, "Drum Bus".to_string());
@@ -85,8 +85,8 @@ fn a_single_plugin_chain_moves_nowhere() {
 /// as latency-affecting for the same reason the track one is.
 #[test]
 fn the_reorder_command_is_latency_affecting() {
-    assert!(affects_latency(&AudioCommand::MovePluginInBus {
-        bus_id: 1,
+    assert!(affects_latency(&AudioCommand::MovePlugin {
+        owner: ChainOwner::Bus(1),
         instance_id: 10,
         to_index: 0,
     }));

@@ -1,9 +1,7 @@
 use iced::Task;
-use resonance_audio::types::AudioCommand;
 
-use crate::message::{Message, ProjectIoMessage, UiMessage};
+use crate::message::{Message, UiMessage};
 use crate::state::ViewMode;
-use crate::update::project_io;
 use crate::Resonance;
 
 /// Handle a [`UiMessage`]. An inspector owner change (a selection) drops
@@ -65,26 +63,6 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::ShowMissingPlugins => {
             r.missing_plugins.show();
             r.ui.mixer.settings_open = false;
-        }
-        UiMessage::StartNewProject => {
-            if r.refuse_project_switch_during_render() {
-                return Task::none();
-            }
-            return project_io::save_project_as_dialog();
-        }
-        UiMessage::NewEmptyProject => {
-            if r.io.loading || r.io.saving || r.io.save_state.is_some() {
-                return Task::none();
-            }
-            if r.refuse_project_switch_during_render() {
-                return Task::none();
-            }
-            // Over unsaved changes this asks Save / Don't save / Cancel
-            // rather than refusing (code review UX-01, UX-04).
-            return crate::update::project_io::request_switch(
-                r,
-                crate::state::ProjectSwitch::NewEmpty,
-            );
         }
         UiMessage::ArmPresetDelete(name) => {
             r.ui.mixer.preset_delete_armed = name;
@@ -178,21 +156,6 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // modifier-less mouse press decide single vs additive.
             r.ui.interaction.select_additive = mods.command() || mods.shift();
         }
-        UiMessage::ConfirmSaveAndQuit => {
-            let window_id = r.modals.confirm_quit.take();
-            r.modals.quit_after_save = window_id;
-            return r.update(Message::ProjectIo(ProjectIoMessage::SaveProject));
-        }
-        UiMessage::ConfirmDiscardAndQuit => {
-            if let Some(id) = r.modals.confirm_quit.take() {
-                crate::update::project_io::recovery::close_session(r);
-                r.engine.shutdown(std::time::Duration::from_millis(150));
-                return iced::window::close(id);
-            }
-        }
-        UiMessage::CancelQuit => {
-            r.modals.confirm_quit = None;
-        }
         UiMessage::ToggleGlobalTracks => {
             r.viewport.global_tracks_expanded = !r.viewport.global_tracks_expanded;
         }
@@ -212,17 +175,6 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 set.insert(track_id);
             }
         }
-        UiMessage::ToggleAutosave => {
-            let enabled = &mut r.settings.autosave.enabled;
-            *enabled = !*enabled;
-            crate::settings::persist(&r.settings);
-        }
-        UiMessage::SetAutosaveInterval(secs) => {
-            // The trigger reads the setting on every tick, so the new
-            // spacing applies from the next one.
-            r.settings.autosave.interval_secs = secs.max(1);
-            crate::settings::persist(&r.settings);
-        }
         UiMessage::ToggleFollowPlayhead => {
             let follow = &mut r.settings.arrange.follow_playhead;
             *follow = !*follow;
@@ -230,34 +182,6 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // once the current manual-scroll pause ends".
             r.viewport.follow_paused = false;
             crate::settings::persist(&r.settings);
-        }
-        UiMessage::ToggleMidiClockSend => {
-            r.devices.midi.midi_clock_send_enabled = !r.devices.midi.midi_clock_send_enabled;
-            let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
-                device: r.devices.midi.midi_clock_send_device.clone(),
-                enabled: r.devices.midi.midi_clock_send_enabled,
-            });
-        }
-        UiMessage::SetMidiClockSendDevice(device) => {
-            r.devices.midi.midi_clock_send_device = device.clone();
-            let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
-                device,
-                enabled: r.devices.midi.midi_clock_send_enabled,
-            });
-        }
-        UiMessage::ToggleMidiClockRecv => {
-            r.devices.midi.midi_clock_recv_enabled = !r.devices.midi.midi_clock_recv_enabled;
-            let _ = r.engine.send(AudioCommand::SetMidiClockInput {
-                device: r.devices.midi.midi_clock_recv_device.clone(),
-                enabled: r.devices.midi.midi_clock_recv_enabled,
-            });
-        }
-        UiMessage::SetMidiClockRecvDevice(device) => {
-            r.devices.midi.midi_clock_recv_device = device.clone();
-            let _ = r.engine.send(AudioCommand::SetMidiClockInput {
-                device,
-                enabled: r.devices.midi.midi_clock_recv_enabled,
-            });
         }
         UiMessage::SetPerformanceTuning(index) => {
             // Footer instrument/tuning pill. Pure view state — the diagram

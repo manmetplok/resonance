@@ -8,10 +8,10 @@
 //! | [`transport`]           | Play/Pause/Stop/Seek/BPM/loop                 |
 //! | [`clips`]               | Audio clips, warp, automation, project dir    |
 //! | [`tracks`]              | Track add/remove/volume/pan/mute/arm/freeze   |
-//! | [`plugins`]             | CLAP plugin add/remove/param/editor/state     |
+//! | [`plugins`]             | CLAP plugin chains (any owner)/param/editor   |
 //! | [`bounce`]              | Bounce, export, stems, freeze                 |
 //! | [`midi`]                | MIDI clips, notes, live play, ext instruments |
-//! | [`busses`]              | Busses, aux sends, master FX chain            |
+//! | [`busses`]              | Busses, aux sends                             |
 //! | [`audition`]            | Audition preview                              |
 //! | [`midi_map`]            | MIDI learn & hardware controller mapping      |
 //! | [`reference`]           | Reference track A/B comparison               |
@@ -120,13 +120,13 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::ListInputDevices
         | AudioCommand::ClearAll
         | AudioCommand::SetTrackFrozenSource { .. }
-        | AudioCommand::UnfreezeTrack { .. }
-        | AudioCommand::SetTrackFxBypass { .. } => tracks::dispatch_tracks(ctx, state, cmd),
+        | AudioCommand::UnfreezeTrack { .. } => tracks::dispatch_tracks(ctx, state, cmd),
 
-        // Plugins
+        // Plugins, and every owner's insert chain (ARCH2-02)
         AudioCommand::AddPlugin { .. }
         | AudioCommand::RemovePlugin { .. }
         | AudioCommand::MovePlugin { .. }
+        | AudioCommand::SetFxBypass { .. }
         | AudioCommand::ScanPlugins
         | AudioCommand::RescanPlugins
         | AudioCommand::SetPluginParam { .. }
@@ -200,18 +200,10 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::SetBusMute { .. }
         | AudioCommand::SetBusName { .. }
         | AudioCommand::SetTrackOutput { .. }
-        | AudioCommand::AddPluginToBus { .. }
-        | AudioCommand::RemovePluginFromBus { .. }
-        | AudioCommand::MovePluginInBus { .. }
         | AudioCommand::SetBusRole { .. }
         | AudioCommand::AddAuxSend { .. }
         | AudioCommand::SetAuxSend { .. }
-        | AudioCommand::RemoveAuxSend { .. }
-        | AudioCommand::AddPluginToMaster { .. }
-        | AudioCommand::RemovePluginFromMaster { .. }
-        | AudioCommand::MovePluginInMaster { .. }
-        | AudioCommand::SetBusFxBypass { .. }
-        | AudioCommand::SetMasterFxBypass { .. } => busses::dispatch_busses(ctx, state, cmd),
+        | AudioCommand::RemoveAuxSend { .. } => busses::dispatch_busses(ctx, state, cmd),
 
         // Audition preview
         AudioCommand::AuditionFile { .. }

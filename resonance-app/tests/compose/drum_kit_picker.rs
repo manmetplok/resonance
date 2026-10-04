@@ -11,7 +11,7 @@ use resonance_app::compose::ComposeMessage;
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioEvent, ParamInfo, ParamValueUpdate, TrackType};
+use resonance_audio::types::{ChainOwner, AudioEvent, ParamInfo, ParamValueUpdate, TrackType};
 use resonance_common::drum_map::GM_PADS;
 use resonance_common::kit_info::{KitInfo, KitInfoPad};
 
@@ -42,7 +42,7 @@ fn app_with_drums(kit: &str) -> Resonance {
     app.test_set_active_project(true);
     app.test_add_track(1, TrackType::Instrument);
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: 1,
+        owner: ChainOwner::Track(1),
         instance_id: INSTANCE,
         plugin_name: "Resonance Drums".to_owned(),
         clap_plugin_id: "com.resonance.drums".to_owned(),
@@ -129,7 +129,7 @@ fn with_two_drum_tracks_the_picker_follows_the_selected_one() {
     let mut app = app_with_drums("Garage");
     app.test_add_track(2, TrackType::Instrument);
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: 2,
+        owner: ChainOwner::Track(2),
         instance_id: OTHER,
         plugin_name: "Resonance Drums".to_owned(),
         clap_plugin_id: "com.resonance.drums".to_owned(),

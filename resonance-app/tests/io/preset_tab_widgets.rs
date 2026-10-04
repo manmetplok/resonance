@@ -11,7 +11,7 @@ use iced_test::simulator::Simulator;
 use resonance_app::message::{BrowserMessage, Message, PluginMessage, PresetUiMessage, UiMessage};
 use resonance_app::state::{BrowserTab, PluginSlotState, ViewMode};
 use resonance_app::{theme, Resonance};
-use resonance_audio::types::{AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_common::factory_presets::FactoryPresetEntry;
 
 const TRACK: u64 = 5;
@@ -269,7 +269,7 @@ fn a_real_drag_onto_a_track_header_adds_the_plugin_with_the_preset() {
     assert_eq!(plugins_on_track(&app), 2, "added to the track's chain");
 
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: next,
         plugin_name: "Test EQ".to_owned(),
         clap_plugin_id: PLUGIN_ID.to_owned(),

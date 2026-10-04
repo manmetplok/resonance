@@ -15,12 +15,9 @@
 //! The library is opened (and scanned) once and kept; a request re-reads
 //! the index only when it changed on disk (one `stat`) and answers from
 //! it, while the rescan that notices a moved file runs off the update
-//! loop ([`OffThreadRescan`]) — so a model added since shows up in a later
+//! loop (`state::library_cache::OffThreadRescan`) — so a model added since shows up in a later
 //! answer, and a name lookup that misses rescans before refusing.
 
-use std::path::PathBuf;
-
-use resonance_common::library_marks::SharedMarks;
 use resonance_common::nam_library::{self, Entry, EntryStatus, Library, Source};
 use resonance_control::methods::amp_models::{
     self, AmpModelEntry, AmpModelList, AmpModelSource, AmpModelStatus,
@@ -32,129 +29,10 @@ use resonance_plugin::nam_rows::ModelRows;
 use super::reply::{failure, success};
 use crate::Resonance;
 
-/// Where the app's `amp_models.*` handlers find the model library and the
-/// marks store.
-#[derive(Debug, Clone, Default)]
-pub struct AmpLibraryRoots {
-    pub models: Option<PathBuf>,
-    pub marks: Option<PathBuf>,
-}
-
-/// A library rescan kept off the update loop (code review STATE2-08), as
-/// `plugins.rescan` is: a rescan walks every file under the root and
-/// hashes the new ones, which must not stall the GUI. At most one runs at
-/// a time; it writes the library's index (`library.json`, under the
-/// library's own file lock), and the next request's `reload_if_changed`
-/// — one `stat` — picks the result up. Shared by `drum_kits.*`.
-#[derive(Default)]
-pub(crate) struct OffThreadRescan {
-    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl OffThreadRescan {
-    /// Run `rescan` on a thread unless one is still running.
-    pub(crate) fn start(&self, name: &str, rescan: impl FnOnce() + Send + 'static) {
-        use std::sync::atomic::Ordering;
-        if self.running.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        /// Clears the flag however the rescan ends, a panic included.
-        struct Done(std::sync::Arc<std::sync::atomic::AtomicBool>);
-        impl Drop for Done {
-            fn drop(&mut self) {
-                self.0.store(false, std::sync::atomic::Ordering::Release);
-            }
-        }
-        let done = Done(self.running.clone());
-        let spawned = std::thread::Builder::new()
-            .name(format!("{name}-rescan"))
-            .spawn(move || {
-                let _done = done;
-                rescan();
-            });
-        if let Err(e) = spawned {
-            tracing::warn!("{name}: could not start a library rescan: {e}");
-            self.running.store(false, Ordering::Release);
-        }
-    }
-}
-
-/// The opened library and marks, cached across requests.
-#[derive(Default)]
-pub struct AmpLibraryCache {
-    pub roots: AmpLibraryRoots,
-    library: Option<Library>,
-    marks: Option<SharedMarks>,
-    rescan: OffThreadRescan,
-}
-
-impl AmpLibraryCache {
-    pub fn new(roots: AmpLibraryRoots) -> Self {
-        Self {
-            roots,
-            ..Self::default()
-        }
-    }
-
-    /// The library as last indexed. Opened and scanned on first use, so
-    /// the first answer sees what is installed; after that a request
-    /// re-reads `library.json` when it changed (one `stat`) and starts a
-    /// rescan off the update loop ([`OffThreadRescan`]), so a model file
-    /// added since shows up in a later answer.
-    pub fn library(&mut self) -> &Library {
-        let roots = &self.roots;
-        let first = self.library.is_none();
-        let lib = self.library.get_or_insert_with(|| match &roots.models {
-            Some(r) => Library::open(r),
-            None => Library::empty(),
-        });
-        if let Some(root) = lib.root().map(std::path::Path::to_path_buf) {
-            if first {
-                if let Err(e) = lib.rescan() {
-                    tracing::warn!("amp_models: library rescan failed: {e}");
-                }
-            } else {
-                lib.reload_if_changed();
-                self.rescan.start("amp-models", move || {
-                    if let Err(e) = Library::open(root).rescan() {
-                        tracing::warn!("amp_models: library rescan failed: {e}");
-                    }
-                });
-            }
-        }
-        lib
-    }
-
-    /// The library rescanned here and now, for a lookup that missed the
-    /// last index (a model added a moment ago): the rare path that waits.
-    pub fn library_rescanned(&mut self) -> &Library {
-        if self.library.is_none() {
-            // The first open scans already.
-            return self.library();
-        }
-        let lib = self.library.as_mut().expect("checked above");
-        if lib.root().is_some() {
-            if let Err(e) = lib.rescan() {
-                tracing::warn!("amp_models: library rescan failed: {e}");
-            }
-        }
-        lib
-    }
-
-    /// The marks store (picking up other processes' writes).
-    pub fn marks(&mut self) -> &SharedMarks {
-        let roots = &self.roots;
-        let marks = self.marks.get_or_insert_with(|| match &roots.marks {
-            Some(d) => SharedMarks::open(d).unwrap_or_else(|e| {
-                tracing::warn!("amp_models: marks unavailable: {e}");
-                SharedMarks::detached()
-            }),
-            None => SharedMarks::detached(),
-        });
-        marks.refresh();
-        marks
-    }
-}
+/// The library handle and its roots live in `state::library_cache`
+/// (`ControlEndpointState` holds the cache — ARCH2-05); this module stays
+/// their import path.
+pub use crate::state::library_cache::{AmpLibraryCache, AmpLibraryRoots};
 
 /// Handle an `amp_models.*` request, or `None` for another namespace.
 pub(super) fn try_handle(app: &mut Resonance, request: &Request) -> Option<Response> {

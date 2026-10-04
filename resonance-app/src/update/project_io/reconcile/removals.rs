@@ -37,7 +37,7 @@ use super::clips::{kept_audio_clips, kept_midi_clips};
 use super::entities::{kept_plugins, kept_tracks, plugin_owners};
 use super::{Reconcile, ReconcileCtx};
 use crate::project::{send_source_from_tag, ProjectFile, ProjectTrack};
-use crate::state::PluginLocator;
+use crate::state::ChainOwner;
 use crate::Resonance;
 
 /// The key routes of `old` a diff restore keeps: the target plugin is kept
@@ -185,8 +185,7 @@ fn prune_clip(r: &mut Resonance, clip_id: ClipId) {
 ///
 /// * After a `ClearAll`: nothing.
 /// * Diff, in `old`'s chain order: every instance `new` does not keep
-///   goes (`RemovePlugin` / `RemovePluginFromBus` /
-///   `RemovePluginFromMaster`) — except one on a track or bus that goes
+///   goes (its owner's `RemovePlugin`) — except one on a track or bus that goes
 ///   too, which `RemoveTrack` / `RemoveBus` drops with it (the engine sends
 ///   no per-plugin echo for those). Then every track `new` does not keep
 ///   (`RemoveTrack`, A-13i): sub-tracks first, each by its own command, so
@@ -242,7 +241,7 @@ impl Reconcile for EntityRemovals {
             .chain(old.busses.iter().flat_map(|b| b.plugins.iter()))
             .chain(old.master_plugins.iter())
             .map(|pp| pp.instance_id);
-        let mut removed_plugins: Vec<(PluginInstanceId, PluginLocator)> = Vec::new();
+        let mut removed_plugins: Vec<(PluginInstanceId, ChainOwner)> = Vec::new();
         for id in chain_order {
             if kept.contains(&id) {
                 continue;
@@ -254,17 +253,11 @@ impl Reconcile for EntityRemovals {
 
         for (instance_id, owner) in removed_plugins {
             let command = match owner {
-                PluginLocator::Bus(bus_id) if removed_busses.contains(&bus_id) => None,
-                PluginLocator::Track(track_id) if removed_track_ids.contains(&track_id) => None,
-                PluginLocator::Track(track_id) => Some(AudioCommand::RemovePlugin {
-                    track_id,
-                    instance_id,
-                }),
-                PluginLocator::Bus(bus_id) => Some(AudioCommand::RemovePluginFromBus {
-                    bus_id,
-                    instance_id,
-                }),
-                PluginLocator::Master => Some(AudioCommand::RemovePluginFromMaster { instance_id }),
+                ChainOwner::Bus(bus_id) if removed_busses.contains(&bus_id) => None,
+                ChainOwner::Track(track_id) if removed_track_ids.contains(&track_id) => None,
+                ChainOwner::Track(_) | ChainOwner::Bus(_) | ChainOwner::Master => {
+                    Some(AudioCommand::RemovePlugin { owner, instance_id })
+                }
             };
             if let Some(command) = command {
                 let _ = r.engine.send(command);
@@ -289,25 +282,10 @@ impl Reconcile for EntityRemovals {
     }
 }
 
-/// What `engine_events::plugins::{track,bus,master}_removed` does to the
-/// mirror for one instance.
-fn prune_plugin(r: &mut Resonance, owner: PluginLocator, instance_id: PluginInstanceId) {
-    let chain = match owner {
-        PluginLocator::Track(id) => r
-            .registry
-            .tracks
-            .iter_mut()
-            .find(|t| t.id == id)
-            .map(|t| &mut t.plugins),
-        PluginLocator::Bus(id) => r
-            .registry
-            .busses
-            .iter_mut()
-            .find(|b| b.id == id)
-            .map(|b| &mut b.plugins),
-        PluginLocator::Master => Some(&mut r.master.plugins),
-    };
-    if let Some(chain) = chain {
+/// What `engine_events::plugins::removed` does to the mirror for one
+/// instance.
+fn prune_plugin(r: &mut Resonance, owner: ChainOwner, instance_id: PluginInstanceId) {
+    if let Some(chain) = r.chain_mut(owner) {
         chain.retain(|p| p.instance_id != instance_id);
     }
     r.ui.mixer.forget_plugin(instance_id);

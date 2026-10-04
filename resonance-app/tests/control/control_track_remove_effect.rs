@@ -10,7 +10,7 @@
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ScannedPlugin, TrackType};
 use resonance_control::methods::track::{PluginKind, PluginParamsView};
 use resonance_control::{ErrorKind, MutationAck, Response};
 use crate::common::call;
@@ -56,7 +56,7 @@ fn app() -> Resonance {
 /// Mirror the engine echo that mounts a plugin on the track.
 fn echo_plugin(app: &mut Resonance, instance_id: u64, plugin_id: &str) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),
@@ -119,7 +119,7 @@ fn removing_a_slot_leaves_the_other_effect_renumbered() {
     );
 
     app.test_apply_engine_event(AudioEvent::PluginRemoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: 11,
     });
     let view = chain(&mut app);
@@ -242,7 +242,7 @@ fn the_removal_is_recorded_on_the_undo_stack() {
     assert_eq!(app.revision(), before + 1, "the removal is a committed edit");
     // The engine echo is what actually drops it from the app's chain.
     app.test_apply_engine_event(AudioEvent::PluginRemoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: 11,
     });
     assert_eq!(chain(&mut app).plugins.len(), 1);

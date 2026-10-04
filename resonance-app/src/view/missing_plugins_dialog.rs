@@ -30,7 +30,7 @@ use iced::widget::{
 use iced::{alignment, Element, Length};
 
 use crate::message::{Message, PluginMessage, UiMessage};
-use crate::state::{MissingPluginSlot, PluginLocator};
+use crate::state::{MissingPluginSlot, ChainOwner};
 use crate::theme;
 use crate::Resonance;
 
@@ -220,9 +220,9 @@ fn missing_row(slot: &MissingPluginSlot) -> Element<'static, Message> {
 /// two audiences are different.
 pub(crate) fn slot_location(slot: &MissingPluginSlot) -> String {
     let kind = match slot.owner {
-        PluginLocator::Track(_) => "track",
-        PluginLocator::Bus(_) => "bus",
-        PluginLocator::Master => "chain",
+        ChainOwner::Track(_) => "track",
+        ChainOwner::Bus(_) => "bus",
+        ChainOwner::Master => "chain",
     };
     format!(
         "{} {} \u{00b7} slot {}",

@@ -1,6 +1,6 @@
 //! ARCH-04 D-1: the app allocates every plugin instance id now
-//! (`Resonance::allocate_plugin_id`), and `AudioCommand::AddPlugin` /
-//! `AddPluginToBus` / `AddPluginToMaster` carry a concrete `id` rather
+//! (`Resonance::allocate_plugin_id`), and `AudioCommand::AddPlugin` (for
+//! every `ChainOwner`) carries a concrete `id` rather
 //! than an optional hint. The engine has no allocator of its own left —
 //! `next_plugin_id` and the hint-vs-`CONTROL_PLUGIN_ID_BASE` rule this
 //! file used to pin (see git history for `plugin_id_ranges.rs`) are gone.
@@ -21,7 +21,7 @@
 //! built plugin follows.
 
 use resonance_audio::test_support::EngineHandlerHarness;
-use resonance_audio::types::{AudioEvent, EngineErrorKind};
+use resonance_audio::types::{AudioEvent, ChainOwner, EngineErrorKind};
 use resonance_audio::{Track, TrackId};
 
 use crate::plugin_binaries::plugin_binary;
@@ -48,7 +48,7 @@ fn a_duplicate_id_is_refused_and_does_not_replace_the_live_instance() {
 
     // The first add at id 1 succeeds: one `PluginAdded`, one live
     // instance, one entry on the track's chain.
-    harness.add_plugin(TRACK, path.clone(), EQ_CLAP_ID.to_string(), 1);
+    harness.add_plugin(ChainOwner::Track(TRACK), path.clone(), EQ_CLAP_ID.to_string(), 1);
     let first = harness.drain_events();
     assert!(
         first
@@ -61,7 +61,7 @@ fn a_duplicate_id_is_refused_and_does_not_replace_the_live_instance() {
 
     // A second add asking for the SAME id is refused — not re-numbered,
     // not silently accepted as a second copy.
-    harness.add_plugin(TRACK, path, EQ_CLAP_ID.to_string(), 1);
+    harness.add_plugin(ChainOwner::Track(TRACK), path, EQ_CLAP_ID.to_string(), 1);
     let second = harness.drain_events();
     assert_eq!(
         error_kind(&second),
@@ -105,7 +105,7 @@ fn a_duplicate_id_is_refused_across_track_bus_and_master() {
     let mut harness = EngineHandlerHarness::new();
     harness.push_track(Track::new(TRACK, "T1".to_string()));
 
-    harness.add_plugin(TRACK, path.clone(), EQ_CLAP_ID.to_string(), 42);
+    harness.add_plugin(ChainOwner::Track(TRACK), path.clone(), EQ_CLAP_ID.to_string(), 42);
     harness.drain_events();
     assert_eq!(harness.plugin_instance_count(), 1);
 
@@ -120,10 +120,11 @@ fn a_duplicate_id_is_refused_across_track_bus_and_master() {
         })
         .expect("AddBus succeeded");
 
-    // No harness accessor sends `AddPluginToBus` directly (it isn't
-    // needed anywhere else yet), so this drives it through the same
-    // `EngineHandlerHarness` machinery `add_plugin` uses, one level down.
-    let events = harness.add_plugin_to_bus(bus_id, path, EQ_CLAP_ID.to_string(), 42);
+    // Since ARCH2-02 a bus add is the same handler with a different
+    // owner, so the refusal is by construction not a track-only case —
+    // but the contract is pinned here regardless.
+    harness.add_plugin(ChainOwner::Bus(bus_id), path, EQ_CLAP_ID.to_string(), 42);
+    let events = harness.drain_events();
     assert_eq!(
         error_kind(&events),
         Some(EngineErrorKind::Internal),

@@ -1,5 +1,5 @@
 //! Reordering the MASTER insert chain — `MasterBus::move_plugin` behind
-//! `AudioCommand::MovePluginInMaster`.
+//! `AudioCommand::MovePlugin { owner: ChainOwner::Master, .. }`.
 //!
 //! The master twin of `bus_plugin_move.rs`, over the same shape: a plain
 //! `Vec<PluginInstanceId>` the engine edits on a copy and publishes in a
@@ -11,7 +11,7 @@
 //! back over the ceiling it exists to hold.
 
 use resonance_audio::test_support::affects_latency;
-use resonance_audio::types::{AudioCommand, MasterBus};
+use resonance_audio::types::{AudioCommand, ChainOwner, MasterBus};
 
 fn master_with(ids: &[u64]) -> MasterBus {
     let mut master = MasterBus::new();
@@ -89,7 +89,8 @@ fn a_single_plugin_chain_moves_nowhere() {
 /// it rather than risking a stale figure.
 #[test]
 fn the_reorder_command_is_latency_affecting() {
-    assert!(affects_latency(&AudioCommand::MovePluginInMaster {
+    assert!(affects_latency(&AudioCommand::MovePlugin {
+        owner: ChainOwner::Master,
         instance_id: 10,
         to_index: 0,
     }));

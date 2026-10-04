@@ -31,6 +31,7 @@ pub mod midi_clip;
 pub mod midi_editor;
 pub mod mixer;
 pub mod palette;
+pub mod chain_edit;
 pub mod chain_ui;
 pub mod plugin;
 pub mod plugin_preset_ui;

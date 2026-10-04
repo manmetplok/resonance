@@ -24,11 +24,10 @@
 //! refuse (onto or off the instrument slot, into another owner's chain)
 //! is refused here too. ▲/▼ stay as the ☰ menu's Move up / Move down.
 
-use resonance_audio::types::PluginInstanceId;
+use resonance_audio::types::{ChainOwner, PluginInstanceId};
 
 use crate::message::{BusMessage, MasterMessage, Message, PluginMessage};
 
-use super::picks::PluginOwner;
 
 /// The move-up / move-down messages for one slot of a plugin chain.
 ///
@@ -52,13 +51,13 @@ pub(crate) struct ChainMoves {
 /// structural slot, so the only limits are the two ends.
 pub(crate) fn chain_moves(
     r: &crate::Resonance,
-    owner: PluginOwner,
+    owner: ChainOwner,
     instance_id: PluginInstanceId,
     index: usize,
     len: usize,
 ) -> ChainMoves {
     match owner {
-        PluginOwner::Track(track_id) => {
+        ChainOwner::Track(track_id) => {
             let Some(track) = r.registry.tracks.iter().find(|t| t.id == track_id) else {
                 return ChainMoves::default();
             };
@@ -85,7 +84,7 @@ pub(crate) fn chain_moves(
                 down: resolved(index + 1),
             }
         }
-        PluginOwner::Bus(bus_id) => ChainMoves {
+        ChainOwner::Bus(bus_id) => ChainMoves {
             up: (index > 0).then(|| {
                 Message::Bus(BusMessage::MovePluginInBus {
                     bus_id,
@@ -101,7 +100,7 @@ pub(crate) fn chain_moves(
                 })
             }),
         },
-        PluginOwner::Master => ChainMoves {
+        ChainOwner::Master => ChainMoves {
             up: (index > 0).then(|| {
                 Message::Master(MasterMessage::MovePluginInMaster {
                     instance_id,
@@ -132,14 +131,13 @@ pub(crate) fn drop_move(
     dragged: PluginInstanceId,
     onto: PluginInstanceId,
 ) -> Option<Message> {
-    use crate::state::PluginLocator;
     let (owner, from) = crate::update::plugin_replace::locate_slot(r, dragged)?;
     let (onto_owner, to) = crate::update::plugin_replace::locate_slot(r, onto)?;
     if owner != onto_owner || from == to {
         return None;
     }
     match owner {
-        PluginLocator::Track(track_id) => {
+        ChainOwner::Track(track_id) => {
             let track = r.registry.tracks.iter().find(|t| t.id == track_id)?;
             let dest =
                 crate::plugin_chain::resolve_effect_move(r, track, from as u32, to as u32).ok()?;
@@ -151,12 +149,12 @@ pub(crate) fn drop_move(
                 })
             })
         }
-        PluginLocator::Bus(bus_id) => Some(Message::Bus(BusMessage::MovePluginInBus {
+        ChainOwner::Bus(bus_id) => Some(Message::Bus(BusMessage::MovePluginInBus {
             bus_id,
             instance_id: dragged,
             to_index: to,
         })),
-        PluginLocator::Master => Some(Message::Master(MasterMessage::MovePluginInMaster {
+        ChainOwner::Master => Some(Message::Master(MasterMessage::MovePluginInMaster {
             instance_id: dragged,
             to_index: to,
         })),
@@ -165,14 +163,14 @@ pub(crate) fn drop_move(
 
 /// The message that removes `instance_id` from `owner`'s chain — the
 /// same one per owner wherever a remove is offered.
-pub(crate) fn remove_message(owner: PluginOwner, instance_id: PluginInstanceId) -> Message {
+pub(crate) fn remove_message(owner: ChainOwner, instance_id: PluginInstanceId) -> Message {
     match owner {
-        PluginOwner::Track(track_id) => {
+        ChainOwner::Track(track_id) => {
             Message::Plugin(PluginMessage::RemovePluginFromTrack(track_id, instance_id))
         }
-        PluginOwner::Bus(bus_id) => {
+        ChainOwner::Bus(bus_id) => {
             Message::Bus(BusMessage::RemovePluginFromBus(bus_id, instance_id))
         }
-        PluginOwner::Master => Message::Master(MasterMessage::RemovePluginFromMaster(instance_id)),
+        ChainOwner::Master => Message::Master(MasterMessage::RemovePluginFromMaster(instance_id)),
     }
 }

@@ -15,11 +15,11 @@
 //! `view` (ux-guidelines.md → "View Performance").
 
 use iced::Task;
-use resonance_audio::types::{AudioCommand, PluginInstanceId};
+use resonance_audio::types::{AudioCommand, ChainOwner, PluginInstanceId};
 use resonance_plugin::presets::PresetSource;
 
 use crate::message::{
-    BusMessage, MasterMessage, Message, PluginMessage, PresetAddOwner, PresetUiMessage,
+    BusMessage, MasterMessage, Message, PluginMessage, PresetUiMessage,
 };
 use crate::state::presets::{
     AuditionOrigin, HostPresetBrowser, HostPresetList, HostPresetRow, PresetAddPick,
@@ -760,7 +760,7 @@ fn drop_on_track(r: &mut Resonance, track_id: resonance_audio::types::TrackId) -
     }
     add_with_preset(
         r,
-        PresetAddOwner::Track(track_id),
+        ChainOwner::Track(track_id),
         PresetAddPick {
             plugin,
             preset_id: row.id,
@@ -770,24 +770,24 @@ fn drop_on_track(r: &mut Resonance, track_id: resonance_audio::types::TrackId) -
     )
 }
 
-fn add_with_preset(r: &mut Resonance, owner: PresetAddOwner, pick: PresetAddPick) -> Task<Message> {
+fn add_with_preset(r: &mut Resonance, owner: ChainOwner, pick: PresetAddPick) -> Task<Message> {
     let instance_id = r.allocate_plugin_id();
     let clap_id = pick.plugin.clap_plugin_id.clone();
     let plugin = pick.plugin;
     let message = match owner {
-        PresetAddOwner::Track(track_id) => {
+        ChainOwner::Track(track_id) => {
             Message::Plugin(PluginMessage::AddPluginToTrackWithId {
                 track_id,
                 instance_id,
                 plugin,
             })
         }
-        PresetAddOwner::Bus(bus_id) => Message::Bus(BusMessage::AddPluginToBusWithId {
+        ChainOwner::Bus(bus_id) => Message::Bus(BusMessage::AddPluginToBusWithId {
             bus_id,
             instance_id,
             plugin,
         }),
-        PresetAddOwner::Master => {
+        ChainOwner::Master => {
             Message::Master(MasterMessage::AddPluginToMasterWithId { instance_id, plugin })
         }
     };

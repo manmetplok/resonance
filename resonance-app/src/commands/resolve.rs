@@ -393,8 +393,8 @@ impl CommandId {
             GoToBar => Message::Ui(UiMessage::OpenPalette(crate::palette::PaletteMode::GoToBar)),
             // With nothing open the startup flow picks a folder; with a
             // project open it is a fresh untitled one, as `project.new` does.
-            NewProject if !r.io.has_active_project => Message::Ui(UiMessage::StartNewProject),
-            NewProject => Message::Ui(UiMessage::NewEmptyProject),
+            NewProject if !r.io.has_active_project => Message::ProjectIo(ProjectIoMessage::StartNewProject),
+            NewProject => Message::ProjectIo(ProjectIoMessage::NewEmptyProject),
             OpenProject => Message::ProjectIo(ProjectIoMessage::OpenProject),
             SaveProject => Message::ProjectIo(ProjectIoMessage::SaveProject),
             SaveProjectAs => Message::ProjectIo(ProjectIoMessage::SaveProjectAs),

@@ -21,7 +21,7 @@ use resonance_app::message::{Message, PluginMessage, ProjectIoMessage, TrackMess
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{
+use resonance_audio::types::{ChainOwner, 
     AudioCommand, AudioEvent, ParamInfo, ParamValueUpdate, PluginInstanceId, PluginParamEdit,
     TrackType,
 };
@@ -167,7 +167,7 @@ fn reopen(
     drain(rx);
     app.test_replay_loaded_project(file);
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: PLUGIN,
         plugin_name: "Drums".to_owned(),
         clap_plugin_id: DRUMS_ID.to_owned(),

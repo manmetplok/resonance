@@ -102,6 +102,24 @@ pub enum ProjectIoMessage {
     /// The user's answer to the unsaved-changes dialog a GUI Open / New
     /// raised (code review UX-01).
     SwitchChoice(SwitchChoice),
+    /// User clicked "New Project" in the startup modal.
+    StartNewProject,
+    /// Replace the open project with a fresh, untitled empty one (the New
+    /// Project command). Over unsaved changes it asks first (the
+    /// Save / Don't save / Cancel dialog, code review UX-01); refused while
+    /// a load or save is running, or an offline render owns the engine.
+    NewEmptyProject,
+    /// User confirmed "Save & Quit" in the unsaved-changes dialog.
+    ConfirmSaveAndQuit,
+    /// User confirmed "Discard & Quit" in the unsaved-changes dialog.
+    ConfirmDiscardAndQuit,
+    /// User cancelled the unsaved-changes quit dialog.
+    CancelQuit,
+    /// Switch periodic autosave on/off (persisted in settings, code review
+    /// FU-M12a / ba todo #471).
+    ToggleAutosave,
+    /// Set the autosave interval in seconds (persisted in settings).
+    SetAutosaveInterval(u32),
 }
 
 impl ProjectIoMessage {
@@ -133,7 +151,17 @@ impl ProjectIoMessage {
             | Self::ChordSheetPathSelected(..)
             | Self::RecoveryChoice(..)
             | Self::OpenResolved { .. }
-            | Self::SwitchChoice(..) => UndoAction::Skip,
+            | Self::SwitchChoice(..)
+            // The project lifecycle, the quit dialog and the autosave
+            // settings (moved here from `UiMessage`, ARCH2-12): never a
+            // project edit either.
+            | Self::StartNewProject
+            | Self::NewEmptyProject
+            | Self::ConfirmSaveAndQuit
+            | Self::ConfirmDiscardAndQuit
+            | Self::CancelQuit
+            | Self::ToggleAutosave
+            | Self::SetAutosaveInterval(..) => UndoAction::Skip,
         }
     }
 }
@@ -141,6 +169,49 @@ impl ProjectIoMessage {
 /// Route a `ProjectIoMessage` to the appropriate handler.
 pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
     match m {
+        ProjectIoMessage::StartNewProject => {
+            if r.refuse_project_switch_during_render() {
+                return Task::none();
+            }
+            return dialogs::save_project_as_dialog();
+        }
+        ProjectIoMessage::NewEmptyProject => {
+            if r.io.loading || r.io.saving || r.io.save_state.is_some() {
+                return Task::none();
+            }
+            if r.refuse_project_switch_during_render() {
+                return Task::none();
+            }
+            // Over unsaved changes this asks Save / Don't save / Cancel
+            // rather than refusing (code review UX-01, UX-04).
+            return request_switch(r, ProjectSwitch::NewEmpty);
+        }
+        ProjectIoMessage::ConfirmSaveAndQuit => {
+            let window_id = r.modals.confirm_quit.take();
+            r.modals.quit_after_save = window_id;
+            return r.update(Message::ProjectIo(ProjectIoMessage::SaveProject));
+        }
+        ProjectIoMessage::ConfirmDiscardAndQuit => {
+            if let Some(id) = r.modals.confirm_quit.take() {
+                recovery::close_session(r);
+                r.engine.shutdown(std::time::Duration::from_millis(150));
+                return iced::window::close(id);
+            }
+        }
+        ProjectIoMessage::CancelQuit => {
+            r.modals.confirm_quit = None;
+        }
+        ProjectIoMessage::ToggleAutosave => {
+            let enabled = &mut r.settings.autosave.enabled;
+            *enabled = !*enabled;
+            crate::settings::persist(&r.settings);
+        }
+        ProjectIoMessage::SetAutosaveInterval(secs) => {
+            // The trigger reads the setting on every tick, so the new
+            // spacing applies from the next one.
+            r.settings.autosave.interval_secs = secs.max(1);
+            crate::settings::persist(&r.settings);
+        }
         ProjectIoMessage::BounceToWav => {
             return dialogs::bounce_dialog();
         }
