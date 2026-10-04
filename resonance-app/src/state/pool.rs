@@ -263,7 +263,6 @@ impl MediaPool {
     }
 }
 
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl crate::Resonance {
     /// Recompute the pool's per-asset usage counts from the current
     /// clip set. Called after any pool/clip mutation that could change
@@ -285,16 +284,43 @@ impl crate::Resonance {
 
     /// Remove an asset from the pool, returning it if present, and
     /// refresh usage counts.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn remove_pool_asset(&mut self, id: AssetId) -> Option<PoolAsset> {
         let removed = self.media.pool.remove(id);
         self.recompute_pool_usage();
         removed
     }
 
+    /// The assets "Remove unused" would take out of the pool, in pool
+    /// order: those no clip plays, except one whose relink import is
+    /// running (its result would land on nothing).
+    pub(crate) fn unused_pool_assets(&self) -> Vec<AssetId> {
+        self.media
+            .pool
+            .assets
+            .iter()
+            .filter(|a| self.media.pool.usage_count(a.id) == 0)
+            .filter(|a| !self.media.relink.is_in_flight(a.id))
+            .map(|a| a.id)
+            .collect()
+    }
+
+    /// Take every [unused](Self::unused_pool_assets) asset out of the
+    /// pool and return their ids. The index only: each asset's WAV stays
+    /// in the project's `audio/` folder, so an undo (the pool rides the
+    /// project snapshot) restores the asset exactly, and a reference
+    /// track loaded from one keeps its file.
+    pub(crate) fn remove_unused_pool_assets(&mut self) -> Vec<AssetId> {
+        // Counts are derived; make sure they reflect the clips right now.
+        self.recompute_pool_usage();
+        let unused = self.unused_pool_assets();
+        for &id in &unused {
+            self.remove_pool_asset(id);
+        }
+        unused
+    }
+
     /// Point a clip at a pool asset (or clear its link when `asset_id` is
     /// `None`) and refresh usage counts. No-op if the clip id is unknown.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn relink_clip(&mut self, clip_id: ClipId, asset_id: Option<AssetId>) {
         if let Some(clip) = self.clips.iter_mut().find(|c| c.id == clip_id) {
             clip.asset_ref = asset_id.map(AssetRef::new);

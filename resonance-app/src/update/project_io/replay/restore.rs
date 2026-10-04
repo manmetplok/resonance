@@ -82,7 +82,7 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
 /// edit deleted it — is **kept and flagged**
 /// ([`TakeGroupState::mark_missing`](crate::state::TakeGroupState::mark_missing)),
 /// never dropped, for the same reason
-/// [`restore_pool`] keeps a missing asset: the comp cover references takes
+/// [`restore_pool_assets`] keeps a missing asset: the comp cover references takes
 /// by id, so silently dropping one would leave the comp pointing at a take
 /// that no longer exists and quietly punch a hole in the composite. Doc
 /// #165's acceptance is explicit that no take is ever silently lost.
@@ -281,30 +281,11 @@ pub(crate) fn restore_quantize(r: &mut Resonance, project: &ProjectFile) {
     r.quantize.settings = project.quantize_settings.clone();
 }
 
-/// Restore the media pool from a saved project (doc #175). Wipes the
-/// previous project's assets, then re-adds each persisted asset, marking
-/// it [`PoolAsset::missing`](crate::state::pool::PoolAsset::missing) when
-/// its backing WAV is no longer present in the project's `audio/`
-/// directory — a missing asset is **kept, not dropped**, so its clips
-/// survive offline and can be relinked later. Finally recomputes usage
-/// counts from the clips' asset refs.
-///
-/// `project_dir` is the absolute `.rproj` directory used to resolve each
-/// asset's project-relative WAV path for the existence check.
-///
-/// Favourites and recent folders are *not* touched here: they are
-/// project-independent user state persisted in `settings.json`, loaded
-/// into the pool once at startup.
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-pub(crate) fn restore_pool(
-    r: &mut Resonance,
-    project: &ProjectFile,
-    project_dir: &std::path::Path,
-) {
-    restore_pool_assets(r, project, Some(project_dir), true);
-}
-
-/// [`restore_pool`] for every origin (the `Pool` reconcile domain).
+/// Restore the media pool from a saved project (doc #175), for every
+/// origin (the `Pool` reconcile domain). Wipes the previous project's
+/// assets, re-adds each persisted one — flagged
+/// [`PoolAsset::missing`](crate::state::pool::PoolAsset::missing), kept
+/// not dropped, when its WAV is absent — and recomputes usage.
 /// `project_dir` is `None` for an untitled project on the undo diff path
 /// (which only records with a saved project, so not expected): no asset
 /// is flagged missing then, rather than all of them. `reserve_engine_ids`

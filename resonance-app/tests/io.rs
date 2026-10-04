@@ -83,6 +83,8 @@ mod mixdown_progress_modal;
 mod open_failure_keeps_path;
 #[path = "io/pool_persistence.rs"]
 mod pool_persistence;
+#[path = "io/pool_remove_unused.rs"]
+mod pool_remove_unused;
 #[path = "io/pool_tab_rendering.rs"]
 mod pool_tab_rendering;
 #[path = "io/project_atomic_write.rs"]
@@ -101,6 +103,8 @@ mod reference_disk_round_trip;
 mod reference_echo_races;
 #[path = "io/relink.rs"]
 mod relink;
+#[path = "io/relink_clip.rs"]
+mod relink_clip;
 #[path = "io/relink_folder_scan.rs"]
 mod relink_folder_scan;
 #[path = "io/relink_modal.rs"]

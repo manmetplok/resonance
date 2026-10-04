@@ -74,7 +74,6 @@ pub(crate) struct CompRibbonHit {
     pub band_height: f32,
 }
 
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl TimelineCanvas<'_> {
     /// The take sub-row under a canvas-space `y`, as
     /// `(track, group, take, row_y, row_height)` in screen space.
@@ -148,7 +147,7 @@ impl TimelineCanvas<'_> {
     /// draw pass paints it **after** the clips. The press handler must
     /// therefore consult this *before* clip hit-testing or the two would
     /// disagree about which one is on top.
-    pub(in crate::view::timeline) fn comp_ribbon_at_in(
+    pub(crate) fn comp_ribbon_at_in(
         &self,
         layout: &ArrangeRowLayout,
         pos: Point,
@@ -184,14 +183,6 @@ impl TimelineCanvas<'_> {
             })
     }
 
-    /// The comp ribbon under `pos`.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-    pub(crate) fn comp_ribbon_at(&self, pos: Point) -> Option<CompRibbonHit> {
-        if self.take_groups.groups.is_empty() {
-            return None;
-        }
-        self.comp_ribbon_at_in(&self.arrange_layout(), pos)
-    }
 
     /// The promote request a drag from `from_x` to `to_x` names, in raw
     /// timeline frames.

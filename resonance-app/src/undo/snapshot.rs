@@ -45,7 +45,6 @@ pub struct UndoSnapshot {
 /// A plugin state filled in after the snapshot that holds it.
 pub(crate) type LateBlob = Arc<std::sync::Mutex<Option<Arc<[u8]>>>>;
 
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl UndoSnapshot {
     /// A snapshot of `project` with no late plugin states.
     pub fn new(project: LoadedProject) -> Self {
@@ -53,29 +52,6 @@ impl UndoSnapshot {
             project,
             late_plugin_states: Vec::new(),
         }
-    }
-
-    /// True when `self` and `other` describe the same undoable state — the
-    /// check that tells a gesture that edited something from a click that
-    /// moved nothing (code review STATE-07). Compares every captured part:
-    /// the project file by its derived `PartialEq` (ARCH-01 A-8 — the whole
-    /// tree derives it now, so this is a plain struct compare; map-valued
-    /// fields compare order-independently the same way the old
-    /// `serde_json` compare did through its key-sorted objects), and notes
-    /// field by field. Nothing else is captured.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-    pub(crate) fn same_state(&self, other: &UndoSnapshot) -> bool {
-        let notes_equal = self.project.midi_notes.len() == other.project.midi_notes.len()
-            && self.project.midi_notes.iter().all(|(id, notes)| {
-                other.project.midi_notes.get(id).is_some_and(|o| {
-                    // A clip nothing touched between the two snapshots
-                    // shares the same `Arc` (ARCH-09 A9-3) — check that
-                    // before the element-wise compare.
-                    Arc::ptr_eq(notes, o)
-                        || crate::update::project_io::replay_diff::midi_notes_equal(notes, o)
-                })
-            });
-        notes_equal && self.project.file == other.project.file
     }
 }
 
@@ -203,7 +179,6 @@ pub enum ChordParamKnob {
 // Resonance snapshot-building and restore methods
 // -------------------------------------------------------------------------
 
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl crate::Resonance {
     /// Build an undo snapshot of the current declarative project state.
     ///
@@ -306,7 +281,8 @@ impl crate::Resonance {
     /// snapshot: the notes are compared in place against `midi_clips`,
     /// and only the `ProjectFile` is rebuilt for the struct comparison —
     /// no note vectors, plugin blobs or project path are copied. Same
-    /// verdict as `before.same_state(&self.snapshot_for_undo())`, cheaper.
+    /// verdict as comparing `before` with a fresh `snapshot_for_undo()`,
+    /// cheaper.
     pub(crate) fn gesture_changed_since(&self, before: &UndoSnapshot) -> bool {
         let notes_equal = before.project.midi_notes.len() == self.midi_clips.len()
             && self.midi_clips.iter().all(|mc| {
@@ -401,25 +377,15 @@ impl crate::Resonance {
     /// `TakeCompChanged` / `ActiveTakeChanged` per group on every history
     /// step, and `RestoreTakeGroups` was deliberately made silent so a
     /// restore does not come up dirty.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-    pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
-        let current = crate::update::build_project_file(self);
-        self.restore_from_snapshot_against(&current, snapshot);
-    }
-
-    /// The body of [`Self::begin_restore_from_snapshot`], taking the live
-    /// `ProjectFile` to diff against as a parameter rather than building it.
     ///
-    /// `try_undo` / `try_redo` already build one — `snapshot_for_undo`, for
-    /// the entry pushed onto the other stack — before calling this, and
-    /// nothing mutates `self`'s project state in between (only the undo
-    /// history's own bookkeeping), so that file is still exactly the live
-    /// state. Calling through [`Self::begin_restore_from_snapshot`] instead
-    /// would rebuild an identical one (FU-A13k: ~0.3 ms debug on the demo
-    /// project, once per history step); this lets them pass the one they
-    /// already have. `test_begin_restore_from_snapshot` has no such file in
-    /// hand, so it goes through the building wrapper above instead.
-    fn restore_from_snapshot_against(
+    /// `current` is the live `ProjectFile` to diff against. `try_undo` /
+    /// `try_redo` already build one — `snapshot_for_undo`, for the entry
+    /// pushed onto the other stack — and nothing mutates `self`'s project
+    /// state in between (only the undo history's own bookkeeping), so they
+    /// pass it in rather than rebuilding an identical one (FU-A13k: ~0.3 ms
+    /// debug on the demo project, once per history step).
+    /// `test_begin_restore_from_snapshot` builds it first.
+    pub(crate) fn restore_from_snapshot_against(
         &mut self,
         current: &crate::project::ProjectFile,
         snapshot: UndoSnapshot,

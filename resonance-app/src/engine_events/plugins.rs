@@ -971,6 +971,16 @@ pub(super) fn param_values_changed(
     instance_id: PluginInstanceId,
     values: Vec<resonance_audio::types::ParamValueUpdate>,
 ) {
+    // A rescan while the plugin's own editor is open is the user acting
+    // there (a preset loaded from its preset bar, an edit it never
+    // announced): on a frozen track it outdates the cache. A rescan with
+    // the editor closed follows a load the host started, whose values
+    // were refused or gated already, and must not stale a freshly
+    // reloaded freeze.
+    let editor_open = r.plugin_slot(instance_id).is_some_and(|s| s.editor_open);
+    let frozen_params = editor_open
+        .then(|| r.watch_frozen_params(instance_id))
+        .flatten();
     let (drums, to_multi) = r
         .with_plugin_mut(instance_id, |slot| {
             let was = crate::drums_mirror::routes_to_ports(slot);
@@ -984,6 +994,7 @@ pub(super) fn param_values_changed(
             (crate::drums_mirror::is_drums(slot), !was && now)
         })
         .unwrap_or((false, false));
+    r.settle_frozen_params(frozen_params);
     if drums {
         // `kit_select`'s text names the kit the picker shows, and a state
         // load may have moved `output_mode` (a v1 state loads as Multi).

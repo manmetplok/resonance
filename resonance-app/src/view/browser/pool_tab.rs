@@ -47,8 +47,79 @@ pub(super) fn pool_body<'a>(r: &'a Resonance) -> Element<'a, Message> {
         let usage = r.media.pool.usage_count(asset.id);
         list = list.push(pool_asset_row(asset, usage, sample_rate));
     }
+    let list = scrollable(list).height(Length::Fill);
 
-    scrollable(list).height(Length::Fill).into()
+    match remove_unused_bar(r) {
+        Some(bar) => column![bar, Space::new().height(8), list].spacing(0).into(),
+        None => list.into(),
+    }
+}
+
+/// The "Remove unused" action above the asset list, shown only while some
+/// asset is unused. A first click asks inline ("Remove N unused assets?")
+/// and the second confirms, so a stray click never empties the pool; the
+/// removal itself is one undo step and leaves every WAV in `audio/`.
+fn remove_unused_bar(r: &Resonance) -> Option<Element<'_, Message>> {
+    let count = r.unused_pool_assets().len();
+    if count == 0 {
+        return None;
+    }
+    let noun = if count == 1 { "asset" } else { "assets" };
+    let small = |label: String, color: Color| {
+        text(label)
+            .size(10)
+            .font(theme::UI_FONT_MEDIUM)
+            .color(color)
+            .line_height(LineHeight::Relative(1.0))
+    };
+    let action = |label: &'static str, color: Color, msg: Message| {
+        button(small(label.to_string(), color))
+            .on_press(msg)
+            .padding([3, 8])
+            .style(|_theme, status| super::style::pill_button_style(status))
+    };
+
+    let bar: Element<'_, Message> = if r.media.browser.confirm_remove_unused {
+        column![
+            small(format!("Remove {count} unused {noun} from the pool?"), theme::TEXT_1),
+            Space::new().height(4),
+            small(
+                "Files stay in the project folder; Undo restores them.".to_string(),
+                theme::TEXT_3,
+            ),
+            Space::new().height(6),
+            row![
+                action(
+                    "Remove",
+                    theme::BAD,
+                    Message::Pool(PoolMessage::RemoveUnusedAssets),
+                ),
+                Space::new().width(6),
+                action(
+                    "Cancel",
+                    theme::TEXT_2,
+                    Message::Pool(PoolMessage::ConfirmRemoveUnused(false)),
+                ),
+            ]
+            .spacing(0),
+        ]
+        .spacing(0)
+        .into()
+    } else {
+        row![
+            small(format!("{count} unused"), theme::TEXT_3),
+            Space::new().width(Length::Fill),
+            action(
+                "Remove unused",
+                theme::TEXT_2,
+                Message::Pool(PoolMessage::ConfirmRemoveUnused(true)),
+            ),
+        ]
+        .align_y(alignment::Vertical::Center)
+        .spacing(0)
+        .into()
+    };
+    Some(bar)
 }
 
 /// One pool-asset row. Layout (left → right):

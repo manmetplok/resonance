@@ -6,14 +6,14 @@
 
 pub(crate) mod automation;
 mod bus_strip;
-mod group_strip;
+pub(crate) mod group_strip;
 pub(crate) mod inspector;
 mod master_strip;
 pub(crate) mod picks;
 mod reference_panel;
 pub(crate) mod reorder;
 mod strip_fingerprint;
-mod strip_parts;
+pub(crate) mod strip_parts;
 mod track_strip;
 
 use iced::widget::{button, column, container, row, scrollable, text, Space};
@@ -24,10 +24,6 @@ use crate::message::*;
 use crate::state::*;
 use crate::theme;
 
-#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
-pub(crate) use group_strip::MixerTopItem;
-#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
-pub(crate) use strip_parts::slot_line_label;
 
 impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {

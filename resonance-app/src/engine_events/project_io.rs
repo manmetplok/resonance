@@ -288,10 +288,8 @@ pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
         // locate them (doc #175, todo #607). An undo/redo does not come
         // here — reopening the modal on every history step would be
         // noise.
-        if r.media.pool.has_missing() {
-            let targets: Vec<resonance_audio::types::AssetId> =
-                r.media.pool.missing_assets().map(|a| a.id).collect();
-            r.media.relink.open_modal(targets);
+        if r.media.pool.has_missing() || r.has_missing_clips() {
+            crate::update::relink::open_relink_modal(r);
         }
 
         // A control-initiated `project.new` (doc #265, todo #1151)

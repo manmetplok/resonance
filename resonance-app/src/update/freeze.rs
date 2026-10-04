@@ -25,9 +25,7 @@ use std::path::{Path, PathBuf};
 
 use iced::Task;
 use resonance_audio::types::{AudioCommand, TrackId, TrackType};
-use resonance_common::{
-    compute_fingerprint, FreezeCacheStatus, FreezeFingerprintBuilder, TrackFreezeState,
-};
+use resonance_common::{FreezeCacheStatus, TrackFreezeState};
 
 use crate::message::Message;
 use crate::state::{FreezeQueue, FreezeStatus, MidiClipState, TrackState};
@@ -628,11 +626,27 @@ impl Resonance {
 // those inputs and, when the track is frozen, routes it here instead of
 // dispatching it: the edit never mutates state or enters the undo stack,
 // it just flips the freeze to `Stale` so the UI can offer a refreeze
-// (banner is the UI todo). Mixer controls (volume / pan / mute / solo /
-// routing / sends) are *not* freeze inputs, so they never reach this path
-// and stay fully live.
+// (the freeze banner offers it). Mixer controls (volume / pan / mute /
+// solo / routing / sends) are *not* freeze inputs, so they never reach
+// this path and stay fully live.
+//
+// Two checks catch what the gate cannot refuse:
+//
+// - Arrangement content (UPD-05): compose regeneration, bar shifts, tempo
+//   and meter edits, engine echoes. `freeze_content_fingerprint` is
+//   baselined when a cache becomes valid and compared after every
+//   dispatch (`revalidate_frozen_content`).
+// - Params the plugin moved itself (W4): an edit announced from its own
+//   editor, or a values rescan while that editor is open (a preset from
+//   its preset bar). `freeze_param_fingerprint` is compared around just
+//   that update (`watch_frozen_params` / `settle_frozen_params`); it has
+//   no standing baseline, because params arrive asynchronously after a
+//   load.
+//
+// None of these compare against the engine's
+// `FreezeCacheRef::render_fingerprint`: the engine hashes its own view
+// (instance ids, resolved lanes), which the app cannot reproduce.
 
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl Resonance {
     /// Invalidate a frozen track to [`FreezeStatus::Stale`], keeping the
     /// (now-outdated) cache attached so playback still works until the user
@@ -653,91 +667,69 @@ impl Resonance {
         }
     }
 
-    /// Recompute the resonance-common input fingerprint over a track's
-    /// current frozen inputs (notes, lyrics, plugin params, instrument
-    /// selection). Returns `None` when the track no longer exists. The
-    /// fingerprint is order-stable: clips and plugins are folded in a fixed
-    /// order so reshuffling the backing `Vec`s never changes the hash.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-    pub(crate) fn compute_track_freeze_fingerprint(&self, track_id: TrackId) -> Option<u64> {
+    /// Fingerprint of the plugin side of a track's frozen inputs: the
+    /// chain (plugin ids in slot order, so a swap or reorder counts), each
+    /// slot's bypass, every writable param value, and the FX-bypass flag.
+    /// Read-only outputs (a load progress, a meter) move on their own and
+    /// are left out. `None` when the track is gone.
+    ///
+    /// Not part of [`Self::freeze_content_fingerprint`]: params arrive
+    /// asynchronously after a load, so a standing baseline would read
+    /// their arrival as an edit. It is compared instead around the mirror
+    /// updates that can move a frozen track's params without passing the
+    /// pre-dispatch gate — the plugin changing them itself
+    /// ([`Self::watch_frozen_params`]).
+    pub(crate) fn freeze_param_fingerprint(&self, track_id: TrackId) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
         let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
-
-        // Notes + lyrics: every MIDI clip bound to this track, in clip-id
-        // order so the backing Vec's order can't perturb the hash.
-        let mut clips: Vec<&MidiClipState> = self
-            .midi_clips
-            .iter()
-            .filter(|c| c.track_id == track_id)
-            .collect();
-        clips.sort_by_key(|c| c.id);
-
-        let mut notes = Vec::new();
-        let mut lyrics = Vec::new();
-        for clip in clips {
-            notes.extend_from_slice(&clip.id.to_le_bytes());
-            notes.extend_from_slice(&clip.start_sample.to_le_bytes());
-            notes.extend_from_slice(&clip.duration_ticks.to_le_bytes());
-            notes.extend_from_slice(&clip.trim_start_ticks.to_le_bytes());
-            notes.extend_from_slice(&clip.trim_end_ticks.to_le_bytes());
-            for n in clip.notes.iter() {
-                notes.push(n.note);
-                notes.extend_from_slice(&n.velocity.to_bits().to_le_bytes());
-                notes.extend_from_slice(&n.start_tick.to_le_bytes());
-                notes.extend_from_slice(&n.duration_ticks.to_le_bytes());
-            }
-            if let Some(clip_lyrics) = self.compose.vocal_audio.clip_lyrics.get(&clip.id) {
-                for syllable in clip_lyrics {
-                    lyrics.extend_from_slice(syllable.as_bytes());
-                    lyrics.push(0); // NUL-separate syllables so "a","b" ≠ "ab"
-                }
-            }
-        }
-
-        // Plugin params + instrument selection: the whole chain in slot
-        // order, plus the FX-bypass flag (it changes the post-FX render
-        // that freeze captured).
-        let mut plugin_params = Vec::new();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
         for slot in &track.plugins {
-            plugin_params.extend_from_slice(slot.clap_plugin_id.as_bytes());
-            plugin_params.push(0);
-            // A read-only output (a load progress, a meter) moves on its
-            // own and says nothing about the sound the cache holds.
+            slot.clap_plugin_id.hash(&mut h);
+            slot.bypassed.hash(&mut h);
             for p in slot.params.iter().filter(|p| !p.read_only) {
-                plugin_params.extend_from_slice(&p.id.to_le_bytes());
-                plugin_params.extend_from_slice(&p.current_value.to_bits().to_le_bytes());
+                p.id.hash(&mut h);
+                p.current_value.to_bits().hash(&mut h);
             }
         }
-        plugin_params.push(track.fx_bypassed as u8);
-
-        // The instrument is the chain's first plugin (slot 0 on an
-        // instrument/vocal track); empty when the track has no synth yet.
-        let instrument_id = track
-            .plugins
-            .first()
-            .map(|p| p.clap_plugin_id.clone())
-            .unwrap_or_default();
-
-        let inputs = FreezeFingerprintBuilder::new()
-            .with_notes(notes)
-            .with_lyrics(lyrics)
-            .with_plugin_params(plugin_params)
-            .with_instrument_id(instrument_id)
-            .build();
-        Some(compute_fingerprint(&inputs))
+        track.fx_bypassed.hash(&mut h);
+        Some(h.finish())
     }
 
-    /// Whether a frozen track's current inputs no longer match the
-    /// fingerprint captured when its cache was rendered. `false` when the
-    /// track isn't frozen (no cache to compare against) or the recompute
-    /// fails.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-    pub(crate) fn freeze_inputs_changed(&self, track_id: TrackId) -> bool {
-        let Some(cache_ref) = self.freeze.status(track_id).cache_ref().cloned() else {
+    /// Before a mirror update that bypasses the pre-dispatch gate — a
+    /// param the plugin changed itself (`ParamEditedByPlugin`), or a values
+    /// rescan while its editor is open (a preset loaded from the plugin's
+    /// own preset bar) — note the plugin's track and its param fingerprint
+    /// if that track is `Frozen`. Hand the result to
+    /// [`Self::settle_frozen_params`] after the update. `None` (nothing to
+    /// check) for a plugin on a bus or the master, or on a track that isn't
+    /// frozen, so the common case costs one map lookup.
+    pub(crate) fn watch_frozen_params(
+        &self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+    ) -> Option<(TrackId, u64)> {
+        let track_id = self.track_of_plugin(instance_id)?;
+        if !matches!(self.freeze.status(track_id), FreezeStatus::Frozen { .. }) {
+            return None;
+        }
+        Some((track_id, self.freeze_param_fingerprint(track_id)?))
+    }
+
+    /// After the update [`Self::watch_frozen_params`] watched: when the
+    /// track's params moved, the cache no longer holds what the chain
+    /// plays, so mark it `Stale`. A no-op rescan, or an edit to the value
+    /// the param already had, leaves it `Frozen`. Returns whether it went
+    /// stale.
+    pub(crate) fn settle_frozen_params(&mut self, watch: Option<(TrackId, u64)>) -> bool {
+        let Some((track_id, before)) = watch else {
             return false;
         };
-        match self.compute_track_freeze_fingerprint(track_id) {
-            Some(fingerprint) => fingerprint != cache_ref.render_fingerprint,
-            None => false,
+        if self
+            .freeze_param_fingerprint(track_id)
+            .is_some_and(|after| after != before)
+        {
+            self.invalidate_frozen_track(track_id)
+        } else {
+            false
         }
     }
 
@@ -871,23 +863,6 @@ impl Resonance {
             {
                 self.invalidate_frozen_track(track_id);
             }
-        }
-    }
-
-    /// Recompute the input fingerprint to *confirm* staleness on a suspected
-    /// change: if a still-`Frozen` track's inputs have drifted from the
-    /// rendered cache, downgrade it to `Stale`. Returns `true` when it
-    /// transitioned. Unlike [`invalidate_frozen_track`] (which trusts the
-    /// caller that a change happened), this verifies via the fingerprint, so
-    /// it's safe to call on changes that may turn out to be no-ops.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-    pub(crate) fn revalidate_frozen_track(&mut self, track_id: TrackId) -> bool {
-        if matches!(self.freeze.status(track_id), FreezeStatus::Frozen { .. })
-            && self.freeze_inputs_changed(track_id)
-        {
-            self.invalidate_frozen_track(track_id)
-        } else {
-            false
         }
     }
 }

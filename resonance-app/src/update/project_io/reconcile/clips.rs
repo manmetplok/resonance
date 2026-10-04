@@ -105,6 +105,7 @@ impl Reconcile for AudioClips {
     fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
         let Some(old) = old else {
             r.clips.clear();
+            r.media.relink.missing_clips.clear();
             let dir = project_dir(ctx);
             for pc in &new.clips {
                 load_audio_clip(r, pc, dir);
@@ -126,11 +127,20 @@ impl Reconcile for AudioClips {
 }
 
 fn load_audio_clip(r: &mut Resonance, pc: &ProjectClip, dir: &Path) {
+    // A clip whose own WAV is gone (the project moved without `audio/`)
+    // stays in the timeline, silent; the relink modal offers to locate
+    // it (W4). Only meaningful with a project folder to look in.
+    let wav = dir.join(&pc.audio_file);
+    if !dir.as_os_str().is_empty() && !wav.exists() {
+        r.media.relink.missing_clips.insert(pc.id);
+    } else {
+        r.media.relink.missing_clips.remove(&pc.id);
+    }
     let _ = r.engine.send(AudioCommand::LoadClipFromWav {
         clip_id: pc.id,
         track_id: pc.track_id,
         start_sample: pc.start_sample,
-        path: dir.join(&pc.audio_file),
+        path: wav,
         name: pc.name.clone(),
         trim_start_frames: pc.trim_start_frames,
         trim_end_frames: pc.trim_end_frames,

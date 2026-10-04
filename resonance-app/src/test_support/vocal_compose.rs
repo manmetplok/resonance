@@ -356,7 +356,7 @@ impl Resonance {
     /// constructing a whole `LoadedProject`.
     #[doc(hidden)]
     pub fn test_restore_references(&mut self, file: &crate::project::ProjectFile) {
-        crate::update::project_io::restore_references(self, file);
+        crate::update::project_io::replay::restore_references(self, file);
     }
 
     /// Test-only: replay the compose tab (section definitions + placements,
@@ -370,7 +370,7 @@ impl Resonance {
     pub fn test_replay_compose(&mut self, file: &crate::project::ProjectFile) {
         self.compose
             .load_from_project(&file.section_definitions, &file.section_placements);
-        crate::update::project_io::restore_drum_patterns(&mut self.compose, file, false);
+        crate::update::project_io::replay::restore_drum_patterns(&mut self.compose, file, false);
     }
 
     /// Test-only: read the project's quantize state (groove library +
@@ -392,7 +392,7 @@ impl Resonance {
     /// restore path a full project load runs (ba todo #395).
     #[doc(hidden)]
     pub fn test_restore_quantize(&mut self, file: &crate::project::ProjectFile) {
-        crate::update::project_io::restore_quantize(self, file);
+        crate::update::project_io::replay::restore_quantize(self, file);
     }
 
     /// Test-only: overwrite a MIDI clip's per-note lyric side-table, as

@@ -2,7 +2,7 @@
 //! #600).
 //!
 //! When a project is loaded whose media pool references a WAV that is no
-//! longer on disk, `restore_pool` keeps that asset — flagged
+//! longer on disk, `restore_pool_assets` keeps that asset — flagged
 //! [`missing`](crate::state::pool::PoolAsset::missing) — so its clips stay
 //! intact (offline). These handlers resolve the file again:
 //!
@@ -38,7 +38,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use iced::Task;
-use resonance_audio::types::{AssetId, AudioCommand};
+use resonance_audio::types::{AssetId, AudioCommand, ClipId};
 use resonance_audio::PoolImportOutcome;
 
 use crate::message::Message;
@@ -102,6 +102,20 @@ pub enum RelinkMessage {
     /// tracked clips stay offline until relinked later. Presentational
     /// only — never undoable.
     DismissModal,
+    /// Open the OS file picker to locate a replacement for one audio clip
+    /// whose own WAV is missing (the modal's per-clip `Locate…`, W4). Such
+    /// a clip is not tied to a missing pool asset — a recorded take, a
+    /// bounce, a clip whose `audio/` copy was lost — so it is relinked by
+    /// itself.
+    LocateClip(ClipId),
+    /// File-picker result for [`LocateClip`](Self::LocateClip): `Some`
+    /// with the chosen path, or `None` if the user cancelled.
+    ClipLocated(ClipId, Option<std::path::PathBuf>),
+    /// The background import of a clip's replacement finished. `Ok`
+    /// carries the new pool asset (copied into the project folder under a
+    /// fresh id); the clip is pointed at it and reloaded. `Err` carries
+    /// the reason.
+    ClipImported(ClipId, Result<PoolImportOutcome, RelinkError>),
 }
 
 impl RelinkMessage {
@@ -119,6 +133,11 @@ impl RelinkMessage {
             Self::Imported(Ok(_)) => UndoAction::Record,
             // `Imported(Err)` only sets a transient error string.
             Self::Imported(Err(_)) => UndoAction::Skip,
+            // A clip relink adds its new asset to the pool and points the
+            // clip at it: one undoable edit, recorded on the applied
+            // outcome just like an asset relink.
+            Self::ClipImported(_, Ok(_)) => UndoAction::Record,
+            Self::ClipImported(_, Err(_)) => UndoAction::Skip,
             // Opening the OS picker, its cancel results, and starting the
             // background import are transient — they mutate no project state.
             Self::Locate(..)
@@ -128,7 +147,9 @@ impl RelinkMessage {
             | Self::ScanFinished(..)
             | Self::CancelScan
             | Self::ShowModal
-            | Self::DismissModal => UndoAction::Skip,
+            | Self::DismissModal
+            | Self::LocateClip(..)
+            | Self::ClipLocated(..) => UndoAction::Skip,
         }
     }
 }
@@ -159,16 +180,162 @@ pub fn handle(r: &mut Resonance, m: RelinkMessage) -> Task<Message> {
         RelinkMessage::ScanFinished(token, found) => return finish_batch_relink(r, token, found),
         RelinkMessage::CancelScan => r.media.relink.cancel_scan(),
         RelinkMessage::Imported(result) => apply_import(r, result),
-        RelinkMessage::ShowModal => {
-            // Snapshot the currently-missing assets so the modal can show
-            // just-relinked rows as resolved instead of making them vanish.
-            let targets: Vec<resonance_audio::types::AssetId> =
-                r.media.pool.missing_assets().map(|a| a.id).collect();
-            r.media.relink.open_modal(targets);
-        }
+        RelinkMessage::ShowModal => open_relink_modal(r),
         RelinkMessage::DismissModal => r.media.relink.close_modal(),
+        RelinkMessage::LocateClip(clip_id) => return locate_clip_dialog(clip_id),
+        RelinkMessage::ClipLocated(clip_id, picked) => {
+            if let Some(path) = picked {
+                return start_clip_relink(r, clip_id, path);
+            }
+        }
+        RelinkMessage::ClipImported(clip_id, result) => apply_clip_import(r, clip_id, result),
     }
     Task::none()
+}
+
+/// Open the relink modal over everything missing right now: the missing
+/// pool assets and the missing clips. Snapshotting them lets the modal
+/// show just-relinked rows as resolved instead of making them vanish.
+pub(crate) fn open_relink_modal(r: &mut Resonance) {
+    let targets: Vec<AssetId> = r.media.pool.missing_assets().map(|a| a.id).collect();
+    let clip_targets = r.missing_clips();
+    r.media.relink.open_modal(targets);
+    r.media.relink.modal_clip_targets = clip_targets;
+}
+
+impl Resonance {
+    /// The audio clips whose WAV was missing at load and that are still in
+    /// the project, in id order.
+    pub(crate) fn missing_clips(&self) -> Vec<ClipId> {
+        self.media
+            .relink
+            .missing_clips
+            .iter()
+            .copied()
+            .filter(|id| self.clips.iter().any(|c| c.id == *id))
+            .collect()
+    }
+
+    /// Whether any clip in the project is missing its WAV.
+    pub(crate) fn has_missing_clips(&self) -> bool {
+        self.media
+            .relink
+            .missing_clips
+            .iter()
+            .any(|id| self.clips.iter().any(|c| c.id == *id))
+    }
+}
+
+/// Open the OS file picker to locate a replacement for one missing clip.
+/// The chosen path (or `None`) returns as [`RelinkMessage::ClipLocated`].
+fn locate_clip_dialog(clip_id: ClipId) -> Task<Message> {
+    Task::perform(
+        async move {
+            rfd::AsyncFileDialog::new()
+                .set_title("Locate Missing Clip Audio")
+                .add_filter("Audio", RELINK_AUDIO_EXTENSIONS)
+                .pick_file()
+                .await
+                .map(|f| f.path().to_path_buf())
+        },
+        move |picked| Message::Relink(RelinkMessage::ClipLocated(clip_id, picked)),
+    )
+}
+
+/// Kick off the import of `src_path` as the replacement for a missing
+/// clip: it becomes a new pool asset (a fresh id from the app's allocator,
+/// copied and transcoded into `audio/` like any import). No-op for a clip
+/// that is gone, no longer missing, already relinking, or when the
+/// project has no folder.
+pub(crate) fn start_clip_relink(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    src_path: PathBuf,
+) -> Task<Message> {
+    if !r.media.relink.missing_clips.contains(&clip_id)
+        || !r.clips.iter().any(|c| c.id == clip_id)
+        || r.media.relink.is_clip_in_flight(clip_id)
+    {
+        return Task::none();
+    }
+    let Some(project_dir) = r.io.project_path.clone() else {
+        r.media.relink.last_error =
+            Some("Cannot relink: the project has not been saved to a folder yet.".into());
+        return Task::none();
+    };
+    let asset_id = r.media.ids.assets.allocate();
+    r.media.relink.clips_in_flight.insert(clip_id);
+    r.media.relink.last_error = None;
+    spawn_import(asset_id, src_path, project_dir, r.sample_rate)
+        .map(move |message| match message {
+            Message::Relink(RelinkMessage::Imported(result)) => {
+                Message::Relink(RelinkMessage::ClipImported(clip_id, result))
+            }
+            other => other,
+        })
+}
+
+/// Apply a clip relink's import: add the new asset to the pool, point the
+/// clip at it ([`Resonance::relink_clip`]) and reload the clip from the
+/// asset's WAV with its own placement, trims and id, so it sounds again.
+/// Trims the new file cannot honour are dropped. On failure, surface it.
+fn apply_clip_import(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    result: Result<PoolImportOutcome, RelinkError>,
+) {
+    r.media.relink.clips_in_flight.remove(&clip_id);
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            r.media.relink.last_error =
+                Some(format!("Relink failed for {}: {}", err.path, err.reason));
+            return;
+        }
+    };
+    // The clip went while the import ran (deleted, undone away): leave
+    // the pool alone; the WAV in `audio/` is harmless.
+    if !r.clips.iter().any(|c| c.id == clip_id) {
+        return;
+    }
+    let Some(project_dir) = r.io.project_path.clone() else {
+        return;
+    };
+    let wav_path = project_dir.join(&outcome.project_relative_path);
+    let asset_id = outcome.asset_id;
+    let frames = outcome.duration_frames;
+    r.add_pool_asset(PoolAsset {
+        id: asset_id,
+        project_relative_path: outcome.project_relative_path,
+        original_path: outcome.original_path,
+        format: outcome.format,
+        channels: outcome.channels,
+        source_sample_rate: outcome.source_sample_rate,
+        duration_frames: frames,
+        thumbnail_peaks: outcome.peaks,
+        missing: false,
+    });
+    r.relink_clip(clip_id, Some(asset_id));
+    let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) else {
+        return;
+    };
+    if clip.trim_start_frames + clip.trim_end_frames >= frames {
+        clip.trim_start_frames = 0;
+        clip.trim_end_frames = 0;
+    }
+    clip.total_frames = frames;
+    clip.duration_samples = frames - clip.trim_start_frames - clip.trim_end_frames;
+    let cmd = AudioCommand::LoadClipFromWav {
+        clip_id,
+        track_id: clip.track_id,
+        start_sample: clip.start_sample,
+        path: wav_path,
+        name: clip.name.clone(),
+        trim_start_frames: clip.trim_start_frames,
+        trim_end_frames: clip.trim_end_frames,
+    };
+    let _ = r.engine.send(cmd);
+    r.media.relink.missing_clips.remove(&clip_id);
 }
 
 /// Audio container extensions a relink source may use — the same set the

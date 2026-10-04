@@ -390,8 +390,9 @@ fn plugin_edit_target(
     match m {
         SetPluginParam(instance_id, ..) => r.track_of_plugin(*instance_id),
         // Already done, in the plugin: there is no edit left to refuse,
-        // only a mirror to keep honest (the freeze fingerprint, which
-        // hashes the mirror, notices the change).
+        // only a mirror to keep honest. `update_inner` compares the
+        // track's param fingerprint around it and marks a frozen track
+        // stale when the edit moved something (`watch_frozen_params`).
         ParamEditedByPlugin { .. } => None,
         // A preset recall moves parameters, so it changes the rendered
         // signal exactly as the individual writes it replaces would.
@@ -508,7 +509,7 @@ impl crate::Resonance {
     /// `plugin_mirror.index` side-table, falling back to a scan so a
     /// desynced index degrades to O(n) instead of a miss (mirrors
     /// `with_plugin_mut`).
-    fn track_of_plugin(
+    pub(crate) fn track_of_plugin(
         &self,
         instance_id: resonance_audio::types::PluginInstanceId,
     ) -> Option<resonance_audio::types::TrackId> {

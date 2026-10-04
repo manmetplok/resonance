@@ -179,17 +179,10 @@ pub(crate) struct IdCounter {
     next: u64,
 }
 
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl IdCounter {
     /// A counter that will hand out `start` first.
     pub(crate) const fn starting_at(start: u64) -> Self {
         Self { next: start }
-    }
-
-    /// The id [`Self::allocate`] would hand out next, without taking it.
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-    pub(crate) const fn peek(&self) -> u64 {
-        self.next
     }
 
     /// Hand out the next id and advance past it.

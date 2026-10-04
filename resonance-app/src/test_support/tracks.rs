@@ -50,7 +50,7 @@ impl Resonance {
     /// asserted without parsing the rendered widget tree.
     #[doc(hidden)]
     pub fn test_mixer_top_level(&self) -> Vec<(bool, resonance_audio::types::TrackId)> {
-        use crate::view::mixer::MixerTopItem;
+        use crate::view::mixer::group_strip::MixerTopItem;
         self.mixer_top_level_items()
             .into_iter()
             .map(|item| match item {

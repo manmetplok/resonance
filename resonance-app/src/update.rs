@@ -161,6 +161,15 @@ impl crate::Resonance {
                 return Task::none();
             }
         }
+        // A param the plugin changed itself has already happened, so the
+        // gate above lets it through to keep the mirror honest; it still
+        // changes what a frozen track's cache was rendered from.
+        let frozen_params = match &message {
+            Message::Plugin(PluginMessage::ParamEditedByPlugin { instance_id, .. }) => {
+                self.watch_frozen_params(*instance_id)
+            }
+            _ => None,
+        };
         let commit_after = self.record_undo(&message);
         // A signature change re-measures every section; its chords are
         // revalidated against the new length in the same dispatch
@@ -175,6 +184,7 @@ impl crate::Resonance {
         if commit_after {
             self.commit_undo_gesture();
         }
+        self.settle_frozen_params(frozen_params);
         // Compose regeneration, bar shifts, tempo edits and engine echoes
         // (drained on Tick) reshape a frozen track's content without
         // passing the gate above (code review UPD-05).

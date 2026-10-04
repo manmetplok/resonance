@@ -158,7 +158,7 @@ impl Resonance {
     /// restore path a full project load runs (ba todo #312).
     #[doc(hidden)]
     pub fn test_restore_performance(&mut self, file: &crate::project::ProjectFile) {
-        crate::update::project_io::restore_performance(self, file);
+        crate::update::project_io::replay::restore_performance(self, file);
     }
 
     /// Test-only: force the transport's recording flag so a test can render

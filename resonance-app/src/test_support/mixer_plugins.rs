@@ -267,7 +267,11 @@ impl Resonance {
     /// nothing to build an app for.
     #[doc(hidden)]
     pub fn test_strip_plugin_label(plugin_name: &str, missing: bool) -> String {
-        crate::view::mixer::slot_line_label(plugin_name, missing)
+        crate::view::mixer::strip_parts::slot_line_label_in(
+            plugin_name,
+            missing,
+            crate::theme::MIXER_SLOT_LINE_CHARS,
+        )
     }
 
     /// Test-only: the lazy key of the plugin parameter panel for `slot`
@@ -562,25 +566,15 @@ impl Resonance {
         .flatten()
     }
 
-    /// Test-only: recompute the resonance-common freeze input fingerprint
-    /// for a track (ba todo #576).
+    /// Test-only: the plugin-side freeze input fingerprint of a track
+    /// (chain, writable param values, bypass flags) that the app compares
+    /// around a plugin-originated param change (W4).
     #[doc(hidden)]
-    pub fn test_freeze_fingerprint(
+    pub fn test_freeze_param_fingerprint(
         &self,
         track_id: resonance_audio::types::TrackId,
     ) -> Option<u64> {
-        self.compute_track_freeze_fingerprint(track_id)
-    }
-
-    /// Test-only: recompute the fingerprint and downgrade a still-`Frozen`
-    /// track to `Stale` if its inputs drifted. Returns whether it
-    /// transitioned (ba todo #576).
-    #[doc(hidden)]
-    pub fn test_revalidate_frozen_track(
-        &mut self,
-        track_id: resonance_audio::types::TrackId,
-    ) -> bool {
-        self.revalidate_frozen_track(track_id)
+        self.freeze_param_fingerprint(track_id)
     }
 
     /// Test-only: read a track's freeze status (defaults to idle).
@@ -721,14 +715,14 @@ impl Resonance {
         bus_id: resonance_audio::types::BusId,
     ) -> Option<u64> {
         let bus = self.registry.busses.iter().find(|b| b.id == bus_id)?;
-        Some(crate::view::mixer::inspector::bus_fingerprint(self, bus))
+        Some(crate::view::mixer::inspector::bus::fingerprint(self, bus))
     }
 
     /// Test-only: the master twin of [`Self::test_inspector_fingerprint`]
     /// — the lazy-region key of the master inspector.
     #[doc(hidden)]
     pub fn test_master_inspector_fingerprint(&self) -> u64 {
-        crate::view::mixer::inspector::master_fingerprint(self)
+        crate::view::mixer::inspector::master::fingerprint(self)
     }
 
     /// Test-only: drive the GUI external-instrument map (and engine) back to
@@ -767,7 +761,14 @@ impl Resonance {
             .find(|t| t.id == track_id)
             .map(|t| t.plugins.as_slice())
             .unwrap_or(&[]);
-        crate::view::mixer::automation::track_choice_labels(track_id, plugins, device_params)
+        crate::view::mixer::automation::choices_for(
+            crate::view::mixer::automation::AutoChan::Track(track_id),
+            plugins,
+            device_params,
+        )
+        .into_iter()
+        .map(|c| c.label.to_string())
+        .collect()
     }
 
     /// Test-only: the message the inspector AUTOMATION group's `+ Add lane`
@@ -782,14 +783,18 @@ impl Resonance {
         track_id: Option<resonance_audio::types::TrackId>,
         label: &str,
     ) -> Option<crate::message::Message> {
-        use crate::view::mixer::automation::{add_lane_message_for_label, AutoChan};
-        match track_id {
+        use crate::view::mixer::automation::{add_lane_message, choices_for, AutoChan};
+        let (chan, plugins) = match track_id {
             Some(id) => {
                 let track = self.registry.tracks.iter().find(|t| t.id == id)?;
-                add_lane_message_for_label(AutoChan::Track(id), &track.plugins, &[], label)
+                (AutoChan::Track(id), track.plugins.as_slice())
             }
-            None => add_lane_message_for_label(AutoChan::Master, &self.master.plugins, &[], label),
-        }
+            None => (AutoChan::Master, self.master.plugins.as_slice()),
+        };
+        choices_for(chan, plugins, &[])
+            .into_iter()
+            .find(|c| &*c.label == label)
+            .map(|c| add_lane_message(chan, &c))
     }
 
     /// Test-only: return the `id`s of every definition currently in the

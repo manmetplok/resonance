@@ -50,14 +50,10 @@
 //! * [`pool_tab`] — pool asset list + audition transport
 //! * [`style`] — `WaveThumbnail` canvas, format helpers, button styles
 
-mod files_tab;
+pub(crate) mod files_tab;
 mod pool_tab;
-mod style;
+pub(crate) mod style;
 
-#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
-pub(crate) use files_tab::listing_fingerprint;
-#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
-pub(crate) use style::WaveThumbnail;
 
 use iced::widget::text::LineHeight;
 use iced::widget::{button, column, container, row, text, Space};

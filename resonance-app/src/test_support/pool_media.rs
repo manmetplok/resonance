@@ -60,7 +60,7 @@ impl Resonance {
         file: &crate::project::ProjectFile,
         project_dir: &std::path::Path,
     ) {
-        crate::update::project_io::restore_pool(self, file, project_dir);
+        crate::update::project_io::replay::restore_pool_assets(self, file, Some(project_dir), true);
     }
 
     /// Test-only: mirror the pool's favourites / recent folders into app
@@ -109,14 +109,14 @@ impl Resonance {
     /// VIEW-27).
     #[doc(hidden)]
     pub fn test_files_listing_fingerprint(&self) -> u64 {
-        crate::view::browser::listing_fingerprint(self)
+        crate::view::browser::files_tab::listing_fingerprint(self)
     }
 
     /// Test-only: the geometry-cache key of a browser waveform thumbnail
     /// (review VIEW-27).
     #[doc(hidden)]
     pub fn test_wave_thumbnail_key(peaks: &[(f32, f32)], muted: bool) -> u64 {
-        crate::view::browser::WaveThumbnail {
+        crate::view::browser::style::WaveThumbnail {
             peaks: std::borrow::Cow::Borrowed(peaks),
             muted,
         }

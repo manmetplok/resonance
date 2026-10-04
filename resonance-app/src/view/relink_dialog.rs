@@ -50,7 +50,10 @@ const LIST_MAX_HEIGHT: f32 = 260.0;
 /// the modal isn't open or has nothing to track, so the caller can stack
 /// it unconditionally.
 pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> {
-    if !r.media.relink.modal_open || r.media.relink.modal_targets.is_empty() {
+    if !r.media.relink.modal_open
+        || (r.media.relink.modal_targets.is_empty()
+            && r.media.relink.modal_clip_targets.is_empty())
+    {
         return Space::new()
             .width(Length::Fixed(0.0))
             .height(Length::Fixed(0.0))
@@ -81,8 +84,33 @@ pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> 
         .filter_map(|&id| r.media.pool.asset(id).map(|a| (a, r.media.relink.is_in_flight(id))))
         .collect();
 
-    let total = rows.len();
-    let relinked = rows.iter().filter(|(a, _)| !a.missing).count();
+    // The missing clips it tracks (W4): a clip whose own WAV is gone and
+    // that no missing asset accounts for. A clip deleted meanwhile drops.
+    let clip_rows: Vec<ClipRow<'_>> = r
+        .media
+        .relink
+        .modal_clip_targets
+        .iter()
+        .filter_map(|&id| {
+            let clip = r.clips.iter().find(|c| c.id == id)?;
+            let track = r
+                .registry
+                .tracks
+                .iter()
+                .find(|t| t.id == clip.track_id)
+                .map_or("", |t| t.name.as_str());
+            Some(ClipRow {
+                clip,
+                track,
+                resolved: !r.media.relink.missing_clips.contains(&id),
+                in_flight: r.media.relink.is_clip_in_flight(id),
+            })
+        })
+        .collect();
+
+    let total = rows.len() + clip_rows.len();
+    let relinked = rows.iter().filter(|(a, _)| !a.missing).count()
+        + clip_rows.iter().filter(|c| c.resolved).count();
 
     let title = text(headline(total))
         .size(20)
@@ -100,6 +128,9 @@ pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> 
     let mut list = column![].spacing(6);
     for (asset, in_flight) in &rows {
         list = list.push(relink_row(asset, *in_flight));
+    }
+    for row in &clip_rows {
+        list = list.push(clip_relink_row(row));
     }
     let list = scrollable(list)
         .height(Length::Shrink)
@@ -293,6 +324,79 @@ fn relink_row(asset: &PoolAsset, in_flight: bool) -> Element<'_, Message> {
         .into()
 }
 
+/// A missing clip as the modal lists it.
+struct ClipRow<'a> {
+    clip: &'a crate::state::ClipState,
+    /// Name of the track the clip sits on.
+    track: &'a str,
+    resolved: bool,
+    in_flight: bool,
+}
+
+/// One missing-clip row: the clip's name and where it sits, and the same
+/// action cell an asset row has, whose `Locate…` relinks just this clip
+/// ([`RelinkMessage::LocateClip`]). A folder search matches assets by
+/// their original filename; a clip has none, so it is located by hand.
+fn clip_relink_row<'a>(row: &ClipRow<'a>) -> Element<'a, Message> {
+    let (glyph, glyph_color) = if row.resolved {
+        (theme::fa::CIRCLE_CHECK, theme::GOOD)
+    } else {
+        (theme::fa::TRIANGLE_EXCLAMATION, theme::BAD)
+    };
+    let place = if row.track.is_empty() {
+        format!("Clip audio audio/clip_{}.wav", row.clip.id)
+    } else {
+        format!("Clip on {} \u{b7} audio/clip_{}.wav", row.track, row.clip.id)
+    };
+    let name_col = column![
+        text(row.clip.name.clone()).size(12).color(theme::TEXT_1),
+        text(place).size(10).color(theme::TEXT_4),
+    ]
+    .spacing(2)
+    .width(Length::Fill);
+
+    let action: Element<'_, Message> = if row.in_flight {
+        text("Relinking\u{2026}").size(11).color(theme::WARM).into()
+    } else if row.resolved {
+        row![
+            theme::icon(theme::fa::CIRCLE_CHECK).size(11).color(theme::GOOD),
+            text("Relinked").size(11).color(theme::GOOD),
+        ]
+        .spacing(6)
+        .align_y(alignment::Vertical::Center)
+        .into()
+    } else {
+        button(text("Locate\u{2026}").size(11).color(theme::ACCENT_SOFT))
+            .on_press(Message::Relink(RelinkMessage::LocateClip(row.clip.id)))
+            .padding([4, 12])
+            .style(|_theme, status| locate_button_style(status))
+            .into()
+    };
+
+    let resolved = row.resolved;
+    let inner = row![
+        theme::icon(glyph).size(13).color(glyph_color),
+        name_col,
+        action,
+    ]
+    .spacing(10)
+    .align_y(alignment::Vertical::Center)
+    .padding([8, 12]);
+
+    container(inner)
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_1)),
+            border: iced::Border {
+                color: if resolved { theme::GOOD } else { theme::LINE },
+                width: 1.0,
+                radius: theme::RADIUS_SM.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
 /// The modal headline, singular/plural aware.
 fn headline(count: usize) -> String {
     if count == 1 {
@@ -339,7 +443,6 @@ fn locate_button_style(status: button::Status) -> button::Style {
 /// the styling or the entry-point wiring.
 ///
 /// [`RelinkMessage::ShowModal`]: crate::message::RelinkMessage::ShowModal
-#[allow(dead_code)] // consumed by the Pool tab rendering, todo #603.
 pub(crate) fn relink_chip<'a>() -> Element<'a, Message> {
     button(text("relink").size(9).color(theme::BAD))
         .on_press(Message::Relink(RelinkMessage::ShowModal))

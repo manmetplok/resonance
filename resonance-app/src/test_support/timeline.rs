@@ -88,7 +88,7 @@ impl Resonance {
         let canvas = self.timeline_canvas_data();
         canvas.visible_viewport.set(visible);
         canvas
-            .test_scrollbar_rects(iced::Rectangle::new(iced::Point::ORIGIN, canvas_size))
+            .scrollbar_rects(iced::Rectangle::new(iced::Point::ORIGIN, canvas_size))
             .map(|sb| sb.track.x)
     }
 
@@ -334,8 +334,9 @@ impl Resonance {
     /// folded or expanded (epic #15, todo #414).
     #[doc(hidden)]
     pub fn test_comp_ribbon_at(&self, x: f32, y: f32) -> Option<u64> {
-        self.timeline_canvas_data()
-            .comp_ribbon_at(iced::Point::new(x, y))
+        let canvas = self.timeline_canvas_data();
+        canvas
+            .comp_ribbon_at_in(canvas.arrange_layout(), iced::Point::new(x, y))
             .map(|hit| hit.group_id)
     }
 
