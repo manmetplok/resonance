@@ -26,12 +26,11 @@
 //! the user dragged in: same asset ref, same usage counts, same single
 //! undo entry covering import and placement together.
 //!
-//! # What is not here
+//! # Warp
 //!
-//! `SetClipWarp` exists as an engine command but has no app-side mirror,
-//! message or undo entry — the GUI cannot set it either. Exposing
-//! "follow tempo" over the wire means building that half first, so it is
-//! deliberately absent rather than half-wired.
+//! `clip.set_warp`, `clip.set_warp_markers` and `clip.detect_tempo` live
+//! in the `warp` submodule; they drive the same
+//! `ClipWarpMessage`s as the clip inspector's warp section.
 
 use crate::control_jobs::JobToken;
 use crate::control_socket::ConnId;
@@ -48,6 +47,9 @@ use resonance_control::methods::pool::{self as pool_proto, ImportParams, PoolAss
 use resonance_control::{PositionSpec, Request, Response, RpcError};
 
 use super::reply::{ack, no_track, reject};
+
+mod warp;
+pub(crate) use warp::tempo_detected;
 use std::path::{Path, PathBuf};
 
 /// Handle a `pool.*` / `clip.*` request, or `None` when `method` belongs
@@ -68,6 +70,9 @@ pub(super) fn try_handle(
         proto::DELETE => delete(app, request),
         proto::SET_GAIN => set_gain(app, request),
         proto::SET_FADE => set_fade(app, request),
+        proto::SET_WARP => warp::set_warp(app, request),
+        proto::SET_WARP_MARKERS => warp::set_warp_markers(app, request),
+        proto::DETECT_TEMPO => warp::detect_tempo(app, conn, request),
         _ => return None,
     };
     Some(handled)

@@ -126,6 +126,8 @@ pub enum ClipMessage {
         new_clip_id: ClipId,
         at_sample: SamplePos,
     },
+    /// Clip warp ("follow tempo") edits and gestures (`update::clip_warp`).
+    Warp(crate::update::clip_warp::ClipWarpMessage),
 }
 
 impl ClipMessage {
@@ -159,6 +161,7 @@ impl ClipMessage {
             Self::MoveClipTo { .. } | Self::TrimClipTo { .. } | Self::SplitClipAt { .. } => {
                 UndoAction::Record
             }
+            Self::Warp(m) => m.undo_action(),
         }
     }
 }
@@ -284,6 +287,7 @@ pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
                 trim_end_frames,
             );
         }
+        ClipMessage::Warp(m) => return crate::update::clip_warp::handle(r, m),
     }
     Task::none()
 }
@@ -342,6 +346,7 @@ pub fn split_clip_at(
     // Warp markers and tuning are keyed to the original clip's timeline;
     // the engine drops them on the tail, so the mirror must too.
     tail.vocal_tuning = None;
+    tail.warp.markers.clear();
 
     let head_trim_end = clip.trim_end_frames + (clip.duration_samples - head_frames);
     if let Some(head) = r.clips.iter_mut().find(|c| c.id == clip_id) {

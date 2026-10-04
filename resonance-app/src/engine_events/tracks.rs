@@ -275,6 +275,7 @@ pub(super) fn bounce_completed(
                 vocal_tuning: None,
                 // A bounced-in-place clip is engine-rendered, not a pool import.
                 asset_ref: None,
+                warp: Default::default(),
             });
         }
     } else {

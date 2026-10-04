@@ -5,12 +5,64 @@
 use resonance_audio::types::*;
 
 use crate::project::{
-    audio_format_tag, fade_curve_tag, send_source_tag, ProjectBus, ProjectClip,
+    audio_format_tag, fade_curve_tag, send_source_tag, warp_algorithm_from_tag,
+    warp_algorithm_tag, ProjectBus, ProjectClip, ProjectClipWarp, ProjectWarpMarker,
     ProjectExternalInstrument, ProjectFile, ProjectMidiClip, ProjectPerformance, ProjectPlugin,
     ProjectPoolAsset, ProjectReference, ProjectReferenceMarker, ProjectReferenceSettings,
     ProjectSend, ProjectTrack, PROJECT_FORMAT_VERSION,
 };
+use crate::state::ClipWarpState;
 use crate::Resonance;
+
+/// A clip's warp mirror in its project-file form; `None` for an unwarped
+/// clip, so projects that never touch warp keep their old shape.
+pub(crate) fn project_clip_warp(warp: &ClipWarpState) -> Option<ProjectClipWarp> {
+    if warp.is_default() {
+        return None;
+    }
+    Some(ProjectClipWarp {
+        enabled: warp.enabled,
+        original_bpm: warp.original_bpm,
+        transpose_semitones: warp.transpose_semitones,
+        algorithm: warp_algorithm_tag(warp.algorithm).to_string(),
+        markers: warp
+            .markers
+            .iter()
+            .map(|m| ProjectWarpMarker {
+                source_frame: m.source_frame,
+                timeline_beat: m.timeline_beat,
+            })
+            .collect(),
+    })
+}
+
+/// The warp mirror a project-file entry describes (`None` = unwarped).
+/// A hand-edited file is sanitised the way the app's own setters would:
+/// tempo and transpose clamped, non-finite marker beats dropped, markers
+/// sorted and capped at [`crate::state::MAX_WARP_MARKERS`].
+pub(crate) fn clip_warp_from_project(warp: Option<&ProjectClipWarp>) -> ClipWarpState {
+    let Some(w) = warp else {
+        return ClipWarpState::default();
+    };
+    let mut markers: Vec<WarpMarker> = w
+        .markers
+        .iter()
+        .filter(|m| m.timeline_beat.is_finite())
+        .map(|m| WarpMarker {
+            source_frame: m.source_frame,
+            timeline_beat: m.timeline_beat,
+        })
+        .collect();
+    crate::state::sort_warp_markers(&mut markers);
+    markers.truncate(crate::state::MAX_WARP_MARKERS);
+    ClipWarpState {
+        enabled: w.enabled,
+        original_bpm: w.original_bpm.and_then(crate::state::clamp_warp_bpm),
+        transpose_semitones: crate::state::clamp_transpose(w.transpose_semitones),
+        algorithm: warp_algorithm_from_tag(&w.algorithm),
+        markers,
+    }
+}
 
 /// Serialize one plugin slot: identity, the path of its opaque CLAP
 /// state blob, and the parameter values that differ from the plugin's own
@@ -371,6 +423,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             fade_out_frames: c.fade_out_frames,
             fade_out_curve: fade_curve_tag(c.fade_out_curve).to_string(),
             gain_db: c.gain_db,
+            warp: project_clip_warp(&c.warp),
         })
         .collect();
 

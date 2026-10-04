@@ -90,7 +90,7 @@ mod vocal;
 /// [`reply`], for the whole layer.
 use reply::{failure, success};
 
-pub(crate) use clip::{import_result, place_result};
+pub(crate) use clip::{import_result, place_result, tempo_detected as clip_tempo_detected};
 pub(crate) use job::export_kind_to_rpc;
 pub(crate) use plugin_presets::{write_saved_state as write_plugin_preset, SavedStateKind};
 pub(crate) use meter::{chain_probe_error, chain_probed, mix_measure_error, mix_measured};

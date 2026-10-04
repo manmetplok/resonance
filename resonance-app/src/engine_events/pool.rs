@@ -264,6 +264,7 @@ pub(crate) fn place_clip_with_id(
         // The whole point of the placement: tie the clip to its pool asset
         // so usage counts, persistence, and relink all reconnect on load.
         asset_ref: Some(AssetRef::new(asset_id)),
+        warp: Default::default(),
     });
 
     // A new clip now references the asset — refresh the pool usage counts.

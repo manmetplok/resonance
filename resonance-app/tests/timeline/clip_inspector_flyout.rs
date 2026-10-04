@@ -60,6 +60,7 @@ fn clip(id: u64, track_id: u64) -> ClipState {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     }
 }
 

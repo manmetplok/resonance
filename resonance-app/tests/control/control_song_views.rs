@@ -139,6 +139,7 @@ fn app() -> Resonance {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     });
 
     let mut def = section_definition(1, "Verse", 2);

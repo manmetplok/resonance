@@ -149,10 +149,12 @@ pub enum AudioCommand {
         markers: Vec<WarpMarker>,
     },
     /// Run tempo/BPM detection over a clip's source audio. The engine
-    /// runs the DSP detector and replies with
-    /// `AudioEvent::ClipTempoDetected`. The detector and its reply event
-    /// are wired up in a later todo; this command is plumbed here so the
-    /// command/event boundary is complete.
+    /// runs the DSP detector (on the engine control thread, over the
+    /// clip's whole source) and replies with
+    /// `AudioEvent::ClipTempoDetected`; `bpm == 0.0` means no tempo was
+    /// found. Analysis only — the clip is not changed. Like every clip
+    /// edit, a command naming a clip that is still loading is parked
+    /// until it lands.
     DetectClipTempo {
         clip_id: ClipId,
     },

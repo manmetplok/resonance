@@ -9,9 +9,11 @@
 //! - [`clip`]: audio clip drawing
 //! - [`midi_notes`]: MIDI clip drawing
 //! - [`drag`]: drag-to-timeline placement affordances
+//! - [`warp`]: clip-warp badge and warp markers
 
 pub use chrome::{gain_tinted_body, format_gain_db, overlap_range, fade_envelope};
 pub(in crate::view::timeline) use chrome::clip_lane_rect;
+pub(in crate::view::timeline) use clip::clips_fingerprint;
 
 use super::TimelineCanvas;
 
@@ -23,3 +25,6 @@ mod global_tracks;
 mod clip;
 mod midi_notes;
 mod drag;
+mod warp;
+
+pub(in crate::view::timeline) use warp::WarpHit;

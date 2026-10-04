@@ -11,6 +11,7 @@ pub mod automation;
 pub mod browser;
 pub mod bus;
 pub mod chord_track;
+pub mod clip_warp;
 pub mod clips;
 pub mod compose;
 pub mod control;

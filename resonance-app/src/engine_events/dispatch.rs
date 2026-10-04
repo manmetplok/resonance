@@ -390,16 +390,32 @@ fn route_clips(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             fade_out_curve,
         ),
         E::ClipGainChanged { clip_id, gain_db } => clips::gain_changed(r, clip_id, gain_db),
-        // Clip warp / follow-tempo events (engine todo #418). Mirroring
-        // these into `ClipState` is todo #421; until it lands these arms
-        // accept the events without acting, keeping the workspace
-        // compiling now that the engine emits them.
-        E::ClipWarpChanged { .. } | E::ClipWarpMarkersChanged { .. } => {}
-        // Clip tempo/BPM detection reply (engine todo #420). The detector
-        // emits this so the command/event boundary is complete; mirroring
-        // the detected BPM into the app is a follow-up todo, so accept it
-        // without acting for now.
-        E::ClipTempoDetected { .. } => {}
+        // Clip warp / follow-tempo: one-way engine→app sync of the stored
+        // values into `ClipState::warp`, like fade/gain above.
+        E::ClipWarpChanged {
+            clip_id,
+            warp_enabled,
+            original_bpm,
+            transpose_semitones,
+            warp_algorithm,
+        } => clips::warp_changed(
+            r,
+            clip_id,
+            warp_enabled,
+            original_bpm,
+            transpose_semitones,
+            warp_algorithm,
+        ),
+        E::ClipWarpMarkersChanged { clip_id, markers } => {
+            clips::warp_markers_changed(r, clip_id, markers)
+        }
+        // Tempo detection reply: the inspector's status line and any
+        // `clip.detect_tempo` job waiting on it.
+        E::ClipTempoDetected {
+            clip_id,
+            bpm,
+            confidence,
+        } => clips::tempo_detected(r, clip_id, bpm, confidence),
         // Media-pool import lifecycle (engine todo #592). `AssetImported`
         // mirrors the asset into the pool and, for a drop, places it as a
         // clip (todo #598, `engine_events::pool`); `ImportFailed` drops the

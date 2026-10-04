@@ -641,6 +641,12 @@ pub const MIXER_STRIP_HEIGHT: u16 = 440;
 pub const BUS_STRIP_HEIGHT: u16 = 320;
 /// Pixel radius around a clip's left/right edge that starts a trim (not move).
 pub const CLIP_EDGE_THRESHOLD: f32 = 6.0;
+/// Height of the strip along a warped audio clip's bottom edge where its
+/// warp markers' handles sit: a press here grabs a marker, a double-click
+/// adds one. Above it the clip body moves as usual.
+pub const WARP_MARKER_STRIP_HEIGHT: f32 = 12.0;
+/// Horizontal pick radius (px) of a warp-marker handle.
+pub const WARP_MARKER_HIT_PX: f32 = 5.0;
 
 // ---------------------------------------------------------------------------
 // Radius scale.

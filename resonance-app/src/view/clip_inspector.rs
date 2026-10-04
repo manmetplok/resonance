@@ -8,7 +8,9 @@
 //! - numeric fade-in / fade-out length (ms),
 //! - per-clip gain (dB) with `−`/`+` steppers,
 //! - a per-fade curve picker (Linear / Equal-power / Exp),
-//! - a **Reset to default** action ("reset to generated").
+//! - a **Reset to default** action ("reset to generated"),
+//! - the **WARP** section (`warp`): warp on/off, source tempo + Detect,
+//!   algorithm, transpose and the marker count.
 //!
 //! All edits emit the shared `ClipMessage` edits handled by the update
 //! todo (#317) — `SetClipFadeInMs` / `SetClipFadeOutMs` / `SetClipGainDb`
@@ -28,6 +30,8 @@ use crate::theme;
 use iced::widget::{button, column, container, row, text, text_input, Space};
 use iced::{alignment, Color, Element, Length};
 use resonance_audio::types::{ClipId, FadeCurve};
+
+mod warp;
 
 /// Width of the flyout card. Wide enough for the three labelled rows and
 /// the curve segmented control without wrapping.
@@ -71,7 +75,7 @@ impl crate::Resonance {
     }
 
     /// The full fade/gain flyout for an editable audio clip.
-    fn editable_flyout<'a>(&self, clip: &'a ClipState) -> Element<'a, Message> {
+    fn editable_flyout<'a>(&'a self, clip: &'a ClipState) -> Element<'a, Message> {
         let id = clip.id;
         let sample_rate = self.sample_rate.max(1);
 
@@ -120,6 +124,8 @@ impl crate::Resonance {
             gain_row,
             Space::new().height(Length::Fixed(2.0)),
             reset,
+            Space::new().height(Length::Fixed(4.0)),
+            self.warp_section(clip),
         ]
         .spacing(7)
         .into()

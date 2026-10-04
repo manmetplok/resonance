@@ -149,6 +149,13 @@ pub struct ClipInteractionState {
     pub clip_fade_drag: Option<FadeDragState>,
     /// Active clip-gain bead drag, if any (todo #317).
     pub clip_gain_drag: Option<GainDragState>,
+    /// Active warp-marker drag on an audio clip, if any (clip warp).
+    pub warp_marker_drag: Option<super::clip_warp::WarpMarkerDragState>,
+    /// Per-clip tempo-detection status shown in the clip inspector.
+    /// Transient: not project data, not undoable.
+    pub tempo_detect: std::collections::HashMap<ClipId, super::clip_warp::TempoDetectStatus>,
+    /// The inspector's source-tempo field mid-edit, if any.
+    pub warp_bpm_draft: Option<super::clip_warp::WarpBpmDraft>,
     pub midi_clip_drag: Option<MidiClipDragState>,
     pub midi_clip_trim: Option<MidiClipTrimState>,
     pub editing_midi_clip: Option<MidiEditorState>,

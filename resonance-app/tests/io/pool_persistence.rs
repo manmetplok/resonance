@@ -43,6 +43,7 @@ fn clip(id: ClipId, track_id: TrackId, asset: Option<AssetId>) -> ClipState {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: asset.map(AssetRef::new),
+        warp: Default::default(),
     }
 }
 

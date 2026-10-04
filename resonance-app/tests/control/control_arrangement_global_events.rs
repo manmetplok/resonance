@@ -117,6 +117,7 @@ fn push_audio_clip(app: &mut Resonance, id: u64, start_sample: u64) {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     });
 }
 

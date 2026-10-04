@@ -123,6 +123,10 @@ pub enum JobToken {
         /// every other method.
         compare: Option<ComparePlan>,
     },
+    /// A `clip.detect_tempo`: completes on `AudioEvent::ClipTempoDetected`
+    /// for this clip, fails when the detector finds no tempo or the clip
+    /// is deleted first (`engine_events::clips`).
+    DetectTempo { clip_id: u64 },
     /// A `meter.probe` (warmth-width-depth.md §7.3): completes on
     /// `AudioEvent::ChainProbed`, fails on `ChainProbeError`, both of
     /// which echo the job id as their `probe_id`. It renders nothing

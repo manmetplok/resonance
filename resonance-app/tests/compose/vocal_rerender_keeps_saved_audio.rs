@@ -143,6 +143,7 @@ fn saved_project() -> Saved {
         fade_out_frames: 0,
         fade_out_curve: "equal_power".to_owned(),
         gain_db: 0.0,
+        warp: None,
     });
     let saved = Saved {
         _root: root,

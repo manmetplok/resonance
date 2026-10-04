@@ -77,6 +77,7 @@ fn clip(
         waveform_peaks: peaks(96),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     }
 }
 

@@ -369,6 +369,7 @@ fn a_diff_undo_rebuilds_the_vocal_audio_clip_map_from_the_target() {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     });
     assert!(l.app.test_vocal_audio_clips(VOCAL).is_empty());
     let mut target = l.app.test_snapshot_for_undo();

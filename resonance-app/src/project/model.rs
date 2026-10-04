@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use resonance_audio::types::{ClipId, FadeCurve, MidiNote, PluginInstanceId, SendSource};
+use resonance_audio::types::{
+    ClipId, FadeCurve, MidiNote, PluginInstanceId, SendSource, WarpAlgorithm,
+};
 
 pub const PROJECT_FORMAT_VERSION: u32 = 2;
 
@@ -846,6 +848,66 @@ pub struct ProjectClip {
     /// Defaults to `0.0` so older projects load at unity gain.
     #[serde(default)]
     pub gain_db: f32,
+    /// Warp ("follow tempo") settings and markers. Omitted for an
+    /// unwarped clip — and absent in every project saved before clip warp
+    /// had a UI — so `None` loads as unwarped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warp: Option<ProjectClipWarp>,
+}
+
+/// One clip's persisted warp state ([`ProjectClip::warp`]). Every field
+/// defaults, so a hand-trimmed entry still loads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectClipWarp {
+    /// Warp switched on.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The tempo the source was performed at, in BPM, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_bpm: Option<f32>,
+    /// Pitch shift on the warp path, in semitones.
+    #[serde(default)]
+    pub transpose_semitones: f32,
+    /// Resynthesis algorithm as a lowercase tag (see
+    /// [`warp_algorithm_tag`]); the project layer owns the spelling so an
+    /// engine rename cannot break saved files.
+    #[serde(default = "default_warp_algorithm_tag")]
+    pub algorithm: String,
+    /// Warp markers, ascending by beat.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<ProjectWarpMarker>,
+}
+
+/// One persisted warp marker: `source_frame` of the clip's source audio
+/// (independent of trim) is heard `timeline_beat` beats after the clip's
+/// start.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ProjectWarpMarker {
+    pub source_frame: u64,
+    pub timeline_beat: f64,
+}
+
+fn default_warp_algorithm_tag() -> String {
+    warp_algorithm_tag(WarpAlgorithm::default()).to_string()
+}
+
+/// Serialize a [`WarpAlgorithm`] to its project-file tag. Kept in sync
+/// with [`warp_algorithm_from_tag`].
+pub fn warp_algorithm_tag(algorithm: WarpAlgorithm) -> &'static str {
+    match algorithm {
+        WarpAlgorithm::Transient => "transient",
+        WarpAlgorithm::Tonal => "tonal",
+    }
+}
+
+/// Parse a warp-algorithm tag; an unknown tag falls back to the default
+/// so loading never fails on it.
+pub fn warp_algorithm_from_tag(tag: &str) -> WarpAlgorithm {
+    match tag {
+        "tonal" => WarpAlgorithm::Tonal,
+        "transient" => WarpAlgorithm::Transient,
+        _ => WarpAlgorithm::default(),
+    }
 }
 
 /// Default [`ProjectClip::fade_in_curve`] / [`ProjectClip::fade_out_curve`]
