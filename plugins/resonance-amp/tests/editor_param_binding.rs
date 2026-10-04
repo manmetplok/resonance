@@ -250,6 +250,13 @@ fn declared_param_ids() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for (i, _) in src.match_indices("Param::new(") {
         let rest = &src[i + "Param::new(".len()..];
+        // An id the host reads by name is declared from
+        // `resonance_plugin::first_party` (code review ARCH2-03).
+        let first_arg = rest.split(',').next().unwrap_or("").trim();
+        if first_arg == "resonance_plugin::first_party::amp::FILE_SELECT" {
+            out.insert(resonance_plugin::first_party::amp::FILE_SELECT.to_string());
+            continue;
+        }
         let Some(open) = rest.find('"') else { continue };
         let Some(close) = rest[open + 1..].find('"') else {
             continue;
