@@ -562,25 +562,15 @@ impl Resonance {
         .flatten()
     }
 
-    /// Test-only: recompute the resonance-common freeze input fingerprint
-    /// for a track (ba todo #576).
+    /// Test-only: the plugin-side freeze input fingerprint of a track
+    /// (chain, writable param values, bypass flags) that the app compares
+    /// around a plugin-originated param change (W4).
     #[doc(hidden)]
-    pub fn test_freeze_fingerprint(
+    pub fn test_freeze_param_fingerprint(
         &self,
         track_id: resonance_audio::types::TrackId,
     ) -> Option<u64> {
-        self.compute_track_freeze_fingerprint(track_id)
-    }
-
-    /// Test-only: recompute the fingerprint and downgrade a still-`Frozen`
-    /// track to `Stale` if its inputs drifted. Returns whether it
-    /// transitioned (ba todo #576).
-    #[doc(hidden)]
-    pub fn test_revalidate_frozen_track(
-        &mut self,
-        track_id: resonance_audio::types::TrackId,
-    ) -> bool {
-        self.revalidate_frozen_track(track_id)
+        self.freeze_param_fingerprint(track_id)
     }
 
     /// Test-only: read a track's freeze status (defaults to idle).

@@ -16,7 +16,9 @@ use resonance_app::message::{
 use resonance_app::state::{FreezeStatus, MidiClipState, PluginSlotState};
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, MidiNote, ParamInfo, TrackId, TrackType};
+use resonance_audio::types::{
+    AudioCommand, AudioEvent, MidiNote, ParamInfo, ParamValueUpdate, TrackId, TrackType,
+};
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 
 const INSTANCE: u64 = 4242;
@@ -104,11 +106,10 @@ fn synth_plugin() -> PluginSlotState {
 fn frozen_track(app: &mut Resonance, track_id: TrackId) {
     app.test_add_track(track_id, TrackType::Instrument);
     app.test_push_track_plugin(track_id, synth_plugin());
-    let fp = app.test_freeze_fingerprint(track_id).expect("fingerprint");
     app.test_set_freeze_status(
         track_id,
         FreezeStatus::Frozen {
-            cache_ref: cache_ref_with_fp(fp),
+            cache_ref: cache_ref_with_fp(0),
         },
     );
 }
@@ -312,11 +313,10 @@ fn refreeze_renders_and_returns_to_frozen() {
 
     // The engine completion mirror (ba todo #575) lands the cache and
     // returns the track to Frozen.
-    let new_fp = app.test_freeze_fingerprint(1).expect("fingerprint");
     app.test_set_freeze_status(
         1,
         FreezeStatus::Frozen {
-            cache_ref: cache_ref_with_fp(new_fp),
+            cache_ref: cache_ref_with_fp(0),
         },
     );
     assert!(matches!(app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
@@ -324,20 +324,24 @@ fn refreeze_renders_and_returns_to_frozen() {
 }
 
 // ---------------------------------------------------------------------
-// Fingerprint recompute confirms staleness
+// Params the plugin moved itself (W4)
 // ---------------------------------------------------------------------
+//
+// The gate cannot refuse an edit made in the plugin's own editor: the
+// plugin already holds the value, and the mirror must follow it. The app
+// compares the track's param fingerprint around that update instead and
+// marks a frozen track stale when it moved.
 
 #[test]
-fn fingerprint_changes_when_inputs_change() {
+fn param_fingerprint_changes_when_a_param_changes() {
     let (mut app, _rx, _dir) = capturing_app();
     app.test_add_track(1, TrackType::Instrument);
     app.test_push_track_plugin(1, synth_plugin());
     app.test_push_midi_clip(midi_clip(10, 1, vec![note(60)]));
 
-    let fp_before = app.test_freeze_fingerprint(1).expect("fingerprint");
-    // Change a plugin param input.
+    let fp_before = app.test_freeze_param_fingerprint(1).expect("fingerprint");
     app.test_set_plugin_param(INSTANCE, PARAM, 0.5);
-    let fp_after = app.test_freeze_fingerprint(1).expect("fingerprint");
+    let fp_after = app.test_freeze_param_fingerprint(1).expect("fingerprint");
 
     assert_ne!(
         fp_before, fp_after,
@@ -346,16 +350,15 @@ fn fingerprint_changes_when_inputs_change() {
 }
 
 #[test]
-fn fingerprint_ignores_mixer_controls() {
+fn param_fingerprint_ignores_mixer_controls() {
     let (mut app, _rx, _dir) = capturing_app();
     app.test_add_track(1, TrackType::Instrument);
     app.test_push_track_plugin(1, synth_plugin());
 
-    let fp_before = app.test_freeze_fingerprint(1).expect("fingerprint");
-    // Mixer controls are not render inputs — fingerprint is unchanged.
+    let fp_before = app.test_freeze_param_fingerprint(1).expect("fingerprint");
     app.test_dispatch(Message::Track(TrackMessage::SetTrackVolume(1, -3.0)));
     app.test_dispatch(Message::Track(TrackMessage::ToggleMute(1)));
-    let fp_after = app.test_freeze_fingerprint(1).expect("fingerprint");
+    let fp_after = app.test_freeze_param_fingerprint(1).expect("fingerprint");
 
     assert_eq!(
         fp_before, fp_after,
@@ -363,28 +366,127 @@ fn fingerprint_ignores_mixer_controls() {
     );
 }
 
-#[test]
-fn revalidate_marks_stale_when_inputs_drift() {
-    let (mut app, _rx, _dir) = capturing_app();
-    frozen_track(&mut app, 1);
-
-    // Inputs still match the rendered fingerprint -> no transition.
-    assert!(!app.test_revalidate_frozen_track(1));
-    assert!(matches!(app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
-
-    // Drift an input directly (a change that bypassed the message gate),
-    // then revalidate: the fingerprint mismatch confirms staleness.
-    app.test_set_plugin_param(INSTANCE, PARAM, 0.7);
-    assert!(app.test_revalidate_frozen_track(1));
-    assert!(matches!(app.test_freeze_status(1), FreezeStatus::Stale { .. }));
+fn plugin_edit(value: f64) -> Message {
+    Message::Plugin(PluginMessage::ParamEditedByPlugin {
+        instance_id: INSTANCE,
+        param_id: PARAM,
+        value,
+        text: String::new(),
+        gesture: true,
+    })
 }
 
 #[test]
-fn revalidate_is_noop_on_unfrozen_track() {
+fn an_edit_in_the_plugins_own_editor_stales_the_frozen_track() {
+    let (mut app, _rx, _dir) = capturing_app();
+    frozen_track(&mut app, 1);
+
+    app.test_update(plugin_edit(0.6));
+
+    assert!(
+        matches!(app.test_freeze_status(1), FreezeStatus::Stale { .. }),
+        "the cache no longer holds what the plugin plays",
+    );
+    assert_eq!(
+        app.test_plugin_param(INSTANCE, PARAM),
+        Some(0.6),
+        "the mirror follows the plugin: the edit already happened",
+    );
+}
+
+#[test]
+fn a_plugin_edit_to_the_value_it_had_leaves_the_track_frozen() {
+    let (mut app, _rx, _dir) = capturing_app();
+    frozen_track(&mut app, 1);
+
+    // The param already reads 0.0.
+    app.test_update(plugin_edit(0.0));
+
+    assert!(matches!(app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
+}
+
+#[test]
+fn a_plugin_edit_on_an_unfrozen_track_changes_no_freeze_status() {
     let (mut app, _rx, _dir) = capturing_app();
     app.test_add_track(1, TrackType::Instrument);
     app.test_push_track_plugin(1, synth_plugin());
 
-    assert!(!app.test_revalidate_frozen_track(1));
+    app.test_update(plugin_edit(0.6));
+
     assert_eq!(app.test_freeze_status(1), FreezeStatus::Idle);
+}
+
+fn rescan(value: f64) -> AudioEvent {
+    AudioEvent::PluginParamValuesChanged {
+        instance_id: INSTANCE,
+        values: vec![ParamValueUpdate {
+            id: PARAM,
+            value,
+            text: String::new(),
+        }],
+    }
+}
+
+fn set_editor_open(app: &mut Resonance, open: bool) {
+    app.test_handle_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open,
+        failure: None,
+    });
+}
+
+/// A preset loaded from the plugin's own preset bar reaches the host as a
+/// values rescan while its editor is open.
+#[test]
+fn a_values_rescan_while_the_editor_is_open_stales_the_frozen_track() {
+    let (mut app, _rx, _dir) = capturing_app();
+    frozen_track(&mut app, 1);
+    set_editor_open(&mut app, true);
+
+    app.test_handle_engine_event(rescan(0.4));
+
+    assert!(matches!(app.test_freeze_status(1), FreezeStatus::Stale { .. }));
+}
+
+/// With the editor closed, a rescan follows a load the host started (a
+/// project load, an undo's state restore): its values are the plugin
+/// settling, and a freshly reloaded freeze must stay frozen.
+#[test]
+fn a_values_rescan_with_the_editor_closed_leaves_the_track_frozen() {
+    let (mut app, _rx, _dir) = capturing_app();
+    frozen_track(&mut app, 1);
+
+    app.test_handle_engine_event(rescan(0.4));
+
+    assert!(matches!(app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
+    assert_eq!(app.test_plugin_param(INSTANCE, PARAM), Some(0.4));
+}
+
+/// The stale transition rides the edit's undo entry: undoing the plugin's
+/// edit puts the param back and the track back to `Frozen` on the cache
+/// it still holds.
+#[test]
+fn undoing_the_plugin_edit_brings_the_freeze_back() {
+    let (mut app, _rx, dir) = capturing_app();
+    let project = dir.path().join("song.rproj");
+    std::fs::create_dir_all(&project).expect("project dir");
+    let freeze_dir = project.with_extension("freeze");
+    std::fs::create_dir_all(&freeze_dir).expect("freeze dir");
+    crate::common::write_freeze_cache_wav(&freeze_dir.join("freeze_1.wav"));
+    app.test_set_project_path(project);
+    frozen_track(&mut app, 1);
+
+    app.test_update(plugin_edit(0.6));
+    assert!(matches!(app.test_freeze_status(1), FreezeStatus::Stale { .. }));
+
+    app.test_update(Message::Undo);
+    assert_eq!(app.test_plugin_param(INSTANCE, PARAM), Some(0.0));
+    assert!(
+        matches!(app.test_freeze_status(1), FreezeStatus::Frozen { .. }),
+        "the undo restores the inputs the cache was rendered from",
+    );
+
+    app.test_update(Message::Redo);
+    assert_eq!(app.test_plugin_param(INSTANCE, PARAM), Some(0.6));
+    assert!(matches!(app.test_freeze_status(1), FreezeStatus::Stale { .. }));
 }
