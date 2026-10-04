@@ -35,6 +35,11 @@ pub const SET_TIME_SIGNATURE: &str = "transport.set_time_signature";
 /// `transport.set_key` — set the global key where the app exposes one
 /// ([`SetKeyParams`]); otherwise key lives per-section (`section.set_scale`).
 pub const SET_KEY: &str = "transport.set_key";
+/// `transport.set_loop_record_mode` — set cycle-record mode
+/// ([`SetLoopRecordModeParams`]): whether a loop pass while a track is
+/// armed rolls into its own take at the seam, or merges into one clip
+/// for the whole cycle-recorded run.
+pub const SET_LOOP_RECORD_MODE: &str = "transport.set_loop_record_mode";
 
 /// All `transport.*` method names.
 pub const METHODS: &[&str] = &[
@@ -47,6 +52,7 @@ pub const METHODS: &[&str] = &[
     SET_TEMPO,
     SET_TIME_SIGNATURE,
     SET_KEY,
+    SET_LOOP_RECORD_MODE,
 ];
 
 /// Params for `transport.seek`: a musical (`bar` [+ `beat`]) or `sample`
@@ -99,6 +105,18 @@ pub struct SetKeyParams {
     pub scale: String,
 }
 
+/// Params for `transport.set_loop_record_mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SetLoopRecordModeParams {
+    /// `true`: roll each loop pass into its own take at the seam (comp
+    /// or solo them afterwards with the take methods). `false`: merge
+    /// the whole cycle-recorded run into one clip, as before takes
+    /// existed.
+    pub distinct_takes: bool,
+}
+
 /// Result of every `transport.*` method: the transport after the call.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -106,5 +124,7 @@ pub struct TransportResult {
     pub state: TransportState,
     pub playhead: SongPosition,
     pub looping: bool,
+    /// Current cycle-record mode (W3) — see [`SetLoopRecordModeParams`].
+    pub loop_record_mode: bool,
     pub revision: u64,
 }

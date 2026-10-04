@@ -42,6 +42,13 @@ impl Resonance {
         self.transport.bpm
     }
 
+    /// Test-only: cycle-record mode (W3) — see
+    /// `state::TransportState::loop_record_mode`.
+    #[doc(hidden)]
+    pub fn test_loop_record_mode(&self) -> bool {
+        self.transport.loop_record_mode
+    }
+
     #[doc(hidden)]
     pub fn test_transport_time_sig(&self) -> (u8, u8) {
         (self.transport.time_sig_num, self.transport.time_sig_den)

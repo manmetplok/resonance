@@ -192,6 +192,24 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         Message::Ui(UiMessage::ToggleFollowPlayhead),
     );
 
+    // Cycle-record mode (W3): lives on the project (undoable, like the
+    // loop range it sits beside), not in `AppSettings` — see
+    // `ProjectFile::loop_record_mode`.
+    let loop_record_toggle = toggle_button(
+        "Distinct takes per loop pass",
+        r.transport.loop_record_mode,
+        Message::Transport(TransportMessage::SetLoopRecordMode(
+            !r.transport.loop_record_mode,
+        )),
+    );
+    let loop_record_hint = text(if r.transport.loop_record_mode {
+        "Each pass of a cycle-recorded run becomes its own take; comp or solo them afterwards."
+    } else {
+        "A cycle-recorded run is merged into one clip for the whole loop, as before."
+    })
+    .size(10)
+    .color(theme::TEXT_3);
+
     let dialog_content = column![
         title,
         Space::new().height(16),
@@ -206,6 +224,11 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         section("Arrange"),
         Space::new().height(6),
         follow_toggle,
+        Space::new().height(20),
+        section("Recording"),
+        Space::new().height(6),
+        loop_record_toggle,
+        loop_record_hint,
         Space::new().height(20),
         plugins_section,
         Space::new().height(20),

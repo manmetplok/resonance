@@ -479,6 +479,8 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         loop_enabled: r.transport.loop_enabled,
         loop_in: r.transport.loop_in,
         loop_out: r.transport.loop_out,
+        // Cycle-record mode (W3) — see `ProjectFile::loop_record_mode`.
+        loop_record_mode: r.transport.loop_record_mode,
         tracks,
         clips,
         midi_clips,

@@ -49,6 +49,16 @@ pub struct ProjectFile {
     pub loop_in: u64,
     #[serde(alias = "punch_out")]
     pub loop_out: u64,
+    /// Cycle-record mode (W3): true rolls each loop pass into its own
+    /// take at the seam, false keeps one merged clip for the whole
+    /// cycle-recorded run (`AudioCommand::SetLoopRecordMode`). Lives on
+    /// the project, not `AppSettings`, because it decides the SHAPE of
+    /// recorded content the same way the loop range does — a setting
+    /// scoped to this song's workflow, not a cross-project device
+    /// preference, and it undoes/redoes like the loop range. `false` on
+    /// legacy projects, matching the engine's own default.
+    #[serde(default)]
+    pub loop_record_mode: bool,
     pub tracks: Vec<ProjectTrack>,
     pub clips: Vec<ProjectClip>,
     #[serde(default)]
@@ -231,6 +241,7 @@ impl Default for ProjectFile {
             loop_enabled: false,
             loop_in: 0,
             loop_out: 0,
+            loop_record_mode: false,
             tracks: Vec::new(),
             clips: Vec::new(),
             midi_clips: Vec::new(),
