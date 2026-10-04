@@ -10,7 +10,8 @@ use crate::common::roundtrip;
 use resonance_app::message::{Message, PoolMessage, RelinkMessage};
 use resonance_app::state::{AssetRef, ClipState, PoolAsset};
 use resonance_app::Resonance;
-use resonance_audio::types::{FadeCurve, TrackType};
+use resonance_audio::test_support::Receiver;
+use resonance_audio::types::{AudioCommand, FadeCurve, TrackType};
 use resonance_control::methods::pool::{self as pool_proto, RemoveUnusedParams, RemoveUnusedResult};
 use resonance_control::{Request, Response};
 
@@ -56,8 +57,11 @@ fn clip_on(asset_id: u64) -> ClipState {
 
 /// A saved project with one used, one unused and one missing-and-unused
 /// asset.
-fn app_with_pool() -> (Resonance, tempfile::TempDir) {
-    let (mut app, _task, _rx) = Resonance::new_for_test_with_capture();
+/// The engine receiver rides along: dropping it would make every later
+/// send fail, which trips the process-wide engine-disconnect latch for the
+/// other tests in this binary (FU-S2a).
+fn app_with_pool() -> (Resonance, (tempfile::TempDir, Receiver<AudioCommand>)) {
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
     let dir = tempfile::tempdir().expect("temp project dir");
     app.test_set_project_path(dir.path().to_path_buf());
     app.test_set_active_project(true);
@@ -68,7 +72,7 @@ fn app_with_pool() -> (Resonance, tempfile::TempDir) {
     app.test_add_pool_asset(asset(MISSING_UNUSED, true));
     app.test_push_clip(clip_on(USED));
     app.test_relink_clip(10, Some(USED)); // refresh usage
-    (app, dir)
+    (app, (dir, rx))
 }
 
 fn pool_ids(app: &Resonance) -> Vec<u64> {
