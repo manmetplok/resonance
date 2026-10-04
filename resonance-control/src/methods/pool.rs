@@ -33,8 +33,17 @@ pub const LIST: &str = "pool.list";
 /// ([`ImportParams`] -> a job whose result is [`ImportResult`]).
 pub const IMPORT: &str = "pool.import";
 
+/// `pool.remove_unused` — drop every asset no clip plays from the pool
+/// ([`RemoveUnusedParams`] -> [`RemoveUnusedResult`]). Destructive, so it
+/// takes `confirm`; one undo brings them all back.
+///
+/// Only the pool's index changes: the pooled WAVs stay in the project's
+/// `audio/` folder, and a reference track loaded from one keeps playing.
+/// An asset whose relink import is running is left alone.
+pub const REMOVE_UNUSED: &str = "pool.remove_unused";
+
 /// All `pool.*` method names.
-pub const METHODS: &[&str] = &[LIST, IMPORT];
+pub const METHODS: &[&str] = &[LIST, IMPORT, REMOVE_UNUSED];
 
 /// Largest number of files one `pool.import` accepts. Refused above this
 /// rather than truncated — a partial import is worse than a rejected one.
@@ -99,5 +108,26 @@ pub struct ImportParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ImportResult {
     pub assets: Vec<PoolAssetView>,
+    pub revision: u64,
+}
+
+/// Params for `pool.remove_unused`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RemoveUnusedParams {
+    /// Required (`true`) when there is anything to remove; the error
+    /// otherwise names the assets that would go.
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+/// Result of `pool.remove_unused`: the assets taken out of the pool, in
+/// pool order. Empty when every asset is in use (nothing changed, and no
+/// undo entry was recorded).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RemoveUnusedResult {
+    pub removed: Vec<AssetId>,
     pub revision: u64,
 }

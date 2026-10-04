@@ -69,6 +69,27 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Remove every asset that no clip plays (usage_count 0 in pool_list) from \
+                       the project's media pool. Follows the confirm convention: without \
+                       confirm: true it is refused with the list of assets that would go — \
+                       re-send with confirm: true to proceed. Returns {removed, revision}; \
+                       removed is empty, and nothing is recorded, when every asset is in use. \
+                       \
+                       Only the pool's index changes: the pooled files stay in the project's \
+                       audio/ folder, a reference track loaded from one keeps playing, and one \
+                       edit_undo brings every removed asset back. An asset whose relink is \
+                       running in the GUI is kept.",
+        annotations(destructive_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<pool::RemoveUnusedResult>()
+    )]
+    async fn pool_remove_unused(
+        &self,
+        Parameters(params): Parameters<pool::RemoveUnusedParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(pool::REMOVE_UNUSED, &params).await
+    }
+
+    #[tool(
         description = "Place a sample as an audio clip on an audio track — the API equivalent of \
                        dragging a file onto the timeline. Name the sample EITHER by asset_id \
                        (already in the pool, see pool_list) OR by path (an absolute path, \

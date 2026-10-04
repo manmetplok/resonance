@@ -71,3 +71,16 @@ fn pool_tab_populated() {
     let app = build_pool_app();
     snapshot_to(&app, "tests/snapshots/pool_tab_populated.png");
 }
+
+/// The inline "Remove N unused assets?" confirmation the Pool tab's
+/// "Remove unused" action opens (W4): the unused and the missing asset
+/// would go, the used one stays.
+#[test]
+fn pool_tab_remove_unused_confirm() {
+    let mut app = build_pool_app();
+    let _ = app.update(Message::Pool(
+        resonance_app::message::PoolMessage::ConfirmRemoveUnused(true),
+    ));
+    assert!(app.test_browser().confirm_remove_unused);
+    snapshot_to(&app, "tests/snapshots/pool_tab_remove_unused_confirm.png");
+}

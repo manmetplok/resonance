@@ -44,7 +44,10 @@ use resonance_control::methods::clip::{
     self as proto, AmountSpec, DeleteParams, FadeResult, FadeShape, MoveParams, PlaceParams,
     SetFadeParams, SetGainParams, TrimParams, TrimResult,
 };
-use resonance_control::methods::pool::{self as pool_proto, ImportParams, PoolAssetView, PoolView};
+use resonance_control::methods::pool::{
+    self as pool_proto, ImportParams, PoolAssetView, PoolView, RemoveUnusedParams,
+    RemoveUnusedResult,
+};
 use resonance_control::{PositionSpec, Request, Response, RpcError};
 
 use super::reply::{ack, no_track, reject};
@@ -61,6 +64,7 @@ pub(super) fn try_handle(
     let handled = match request.method.as_str() {
         pool_proto::LIST => (list(app, request), Task::none()),
         pool_proto::IMPORT => import(app, conn, request),
+        pool_proto::REMOVE_UNUSED => remove_unused(app, request),
         proto::PLACE => place(app, conn, request),
         proto::MOVE => move_clip(app, request),
         proto::TRIM => trim(app, request),
@@ -157,6 +161,59 @@ fn import(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Ta
         Some(conn),
     );
     (super::success(request, &started), task)
+}
+
+// ---------------------------------------------------------------------------
+// pool.remove_unused
+// ---------------------------------------------------------------------------
+
+/// Drop every unused asset from the pool through the same message the
+/// Pool tab's "Remove unused" sends, so it is one undo entry. With
+/// nothing unused it answers an empty list and records nothing; with
+/// something to remove it follows the confirm convention.
+fn remove_unused(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: RemoveUnusedParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    app.recompute_pool_usage();
+    let unused = app.unused_pool_assets();
+    if unused.is_empty() {
+        let result = RemoveUnusedResult {
+            removed: Vec::new(),
+            revision: app.revision(),
+        };
+        return (super::success(request, &result), Task::none());
+    }
+    if !params.confirm {
+        let names: Vec<String> = unused
+            .iter()
+            .filter_map(|id| app.media.pool.asset(*id))
+            .map(|a| format!("{} ({:?})", a.id, name_from_path(&a.original_path)))
+            .collect();
+        return reject(
+            request,
+            RpcError::needs_confirmation(format!(
+                "removing {} unused asset(s) from the pool: {}; their files stay in the \
+                 project folder and edit_undo restores them; re-send with \"confirm\": true",
+                unused.len(),
+                names.join(", "),
+            )),
+        );
+    }
+    let task = super::run_via_update(app, Message::Pool(PoolMessage::RemoveUnusedAssets));
+    // The dispatch is synchronous; report what actually left the pool (a
+    // gate may have swallowed it).
+    let removed = unused
+        .into_iter()
+        .filter(|id| !app.media.pool.contains(*id))
+        .map(resonance_control::ids::AssetId)
+        .collect();
+    let result = RemoveUnusedResult {
+        removed,
+        revision: app.revision(),
+    };
+    (super::success(request, &result), task)
 }
 
 /// Validate a batch of source paths: non-empty, within the batch cap,

@@ -339,7 +339,6 @@ fn locate_button_style(status: button::Status) -> button::Style {
 /// the styling or the entry-point wiring.
 ///
 /// [`RelinkMessage::ShowModal`]: crate::message::RelinkMessage::ShowModal
-#[allow(dead_code)] // consumed by the Pool tab rendering, todo #603.
 pub(crate) fn relink_chip<'a>() -> Element<'a, Message> {
     button(text("relink").size(9).color(theme::BAD))
         .on_press(Message::Relink(RelinkMessage::ShowModal))

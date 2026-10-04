@@ -101,6 +101,15 @@ pub enum PoolMessage {
         track_id: TrackId,
         start_sample: SamplePos,
     },
+    /// Show (`true`) or dismiss (`false`) the Pool tab's inline "Remove
+    /// N unused assets?" confirmation. View state only.
+    ConfirmRemoveUnused(bool),
+    /// Take every asset no clip plays out of the pool (the Pool tab's
+    /// "Remove unused" action, control method `pool.remove_unused`).
+    /// Only the pool index changes: the pooled WAVs stay in `audio/`, so
+    /// one undo brings every asset back intact. An asset whose relink
+    /// import is in flight is kept. Classified `UndoAction::Record`.
+    RemoveUnusedAssets,
 }
 
 impl PoolMessage {
@@ -118,6 +127,11 @@ impl PoolMessage {
             // `WindowAudioDrop` re-dispatches `ImportAndPlace` inside the handler
             // (recorded then).
             Self::PickFiles | Self::WindowAudioDrop(..) => UndoAction::Skip,
+            // Opening or dismissing the confirmation is view state.
+            Self::ConfirmRemoveUnused(..) => UndoAction::Skip,
+            // The pool rides the `ProjectFile` snapshot, so one undo puts
+            // every removed asset back; their WAVs never left `audio/`.
+            Self::RemoveUnusedAssets => UndoAction::Record,
             // Audio import + placement (doc #175, todo #598) is one undoable
             // action. Recording here — before the import command is even sent —
             // captures the pre-import project (no pool asset, no placed clip, no
@@ -229,6 +243,13 @@ pub fn handle(r: &mut Resonance, message: PoolMessage) -> Task<Message> {
             if let Err(reason) = place_pooled_asset(r, clip_id, asset_id, track_id, start_sample) {
                 r.banners.error_message = Some(reason);
             }
+        }
+        PoolMessage::ConfirmRemoveUnused(open) => {
+            r.media.browser.confirm_remove_unused = open && !r.unused_pool_assets().is_empty();
+        }
+        PoolMessage::RemoveUnusedAssets => {
+            r.media.browser.confirm_remove_unused = false;
+            r.remove_unused_pool_assets();
         }
     }
     Task::none()

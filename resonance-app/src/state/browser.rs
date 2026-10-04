@@ -159,6 +159,9 @@ pub struct BrowserState {
     pub filter: String,
     /// Audition-preview transport state.
     pub audition: AuditionState,
+    /// The Pool tab's inline "Remove N unused assets?" confirmation is
+    /// showing (`PoolMessage::ConfirmRemoveUnused`).
+    pub confirm_remove_unused: bool,
 }
 
 impl BrowserState {
