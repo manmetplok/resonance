@@ -210,6 +210,38 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     .size(10)
     .color(theme::TEXT_3);
 
+    // I/O latency (doc #260 finding #13): queried on open and whenever
+    // the input device list re-enumerates (`UiMessage::OpenSettings`,
+    // `engine_events::transport::input_devices_listed`).
+    let fmt_latency = |samples: u64| {
+        let ms = 1000.0 * samples as f64 / f64::from(r.sample_rate.max(1));
+        format!("{samples} samples ({ms:.1} ms)")
+    };
+    let (capture_text, playback_text, round_trip_text) = match r.devices.io_latency {
+        Some(l) => (
+            fmt_latency(l.capture_samples),
+            fmt_latency(l.playback_samples),
+            fmt_latency(l.round_trip_samples),
+        ),
+        None => ("—".to_string(), "—".to_string(), "—".to_string()),
+    };
+    let latency_row = |label: &'static str, value: String| {
+        row![
+            text(label).size(12).color(theme::TEXT_2),
+            Space::new().width(Length::Fill),
+            text(value).size(12).font(theme::MONO_FONT).color(theme::TEXT_1),
+        ]
+        .align_y(alignment::Vertical::Center)
+    };
+    let audio_section = column![
+        section("Audio"),
+        Space::new().height(6),
+        latency_row("Input latency", capture_text),
+        latency_row("Output latency", playback_text),
+        latency_row("Round trip", round_trip_text),
+    ]
+    .spacing(4);
+
     let dialog_content = column![
         title,
         Space::new().height(16),
@@ -229,6 +261,8 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         Space::new().height(6),
         loop_record_toggle,
         loop_record_hint,
+        Space::new().height(20),
+        audio_section,
         Space::new().height(20),
         plugins_section,
         Space::new().height(20),

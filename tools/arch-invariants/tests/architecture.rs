@@ -2027,10 +2027,6 @@ const ORPHANED_AUDIO_COMMANDS: &[&str] = &[
     "ClearAllMidiBindings",
     "SetControllerMap",
     "SetControlSurfaceInput",
-    // Loop-record mode (takes vs. merge): no transport toggle yet.
-    "SetLoopRecordMode",
-    // Round-trip I/O latency probe: no settings surface reads it.
-    "QueryIoLatency",
     // Clip warp (time-stretch to tempo): engine since 2026-06-22, no
     // clip-inspector controls; its events are dropped in `dispatch.rs`.
     "SetClipWarp",

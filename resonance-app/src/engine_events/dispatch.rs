@@ -209,19 +209,20 @@ fn route_transport(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::RecordingOverflow { dropped_frames } => {
             transport::recording_overflow(r, dropped_frames)
         }
-        // I/O latency report (doc #260 finding #13): no UI surface yet —
-        // logged for diagnosability until a round-trip readout lands.
+        // I/O latency report (doc #260 finding #13): mirrored onto
+        // `r.devices.io_latency` for the Settings → Audio readout (W3).
         E::IoLatencyReport {
             capture_samples,
             playback_samples,
             round_trip_samples,
         } => {
-            tracing::info!(
+            tracing::debug!(
                 capture_samples,
                 playback_samples,
                 round_trip_samples,
                 "audio: io latency (samples)"
             );
+            transport::io_latency_report(r, capture_samples, playback_samples, round_trip_samples);
         }
         // Render-pool status (realtime-multithreading.md §6): no UI
         // surface yet. The engine already logs it; kept here so a DSP-load
