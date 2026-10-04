@@ -44,7 +44,7 @@ Several agents reached the same root cause from different sides. Fix these toget
 7. **Discontinuities on switch, retrigger and toggle** (DSP2-03, -05, -08, -11, HOST-09). Mostly missing crossfades or smoothers. The existing crossfade machinery should be reused.
 8. **Silent failure surfaces** (UX-04, UX-11, UX-13, PUX-09, ARCH2-06). Errors are overwritten, autosave failures are only logged, the CPU meter is a placeholder, and unknown control params are silently ignored.
 
-## Fix campaign status (started 2026-10-02)
+## Fix campaign status (started 2026-10-02, all batches merged 2026-10-04)
 
 Each agent works in its own worktree and commits on its branch. The orchestrator merges every batch into master and updates this table. Agents do **not** edit this file.
 
@@ -79,7 +79,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | merged | ee3d8053 |
 | 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | merged | 7a1f4f97 |
 | 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | merged | 2b41b974 |
-| 6 | W1 MIDI learn UI | FU-A1a1: EnterMidiLearn/CancelMidiLearn/ClearMidiBinding/ClearAllMidiBindings, SetControllerMap, SetControlSurfaceInput | opus | running | |
+| 6 | W1 MIDI learn UI | FU-A1a1: EnterMidiLearn/CancelMidiLearn/ClearMidiBinding/ClearAllMidiBindings, SetControllerMap, SetControlSurfaceInput | opus | merged | ec7520fd |
 | 6 | W2 clip warp UI | FU-A1a1: SetClipWarp, SetClipWarpMarkers, DetectClipTempo | opus | merged | de2625d3 |
 | 6 | W3 loop-record mode + I/O latency | FU-A1a1: SetLoopRecordMode, QueryIoLatency | sonnet | merged | 1482d278 |
 | 6 | W4 freeze auto-stale, pool remove/relink, delete dead helpers | FU-A1a3 | opus | merged | c1a4621a |
@@ -234,6 +234,17 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 - *W4:*
   - The unwired freeze-fingerprint helpers compared incompatible hashes, so they were replaced. Auto-stale now fires on plugin-side param edits and on a rescan while the editor is open; the existing pre-dispatch gate and the UPD-05 fingerprint cover the rest.
   - "Remove unused" removes entries from the pool index only, and is undoable.
+- **FU-W1a:** no UI for a binding's range, invert, takeover or encoder mode (the engine supports them through controller maps).
+- **FU-W1b:** there are no bus or master volume/pan targets in the binding model, and no inspector picker for bus/master plugin params. Those can only be learned from the generic plugin window.
+- **FU-W1c:** sub-track strips' M, S and pan aren't learnable; only the fader is.
+- **FU-W1d:** bindings to deleted targets stay listed as "Deleted …". Consider pruning them on delete.
+- **FU-W1e:** controller maps address targets by id, so they only fit projects with the same structure.
+- **FU-W1f:** the duplicate control-surface device list (engine event + app mirror) can be deleted.
+- **FU-W1g:** not yet tried with a real control surface.
+- *W1:*
+  - The engine half of MIDI learn was only stubs ("E3", todo #430). W1 built it.
+  - `ControlSurfaceParamChanged` was replaced by `ControlSurfaceMoved`: the engine matches the incoming message, and the app applies the change through the normal message path, so undo, save and automation work.
+  - `ORPHANED_AUDIO_COMMANDS` is now empty.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
