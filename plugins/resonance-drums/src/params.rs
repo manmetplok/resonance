@@ -35,11 +35,11 @@ pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
 /// Labels for the output mode choice, indexed by parameter value.
 pub const OUTPUT_MODE_LABELS: &[&str] = &["Stereo", "Multi"];
 /// `output_mode`: everything to Main (the default, D5).
-pub const OUTPUT_MODE_STEREO: i32 = 0;
+pub const OUTPUT_MODE_STEREO: i32 = resonance_plugin::first_party::drums::OUTPUT_MODE_STEREO;
 /// `output_mode`: per-pad ports plus the Overhead port.
-pub const OUTPUT_MODE_MULTI: i32 = 1;
+pub const OUTPUT_MODE_MULTI: i32 = resonance_plugin::first_party::drums::OUTPUT_MODE_MULTI;
 /// The id of the output mode param.
-pub const OUTPUT_MODE_ID: &str = "output_mode";
+pub const OUTPUT_MODE_ID: &str = resonance_plugin::first_party::drums::OUTPUT_MODE;
 
 /// `polyphony`'s id.
 pub const POLYPHONY_ID: &str = "polyphony";
@@ -242,7 +242,7 @@ impl Default for DrumParams {
             // 1001 steps — past the engine's choice-label walk, so a
             // parameter query never enumerates the library.
             kit_select: IntParam::new(
-                "kit_select",
+                resonance_plugin::first_party::drums::KIT_SELECT,
                 "Kit",
                 NO_KIT,
                 IntRange::Linear {
@@ -255,7 +255,7 @@ impl Default for DrumParams {
             .not_automatable()
             .excluded_from_state(),
             kit_load_progress: FloatParam::new(
-                "kit_load_progress",
+                resonance_plugin::first_party::drums::KIT_LOAD_PROGRESS,
                 "Kit Load Progress",
                 1.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },

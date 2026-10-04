@@ -1495,6 +1495,60 @@ fn view_layer_never_hardcodes_pure_white_or_black() {
 }
 
 // ---------------------------------------------------------------------------
+// First-party plugin identity has one spelling (code review ARCH2-03)
+// ---------------------------------------------------------------------------
+
+/// ARCH2-03: "The app depends on no plugin crate" was enforced, but the
+/// app depended on plugin internals by string literal — rename a CLAP id
+/// and every template track became a missing-plugin slot. Each
+/// first-party CLAP id (`com.resonance.<dir>` for every
+/// `plugins/resonance-<dir>/`) is spelled once, in
+/// `resonance-plugin/src/first_party.rs`; the plugins declare `CLAP_ID`
+/// from it and the app imports it. A quoted literal of one anywhere else
+/// in the app's, the SDK's or a plugin's sources fails. (`resonance-
+/// control` spells `MASTERING_PLUGIN_ID` itself — it links nothing — and
+/// the app's `builtin_templates` tests pin it to the plugin's.)
+///
+/// Exercised 2026-10-04: changed `const CLAP_ID` in
+/// `plugins/resonance-gate/src/lib.rs` back to `"com.resonance.gate"` →
+/// failed on that line; reverted.
+#[test]
+fn first_party_clap_ids_are_spelled_once() {
+    let root = workspace_root();
+    let literals: Vec<String> = packages()
+        .iter()
+        .filter(|p| p.is_plugin(&root))
+        .filter_map(|p| p.name.strip_prefix("resonance-").map(|n| format!("\"com.resonance.{n}\"")))
+        .collect();
+    assert!(literals.len() >= 13, "plugin dirs moved? found {literals:?}");
+    let home = "resonance-plugin/src/first_party.rs";
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-app/src"), &mut files);
+    rust_files(&root.join("resonance-plugin/src"), &mut files);
+    for p in packages().iter().filter(|p| p.is_plugin(&root)) {
+        rust_files(&p.dir.join("src"), &mut files);
+    }
+    let mut violations = Vec::new();
+    for file in files {
+        let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+        if rel == home {
+            continue;
+        }
+        for (n, code) in code_lines(&file) {
+            if let Some(lit) = literals.iter().find(|l| code.contains(l.as_str())) {
+                violations.push(format!(
+                    "{rel}:{n}: spells {lit} — use the `resonance_plugin::first_party` constant"
+                ));
+            }
+        }
+    }
+    report(
+        "ARCH2-03: first-party CLAP ids are spelled only in resonance_plugin::first_party",
+        &violations,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The wire protocol stays in the control layer (code review ARCH2-11)
 // ---------------------------------------------------------------------------
 

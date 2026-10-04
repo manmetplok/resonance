@@ -301,3 +301,22 @@ fn a_full_state_reload_loads_the_kit_once() {
     assert!(drums.initialize(48_000.0, 512));
     assert_eq!(generation(), g0 + 1, "one load, from initialize");
 }
+
+/// The host reads these keys by name (`resonance-app/src/drums_mirror.rs`,
+/// through `resonance_plugin::first_party`): each must be a real param,
+/// and `output_mode`'s Multi step must be the plugin's (code review
+/// ARCH2-03 — a rename used to fall through to "multi-out" silently).
+#[test]
+fn host_named_keys_are_real_params() {
+    use resonance_plugin::first_party;
+    let drums = ResonanceDrums::new();
+    let ids: Vec<&str> = drums.params().iter().map(|p| p.id()).collect();
+    for key in first_party::drums::HOST_KEYS {
+        assert!(ids.contains(key), "drums has no param {key:?}");
+    }
+    assert_eq!(ResonanceDrums::CLAP_ID, first_party::DRUMS);
+    assert_eq!(
+        resonance_drums::params::OUTPUT_MODE_LABELS[first_party::drums::OUTPUT_MODE_MULTI as usize],
+        "Multi"
+    );
+}

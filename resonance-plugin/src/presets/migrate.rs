@@ -187,8 +187,11 @@ pub fn convert_legacy_document(
         return Err("no params object".to_string());
     }
     let name = stored.unwrap_or_else(|| fallback_name.to_string());
-    if plugin_id == "com.resonance.amp"
-        && obj.get("params").and_then(|p| p.get("file_select")).is_some()
+    if plugin_id == crate::first_party::AMP
+        && obj
+            .get("params")
+            .and_then(|p| p.get(crate::first_party::amp::FILE_SELECT))
+            .is_some()
         && !obj.contains_key("model_path")
     {
         tracing::info!(

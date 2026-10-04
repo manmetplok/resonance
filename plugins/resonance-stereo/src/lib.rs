@@ -51,7 +51,7 @@ impl ResonanceStereo {
 }
 
 impl ResonancePlugin for ResonanceStereo {
-    const CLAP_ID: &'static str = "com.resonance.stereo";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::STEREO;
     const NAME: &'static str = "Resonance Stereo";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

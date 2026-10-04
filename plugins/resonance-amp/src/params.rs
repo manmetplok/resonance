@@ -167,7 +167,7 @@ fn file_select_param(library: Arc<SharedLibrary>, status: Arc<Mutex<ModelStatus>
     // value is a library slot; its text is the slot's model name, which is
     // how the control API reads which model is loaded (§9.1).
     IntParam::new(
-        "file_select",
+        resonance_plugin::first_party::amp::FILE_SELECT,
         "Model Select",
         0,
         IntRange::Linear {

@@ -339,6 +339,8 @@ fn dyn_sc_detects_on_the_sidechain_key() {
     assert!(no_key.abs() < 0.05, "no key connected, yet the band cut {no_key:.2} dB");
 
     assert_eq!(ResonanceEq::SIDECHAIN_INPUT, Some(2), "the EQ declares a key port");
+    // ...which the host treats as secondary (code review ARCH2-03).
+    assert!(resonance_plugin::first_party::SECONDARY_KEY_PLUGINS.contains(&ResonanceEq::CLAP_ID));
     assert!(
         EqParams::default().bands.iter().all(|b| !b.dyn_sc.value()),
         "dyn_sc is off by default"

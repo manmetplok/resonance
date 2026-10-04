@@ -3,6 +3,7 @@
 /// Replaces nih-plug with a thin abstraction over clack-plugin.
 pub mod clap_bridge;
 pub mod features;
+pub mod first_party;
 pub mod formatters;
 pub mod gui;
 pub mod host;

@@ -76,7 +76,7 @@ impl EditorFactory for MasteringEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Mastering".to_string(),
-                app_id: "com.resonance.mastering".to_string(),
+                app_id: resonance_plugin::first_party::MASTERING.to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
                 min_size: (1000, 620),
                 resizable: true,

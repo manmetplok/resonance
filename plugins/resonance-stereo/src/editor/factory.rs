@@ -59,7 +59,7 @@ impl EditorFactory for StereoEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Stereo".to_string(),
-                app_id: "com.resonance.stereo".to_string(),
+                app_id: resonance_plugin::first_party::STEREO.to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
                 min_size: (700, 340),
                 resizable: true,

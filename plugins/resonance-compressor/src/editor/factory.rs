@@ -60,7 +60,7 @@ impl EditorFactory for CompressorEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Compressor".to_string(),
-                app_id: "com.resonance.compressor".to_string(),
+                app_id: resonance_plugin::first_party::COMPRESSOR.to_string(),
                 initial_size: (960, 540),
                 min_size: (680, 400),
                 resizable: true,

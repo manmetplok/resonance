@@ -58,7 +58,7 @@ impl EditorFactory for ColorEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Color".to_string(),
-                app_id: "com.resonance.color".to_string(),
+                app_id: resonance_plugin::first_party::COLOR.to_string(),
                 initial_size: SIZE,
                 min_size: (720, 440),
                 resizable: true,

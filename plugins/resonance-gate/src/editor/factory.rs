@@ -65,7 +65,7 @@ impl EditorFactory for GateEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Gate".to_string(),
-                app_id: "com.resonance.gate".to_string(),
+                app_id: resonance_plugin::first_party::GATE.to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
                 min_size: (640, 260),
                 resizable: true,

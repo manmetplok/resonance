@@ -80,7 +80,7 @@ impl EditorFactory for WavetableEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Wavetable".to_string(),
-                app_id: "com.resonance.wavetable".to_string(),
+                app_id: resonance_plugin::first_party::WAVETABLE.to_string(),
                 initial_size: (960, 560),
                 min_size: (720, 480),
                 resizable: true,

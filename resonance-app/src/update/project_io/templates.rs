@@ -522,17 +522,14 @@ pub fn write_template(
 // `project_path = None`, so the source is never mutated.
 // ---------------------------------------------------------------------------
 
-/// Stable CLAP ids of the bundled Resonance plugins. The concrete `.clap`
-/// file path is machine-specific (resolved by the runtime plugin scan), so
-/// built-in templates reference plugins by id only and leave the path empty
-/// for the instantiate step to fill in against `available_plugins`.
-const CLAP_DRUMS: &str = "com.resonance.drums";
-const CLAP_WAVETABLE: &str = "com.resonance.wavetable";
-const CLAP_REVERB: &str = "com.resonance.reverb";
-const CLAP_DELAY: &str = "com.resonance.delay";
-const CLAP_EQ: &str = "com.resonance.eq";
-const CLAP_COMPRESSOR: &str = "com.resonance.compressor";
-const CLAP_MASTERING: &str = "com.resonance.mastering";
+// Stable CLAP ids of the bundled Resonance plugins. The concrete `.clap`
+// file path is machine-specific (resolved by the runtime plugin scan), so
+// built-in templates reference plugins by id only and leave the path empty
+// for the instantiate step to fill in against `available_plugins`.
+use resonance_plugin::first_party::{
+    COMPRESSOR as CLAP_COMPRESSOR, DELAY as CLAP_DELAY, DRUMS as CLAP_DRUMS, EQ as CLAP_EQ,
+    MASTERING as CLAP_MASTERING, REVERB as CLAP_REVERB, WAVETABLE as CLAP_WAVETABLE,
+};
 
 /// A built-in starter rendered to data: a replay-ready `ProjectFile` plus
 /// the MIDI notes that a saved project would store in `midi/clip_{id}.mid`.

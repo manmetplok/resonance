@@ -755,3 +755,17 @@ fn the_model_selector_is_too_wide_for_the_choice_label_walk() {
         "file_select now fits the choice walk; check what {steps} labels cost per query"
     );
 }
+
+/// The host resolves a model name through these keys by name
+/// (`update/control/track/params.rs`, via `resonance_plugin::first_party`):
+/// each must be a real param (code review ARCH2-03).
+#[test]
+fn host_named_keys_are_real_params() {
+    use resonance_plugin::first_party;
+    let amp = ResonanceAmp::new();
+    let ids: Vec<&str> = amp.params().iter().map(|p| p.id()).collect();
+    for key in first_party::amp::HOST_KEYS {
+        assert!(ids.contains(key), "amp has no param {key:?}");
+    }
+    assert_eq!(ResonanceAmp::CLAP_ID, first_party::AMP);
+}

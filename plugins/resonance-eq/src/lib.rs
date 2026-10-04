@@ -67,7 +67,7 @@ impl ResonanceEq {
 }
 
 impl ResonancePlugin for ResonanceEq {
-    const CLAP_ID: &'static str = "com.resonance.eq";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::EQ;
     const NAME: &'static str = "Resonance EQ";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

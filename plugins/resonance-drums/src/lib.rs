@@ -372,7 +372,7 @@ impl KitBridge {
             .kit_select_edits
             .fetch_add(1, Ordering::Relaxed);
         if let Some(host) = self.host.lock().as_ref() {
-            host.announce_param_change("kit_select");
+            host.announce_param_change(resonance_plugin::first_party::drums::KIT_SELECT);
         }
     }
 
@@ -570,7 +570,7 @@ const KIT_SELECT_INDEX: usize = 4;
 const KIT_LOAD_PROGRESS_INDEX: usize = 5;
 
 impl ResonancePlugin for ResonanceDrums {
-    const CLAP_ID: &'static str = "com.resonance.drums";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::DRUMS;
     const NAME: &'static str = "Resonance Drums";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
@@ -676,10 +676,10 @@ impl ResonancePlugin for ResonanceDrums {
                 reload: Some(bridge.clone()),
             },
         ));
-        debug_assert_eq!(params.param_at(KIT_SELECT_INDEX).id(), "kit_select");
+        debug_assert_eq!(params.param_at(KIT_SELECT_INDEX).id(), resonance_plugin::first_party::drums::KIT_SELECT);
         debug_assert_eq!(
             params.param_at(KIT_LOAD_PROGRESS_INDEX).id(),
-            "kit_load_progress"
+            resonance_plugin::first_party::drums::KIT_LOAD_PROGRESS
         );
         let progress_param =
             selection::ProgressParam::new(params.clone(), bridge.load_progress.clone());

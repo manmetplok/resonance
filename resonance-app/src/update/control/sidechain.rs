@@ -72,12 +72,12 @@ pub(super) fn resolve_key_source(
     }
 }
 
-/// Plugins whose key port is secondary: they read a key (the reverb
-/// ducks its wet return from one, the EQ's dynamic bands can detect on
-/// one) but are not what an unqualified "key this track from X" means.
-/// Default resolution skips them while any other keyed plugin sits
-/// anywhere on the chain.
-const SECONDARY_KEY_PLUGINS: &[&str] = &["com.resonance.reverb", "com.resonance.eq"];
+// Plugins whose key port is secondary: they read a key (the reverb
+// ducks its wet return from one, the EQ's dynamic bands can detect on
+// one) but are not what an unqualified "key this track from X" means.
+// Default resolution skips them while any other keyed plugin sits
+// anywhere on the chain.
+use resonance_plugin::first_party::SECONDARY_KEY_PLUGINS;
 
 /// The plugin an omitted `plugin_id` resolves to: the first plugin on
 /// `chain` that declares a sidechain (key) input and is not listed in

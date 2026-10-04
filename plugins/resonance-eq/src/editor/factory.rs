@@ -65,7 +65,7 @@ impl EditorFactory for EqEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance EQ".to_string(),
-                app_id: "com.resonance.eq".to_string(),
+                app_id: resonance_plugin::first_party::EQ.to_string(),
                 initial_size: (960, 730),
                 min_size: (720, 610),
                 resizable: true,
