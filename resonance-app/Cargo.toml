@@ -23,7 +23,7 @@ serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 base64 = "0.22"
-printpdf = { version = "0.9", default-features = false }
+printpdf = { version = "0.12", default-features = false }
 time = { workspace = true, features = ["formatting", "parsing"] }
 # Subscriber installed in `main.rs` only (ARCH-05 A5-1).
 tracing.workspace = true
