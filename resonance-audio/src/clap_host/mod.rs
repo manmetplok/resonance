@@ -679,16 +679,20 @@ impl PluginSlot {
 
     /// This block's [`FadeStage`] for the slot.
     ///
-    /// Folds in the own-parameter rule: a plugin that bypasses itself
-    /// stays in the chain even when settled-bypassed (its output *is* the
-    /// dry signal by then), so the stage never resolves to
-    /// [`FadeStage::Dry`] for it. The host crossfade still runs over the
-    /// transition, which is what makes a plugin that switches its own
-    /// bypass abruptly click-free anyway.
+    /// A plugin that bypasses itself is always [`FadeStage::Wet`] (code
+    /// review HOST-04): it stays in the chain even when settled-bypassed
+    /// (its output *is* the dry signal by then), and the host does not
+    /// crossfade over the transition either — the plugin's bypassed
+    /// output is its input delayed by its latency, while the host's dry
+    /// copy is the undelayed input, so a host crossfade on a latent
+    /// plugin blended two misaligned signals and stepped by `latency`
+    /// samples at both ends. The plugin owns its own transition. The fade
+    /// position still advances, so the slot's state reads the same as any
+    /// other's.
     #[inline]
     pub fn stage(&self, sample_rate: u32, frames: usize, live: bool) -> FadeStage {
         let stage = self.bypass.stage(sample_rate, frames, live);
-        if self.bypass_param.is_some() && stage == FadeStage::Dry {
+        if self.bypass_param.is_some() {
             FadeStage::Wet
         } else {
             stage
@@ -698,15 +702,21 @@ impl PluginSlot {
     /// Push the plugin's own bypass parameter when it declares one and
     /// the target changed. Call right after locking the instance and
     /// before processing it.
+    ///
+    /// The value counts as sent only once it is actually queued (code
+    /// review HOST-14): a full parameter queue leaves `own_bypass_sent`
+    /// alone, so the next block retries instead of the bypass being lost.
     pub fn sync_own_bypass(&self, inst: &mut ClapInstance) {
         let Some(param_id) = self.bypass_param else {
             return;
         };
         let want: i8 = i8::from(self.bypass.bypassed());
-        if self.own_bypass_sent.swap(want, Ordering::Relaxed) == want {
+        if self.own_bypass_sent.load(Ordering::Relaxed) == want {
             return;
         }
-        inst.set_param(param_id, f64::from(want));
+        if inst.set_param(param_id, f64::from(want)) {
+            self.own_bypass_sent.store(want, Ordering::Relaxed);
+        }
     }
 }
 

@@ -140,6 +140,16 @@ pub trait Param: Send + Sync {
     fn is_stepped(&self) -> bool {
         false
     }
+    /// Whether this is the plugin's own whole-plugin bypass switch —
+    /// CLAP `IS_BYPASS` (code review HOST-07). A host that finds one
+    /// drives it instead of skipping the plugin, so declare it only on a
+    /// bypass that keeps the plugin's latency: its bypassed output must
+    /// be the input delayed by the latency the plugin reports, with the
+    /// plugin making its own click-free transition. The host then keeps
+    /// every other track's delay compensation untouched across a toggle.
+    fn is_bypass(&self) -> bool {
+        false
+    }
     /// Compute a stable u32 CLAP param ID from the string ID.
     ///
     /// This is the plugin-side id. What a host sees can differ for a
@@ -661,6 +671,7 @@ pub struct BoolParam {
     default: bool,
     value: AtomicBool,
     module: &'static str,
+    is_bypass: bool,
 }
 
 impl BoolParam {
@@ -671,12 +682,20 @@ impl BoolParam {
             default,
             value: AtomicBool::new(default),
             module: "",
+            is_bypass: false,
         }
     }
 
     /// Put this parameter in a host-visible group — see [`Param::module`].
     pub fn with_module(mut self, module: &'static str) -> Self {
         self.module = module;
+        self
+    }
+
+    /// Declare this as the plugin's latency-preserving bypass switch —
+    /// see [`Param::is_bypass`] for what that promises.
+    pub fn as_bypass(mut self) -> Self {
+        self.is_bypass = true;
         self
     }
 
@@ -743,5 +762,8 @@ impl Param for BoolParam {
     }
     fn is_stepped(&self) -> bool {
         true
+    }
+    fn is_bypass(&self) -> bool {
+        self.is_bypass
     }
 }

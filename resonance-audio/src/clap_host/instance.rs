@@ -786,18 +786,27 @@ impl ClapInstance {
     }
 
     /// Queue a parameter change to be sent during the next process() call.
-    /// Deduplicates by param_id (last value wins) and caps at 128 entries
-    /// to prevent unbounded growth when the GUI automates many parameters
-    /// between process calls.
-    pub fn set_param(&mut self, param_id: u32, value: f64) {
+    /// Deduplicates by param_id (last value wins) and caps at
+    /// `MAX_PENDING_PARAMS` distinct parameters to prevent unbounded growth
+    /// when the GUI automates many parameters between process calls.
+    ///
+    /// Returns whether the value was queued: `false` only when the queue
+    /// is full of *other* parameters (a change to one already queued
+    /// always lands), so a caller that must not lose a value can retry
+    /// (code review HOST-14).
+    pub fn set_param(&mut self, param_id: u32, value: f64) -> bool {
         if let Some(existing) = self
             .pending_params
             .iter_mut()
             .find(|(id, _)| *id == param_id)
         {
             existing.1 = value;
+            true
         } else if self.pending_params.len() < crate::limits::MAX_PENDING_PARAMS {
             self.pending_params.push((param_id, value));
+            true
+        } else {
+            false
         }
     }
 
@@ -807,9 +816,14 @@ impl ClapInstance {
     /// process call sorts them by time. Dropped when the queue is full
     /// (the next block's start re-sends every lane's value).
     /// Allocation-free.
-    pub fn queue_param_at(&mut self, param_id: u32, value: f64, sample_offset: u32) {
+    ///
+    /// Returns whether the point was queued (code review HOST-14).
+    pub fn queue_param_at(&mut self, param_id: u32, value: f64, sample_offset: u32) -> bool {
         if self.pending_auto.len() < crate::limits::MAX_PENDING_AUTOMATION {
             self.pending_auto.push((sample_offset, param_id, value));
+            true
+        } else {
+            false
         }
     }
 
