@@ -42,6 +42,9 @@ pub enum Overlay {
     MarkersOverview,
     DrumGroupsManager,
     MarkerMenu,
+    /// The right-click MIDI menu on a learnable control (MIDI Learn,
+    /// doc #167): window coordinates, drawn in the root stack.
+    MidiMenu,
     /// The track context menu and its "Save as preset…" prompt. Drawn in
     /// the arrange area (its anchor is in arrange-area space), not in the
     /// root stack, but gated and dismissed like any other overlay.
@@ -119,6 +122,7 @@ impl Overlay {
                 Message::MarkerUi(MarkerUiMessage::CancelRename)
             }
             Overlay::MarkerMenu => Message::MarkerUi(MarkerUiMessage::CloseMenu),
+            Overlay::MidiMenu => Message::MidiMap(MidiMapMessage::CloseMenu),
             Overlay::TrackMenu if r.ui.interaction.preset_save.is_some() => {
                 Message::Track(TrackMessage::CloseSavePresetPrompt)
             }
@@ -178,6 +182,8 @@ impl Resonance {
             || self.ui.interaction.marker_rename.is_some()
         {
             Overlay::MarkerMenu
+        } else if self.devices.midi_map.menu.is_some() {
+            Overlay::MidiMenu
         } else if self.ui.interaction.track_menu.is_some()
             || self.ui.interaction.preset_save.is_some()
         {

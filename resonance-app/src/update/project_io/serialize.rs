@@ -577,6 +577,8 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             lanes.sort_by_key(|l| l.id);
             lanes
         },
+        // MIDI Learn bindings (doc #167), by id for a stable order.
+        midi_bindings: r.devices.midi_map.sorted(),
         // Performance-mode footer selection (epic #11): the instrument
         // tuning (stored by stable name) and capo offset for the live
         // fingering diagrams.

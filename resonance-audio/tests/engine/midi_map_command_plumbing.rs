@@ -1,9 +1,8 @@
 //! Contract tests for the MIDI Learn / hardware-controller-mapping
 //! command & event plumbing (todo #429, doc #167 §2 E2).
 //!
-//! This slice only wires the command/event variants and stub handlers; the
-//! real binding application lands in E3. So these tests pin the *shape* of
-//! the new public boundary — that every command and event variant exists,
+//! These tests pin the *shape* of the public boundary (the behaviour is
+//! `tests/midi_hw/midi_map_engine.rs`) — that every command and event variant exists,
 //! carries the documented payload built from the shared `resonance-common`
 //! `midi_map` types, and survives the `Clone` + `Debug` the engine channel
 //! relies on. A renamed field or dropped variant fails to compile here, and
@@ -133,17 +132,12 @@ fn midi_map_events_round_trip_through_clone() {
         other => panic!("expected MidiBindingCleared, got {other:?}"),
     }
 
-    match (AudioEvent::ControlSurfaceParamChanged {
-        target: MidiTarget::TrackPan(2),
-        value_norm: 0.75,
-    })
-    .clone()
-    {
-        AudioEvent::ControlSurfaceParamChanged { target, value_norm } => {
-            assert_eq!(target, MidiTarget::TrackPan(2));
-            assert!((value_norm - 0.75).abs() < f32::EPSILON);
+    match (AudioEvent::ControlSurfaceMoved { binding, value: 96 }).clone() {
+        AudioEvent::ControlSurfaceMoved { binding, value } => {
+            assert_eq!(binding.id, BindingId(7));
+            assert_eq!(value, 96);
         }
-        other => panic!("expected ControlSurfaceParamChanged, got {other:?}"),
+        other => panic!("expected ControlSurfaceMoved, got {other:?}"),
     }
 
     match (AudioEvent::ControlSurfaceDevicesChanged {

@@ -2017,17 +2017,7 @@ fn enum_variants(file: &Path, name: &str) -> Vec<String> {
 /// surface (code review ARCH2-01). Each line is a decision someone has to
 /// make (wire it, or delete it from the engine), never a place to park a
 /// new command: a new variant must have an app caller when it lands.
-const ORPHANED_AUDIO_COMMANDS: &[&str] = &[
-    // MIDI learn / controller maps / control surfaces: the engine side
-    // (bindings, learn capture, `MidiLearnCaptured`) exists; there is no
-    // learn UI, only `test_support` arms it.
-    "EnterMidiLearn",
-    "CancelMidiLearn",
-    "ClearMidiBinding",
-    "ClearAllMidiBindings",
-    "SetControllerMap",
-    "SetControlSurfaceInput",
-];
+const ORPHANED_AUDIO_COMMANDS: &[&str] = &[];
 
 /// `AudioCommand` variants the engine sends to itself, by design never
 /// from the app: worker threads post them on the retry channel, and

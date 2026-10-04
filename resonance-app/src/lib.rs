@@ -449,6 +449,12 @@ impl Resonance {
         let _ = engine.send(AudioCommand::ScanPlugins);
 
         let mut app = Self::assemble(engine, Host::Machine);
+        // The control surface this machine's MIDI bindings are played from.
+        if let Some(device) = app.settings.midi.control_surface_input.clone() {
+            let _ = app.engine.send(AudioCommand::SetControlSurfaceInput {
+                device: Some(device),
+            });
+        }
         // The session's default "Track 1" (FU-D4a): app-allocated and
         // sent synchronously, before iced's event loop can deliver any
         // other message, so nothing can ever race this for id 1. See

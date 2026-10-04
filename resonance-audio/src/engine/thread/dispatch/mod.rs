@@ -217,7 +217,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::ClearAllMidiBindings
         | AudioCommand::SetControlSurfaceInput { .. }
         | AudioCommand::EnterMidiLearn { .. }
-        | AudioCommand::CancelMidiLearn => midi_map::dispatch_midi_map(ctx, cmd),
+        | AudioCommand::CancelMidiLearn => midi_map::dispatch_midi_map(ctx, state, cmd),
 
         // Reference track A/B
         AudioCommand::LoadReferenceTrack { .. }

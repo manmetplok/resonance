@@ -84,6 +84,9 @@ pub(crate) fn handle(r: &mut Resonance, msg: KeymapMsg) -> Task<Message> {
                 editor.baseline = preset.bindings();
                 editor.unbound_by_preset = preset.unbound();
             }
+            if tab == SettingsTab::Midi {
+                crate::update::midi_map::reload_saved_maps(r);
+            }
         }
         KeymapMsg::SetPreset(preset) => {
             r.settings.keymap.preset = preset.key().to_string();

@@ -30,6 +30,7 @@ pub mod keymap;
 pub mod master;
 pub mod midi_clip;
 pub mod midi_editor;
+pub mod midi_map;
 pub mod mixer;
 pub mod palette;
 pub mod chain_edit;
@@ -227,6 +228,7 @@ impl crate::Resonance {
             Message::Clip(m) => clips::handle(self, m),
             Message::MidiClip(m) => midi_clip::handle(self, m),
             Message::MidiEditor(m) => midi_editor::handle(self, m),
+            Message::MidiMap(m) => midi_map::handle(self, m),
             Message::VocalTuning(m) => vocal_tuning::handle(self, m),
             Message::Plugin(m) => plugin::handle(self, m),
             Message::Automation(m) => automation::handle(self, m),

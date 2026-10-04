@@ -860,6 +860,17 @@ impl EngineHandlerHarness {
         self.with_ctx(|ctx, state| super::dispatch::dispatch(ctx, state, cmd));
     }
 
+    /// Feed one raw control-surface MIDI message through the engine loop's
+    /// drain handler, as if the control-surface port had delivered it.
+    /// Unparseable bytes are dropped, as the port callback drops them.
+    pub fn control_surface_message(&mut self, raw: &[u8]) {
+        if let Some(event) = crate::midi_hardware::parse_control_event_for_test(raw) {
+            self.with_ctx(|ctx, state| {
+                crate::engine::midi::handle_live_control_event(ctx, state, event)
+            });
+        }
+    }
+
     /// Republish the plugin-delay-compensation table, as the engine loop
     /// does after every command [`affects_latency`](plugins::affects_latency)
     /// flags ([`Self::dispatch`] runs only the handler).

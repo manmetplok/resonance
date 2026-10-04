@@ -79,6 +79,8 @@ mod control_meter_compare;
 mod control_meter_probe;
 #[path = "control/control_reference.rs"]
 mod control_reference;
+#[path = "control/control_midi_map.rs"]
+mod control_midi_map;
 #[path = "control/control_mixer_volume_db.rs"]
 mod control_mixer_volume_db;
 #[path = "control/control_mutation_gate.rs"]

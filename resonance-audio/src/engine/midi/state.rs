@@ -32,6 +32,9 @@ pub struct MidiHardwareState {
     /// thread via a separate bounded channel, drained alongside
     /// [`Self::midi_inputs`].
     pub control_surface: ControlSurfaceInput,
+    /// The active MIDI-learn binding set and learn arm the
+    /// control-surface messages are matched against (doc #167 §2 E3).
+    pub map: crate::engine::midi_map::ActiveMidiMap,
     /// Hardware MIDI output registry. Refcounts midir output
     /// connections across tracks that share the same physical port.
     pub midi_outputs: MidiOutputRegistry,
@@ -67,6 +70,7 @@ impl MidiHardwareState {
         Self {
             midi_inputs: MidiInputRegistry::new(live_midi_tx),
             control_surface: ControlSurfaceInput::new(live_control_tx),
+            map: Default::default(),
             midi_outputs: MidiOutputRegistry::new(),
             midi_outbound_held: HashMap::new(),
             midi_outbound_last_playhead: 0,

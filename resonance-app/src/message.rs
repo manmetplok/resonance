@@ -33,6 +33,7 @@ pub use crate::update::marker_ui::MarkerUiMessage;
 pub use crate::update::master::MasterMessage;
 pub use crate::update::midi_clip::MidiClipMessage;
 pub use crate::update::midi_editor::MidiEditorMessage;
+pub use crate::update::midi_map::MidiMapMessage;
 pub use crate::update::mixer::MixerMessage;
 pub use crate::update::pool::PoolMessage;
 pub use crate::update::project_io::ProjectIoMessage;
@@ -69,6 +70,10 @@ pub enum Message {
     Clip(ClipMessage),
     MidiClip(MidiClipMessage),
     MidiEditor(MidiEditorMessage),
+    /// MIDI Learn and hardware controller maps (doc #167): the learn arm,
+    /// the right-click MIDI menu, binding edits (undoable project state),
+    /// the control-surface port and the controller-map presets.
+    MidiMap(MidiMapMessage),
     VocalTuning(VocalTuningMessage),
     Plugin(PluginMessage),
     Automation(AutomationMessage),

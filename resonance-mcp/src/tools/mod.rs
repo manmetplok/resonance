@@ -23,6 +23,7 @@ pub mod external;
 pub mod global;
 pub mod master;
 pub mod meter;
+pub mod midi_map;
 pub mod project;
 pub mod render;
 pub mod song;

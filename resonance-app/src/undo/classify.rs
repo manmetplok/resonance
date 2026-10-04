@@ -76,6 +76,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::Clip(m) => m.undo_action(),
         Message::MidiClip(m) => m.undo_action(),
         Message::MidiEditor(m) => m.undo_action(),
+        Message::MidiMap(m) => m.undo_action(),
         Message::VocalTuning(m) => m.undo_action(),
         Message::Plugin(m) => m.undo_action(),
         Message::Automation(m) => m.undo_action(),

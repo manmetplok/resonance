@@ -26,6 +26,8 @@ mod midi_hardware_emit;
 mod midi_hardware_parse;
 #[path = "midi_hw/live_record_stop.rs"]
 mod live_record_stop;
+#[path = "midi_hw/midi_map_engine.rs"]
+mod midi_map_engine;
 #[path = "midi_hw/midi_io.rs"]
 mod midi_io;
 #[path = "midi_hw/midi_program_change.rs"]

@@ -2,7 +2,8 @@
 //! mono toggle, Bounce in place (instrument tracks), and the external
 //! hardware section — the "External hardware…" enable action
 //! on a plain instrument track, or the whole external-instrument pairing
-//! (`external_instrument`) on a track that already is one.
+//! (`external_instrument`) on a track that already is one — then MIDI
+//! CONTROL, the track's MIDI Learn bindings (`midi`).
 
 use iced::widget::{column, row, text, Space};
 use iced::Element;
@@ -85,5 +86,7 @@ pub(super) fn track_group(
         ));
     }
 
-    col.into()
+    col.push(Space::new().height(14))
+        .push(super::midi::midi_section(r, track))
+        .into()
 }
