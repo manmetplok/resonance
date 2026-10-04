@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::block_accumulator::BLOCK_HOP_SECS;
 use super::gating::gated_integrated_lufs;
+use super::incremental::IncrementalGate;
 
 /// Maximum number of seconds of audio the integrated meter can hold before
 /// it starts dropping new blocks. Pick something generous enough to cover
@@ -32,6 +33,9 @@ pub struct IntegratedAccumulator {
     /// Set (relaxed) when the first block is dropped, so a UI thread can
     /// poll the condition lock-free instead of the audio thread logging.
     cap_reached: AtomicBool,
+    /// The same blocks as a loudness histogram, for the realtime readout
+    /// ([`Self::integrated_lufs_live`]). Uncapped: it is constant memory.
+    live: IncrementalGate,
 }
 
 impl IntegratedAccumulator {
@@ -42,6 +46,7 @@ impl IntegratedAccumulator {
             cap,
             dropped: 0,
             cap_reached: AtomicBool::new(false),
+            live: IncrementalGate::new(),
         }
     }
 
@@ -49,6 +54,7 @@ impl IntegratedAccumulator {
         self.blocks.clear();
         self.dropped = 0;
         self.cap_reached.store(false, Ordering::Relaxed);
+        self.live.reset();
     }
 
     /// Add one block mean-square. If the cap has been reached, the value
@@ -58,6 +64,7 @@ impl IntegratedAccumulator {
     /// the flag instead.
     #[inline]
     pub fn push_block(&mut self, mean_square: f64) {
+        self.live.push_block(mean_square);
         if self.blocks.len() < self.cap {
             self.blocks.push(mean_square);
         } else {
@@ -91,8 +98,26 @@ impl IntegratedAccumulator {
 
     /// Run the two-pass gate and return the integrated LUFS value. Returns
     /// `f64::NEG_INFINITY` if there's nothing to report yet.
+    ///
+    /// Exact, but `O(blocks)`: offline analysis only. A realtime caller
+    /// uses [`Self::integrated_lufs_live`].
     pub fn integrated_lufs(&self) -> f64 {
         gated_integrated_lufs(&self.blocks)
+    }
+
+    /// The integrated LUFS from the incremental histogram gate: cost
+    /// independent of session length, allocation-free, and not subject to
+    /// the 60-minute cap. Matches [`Self::integrated_lufs`] to well under
+    /// a hundredth of an LU (see `IncrementalGate`).
+    pub fn integrated_lufs_live(&self) -> f64 {
+        self.live.integrated_lufs()
+    }
+
+    /// Blocks that passed the absolute gate since the last reset — the
+    /// only blocks [`Self::integrated_lufs_live`] depends on, so a caller
+    /// can cache the readout on it. Uncapped.
+    pub fn live_gated_blocks(&self) -> u64 {
+        self.live.gated_block_count()
     }
 }
 

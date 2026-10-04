@@ -10,8 +10,9 @@
 //! 4. **Relative gate**: drop blocks with `L_j < reference - 10 LU`.
 //! 5. Return `-0.691 + 10 log10(mean MS of final surviving blocks)`.
 //!
-//! Pure functions over a slice so the integrated accumulator can defer the
-//! work to readout time and never run it on the audio thread.
+//! Pure functions over a slice: the exact, `O(blocks)` reference used by
+//! offline analysis. A realtime readout uses
+//! [`IncrementalGate`](super::incremental::IncrementalGate) instead.
 
 /// BS.1770-4 loudness offset constant.
 pub const LOUDNESS_OFFSET: f64 = -0.691;
@@ -19,6 +20,21 @@ pub const LOUDNESS_OFFSET: f64 = -0.691;
 pub const ABSOLUTE_GATE_LUFS: f64 = -70.0;
 /// Relative gate offset from the ungated reference (LU).
 pub const RELATIVE_GATE_LU: f64 = -10.0;
+
+thread_local! {
+    /// Calls of the `O(blocks)` [`gated_integrated_lufs`] on this thread.
+    /// A const-initialised `Cell`, so counting never allocates; it exists
+    /// so a test can prove a realtime readout never takes the full-history
+    /// path (code review RT-03).
+    static FULL_GATE_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread ran the full-history two-pass gate
+/// ([`gated_integrated_lufs`]). Test probe for RT-03.
+#[doc(hidden)]
+pub fn full_gate_calls_on_this_thread() -> u64 {
+    FULL_GATE_CALLS.with(|c| c.get())
+}
 
 /// Convert a block mean-square to a block loudness in LUFS, returning
 /// `f64::NEG_INFINITY` for zero or negative inputs so they naturally fail
@@ -38,6 +54,7 @@ pub fn block_mean_square_to_lufs(ms: f64) -> f64 {
 /// Returns `f64::NEG_INFINITY` if no blocks survive the absolute gate
 /// (i.e. the source is effectively silent).
 pub fn gated_integrated_lufs(blocks: &[f64]) -> f64 {
+    FULL_GATE_CALLS.with(|c| c.set(c.get() + 1));
     if blocks.is_empty() {
         return f64::NEG_INFINITY;
     }

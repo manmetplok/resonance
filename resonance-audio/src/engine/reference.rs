@@ -343,22 +343,19 @@ pub struct ABMeterTap {
     scratch_r: Vec<f32>,
     samples_since_lra: usize,
     lra_tick_samples: usize,
-    /// Memoised gated-integrated LUFS, keyed on the gating-block count.
+    /// Memoised gated-integrated LUFS, keyed on the live gate's block
+    /// count.
     ///
-    /// `LufsMeter::integrated_lufs` runs the BS.1770-4 two-pass gate over
-    /// every 100 ms block of the session — `O(session length)` with two
-    /// `log10` per block. [`snapshot`](ABMeterTap::snapshot) is called
-    /// from the audio callback *every* block (375 Hz at 48 kHz / q128),
-    /// so that cost was paid ~37× per new gating block and grew without
-    /// bound as a session ran (measured: 57 µs per callback — 2.1 % of a
-    /// 2.67 ms quantum — after ten minutes, and rising linearly).
-    ///
-    /// The integrated value is a pure function of the block list, so
-    /// caching on the block count returns the identical value while
-    /// collapsing the recompute rate to the ~10 Hz the meter actually
-    /// changes at. `Cell` keeps `snapshot` a `&self` reader; the tap is
-    /// owned by one thread (the audio callback).
-    integrated_cache: std::cell::Cell<(usize, f32)>,
+    /// [`snapshot`](ABMeterTap::snapshot) runs on the audio callback every
+    /// block. The integrated reading comes from the meter's incremental
+    /// histogram gate (`LufsMeter::integrated_lufs_live`), whose cost
+    /// does not depend on how long the session has run — the exact
+    /// two-pass gate used to run here over every 100 ms block since app
+    /// start, 400 µs per recompute after an hour (code review RT-03).
+    /// The cache further collapses even that bounded walk to the ~10 Hz
+    /// the reading can change at. `Cell` keeps `snapshot` a `&self`
+    /// reader; the tap is owned by one thread (the audio callback).
+    integrated_cache: std::cell::Cell<(u64, f32)>,
 }
 
 impl ABMeterTap {
@@ -371,7 +368,7 @@ impl ABMeterTap {
             scratch_r: Vec::new(),
             samples_since_lra: 0,
             lra_tick_samples: (LRA_TICK_SECONDS * sample_rate).max(1.0) as usize,
-            integrated_cache: std::cell::Cell::new((usize::MAX, f32::NEG_INFINITY)),
+            integrated_cache: std::cell::Cell::new((u64::MAX, f32::NEG_INFINITY)),
         }
     }
 
@@ -379,12 +376,12 @@ impl ABMeterTap {
     /// landed. See [`integrated_cache`](Self::integrated_cache).
     #[inline]
     fn cached_integrated_lufs(&self) -> f32 {
-        let blocks = self.lufs.integrated_block_count();
+        let blocks = self.lufs.integrated_live_blocks();
         let (cached_blocks, cached_value) = self.integrated_cache.get();
         if cached_blocks == blocks {
             return cached_value;
         }
-        let value = self.lufs.integrated_lufs();
+        let value = self.lufs.integrated_lufs_live();
         self.integrated_cache.set((blocks, value));
         value
     }
@@ -408,8 +405,7 @@ impl ABMeterTap {
         self.true_peak.reset();
         self.lra.reset();
         self.samples_since_lra = 0;
-        self.integrated_cache
-            .set((usize::MAX, f32::NEG_INFINITY));
+        self.integrated_cache.set((u64::MAX, f32::NEG_INFINITY));
     }
 
     /// Feed one interleaved block (`channels`-wide, `frames` long) to every

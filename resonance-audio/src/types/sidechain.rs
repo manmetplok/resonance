@@ -151,6 +151,14 @@ pub struct SidechainTaps {
     /// Which bank the current block WRITES into; the other is read.
     write_bank: usize,
     max_frames: usize,
+    /// Frame offset of the sub-block rendering now within the callback's
+    /// buffer (code review RT-06). A loop-seam callback renders two
+    /// sub-blocks against one bank pair: the tail sub-block captures at
+    /// `head_frames` (after the head's capture, not over it) and reads
+    /// the previous callback's key from the same position, so both sides
+    /// stay sample-aligned with the callback they belong to. Zero for
+    /// every whole-buffer pass.
+    sub_offset: usize,
 }
 
 impl SidechainTaps {
@@ -171,7 +179,17 @@ impl SidechainTaps {
             slots,
             write_bank: 0,
             max_frames,
+            sub_offset: 0,
         }
+    }
+
+    /// Place the next captures and key reads at frame `offset` of the
+    /// callback's buffer: the start of the sub-block about to render
+    /// (`head_frames` for a loop seam's tail sub-block). Every block
+    /// begins at 0 ([`Self::begin_block`]); a renderer that splits the
+    /// buffer sets it before each sub-block and back to 0 afterwards.
+    pub fn set_sub_block_offset(&mut self, offset: usize) {
+        self.sub_offset = offset.min(self.max_frames);
     }
 
     /// Start a block: swap banks (so this block reads what the last one
@@ -203,6 +221,7 @@ impl SidechainTaps {
                 free.clear_written();
             }
         }
+        self.sub_offset = 0;
         // Nothing captured yet this block.
         let bank = self.write_bank;
         for slot in self.slots.iter_mut() {
@@ -242,25 +261,40 @@ impl SidechainTaps {
     ) {
         let bank = self.write_bank;
         let max = self.max_frames;
+        let off = self.sub_offset;
         let Some(slot) = self.slots.iter().find(|s| s.source == Some(source)) else {
             return;
         };
-        let n = frames.min(max).min(left.len()).min(right.len());
+        let n = frames
+            .min(max - off)
+            .min(left.len())
+            .min(right.len());
         // SAFETY: the caller is the only writer of this slot's write bank
         // (see above), and readers only ever read the other bank.
         let (l, r) = unsafe { &mut *slot.banks[bank].get() };
-        l[..n].copy_from_slice(&left[..n]);
-        r[..n].copy_from_slice(&right[..n]);
+        // The first capture into this bank this callback owns the whole
+        // buffer: anything before the sub-block (a seam's head the source
+        // did not render in) is silence, not audio from two callbacks ago.
+        // A later sub-block's capture leaves the earlier one's frames be.
+        if !slot.written[bank].load(Ordering::Relaxed) {
+            l[..off].fill(0.0);
+            r[..off].fill(0.0);
+        }
+        l[off..off + n].copy_from_slice(&left[..n]);
+        r[off..off + n].copy_from_slice(&right[..n]);
         // A short block leaves stale audio in the tail; zero it so the
-        // key never reads samples from a longer previous block.
-        l[n..].fill(0.0);
-        r[n..].fill(0.0);
+        // key never reads samples from a longer previous block. (A seam
+        // tail capture then overwrites what the head's zeroed.)
+        l[off + n..].fill(0.0);
+        r[off + n..].fill(0.0);
         slot.written[bank].store(true, Ordering::Release);
     }
 
     /// The key signal for `source` this block — the previous block's
-    /// capture. `None` when the source isn't tapped or produced nothing,
-    /// which leaves the plugin keying off its own input.
+    /// capture, from the current sub-block's offset on (see
+    /// [`Self::set_sub_block_offset`]). `None` when the source isn't
+    /// tapped or produced nothing, which leaves the plugin keying off its
+    /// own input.
     pub fn key(&self, source: SendSource) -> Option<(&[f32], &[f32])> {
         let bank = self.write_bank ^ 1;
         let slot = self.slots.iter().find(|s| s.source == Some(source))?;
@@ -271,7 +305,7 @@ impl SidechainTaps {
         // `&mut self`, which the returned borrow excludes); this block's
         // captures go to the other bank.
         let (l, r) = unsafe { &*slot.banks[bank].get() };
-        Some((l.as_slice(), r.as_slice()))
+        Some((&l[self.sub_offset..], &r[self.sub_offset..]))
     }
 
     /// The key signal for `plugin`, resolving its route in one step.

@@ -21,13 +21,32 @@ pub(super) struct Seam {
     pub(super) head_frames: usize,
     pub(super) tail_frames: usize,
     pub(super) loop_in: u64,
+    /// `loop_out - loop_in`, never zero.
+    pub(super) loop_len: u64,
 }
 
 impl Seam {
+    /// Frames of the tail sub-block actually rendered from `loop_in`: all
+    /// of `tail_frames`, unless the loop is shorter than that (a loop
+    /// shorter than one buffer, code review RT-12). Then the tail plays
+    /// exactly one pass, `loop_in..loop_out`, and the rest of the buffer
+    /// stays silent rather than rendering past `loop_out`.
+    pub(super) fn tail_rendered(self) -> usize {
+        (self.tail_frames as u64).min(self.loop_len) as usize
+    }
+
+    /// Where the next buffer starts: `loop_in` plus the tail, wrapped
+    /// modulo the loop length so a loop shorter than a buffer keeps the
+    /// playhead inside the loop instead of escaping past `loop_out` for
+    /// good (RT-12) — the same wrap `advance_playhead_silent` makes.
+    pub(super) fn next_playhead(self) -> u64 {
+        self.loop_in + self.tail_frames as u64 % self.loop_len
+    }
+
     /// The metronome pass's view of the split: it maps output frames onto
     /// two timeline ranges the same way.
     pub(super) fn as_ranges(self) -> (usize, usize, u64) {
-        (self.head_frames, self.tail_frames, self.loop_in)
+        (self.head_frames, self.tail_rendered(), self.loop_in)
     }
 }
 
@@ -54,6 +73,7 @@ pub(super) fn detect(shared: &SharedState, playhead: u64, frames: usize) -> Opti
             head_frames,
             tail_frames: frames - head_frames,
             loop_in: lo,
+            loop_len: hi - lo,
         })
     } else {
         None
@@ -121,22 +141,30 @@ pub(super) fn render_arrangement(
     // ---- Post-wrap sub-block (plays from `loop_in`) -----------------------
     let tail_monitor_start = head_monitor_frames * stride;
     let tail_monitor_avail = monitor.frames.saturating_sub(head_monitor_frames);
-    let tail_monitor_frames = tail_monitor_avail.min(seam.tail_frames);
+    let tail_frames = seam.tail_rendered();
+    let tail_monitor_frames = tail_monitor_avail.min(tail_frames);
+    // Sidechain keys are double-buffered per CALLBACK, not per sub-block:
+    // the tail captures after the head's frames and reads the previous
+    // callback's key from the same position, rather than both sub-blocks
+    // sharing offset 0 (code review RT-06).
+    scratch.sidechain.set_sub_block_offset(seam.head_frames);
     render_sub(
         BlockInputs {
             playhead: seam.loop_in,
-            frames: seam.tail_frames,
+            frames: tail_frames,
             ..inputs
         },
         scratch,
-        seam.head_frames * channels..(seam.head_frames + seam.tail_frames) * channels,
+        seam.head_frames * channels..(seam.head_frames + tail_frames) * channels,
         tail_monitor_start..tail_monitor_start + tail_monitor_frames * stride,
         tail_monitor_frames,
         monitor.input_channels,
         transport,
     );
+    // The master pass runs over the whole buffer again.
+    scratch.sidechain.set_sub_block_offset(0);
 
-    seam.loop_in + seam.tail_frames as u64
+    seam.next_playhead()
 }
 
 /// Render one timeline sub-block over the `out` slice of the output, with

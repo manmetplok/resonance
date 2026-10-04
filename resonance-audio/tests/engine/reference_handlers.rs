@@ -410,6 +410,48 @@ fn ab_meter_tap_reset_clears_accumulators() {
     assert_eq!(cleared.true_peak_max_dbtp, MeterSnapshot::default().true_peak_max_dbtp);
 }
 
+/// RT-03: `snapshot()` runs on the audio callback every block. Its
+/// integrated reading used to re-run the BS.1770 two-pass gate over every
+/// 100 ms block since app start — a cost that grew with the session. The
+/// tap now reads the incremental gate: across a minute of material read
+/// back every block, the full-history gate never runs, and the reading
+/// still matches the offline analysis of the same audio.
+#[test]
+fn ab_meter_tap_snapshot_cost_does_not_grow_with_the_session() {
+    use resonance_metering::lufs::gating::full_gate_calls_on_this_thread;
+    let sr = 48_000u32;
+    let frames = sr as usize * 60;
+    // A level that moves every few seconds, so both gates have work to do.
+    let interleaved = interleaved_stereo(frames, |i| {
+        let level = [0.5, 0.05, 0.2, 0.002, 0.35][(i / (sr as usize * 4)) % 5];
+        let s = level * (std::f32::consts::TAU * 997.0 * i as f32 / sr as f32).sin();
+        (s, s)
+    });
+
+    let mut tap = ABMeterTap::new(sr as f32);
+    let before = full_gate_calls_on_this_thread();
+    let mut snap = MeterSnapshot::default();
+    for chunk in interleaved.chunks(128 * 2) {
+        tap.feed_interleaved(chunk, 2, chunk.len() / 2);
+        snap = tap.snapshot();
+    }
+    assert_eq!(
+        full_gate_calls_on_this_thread(),
+        before,
+        "the realtime snapshot must never run the O(session) gate"
+    );
+
+    let left: Vec<f32> = interleaved.iter().step_by(2).copied().collect();
+    let right: Vec<f32> = interleaved.iter().skip(1).step_by(2).copied().collect();
+    let offline = LufsMeter::analyze_offline(sr as f32, &left, &right);
+    assert!(
+        (snap.integrated_lufs - offline.integrated).abs() < 0.02,
+        "live integrated {} vs offline {}",
+        snap.integrated_lufs,
+        offline.integrated
+    );
+}
+
 #[test]
 fn ab_meter_tap_handles_mono_blocks() {
     // A single-channel block should be metered (L duplicated to R), not

@@ -22,7 +22,7 @@ use resonance_common::AutomationTarget;
 
 use crate::mixer::automation_apply::{apply_plugin_params, auto_gain_ramp, auto_muted};
 use crate::mixer::common::ramped_stereo_peaks;
-use crate::mixer::midi_events::collect_midi_events;
+use crate::mixer::midi_events::{collect_midi_events_covering, release_uncovered_keys, KeySet};
 use crate::mixer::midi_stash::{MidiStash, StashEntry};
 use crate::render_pool::{RunStats, WorkerBufs};
 use crate::types::*;
@@ -594,7 +594,8 @@ fn render_instrument_source(
     let mut has_audio = false;
     let mut extra_ports_filled: usize = 0;
 
-    collect_midi_events(
+    let mut covered = KeySet::EMPTY;
+    collect_midi_events_covering(
         ctx.inputs.midi_clips,
         track.id,
         ctx.inputs.playhead,
@@ -602,7 +603,20 @@ fn render_instrument_source(
         ctx.inputs.tempo_map,
         ctx.inputs.sample_rate,
         js.note_event_buf,
+        &mut covered,
     );
+    // Live: release any key the timeline holds that no clip note covers
+    // any more — an edit, delete or tempo change under a sounding note
+    // (code review RT-05). Offline renders run the arrangement start to
+    // end with no edits under them, so they keep the stateless events.
+    if strategy.is_live() && !track.plugins().is_empty() {
+        let held = release_uncovered_keys(
+            js.note_event_buf,
+            KeySet(track.timeline_held()),
+            covered,
+        );
+        track.set_timeline_held(held.0);
+    }
 
     // The first plugin is the instrument (receives note events); the
     // remaining ones are effects (audio-only).

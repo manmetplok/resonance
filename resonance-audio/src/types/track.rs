@@ -2,7 +2,7 @@
 //! audio callback.
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use arc_swap::{ArcSwap, ArcSwapOption, Guard};
 use resonance_common::{DeviceParam, PlaybackSource};
@@ -124,6 +124,14 @@ struct TrackRuntime {
     /// block computed from the same scan. Written only by the audio
     /// thread, once per block, before any disposition is decided.
     block_soloed: AtomicBool,
+    /// Keys the timeline has turned on in this track's instrument and not
+    /// yet turned off, as a 128-bit set (code review RT-05). Note-offs are
+    /// collected statelessly from the clip notes, so a sounding note that
+    /// is shortened, moved or deleted, or whose clip goes away, would never
+    /// get one; the render pass releases any held key no clip note covers
+    /// at the playhead any more. Written only by the one render job that
+    /// renders this track (audio thread), cleared by its voice flushes.
+    timeline_held: [AtomicU64; 2],
     /// 0-indexed starting input channel on the track's input device. For
     /// mono tracks this is the single channel captured and duplicated to
     /// L/R; for stereo tracks it's the L channel and `port_index + 1` is
@@ -206,6 +214,7 @@ impl Track {
                 last_gain_l_bits: AtomicU32::new(0),
                 last_gain_r_bits: AtomicU32::new(0),
                 block_soloed: AtomicBool::new(false),
+                timeline_held: [AtomicU64::new(0), AtomicU64::new(0)],
                 input_port_bits: AtomicU32::new(0),
                 plugin_chain: ArcSwap::from_pointee(Vec::new()),
                 device_params: ArcSwap::from_pointee(HashMap::new()),
@@ -574,6 +583,22 @@ impl Track {
     pub fn set_last_gains(&self, l: f32, r: f32) {
         self.runtime.last_gain_l_bits.store(l.to_bits(), Ordering::Relaxed);
         self.runtime.last_gain_r_bits.store(r.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The keys the timeline holds down in this track's instrument (bit
+    /// `k` of the 128-bit set = key `k`). See `TrackRuntime::timeline_held`.
+    pub fn timeline_held(&self) -> [u64; 2] {
+        [
+            self.runtime.timeline_held[0].load(Ordering::Relaxed),
+            self.runtime.timeline_held[1].load(Ordering::Relaxed),
+        ]
+    }
+
+    /// Store the held-key set after a block. Audio thread only (the job
+    /// rendering this track, or a voice flush).
+    pub fn set_timeline_held(&self, held: [u64; 2]) {
+        self.runtime.timeline_held[0].store(held[0], Ordering::Relaxed);
+        self.runtime.timeline_held[1].store(held[1], Ordering::Relaxed);
     }
 }
 

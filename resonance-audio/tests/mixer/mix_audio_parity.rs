@@ -278,8 +278,12 @@ fn input_block(seed: u32) -> Vec<f32> {
 fn playing_blocks_with_loop_seam_are_bit_identical() {
     // Re-blessed for FU-B6a: the feeder bus's first live block now renders
     // flat at its target gain instead of ramping in from the
-    // construction-time 0 (0x17d0_3079_dca4_3989 → this).
-    const EXPECTED: u64 = 0x2398_b5cf_f7a9_daa0;
+    // construction-time 0 (0x17d0_3079_dca4_3989 → 0x2398_b5cf_f7a9_daa0).
+    // Re-blessed for RT-10: on a seam block the master-gain lane is read
+    // at the post-wrap end of the buffer (`loop_in + tail`), not at the
+    // pre-wrap `playhead + frames` past `loop_out`
+    // (0x2398_b5cf_f7a9_daa0 → this).
+    const EXPECTED: u64 = 0x9855_6c4d_e20e_9bc9;
 
     use std::sync::atomic::Ordering;
     let mut h = harness(true);
@@ -498,8 +502,10 @@ fn audition_blocks_are_bit_identical() {
     // 0x40ea_d698_e423_5ccb.
     // Re-blessed for FU-B6a: the feeder bus's first live block now renders
     // flat at its target gain instead of ramping in from the
-    // construction-time 0 (0xf1d5_aaa8_7cc5_cb25 → this).
-    const EXPECTED: u64 = 0x01ec_d73b_9f26_15b6;
+    // construction-time 0 (0xf1d5_aaa8_7cc5_cb25 → 0x01ec_d73b_9f26_15b6).
+    // Re-blessed for RT-10: the seam block's master gain is read at the
+    // post-wrap position (0x01ec_d73b_9f26_15b6 → this).
+    const EXPECTED: u64 = 0x20db_93e9_4c24_6e77;
 
     use std::sync::atomic::Ordering;
     let mut h = harness(false);

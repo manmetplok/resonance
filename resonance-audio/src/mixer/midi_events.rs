@@ -111,7 +111,36 @@ pub(super) fn collect_midi_events<C: Borrow<MidiClip>>(
     sample_rate: u32,
     out: &mut Vec<PendingNoteEvent>,
 ) {
+    let mut covered = KeySet::EMPTY;
+    collect_midi_events_covering(
+        midi_clips,
+        track_id,
+        playhead,
+        frames,
+        tempo_map,
+        sample_rate,
+        out,
+        &mut covered,
+    );
+}
+
+/// [`collect_midi_events`], also reporting in `covered` every key a clip
+/// note holds down across the block's first frame (started before
+/// `playhead`, ends after it) — what [`release_uncovered_keys`] needs.
+/// Same window, same notes: one extra comparison per surviving note.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn collect_midi_events_covering<C: Borrow<MidiClip>>(
+    midi_clips: &[C],
+    track_id: TrackId,
+    playhead: u64,
+    frames: usize,
+    tempo_map: &TempoMap,
+    sample_rate: u32,
+    out: &mut Vec<PendingNoteEvent>,
+    covered: &mut KeySet,
+) {
     out.clear();
+    *covered = KeySet::EMPTY;
     let buf_end = playhead + frames as u64;
     // Note-ons currently in `out`, kept so the cap's eviction path knows
     // without a scan whether there is anything left to evict.
@@ -230,6 +259,12 @@ pub(super) fn collect_midi_events<C: Borrow<MidiClip>>(
                 continue;
             }
 
+            // Sounding across the block start: its note-on is in the
+            // past, its note-off still ahead.
+            if note_abs_start < playhead && note_abs_end > playhead {
+                covered.insert(note.note);
+            }
+
             // Emit NoteOn if it falls in this buffer
             if note_abs_start >= playhead && note_abs_start < buf_end {
                 push_capped(
@@ -264,6 +299,101 @@ pub(super) fn collect_midi_events<C: Borrow<MidiClip>>(
     // stable sort's heap allocation on the audio thread; note-offs are
     // keyed before note-ons so retriggers at the same offset stay paired.
     out.sort_unstable_by_key(|e| (e.sample_offset, e.is_note_on));
+}
+
+/// A set of MIDI keys (0..=127) as a 128-bit mask. `Copy`, two words, so
+/// it lives on the stack or in a pair of atomics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct KeySet(pub(crate) [u64; 2]);
+
+impl KeySet {
+    pub(crate) const EMPTY: Self = Self([0, 0]);
+
+    #[inline]
+    pub(crate) fn insert(&mut self, key: u8) {
+        let k = (key & 0x7f) as usize;
+        self.0[k >> 6] |= 1 << (k & 63);
+    }
+
+    #[inline]
+    pub(crate) fn remove(&mut self, key: u8) {
+        let k = (key & 0x7f) as usize;
+        self.0[k >> 6] &= !(1 << (k & 63));
+    }
+
+    #[inline]
+    pub(crate) fn is_empty(self) -> bool {
+        self.0 == [0, 0]
+    }
+
+    /// Keys in `self` but not in `other`.
+    #[inline]
+    pub(crate) fn minus(self, other: Self) -> Self {
+        Self([self.0[0] & !other.0[0], self.0[1] & !other.0[1]])
+    }
+
+    /// The keys, ascending.
+    pub(crate) fn keys(self) -> impl Iterator<Item = u8> {
+        (0u8..128).filter(move |&k| self.0[(k >> 6) as usize] & (1 << (k & 63)) != 0)
+    }
+}
+
+/// Stateful note-off completion (code review RT-05).
+///
+/// [`collect_midi_events`] emits a note-off only when a note's end falls
+/// inside the block, so a note that is shortened to before the playhead,
+/// moved, deleted, has its clip trimmed or deleted, or is pulled earlier
+/// by a tempo change, while it sounds, never gets one: the voice hangs
+/// until the next loop seam or Stop. `held` is what the timeline turned on
+/// in this instrument and has not turned off; `covered` is what the clip
+/// notes still hold across the block start. Every held key that no note
+/// covers, and that this block doesn't release itself, gets a note-off
+/// at offset 0. Returns the held set after this block's events.
+///
+/// Allocation-free: the note-offs go through [`push_capped`], which never
+/// grows `out` past its pre-allocated cap (a note-off evicts a queued
+/// note-on there). Cheap when nothing is held: one comparison.
+pub(super) fn release_uncovered_keys(
+    out: &mut Vec<PendingNoteEvent>,
+    held: KeySet,
+    covered: KeySet,
+) -> KeySet {
+    if !held.is_empty() {
+        let mut released_here = KeySet::EMPTY;
+        let mut note_ons = 0usize;
+        for e in out.iter() {
+            if e.is_note_on {
+                note_ons += 1;
+            } else {
+                released_here.insert(e.note);
+            }
+        }
+        let stale = held.minus(covered).minus(released_here);
+        if !stale.is_empty() {
+            for key in stale.keys() {
+                push_capped(
+                    out,
+                    &mut note_ons,
+                    PendingNoteEvent {
+                        is_note_on: false,
+                        note: key,
+                        velocity: 0.0,
+                        sample_offset: 0,
+                    },
+                );
+            }
+            out.sort_unstable_by_key(|e| (e.sample_offset, e.is_note_on));
+        }
+    }
+    let mut after = held;
+    for e in out.iter() {
+        if e.is_note_on {
+            after.insert(e.note);
+        } else {
+            after.remove(e.note);
+        }
+    }
+    after
 }
 
 /// Append `event` to `out` without ever exceeding

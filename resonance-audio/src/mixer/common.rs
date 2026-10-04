@@ -277,6 +277,8 @@ pub(super) fn panic_instrument_tracks(
         if !track.track_type.accepts_midi() {
             continue;
         }
+        // The flush releases every timeline-held key (RT-05).
+        track.set_timeline_held([0, 0]);
         let Some(inst_id) = track.plugins().first().copied() else {
             continue;
         };

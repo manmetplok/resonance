@@ -81,7 +81,15 @@ pub(super) fn run_master_passes(
     // position: the mix reaching master is max_latency() behind the raw
     // playhead, so a drawn master move lands on the audio it was drawn
     // against (doc #260 finding #9).
-    let master_eval = (tail.playhead + tail.frames as u64).saturating_sub(tail.max_latency);
+    // On a seam callback the buffer ends on the post-wrap timeline, so
+    // the end frame is where the next buffer starts (`loop_in` + tail),
+    // not the pre-wrap `playhead + frames`, which lies past `loop_out`
+    // (code review RT-10).
+    let block_end = match tail.seam {
+        Some(seam) => seam.next_playhead(),
+        None => tail.playhead + tail.frames as u64,
+    };
+    let master_eval = block_end.saturating_sub(tail.max_latency);
     let auto_master = auto_master_volume(tail.automation, master_eval);
     apply_master_volume_and_peaks(scratch.data, channels, shared, auto_master);
 
