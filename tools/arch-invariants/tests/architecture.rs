@@ -1495,6 +1495,67 @@ fn view_layer_never_hardcodes_pure_white_or_black() {
 }
 
 // ---------------------------------------------------------------------------
+// The wire protocol stays in the control layer (code review ARCH2-11)
+// ---------------------------------------------------------------------------
+
+/// Where `resonance-app` may name `resonance_control`: the control layer
+/// itself (prefixes) and the listed files, each for a stated reason.
+const CONTROL_LAYER_PREFIXES: &[&str] = &[
+    "resonance-app/src/update/control/",
+    "resonance-app/src/control_socket",
+    "resonance-app/src/control_jobs",
+    "resonance-app/src/test_support/",
+    "resonance-app/src/state/control.rs",
+];
+const CONTROL_WIRE_ALLOWED_FILES: &[&str] = &[
+    // `PendingPluginPresetSave` (only ever armed by `presets.save` over
+    // the control API) carries the request's `PresetMetaInput` until the
+    // engine's state echo lands.
+    "resonance-app/src/lib.rs",
+    // Resolves a control `clip.place` import job by its method name.
+    "resonance-app/src/engine_events/pool.rs",
+];
+
+/// ARCH2-11: "Wire-protocol types are used as app domain types" — preset
+/// sources in state/messages and `MAX_BARS` as the section limit made a
+/// protocol-only change ripple into app state, messages and undo. App
+/// state, messages, views and the domain handlers use app-owned (or
+/// `resonance_plugin::presets`) types; the control layer maps them onto
+/// the wire (`update/control/view_model`, `plugin_presets::wire_source`).
+///
+/// Exercised 2026-10-04: put `pub source:
+/// resonance_control::methods::plugin_preset::PluginPresetSource,` back
+/// in `state/presets.rs`'s `SlotPresetIdentity` (text only) → failed on
+/// that line; reverted.
+#[test]
+fn wire_protocol_types_stay_in_the_control_layer() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-app/src"), &mut files);
+    let mut violations = Vec::new();
+    for file in files {
+        let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+        if CONTROL_LAYER_PREFIXES.iter().any(|p| rel.starts_with(p))
+            || CONTROL_WIRE_ALLOWED_FILES.contains(&rel.as_str())
+        {
+            continue;
+        }
+        for (n, code) in code_lines(&file) {
+            if names_path(&code, "resonance_control") {
+                violations.push(format!(
+                    "{rel}:{n}: names `resonance_control` outside the control layer — use an \
+                     app-owned type here and map to the wire in `update/control/`"
+                ));
+            }
+        }
+    }
+    report(
+        "ARCH2-11: `resonance_control` (the wire protocol) is named only in the control layer",
+        &violations,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Engine features with an app caller (code review ARCH2-01)
 // ---------------------------------------------------------------------------
 

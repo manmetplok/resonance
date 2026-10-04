@@ -291,7 +291,7 @@ pub enum PluginMessage {
         /// The preset's id and source: the slot's loaded-preset identity
         /// until the plugin reports its own (slice P5).
         preset_id: String,
-        preset_source: resonance_control::methods::plugin_preset::PluginPresetSource,
+        preset_source: resonance_plugin::presets::PresetSource,
     },
     /// Recall a preset the plugin owns (one its preset-discovery factory
     /// listed): the plugin loads it through `clap.preset-load`, and the

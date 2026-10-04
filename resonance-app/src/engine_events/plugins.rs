@@ -802,7 +802,7 @@ pub(super) fn preset_loaded(
     load_key: Option<String>,
 ) {
     use resonance_audio::types::PluginPresetLocation as L;
-    use resonance_control::methods::plugin_preset::PluginPresetSource;
+    use resonance_plugin::presets::PresetSource as PluginPresetSource;
     if r
         .presets
         .plugin_preset_identity
@@ -1088,7 +1088,7 @@ pub(super) fn preset_identity(
     instance_id: PluginInstanceId,
     identity: Option<resonance_common::preset_session::IdentityReport>,
 ) {
-    use resonance_control::methods::plugin_preset::PluginPresetSource;
+    use resonance_plugin::presets::PresetSource as PluginPresetSource;
     match identity {
         Some(report) => {
             let source = if report.source == "factory" {

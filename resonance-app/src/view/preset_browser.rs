@@ -122,7 +122,7 @@ fn preset_row(
     if let Some(c) = &row_data.category {
         sub.push(c.clone());
     }
-    if row_data.source == resonance_control::methods::plugin_preset::PluginPresetSource::User {
+    if row_data.source == resonance_plugin::presets::PresetSource::User {
         sub.push("user".to_string());
     }
     if !sub.is_empty() {

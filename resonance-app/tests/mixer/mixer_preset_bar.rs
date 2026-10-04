@@ -17,7 +17,7 @@ use resonance_app::state::{Overlay, PluginSlotState, ViewMode};
 use resonance_app::{theme, Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_common::factory_presets::FactoryPresetEntry;
-use resonance_control::methods::plugin_preset::PluginPresetSource;
+use resonance_plugin::presets::PresetSource as PluginPresetSource;
 
 const TRACK: u64 = 5;
 const INSTANCE: u64 = 950;

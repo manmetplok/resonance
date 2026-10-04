@@ -340,7 +340,7 @@ pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
         r.presets.plugin_preset_identity.insert(
             instance_id,
             crate::state::presets::SlotPresetIdentity {
-                source: resonance_control::methods::plugin_preset::PluginPresetSource::Factory,
+                source: resonance_plugin::presets::PresetSource::Factory,
                 id: preset_id,
                 name: preset_name,
                 modified: false,
