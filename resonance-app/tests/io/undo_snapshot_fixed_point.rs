@@ -288,6 +288,29 @@ fn edit_every_domain(f: &mut Fixture, h: &Handles, variant: u8) {
             clip_id: c,
             gain_db: -6.0 + 3.0 * v,
         }));
+        // Clip warp: scalars and markers differ per round.
+        app.test_dispatch(Message::Clip(ClipMessage::Warp(ClipWarpMessage::SetWarp {
+            clip_id: c,
+            enabled: variant == 0,
+            original_bpm: Some(90.0 + 10.0 * v),
+            transpose_semitones: -2.0 + v,
+            algorithm: if variant == 0 {
+                resonance_audio::types::WarpAlgorithm::Tonal
+            } else {
+                resonance_audio::types::WarpAlgorithm::Transient
+            },
+        })));
+        app.test_dispatch(Message::Clip(ClipMessage::Warp(
+            ClipWarpMessage::SetWarpMarkers {
+                clip_id: c,
+                markers: (0..=vu)
+                    .map(|i| resonance_audio::types::WarpMarker {
+                        source_frame: 24_000 * (i + 1),
+                        timeline_beat: 1.0 + i as f64 + 0.5 * v as f64,
+                    })
+                    .collect(),
+            },
+        )));
     }
 
     // Freeze: the second track is frozen with a real cache file in round
@@ -600,6 +623,8 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
             clip.fade_in_frames > 0 && clip.gain_db < 0.0,
             "fade/gain landed"
         );
+        let warp = clip.warp.as_ref().expect("warp landed");
+        assert!(warp.enabled && warp.markers.len() == 1, "warp landed");
     }
     if let Some(d) = h.definition {
         let def = file

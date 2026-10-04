@@ -141,8 +141,8 @@ fn draw_warp_badge(frame: &mut canvas::Frame, clip: &ClipState, x: f32, y: f32, 
         Some(bpm) => format!("WARP {}", crate::state::format_warp_bpm(bpm)),
         None => "WARP".to_string(),
     };
-    // ~5.6 px per mono glyph at 9 px, plus padding.
-    let pill_w = label.chars().count() as f32 * 5.6 + 8.0;
+    // ~6.4 px per mono glyph at 9 px (with margin), plus padding.
+    let pill_w = label.chars().count() as f32 * 6.4 + 8.0;
     let pill_h = 12.0;
     let top = y + 17.0;
     if w < pill_w + 8.0 || h < top - y + pill_h + theme::WARP_MARKER_STRIP_HEIGHT {

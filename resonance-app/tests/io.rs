@@ -33,6 +33,8 @@ mod browser_handlers;
 mod chord_sheet_header;
 #[path = "io/chord_track_persistence.rs"]
 mod chord_track_persistence;
+#[path = "io/clip_warp_persistence.rs"]
+mod clip_warp_persistence;
 #[path = "io/clip_wav_gc.rs"]
 mod clip_wav_gc;
 #[path = "io/crash_detection.rs"]

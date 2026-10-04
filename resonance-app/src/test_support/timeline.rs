@@ -118,6 +118,15 @@ impl Resonance {
         self.ui.interaction.selected_clip = clip_id;
     }
 
+    /// Test-only: the clip inspector's tempo-detection status for a clip.
+    #[doc(hidden)]
+    pub fn test_tempo_detect_status(
+        &self,
+        clip_id: resonance_audio::types::ClipId,
+    ) -> Option<state::TempoDetectStatus> {
+        self.ui.interaction.tempo_detect.get(&clip_id).copied()
+    }
+
     /// Test-only: push an audio clip straight into GUI state, bypassing
     /// the engine `ClipImported` round-trip, so a test can then drive
     /// fade/gain events against a known clip id.
