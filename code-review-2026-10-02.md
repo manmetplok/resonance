@@ -77,8 +77,8 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 3 | P3 editor runtime | PUX-04, -07, -09, -10, -12, PUX-01 (preset-bar recall), DEP-03, FU-P1a, FU-P2a, FU-P2b, FU-P2e, FU-P2f | sonnet | merged | 1f2eff0c |
 | 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | merged | ad402dbd |
 | 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | merged | ee3d8053 |
-| 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | running | |
-| 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | last, alone | |
+| 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | merged | 7a1f4f97 |
+| 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | running | |
 
 ### Follow-ups raised by batches
 
@@ -181,6 +181,26 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
   - DEP-10's `strip = "debuginfo"` gave no size change, because release builds already had no DWARF.
   - The printpdf upgrade needed no source changes.
   - Cargo.lock lost ~74 packages.
+- **FU-A1a1: decision needed.** Wire or delete these orphaned engine features, which are allow-listed in `every_audio_command_has_an_app_caller`:
+  - MIDI learn (`EnterMidiLearn`, `CancelMidiLearn`, `ClearMidiBinding`, `ClearAllMidiBindings`)
+  - `SetControllerMap` and `SetControlSurfaceInput`
+  - `SetLoopRecordMode`
+  - `QueryIoLatency`
+  - clip warp (`SetClipWarp`, `SetClipWarpMarkers`, `DetectClipTempo`)
+- **FU-A1a2:** MIDI file export has no engine side.
+- **FU-A1a3:** app items reached only from `test_support`; each needs wiring or deleting:
+  - freeze auto-stale (`revalidate_frozen_track`, `freeze_inputs_changed`, `compute_track_freeze_fingerprint`)
+  - pool (`remove_pool_asset`, `relink_clip`)
+  - `same_state`, `begin_restore_from_snapshot`, `IdCounter::peek`
+  - several view helpers
+- **FU-A1a4:** macOS-only items that the old crate-wide allow hid may now warn on macOS.
+- **FU-A1a5:** `CommitBpm` with the playhead past a tempo change rewrites the bar-1 tempo. This predates A1a and is now more visible.
+- **FU-A1a6:** consider moving the headless preset/browser library out of the CLAP SDK, so the app doesn't link `clack-plugin`.
+- **FU-A1a7:** `ExportOverwrite::Ask` behaves like Suffix, because there is no prompt.
+- *A1a notes:*
+  - `song.summary.tempo_bpm` still reports the tempo at the playhead, as documented on the wire.
+  - The test-binary layout rule outside app/audio is a per-crate count ratchet.
+  - First-party ids live in `resonance_plugin::first_party`.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
