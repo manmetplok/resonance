@@ -98,7 +98,7 @@ impl MeteringCore {
     fn publish_snapshot(&self, viz: &MasteringViz) {
         let (tp_l, tp_r) = self.true_peak.per_channel_dbtp();
         let tp_max = self.true_peak.peak_dbtp();
-        let integrated = self.lufs.integrated_lufs();
+        let integrated = self.lufs.integrated_lufs_live(); // O(1) on the audio thread (FU-R4a)
         let short_term = self.lufs.short_term_lufs();
         let plr = PlrMeter::compute(tp_max, tp_max, integrated, short_term);
         let snap = MeterSnapshot {
