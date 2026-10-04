@@ -54,3 +54,80 @@ fn release_all_with_nothing_held_is_silent() {
     input.release_all(&mut out);
     assert!(out.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Keyboard: client-side repeat flag, and release on focus loss (PUX-10).
+// ---------------------------------------------------------------------------
+
+use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
+
+fn key_event(keysym: Keysym) -> KeyEvent {
+    KeyEvent { time: 0, raw_code: 0, keysym, utf8: None }
+}
+
+fn key_events(events: &[Event]) -> Vec<(egui::Key, bool, bool)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Key { key, pressed, repeat, .. } => Some((*key, *pressed, *repeat)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_real_press_and_release_are_never_marked_repeat() {
+    let mut input = InputState::new();
+    let mut out = Vec::new();
+    input.process_key(&key_event(Keysym::a), true, false, &mut out);
+    input.process_key(&key_event(Keysym::a), false, false, &mut out);
+    assert_eq!(
+        key_events(&out),
+        vec![(egui::Key::A, true, false), (egui::Key::A, false, false)]
+    );
+}
+
+#[test]
+fn a_repeated_key_down_is_marked_repeat() {
+    let mut input = InputState::new();
+    let mut out = Vec::new();
+    input.process_key(&key_event(Keysym::a), true, false, &mut out);
+    out.clear();
+    input.process_key(&key_event(Keysym::a), true, true, &mut out);
+    assert_eq!(key_events(&out), vec![(egui::Key::A, true, true)]);
+}
+
+#[test]
+fn a_held_key_is_released_when_focus_leaves() {
+    let mut input = InputState::new();
+    let mut out = Vec::new();
+    input.process_key(&key_event(Keysym::Left), true, false, &mut out);
+    input.process_key(&key_event(Keysym::a), true, false, &mut out);
+    out.clear();
+
+    input.release_held_keys(&mut out);
+    let released: Vec<_> = key_events(&out)
+        .into_iter()
+        .filter(|(_, pressed, _)| !pressed)
+        .map(|(key, _, _)| key)
+        .collect();
+    assert_eq!(released, vec![egui::Key::ArrowLeft, egui::Key::A]);
+    assert!(
+        out.iter().any(|e| matches!(e, Event::WindowFocused(false))),
+        "expected a WindowFocused(false) event; got {out:?}"
+    );
+
+    // Released once: a second leave has nothing left to release.
+    out.clear();
+    input.release_held_keys(&mut out);
+    assert!(key_events(&out).is_empty(), "no key should be released twice: {out:?}");
+}
+
+#[test]
+fn release_held_keys_with_nothing_held_still_reports_focus_lost() {
+    let mut input = InputState::new();
+    let mut out = Vec::new();
+    input.release_held_keys(&mut out);
+    assert!(key_events(&out).is_empty());
+    assert!(matches!(out.as_slice(), [Event::WindowFocused(false)]));
+}

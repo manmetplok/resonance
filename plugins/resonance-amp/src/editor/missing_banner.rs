@@ -79,6 +79,22 @@ pub(crate) fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut AmpEditorApp, 
                 .size(11.0),
             );
             ui.add_space(8.0);
+
+            // Collect "Locate file…"'s dialog, if one is in flight —
+            // every frame this banner draws, not just the one after the
+            // click, since the dialog can take many frames to resolve.
+            #[cfg(not(target_os = "macos"))]
+            if let Some(files) =
+                actions::poll_nam_picker(ui.ctx(), actions::locate_nam_picker_id())
+            {
+                if let Some(located) = files.into_iter().next() {
+                    app.jobs.start("checking the file…", move || {
+                        let id = nam_library::hash_file(&located).ok();
+                        JobDone::Located(located, id)
+                    });
+                }
+            }
+
             if let Some(located) = app.missing.mismatch.clone() {
                 ui.horizontal(|ui| {
                     ui.label(
@@ -119,6 +135,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut AmpEditorApp, 
                         .add_enabled(!app.jobs.busy(), egui::Button::new("Locate file…"))
                         .clicked()
                     {
+                        #[cfg(target_os = "macos")]
                         if let Some(located) = actions::pick_nam_files(false).into_iter().next() {
                             // Hashed on the job thread; the frame decides
                             // when it reports back (`app.rs`).
@@ -127,6 +144,8 @@ pub(crate) fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut AmpEditorApp, 
                                 JobDone::Located(located, id)
                             });
                         }
+                        #[cfg(not(target_os = "macos"))]
+                        actions::start_nam_picker(ui.ctx(), actions::locate_nam_picker_id(), false);
                     }
                     if ui.button("Choose another model").clicked() {
                         app.open_library();

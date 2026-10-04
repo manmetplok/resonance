@@ -77,7 +77,7 @@ impl EqEditorApp {
 
 impl EditorApp for EqEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
-        theme::apply(ui.ctx());
+        theme::apply_once(ui.ctx());
         // Continuous repaint so response curve follows slider movement.
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));

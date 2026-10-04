@@ -5,18 +5,18 @@
 
 use std::time::{Duration, Instant};
 
-use plugin_gui_core::repaint::{plan_repaint, repaint_due, RepaintPlan, REPAINT_SOON};
+use plugin_gui_core::repaint::{plan_repaint, repaint_due, RepaintPlan};
 
 #[test]
-fn short_delays_repaint_now() {
+fn zero_delay_repaints_now() {
+    // Duration::ZERO is what `Context::request_repaint()` reports —
+    // the only case that should collapse to an immediate repaint.
     let now = Instant::now();
-    for ms in [0u64, 1, 16, 49] {
-        assert_eq!(
-            plan_repaint(now, Duration::from_millis(ms), None),
-            RepaintPlan::Now,
-            "{ms} ms should repaint immediately"
-        );
-    }
+    assert_eq!(
+        plan_repaint(now, Duration::ZERO, None),
+        RepaintPlan::Now,
+        "a real request_repaint() should repaint immediately"
+    );
 }
 
 #[test]
@@ -24,19 +24,26 @@ fn now_supersedes_pending_deadline() {
     let now = Instant::now();
     let pending = Some(now + Duration::from_millis(500));
     assert_eq!(
-        plan_repaint(now, Duration::from_millis(10), pending),
+        plan_repaint(now, Duration::ZERO, pending),
         RepaintPlan::Now
     );
 }
 
 #[test]
-fn threshold_delay_becomes_deadline_not_dropped() {
-    // The original bug: exactly-50 ms (and anything longer) was discarded.
+fn sixteen_and_thirtythree_ms_become_deadlines_not_now() {
+    // PUX-04: editors call request_repaint_after(16ms|33ms) on every
+    // frame to pace their own redraw. Collapsing that to `Now` repaints
+    // at the monitor's refresh rate forever instead of the ~60/30 Hz
+    // actually requested.
     let now = Instant::now();
-    assert_eq!(
-        plan_repaint(now, REPAINT_SOON, None),
-        RepaintPlan::At(now + REPAINT_SOON)
-    );
+    for ms in [1u64, 16, 33, 49, 50] {
+        let delay = Duration::from_millis(ms);
+        assert_eq!(
+            plan_repaint(now, delay, None),
+            RepaintPlan::At(now + delay),
+            "{ms} ms should schedule a deadline, not repaint immediately"
+        );
+    }
 }
 
 #[test]

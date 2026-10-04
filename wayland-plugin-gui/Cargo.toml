@@ -41,3 +41,8 @@ raw-window-handle = "0.6"
 [[example]]
 name = "hello"
 path = "examples/hello.rs"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# tests/input_state.rs builds SCTK KeyEvent/Keysym values directly to
+# drive InputState headlessly (PUX-10).
+smithay-client-toolkit = "0.20"

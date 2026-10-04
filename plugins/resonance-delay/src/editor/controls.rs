@@ -41,9 +41,10 @@ pub type IntAt = fn(&DelayParams) -> &IntParam;
 pub enum Switch {
     /// A chip toggle.
     Toggle(BoolAt, &'static str),
-    /// A vertical one-of-N segmented control, labelled in order from the
-    /// param's minimum.
-    Segments(IntAt, &'static [&'static str]),
+    /// A vertical one-of-N segmented control, labelled from the param's
+    /// own choice table (`IntParam::with_choices`) — FU-P2a: the labels
+    /// used to be a second argument here, duplicating `params.rs`.
+    Segments(IntAt),
     /// A note-division combo, labelled from the param's own choice table.
     Division(IntAt),
 }
@@ -61,13 +62,6 @@ pub struct Group {
     pub caption: &'static str,
     pub items: &'static [Item],
 }
-
-/// `character`'s values, in order. The param declares no choice table
-/// yet (follow-up: move these onto `params.rs` with `with_choices`, so
-/// the host's lane reads the same words).
-pub const CHARACTER_LABELS: &[&str] = &["Digital", "Analog"];
-/// `routing`'s values, in order (same follow-up).
-pub const ROUTING_LABELS: &[&str] = &["Stereo", "Ping-Pong", "Dual"];
 
 /// Every card, in the order the signal meets them. Covers every
 /// declared parameter exactly once (`tests/editor_layout.rs`).
@@ -93,8 +87,8 @@ pub const GROUPS: &[Group] = &[
     Group {
         caption: "CHARACTER",
         items: &[
-            Item::Switches(&[Switch::Segments(|p| &p.character, CHARACTER_LABELS)]),
-            Item::Switches(&[Switch::Segments(|p| &p.routing, ROUTING_LABELS)]),
+            Item::Switches(&[Switch::Segments(|p| &p.character)]),
+            Item::Switches(&[Switch::Segments(|p| &p.routing)]),
             Item::Knob(|p| &p.stereo_offset, "Offset"),
         ],
     },
@@ -272,9 +266,9 @@ fn draw_switch(ui: &mut egui::Ui, params: &DelayParams, switch: &Switch) {
         Switch::Toggle(at, label) => {
             editor_widgets::param_chip(ui, at(params), label, true, ChipStyle::COMPACT);
         }
-        Switch::Segments(at, labels) => {
+        Switch::Segments(at) => {
             let style = SegmentedStyle::COMPACT.vertical(true);
-            editor_widgets::param_segmented(ui, at(params), labels, &style);
+            editor_widgets::choice_segmented(ui, at(params), &style);
         }
         Switch::Division(at) => {
             editor_widgets::int_choice(ui, at(params), COMBO_W);

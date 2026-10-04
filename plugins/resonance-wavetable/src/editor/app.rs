@@ -92,7 +92,7 @@ impl EditorApp for WavetableEditorApp {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));
 
-        theme::apply(ui.ctx());
+        theme::apply_once(ui.ctx());
 
         // Chrome (brand + chrome icons).
         egui::Panel::top("wt_chrome")

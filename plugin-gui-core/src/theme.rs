@@ -93,4 +93,21 @@ pub mod lavender {
         visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
         ctx.set_visuals(visuals);
     }
+
+    /// [`apply`], but only the first time it runs for this `Context` —
+    /// every editor used to call `apply` on every frame (PUX-04).
+    /// `set_visuals` is a full style rebuild, not a cheap no-op, and the
+    /// palette never changes while an editor is open, so repeating it
+    /// per frame was pure waste next to the audio work. Call this from
+    /// `EditorApp::ui` instead of `apply` directly; it has no effect
+    /// after the first call for a given `Context` (i.e. for the life of
+    /// one editor window).
+    pub fn apply_once(ctx: &egui::Context) {
+        let id = egui::Id::new("resonance_lavender_theme_applied");
+        let already = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+        if !already {
+            apply(ctx);
+            ctx.data_mut(|d| d.insert_temp(id, true));
+        }
+    }
 }

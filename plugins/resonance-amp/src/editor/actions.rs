@@ -208,11 +208,13 @@ pub(crate) fn import_summary(results: &[Result<ImportOutcome, String>]) -> (Opti
     (last, message)
 }
 
-/// A modal file dialog for `.nam` files. Sync on the UI thread — the
-/// Wayland runtime's editor thread, or the AppKit main thread under the
-/// Cocoa runtime, where a modal panel is the supported path and the
-/// runtime's reentrancy guard skips nested paints (macos-editor-plan.md
-/// §3h).
+/// A modal file dialog for `.nam` files. On Cocoa this stays a direct,
+/// synchronous `rfd` call — it runs inside the guarded AppKit modal run
+/// loop (macos-editor-plan.md §3h). On Linux, PUX-07: see
+/// [`start_nam_picker`]/[`poll_nam_picker`] below instead — a modal
+/// dialog call inside `ui()` would block the Wayland editor thread (no
+/// repaint, no Wayland dispatch) for as long as it is up.
+#[cfg(target_os = "macos")]
 pub(crate) fn pick_nam_files(multiple: bool) -> Vec<PathBuf> {
     let dialog = rfd::FileDialog::new().add_filter("NAM model", &["nam"]);
     if multiple {
@@ -220,4 +222,45 @@ pub(crate) fn pick_nam_files(multiple: bool) -> Vec<PathBuf> {
     } else {
         dialog.pick_file().into_iter().collect()
     }
+}
+
+/// Non-macOS: start a `.nam` file dialog on its own thread, kept alive
+/// across frames at `id` until [`poll_nam_picker`] collects the answer.
+/// `id` distinguishes the editor's two pickers (`Import .nam…` picks
+/// many; the missing-model banner's `Locate file…` picks one) so
+/// either can be in flight without disturbing the other.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn start_nam_picker(ctx: &plugin_gui_core::egui::Context, id: plugin_gui_core::egui::Id, multiple: bool) {
+    use resonance_plugin::file_picker::{CtxPicker, FileDialogRequest};
+    let request = if multiple {
+        FileDialogRequest::open_files()
+    } else {
+        FileDialogRequest::open_file()
+    }
+    .title("Import a NAM model")
+    .filter("NAM model", &["nam"]);
+    CtxPicker::<()>::get(ctx, id).start(request, ());
+}
+
+/// The picker at `id`'s answer, once its dialog has closed. `None` means
+/// still open or dismissed-and-not-yet-polled; an empty `Vec` means the
+/// user dismissed it without picking anything.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn poll_nam_picker(
+    ctx: &plugin_gui_core::egui::Context,
+    id: plugin_gui_core::egui::Id,
+) -> Option<Vec<PathBuf>> {
+    use resonance_plugin::file_picker::CtxPicker;
+    let (answer, ()) = CtxPicker::<()>::get(ctx, id).poll()?;
+    Some(answer.into_many())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn import_nam_picker_id() -> plugin_gui_core::egui::Id {
+    plugin_gui_core::egui::Id::new("amp_import_nam_picker")
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn locate_nam_picker_id() -> plugin_gui_core::egui::Id {
+    plugin_gui_core::egui::Id::new("amp_locate_nam_picker")
 }

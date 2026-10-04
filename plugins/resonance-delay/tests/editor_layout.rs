@@ -35,7 +35,7 @@ fn table_ids(params: &DelayParams) -> Vec<String> {
                     for s in *switches {
                         ids.push(match s {
                             Switch::Toggle(at, _) => at(params).id().to_string(),
-                            Switch::Segments(at, _) | Switch::Division(at) => {
+                            Switch::Segments(at) | Switch::Division(at) => {
                                 at(params).id().to_string()
                             }
                         });

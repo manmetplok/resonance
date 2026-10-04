@@ -469,6 +469,9 @@ struct AnnouncerInner {
     /// [`EditAnnouncer::recording`] (tests); `None` keeps a live editor
     /// from growing a log forever.
     log: Option<std::sync::Mutex<Vec<String>>>,
+    /// How many times [`EditAnnouncer::request_params_rescan`] was
+    /// called, attached or not — mirrors `count` for `announce` (PUX-01).
+    rescans: AtomicU64,
 }
 
 impl EditAnnouncer {
@@ -512,6 +515,28 @@ impl EditAnnouncer {
         if let Some(host) = self.inner.host.get() {
             host.announce_param_change(param_id);
         }
+    }
+
+    /// Tell the host to refresh its mirror of every parameter's value
+    /// ([`HostHandle::request_params_rescan`]) without recording an
+    /// undo entry — for a bulk change that is not itself one edit, such
+    /// as an in-editor preset recall (code review PUX-01: the preset
+    /// bar's ◀/▶ step and combo pick write many params at once through
+    /// `PresetSession`/`PresetEditor`, not through a single gesture
+    /// [`Self::announce`] fits). A no-op where no host is attached.
+    pub fn request_params_rescan(&self) {
+        self.inner.rescans.fetch_add(1, Ordering::Relaxed);
+        if let Some(host) = self.inner.host.get() {
+            host.request_params_rescan();
+        }
+    }
+
+    /// How many rescans have been requested, attached or not — mirrors
+    /// [`Self::count`] for [`Self::announce`]; lets a test using
+    /// [`Self::recording`] assert a bulk change (a preset recall)
+    /// refreshed the host's mirror without going through `announce`.
+    pub fn rescans_requested(&self) -> u64 {
+        self.inner.rescans.load(Ordering::Relaxed)
     }
 
     /// How many edits have been announced, attached or not.

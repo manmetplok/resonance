@@ -83,6 +83,8 @@ impl EditorFactory for IrEditorFactory {
             bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceIr>(),
             presets: self.presets.clone(),
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
+            #[cfg(not(target_os = "macos"))]
+            ir_picker: parking_lot::Mutex::new(resonance_plugin::file_picker::FilePicker::default()),
         };
         let runtime = RuntimeEditor::new(
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),

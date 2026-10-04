@@ -24,8 +24,10 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
         ui.add_space(8.0);
 
         if ui.button("Load IR…").clicked() {
-            load_ir_clicked(ui.ctx(), app);
+            start_load_ir(ui.ctx(), app);
         }
+        #[cfg(not(target_os = "macos"))]
+        poll_load_ir(ui.ctx(), app);
 
         ui.add_space(8.0);
         ui.separator();
@@ -81,7 +83,16 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
             drop(list);
 
             let raw_name = app.ir_name.lock().clone();
-            let name = if raw_name.is_empty() {
+            // PUX-09: a load failure's only channel is "Error: {e}" in
+            // this same string (`loader.rs`'s doc comment on
+            // `load_into` says so) — shown here as plain filename text
+            // it used to be indistinguishable from a real one at a
+            // glance. The banner (`missing_banner::draw`, drawn over
+            // the centre when `load_error` is `Some`) says the real
+            // detail; this slot just stops pretending it's a filename.
+            let name = if super::missing_banner::load_error(&raw_name).is_some() {
+                "(load failed — see below)".to_string()
+            } else if raw_name.is_empty() {
                 if stem.is_empty() {
                     "(no IR loaded)".to_string()
                 } else {
@@ -115,17 +126,48 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
     });
 }
 
-fn load_ir_clicked(ctx: &egui::Context, app: &IrEditorApp) {
-    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
-    // thread, or the AppKit main thread under the Cocoa runtime, where a
-    // modal panel is the supported path and the runtime's reentrancy
-    // guard skips nested paints (macos-editor-plan.md §3h).
+/// PUX-07: on Cocoa the dialog runs inside the guarded AppKit modal run
+/// loop, so `Load IR…` stays a direct, synchronous `rfd` call there.
+/// On Linux it runs on its own thread and is polled every frame
+/// ([`poll_load_ir`]) — a modal `rfd::FileDialog::pick_file()` call
+/// inside `ui()` would otherwise block the Wayland editor thread (no
+/// repaint, no Wayland dispatch) for as long as the dialog is up.
+#[cfg(target_os = "macos")]
+pub(super) fn start_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Impulse response (WAV)", &["wav"])
         .pick_file()
     else {
         return;
     };
+    apply_ir_path(ctx, app, path);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn start_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
+    use resonance_plugin::file_picker::FileDialogRequest;
+    app.ir_picker.lock().start(
+        FileDialogRequest::open_file()
+            .title("Load IR")
+            .filter("Impulse response (WAV)", &["wav"]),
+    );
+    let _ = ctx; // kept for signature parity with the macOS path
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn poll_load_ir(ctx: &egui::Context, app: &IrEditorApp) {
+    let Some(answer) = app.ir_picker.lock().poll() else {
+        return;
+    };
+    if let Some(path) = answer.into_one() {
+        apply_ir_path(ctx, app, path);
+    }
+}
+
+/// Everything a chosen impulse-response path drives: the file-list
+/// browser, `ir_path`, the `file_select` param (announced as an edit)
+/// and the load request itself.
+fn apply_ir_path(ctx: &egui::Context, app: &IrEditorApp, path: std::path::PathBuf) {
     let path_str = path.to_string_lossy().into_owned();
 
     let Some(dir) = path.parent() else {

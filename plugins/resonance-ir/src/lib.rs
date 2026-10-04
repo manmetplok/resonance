@@ -14,7 +14,7 @@ pub mod state;
 pub mod viz;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use dsp::{IrEngine, LatencyMode, StereoConvolver};
 use loader::{LoaderDeps, LoaderHandle};
@@ -92,6 +92,16 @@ impl ResonanceIr {
     fn target_block_size(&self) -> usize {
         dsp::block_size_for(self.sample_rate, self.latency_mode())
     }
+
+    /// Set `ir_name` directly, for `tests/missing_banner.rs` (PUX-09):
+    /// driving an actual failed load (a bad path through
+    /// `loader::load_into`) would also need a running loader thread,
+    /// when all the banner test needs is `ir_name` holding
+    /// `loader.rs`'s own `"Error: {e}"` convention. Not plugin API.
+    #[doc(hidden)]
+    pub fn test_set_ir_name(&self, text: &str) {
+        *self.ir_name.lock() = text.to_string();
+    }
 }
 
 impl ResonancePlugin for ResonanceIr {
@@ -158,6 +168,15 @@ impl ResonancePlugin for ResonanceIr {
     fn set_host(&mut self, host: Arc<HostHandle>) {
         self.editor_announcer.attach(host.clone());
         self.host = Some(host);
+    }
+
+    fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {
+        // FU-P1a: the params are shared, so a host reads a live
+        // instance's real values while the plugin is in the audio
+        // processor — without this, a third-party host that never
+        // flushes between blocks sees a stale mirror for any value an
+        // editor edit moved while the transport is stopped.
+        Some(Arc::new(IrParamText(self.params.clone())))
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
@@ -327,6 +346,27 @@ impl ResonancePlugin for ResonanceIr {
             self.presets.clone(),
             self.editor_announcer.clone(),
         )))
+    }
+}
+
+/// Parameter text and live values over the shared `IrParams`, for the
+/// CLAP bridge while the plugin is active (FU-P1a).
+struct IrParamText(Arc<IrParams>);
+
+impl resonance_plugin::ParamTextSource for IrParamText {
+    fn display(&self, index: usize, value: f64) -> Option<String> {
+        (index < params::PARAM_COUNT).then(|| self.0.param_at(index).display(value))
+    }
+
+    fn parse(&self, index: usize, text: &str) -> Option<f64> {
+        if index >= params::PARAM_COUNT {
+            return None;
+        }
+        self.0.param_at(index).parse(text)
+    }
+
+    fn live_value(&self, index: usize) -> Option<f64> {
+        (index < params::PARAM_COUNT).then(|| self.0.param_at(index).get_plain())
     }
 }
 

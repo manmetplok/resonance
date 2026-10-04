@@ -181,8 +181,13 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                 .on_hover_text("Import a WAV as this oscillator's wavetable")
                 .clicked()
             {
-                load_clicked(app, osc);
+                #[cfg(target_os = "macos")]
+                start_load(app, osc);
+                #[cfg(not(target_os = "macos"))]
+                start_load(ui.ctx(), osc);
             }
+            #[cfg(not(target_os = "macos"))]
+            poll_load(ui.ctx(), app, osc);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let frames = table.frame_count();
                 let frame_idx = ((position * (frames.saturating_sub(1)).max(1) as f32)
@@ -218,19 +223,54 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     });
 }
 
-/// "Load…": pick a WAV and import it into oscillator `osc` in the background.
-fn load_clicked(app: &mut WavetableEditorApp, osc: usize) {
-    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
-    // thread, or the AppKit main thread under the Cocoa runtime, where a
-    // modal panel is the supported path and the runtime's reentrancy
-    // guard skips nested paints (macos-editor-plan.md §3h). The import
-    // itself runs on a loader thread; the table is selected once it lands.
+/// "Load…": pick a WAV and import it into oscillator `osc` in the
+/// background. The import itself always runs on a loader thread; the
+/// table is selected once it lands (see the `pending_user_load` check
+/// above). PUX-07: on Cocoa the *dialog* also stays a direct,
+/// synchronous `rfd` call — it runs inside the guarded AppKit modal run
+/// loop. On Linux it runs on its own thread via `FilePicker` and is
+/// polled every frame ([`poll_load`]); a modal `pick_file()` call
+/// inside `ui()` would otherwise block the Wayland editor thread (no
+/// repaint, no Wayland dispatch) for as long as the dialog is up.
+#[cfg(target_os = "macos")]
+fn start_load(app: &mut WavetableEditorApp, osc: usize) {
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Wavetable (WAV)", &["wav"])
         .pick_file()
     else {
         return;
     };
+    apply_load(app, osc, path);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_load(ctx: &egui::Context, osc: usize) {
+    use resonance_plugin::file_picker::{CtxPicker, FileDialogRequest};
+    CtxPicker::<usize>::get(ctx, load_picker_id(osc)).start(
+        FileDialogRequest::open_file()
+            .title("Load a wavetable")
+            .filter("Wavetable (WAV)", &["wav"]),
+        osc,
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+fn poll_load(ctx: &egui::Context, app: &mut WavetableEditorApp, osc: usize) {
+    use resonance_plugin::file_picker::CtxPicker;
+    let Some((answer, osc)) = CtxPicker::<usize>::get(ctx, load_picker_id(osc)).poll() else {
+        return;
+    };
+    if let Some(path) = answer.into_one() {
+        apply_load(app, osc, path);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn load_picker_id(osc: usize) -> egui::Id {
+    egui::Id::new(("resonance_wavetable_load_osc", osc))
+}
+
+fn apply_load(app: &mut WavetableEditorApp, osc: usize, path: std::path::PathBuf) {
     let generation = app
         .user_tables
         .request_file(osc, path.to_string_lossy().into_owned());

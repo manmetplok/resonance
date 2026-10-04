@@ -222,7 +222,8 @@ macro_rules! make_band {
                 },
             )
             .with_unit(" Hz")
-            .with_value_to_string(format_hz()),
+            .with_value_to_string(format_hz())
+            .with_string_to_value(resonance_plugin::formatters::s2v_f32_hz()),
             gain: FloatParam::new(
                 concat!("band", $ix, "_gain"),
                 concat!("Band ", $ix, " Gain"),

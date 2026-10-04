@@ -183,3 +183,86 @@ fn with_announcer_lends_the_plugins_announcer_to_every_frame() {
     assert!(p.on.value());
     assert_eq!(plugin_side.announced(), ["on"], "the plugin's own announcer heard it");
 }
+
+/// FU-P2e: a gesture whose widget stops being drawn mid-drag (scrolled
+/// out of a list, a tab switched away from it) never delivers `ended`,
+/// so the shared ledger (`editor_widgets::apply_gesture`) used to keep
+/// its start value around forever. That was not just a leak: the
+/// *next* real gesture on the same param saw an entry already there
+/// and kept the stale start as its own baseline instead of the value
+/// it actually began from — so a second gesture that moved nothing at
+/// all could still announce a false edit.
+#[test]
+fn an_abandoned_gesture_does_not_poison_the_next_ones_baseline() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct HideableApp {
+        p: Arc<Params>,
+        show: Arc<AtomicBool>,
+    }
+    impl EditorApp for HideableApp {
+        fn ui(&mut self, ui: &mut egui::Ui) {
+            if self.show.load(Ordering::Relaxed) {
+                editor_widgets::float_knob(ui, &self.p.cutoff, "Cutoff", "Hz");
+            }
+        }
+    }
+
+    let p = params();
+    let show = Arc::new(AtomicBool::new(true));
+    let mut ed = HeadlessEditor::new(
+        Box::new(HideableApp { p: p.clone(), show: show.clone() }),
+        (300.0, 200.0),
+    );
+
+    let button = |pos: egui::Pos2, pressed: bool| {
+        vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }]
+    };
+
+    // Begin a drag and move it partway — a real, in-flight gesture.
+    let frame = ed.settled();
+    let from = frame.widgets.iter().find(|w| w.name == "cutoff").unwrap().rect.center();
+    ed.frame(vec![egui::Event::PointerMoved(from)]);
+    ed.frame(button(from, true));
+    let moved_to = from - egui::vec2(0.0, 30.0);
+    ed.frame(vec![egui::Event::PointerMoved(moved_to)]);
+    let abandoned_value = p.cutoff.value();
+    assert_ne!(abandoned_value, 1_000.0, "the drag should have moved it off its default");
+    assert!(ed.announced().is_empty(), "not ended yet, so nothing announced");
+
+    // The widget stops being drawn — nothing ever sees `ended` for this
+    // gesture. The pointer is released while it is gone (so the next
+    // click starts clean at the egui level); the ledger entry is what
+    // this test is really about.
+    show.store(false, Ordering::Relaxed);
+    ed.frame(button(moved_to, false));
+    for _ in 0..3 {
+        ed.frame(Vec::new());
+    }
+    show.store(true, Ordering::Relaxed);
+
+    // A brand-new gesture begins later and makes no *net* change: it
+    // really drags (so `began` genuinely fires), out and back to
+    // exactly where it started this time — which is nonzero for the
+    // stale baseline (1_000.0) but zero for the correct one
+    // (`abandoned_value`).
+    let frame = ed.settled();
+    let from = frame.widgets.iter().find(|w| w.name == "cutoff").unwrap().rect.center();
+    ed.frame(vec![egui::Event::PointerMoved(from)]);
+    ed.frame(button(from, true));
+    ed.frame(vec![egui::Event::PointerMoved(from - egui::vec2(0.0, 20.0))]);
+    ed.frame(vec![egui::Event::PointerMoved(from)]);
+    ed.frame(button(from, false));
+
+    assert_eq!(p.cutoff.value(), abandoned_value, "the new gesture should have landed back where it started");
+    assert!(
+        ed.announced().is_empty(),
+        "a gesture that moved nothing must not announce, even after an earlier one was abandoned: {:?}",
+        ed.announced()
+    );
+}

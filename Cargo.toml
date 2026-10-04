@@ -25,7 +25,7 @@ egui_glow = { version = "0.34", default-features = false }
 iced = { version = "0.14" }
 hound = "3.5"
 rand = "0.10"
-rfd = "0.15"
+rfd = "0.17"
 rustfft = "6"
 symphonia = { version = "0.6", default-features = false, features = ["wav", "pcm", "flac", "mp3", "ogg", "vorbis", "aac", "isomp4"] }
 dirs = "6"

@@ -196,6 +196,12 @@ impl EditorThread {
             title: options.title.clone(),
             app_id: options.app_id.clone(),
             min_size: options.min_size,
+            loop_handle: loop_handle.clone(),
+            // Matches the old hardcoded `RawInput::focused: true`: most
+            // compositors send `enter` as soon as the surface is
+            // created, so starting "focused" is right for the common
+            // case, and a `leave` before that (uncommon) corrects it.
+            keyboard_focused: true,
         };
 
         // Drive the loop until we get our first configure event, so EGL can

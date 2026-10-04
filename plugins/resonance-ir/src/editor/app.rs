@@ -13,7 +13,7 @@ use plugin_gui_core::{egui, EditorApp};
 use crate::params::IrParams;
 use crate::viz::IrViz;
 
-use super::{controls, header, latency, meters, response_view, theme, waveform_view};
+use super::{controls, header, latency, meters, missing_banner, response_view, theme, waveform_view};
 
 pub(crate) struct IrEditorApp {
     pub(crate) params: Arc<IrParams>,
@@ -29,11 +29,17 @@ pub(crate) struct IrEditorApp {
     pub(crate) presets: Arc<resonance_plugin::presets::PresetSession>,
     /// Transient bar state (open combo, in-progress rename), editor-only.
     pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
+    /// `Load IR…`'s dialog, polled from `header::draw` (PUX-07) — a
+    /// field rather than a one-off local because the dialog can take
+    /// many frames to resolve. Linux only; Cocoa calls `rfd` directly
+    /// on the guarded AppKit main thread.
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) ir_picker: Mutex<resonance_plugin::file_picker::FilePicker>,
 }
 
 impl EditorApp for IrEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
-        theme::apply(ui.ctx());
+        theme::apply_once(ui.ctx());
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
 
@@ -70,6 +76,17 @@ fn draw_center(ui: &mut egui::Ui, app: &mut IrEditorApp) {
         egui::pos2(avail.left() + gap, avail.bottom() - meter_h),
         egui::pos2(avail.right() - gap, avail.bottom() - 2.0),
     );
+
+    // PUX-09: a load failure has nothing real to draw — the banner
+    // takes the waveform/response views' place, as the amp's
+    // missing-model banner does for its scope/curve.
+    let error = missing_banner::load_error(&app.ir_name.lock()).map(str::to_string);
+    if let Some(message) = error {
+        missing_banner::draw(ui, viz_rect, app, &message);
+        let painter = ui.painter_at(avail);
+        meters::draw(&painter, meter_rect, &app.viz);
+        return;
+    }
 
     // Split viz: waveform (left ~55%), response (right ~45%).
     let resp_w = (viz_rect.width() * 0.45).clamp(240.0, 520.0);

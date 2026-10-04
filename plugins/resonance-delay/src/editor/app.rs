@@ -47,7 +47,7 @@ impl DelayEditorApp {
 
 impl EditorApp for DelayEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
-        theme::apply(ui.ctx());
+        theme::apply_once(ui.ctx());
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));
 
@@ -119,13 +119,11 @@ fn draw_header(ui: &mut egui::Ui, app: &mut DelayEditorApp) {
             ui.label(egui::RichText::new(format!("GATE {label}")).color(theme::ACCENT));
         }
 
-        // Character + Routing readout.
+        // Character + Routing readout — each param's own display text
+        // (FU-P2a: `with_choices` in params.rs), not a local label table.
         ui.add_space(12.0);
-        let pick = |labels: &'static [&'static str], v: i32| {
-            labels[(v.max(0) as usize).min(labels.len() - 1)]
-        };
-        let char_label = pick(controls::CHARACTER_LABELS, app.params.character.value());
-        let route_label = pick(controls::ROUTING_LABELS, app.params.routing.value());
+        let char_label = app.params.character.display(app.params.character.value() as f64);
+        let route_label = app.params.routing.display(app.params.routing.value() as f64);
         ui.label(
             egui::RichText::new(format!("{char_label} · {route_label}")).color(theme::TEXT_DIM),
         );
