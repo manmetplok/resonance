@@ -38,6 +38,7 @@ fn audio_clip(id: ClipId, track_id: TrackId) -> ProjectClip {
         fade_out_frames: 0,
         fade_out_curve: "linear".to_owned(),
         gain_db: 0.0,
+        warp: None,
     }
 }
 

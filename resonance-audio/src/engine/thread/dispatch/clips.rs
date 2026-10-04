@@ -25,6 +25,9 @@ pub(super) fn dispatch_clips(
         | AudioCommand::SplitClip { clip_id, .. }
         | AudioCommand::SetClipFade { clip_id, .. }
         | AudioCommand::SetClipGain { clip_id, .. }
+        | AudioCommand::SetClipWarp { clip_id, .. }
+        | AudioCommand::SetClipWarpMarkers { clip_id, .. }
+        | AudioCommand::DetectClipTempo { clip_id }
             if !clips::clip_exists(ctx, clip_id) =>
         {
             clips::defer_clip_command(state, clip_id, cmd)

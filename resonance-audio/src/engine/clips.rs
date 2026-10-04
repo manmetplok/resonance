@@ -257,6 +257,24 @@ fn apply_clip_command(ctx: &HandlerCtx, state: &mut HandlerState, command: Audio
         AudioCommand::SetClipGain { clip_id, gain_db } => {
             handle_set_clip_gain(ctx, clip_id, gain_db)
         }
+        AudioCommand::SetClipWarp {
+            clip_id,
+            warp_enabled,
+            original_bpm,
+            transpose_semitones,
+            warp_algorithm,
+        } => handle_set_clip_warp(
+            ctx,
+            clip_id,
+            warp_enabled,
+            original_bpm,
+            transpose_semitones,
+            warp_algorithm,
+        ),
+        AudioCommand::SetClipWarpMarkers { clip_id, markers } => {
+            handle_set_clip_warp_markers(ctx, clip_id, markers)
+        }
+        AudioCommand::DetectClipTempo { clip_id } => handle_detect_clip_tempo(ctx, clip_id),
         _ => {}
     }
 }

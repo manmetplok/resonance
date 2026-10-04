@@ -24,7 +24,8 @@ use resonance_audio::types::{AudioCommand, ClipId, MidiNote, TrackId, TrackType}
 use super::entities::kept_tracks;
 use super::{Reconcile, ReconcileCtx};
 use crate::project::{fade_curve_from_tag, ProjectClip, ProjectFile, ProjectMidiClip};
-use crate::state::{ClipState, MidiClipState};
+use crate::state::{ClipState, ClipWarpState, MidiClipState};
+use crate::update::project_io::serialize::clip_warp_from_project;
 use crate::Resonance;
 
 /// The directory a clip's `audio_file` resolves against. Always set on the
@@ -84,7 +85,8 @@ fn order_like<T>(clips: &mut [T], id: impl Fn(&T) -> ClipId, target: &[ClipId]) 
 ///
 /// * After a `ClearAll`: the mirror is emptied, then every clip goes out as
 ///   `LoadClipFromWav` (absolute path under the project dir), followed by
-///   `SetClipFade` / `SetClipGain` only when non-default (the load carries
+///   `SetClipFade` / `SetClipGain` / `SetClipWarp` / `SetClipWarpMarkers`
+///   only when non-default (the load carries
 ///   neither; legacy / unfaded projects stay quiet). The WAVs an undo
 ///   reloads exist because `snapshot_for_undo` sent `PersistClipWavs`
 ///   (FU-V5b); the engine bumps its clip-id allocator past each loaded id
@@ -154,6 +156,10 @@ fn load_audio_clip(r: &mut Resonance, pc: &ProjectClip, dir: &Path) {
             gain_db: pc.gain_db,
         });
     }
+    // Warp, likewise only when the clip has any (the engine parks both
+    // until the WAV has loaded).
+    let warp = clip_warp_from_project(pc.warp.as_ref());
+    send_clip_warp(r, pc.id, &ClipWarpState::default(), &warp);
 
     r.clips.push(ClipState {
         id: pc.id,
@@ -174,6 +180,7 @@ fn load_audio_clip(r: &mut Resonance, pc: &ProjectClip, dir: &Path) {
         // The pool link (doc #175); `Pool` reconciles it against the pool
         // and recomputes usage once every clip is in place.
         asset_ref: pc.asset_ref.map(crate::state::pool::AssetRef::new),
+        warp,
     });
 }
 
@@ -223,6 +230,11 @@ fn apply_audio_clip(r: &mut Resonance, oc: &ProjectClip, pc: &ProjectClip) {
             gain_db: pc.gain_db,
         });
     }
+    // Warp: compared in mirror form, so a tag spelling or marker order
+    // that normalises to the same state sends nothing.
+    let old_warp = clip_warp_from_project(oc.warp.as_ref());
+    let warp = clip_warp_from_project(pc.warp.as_ref());
+    send_clip_warp(r, pc.id, &old_warp, &warp);
 
     if let Some(cs) = r.clips.iter_mut().find(|c| c.id == pc.id) {
         cs.start_sample = pc.start_sample;
@@ -238,6 +250,28 @@ fn apply_audio_clip(r: &mut Resonance, oc: &ProjectClip, pc: &ProjectClip) {
         cs.gain_db = pc.gain_db;
         // An undo that relinked or cleared the pool link is reflected.
         cs.asset_ref = pc.asset_ref.map(crate::state::pool::AssetRef::new);
+        cs.warp = warp;
+    }
+}
+
+/// Push whatever part of a clip's warp state differs between `old` and
+/// `new`: `SetClipWarp` for the four scalars, `SetClipWarpMarkers` for
+/// the marker set. Nothing when they agree.
+fn send_clip_warp(r: &Resonance, clip_id: ClipId, old: &ClipWarpState, new: &ClipWarpState) {
+    if old.params_differ(new) {
+        let _ = r.engine.send(AudioCommand::SetClipWarp {
+            clip_id,
+            warp_enabled: new.enabled,
+            original_bpm: new.original_bpm,
+            transpose_semitones: new.transpose_semitones,
+            warp_algorithm: new.algorithm,
+        });
+    }
+    if old.markers != new.markers {
+        let _ = r.engine.send(AudioCommand::SetClipWarpMarkers {
+            clip_id,
+            markers: new.markers.clone(),
+        });
     }
 }
 

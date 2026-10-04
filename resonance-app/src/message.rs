@@ -19,6 +19,7 @@ pub use crate::update::automation::AutomationMessage;
 pub use crate::update::browser::BrowserMessage;
 pub use crate::update::bus::BusMessage;
 pub use crate::update::chord_track::ChordTrackMessage;
+pub use crate::update::clip_warp::ClipWarpMessage;
 pub use crate::update::clips::ClipMessage;
 pub use crate::update::drag::{DragMessage, DropTarget};
 pub use crate::update::export::ExportMessage;

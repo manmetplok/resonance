@@ -15,6 +15,9 @@ use rmcp::{tool, tool_router};
 /// Importing decodes, resamples and copies the file, so a long stereo
 /// take costs real seconds; a drum one-shot returns immediately.
 const IMPORT_WAIT_MS: u64 = 120_000;
+/// How long to block on a tempo detection. The detector reads the clip's
+/// whole source; a long take costs a second or two.
+const DETECT_TEMPO_WAIT_MS: u64 = 60_000;
 
 #[tool_router(router = router_clip, vis = "pub(crate)")]
 impl ResonanceMcp {
@@ -205,6 +208,74 @@ impl ResonanceMcp {
         Parameters(params): Parameters<clip::SetFadeParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(clip::SET_FADE, &params).await
+    }
+
+    #[tool(
+        description = "Set an audio clip's warp (\"follow tempo\") settings: enabled (on/off), \
+                       original_bpm (the tempo the recording was performed at, 20-999), \
+                       clear_original_bpm (forget it), transpose_semitones (within +/-48) and \
+                       algorithm (transient, the default, keeps drum hits crisp; tonal suits \
+                       pads and vocals). Every field is optional and omitted ones keep their \
+                       value; a call that sets nothing is rejected. Use clip_detect_tempo to \
+                       find original_bpm when you do not know it. \
+                       \
+                       IMPORTANT: the settings are stored with the clip, saved with the project \
+                       and shown in the GUI, but playback and bounces do NOT time-stretch yet — \
+                       a warped clip still plays its source at its own speed. Do not rely on \
+                       warp to fit a loop to the project tempo; check by ear or meter before \
+                       claiming it does. Undoable with edit_undo. Returns the clip's full warp \
+                       state: {enabled, original_bpm, transpose_semitones, algorithm, markers}.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<clip::WarpResult>()
+    )]
+    async fn clip_set_warp(
+        &self,
+        Parameters(params): Parameters<clip::SetWarpParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(clip::SET_WARP, &params).await
+    }
+
+    #[tool(
+        description = "Replace an audio clip's warp markers. A marker pins source_frame (a frame \
+                       of the clip's source file, counted from the file's start regardless of \
+                       trim) to beat (beats after the clip's start, >= 0, at the project's base \
+                       tempo) — the way to line a loose performance up with the grid. Pass the \
+                       COMPLETE new set: an empty list removes every marker. Order does not \
+                       matter, but after sorting by beat source_frame must never decrease, \
+                       markers must be at least 1/16 beat apart, and at most 1024 are \
+                       accepted. \
+                       \
+                       Like clip_set_warp this is stored, saved and drawn on the clip, but \
+                       playback does NOT stretch to the markers yet. Undoable with edit_undo; \
+                       returns the clip's full warp state.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<clip::WarpResult>()
+    )]
+    async fn clip_set_warp_markers(
+        &self,
+        Parameters(params): Parameters<clip::SetWarpMarkersParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(clip::SET_WARP_MARKERS, &params)
+            .await
+    }
+
+    #[tool(
+        description = "Estimate the tempo of an audio clip's source audio. Runs as a job (waits \
+                       up to 1 minute) whose result is {clip_id, bpm, confidence} with confidence \
+                       in 0..1; the job FAILS when no tempo can be found (too short, or no \
+                       steady pulse). Analysis only — the clip is not changed: pass the bpm to \
+                       clip_set_warp as original_bpm to use it. A low confidence, or a bpm that \
+                       is half or double what you expect, is common on sparse material; treat \
+                       it as a suggestion. The result also shows in the GUI's clip inspector.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn clip_detect_tempo(
+        &self,
+        Parameters(params): Parameters<clip::DetectTempoParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(clip::DETECT_TEMPO, &params, DETECT_TEMPO_WAIT_MS)
+            .await
     }
 
     #[tool(

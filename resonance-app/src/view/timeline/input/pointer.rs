@@ -13,6 +13,7 @@ use iced::{mouse, Point, Rectangle};
 use crate::message::*;
 use crate::theme;
 use crate::view::arrange_layout::ArrangeRowKind;
+use super::super::draw::WarpHit;
 use super::super::hit_test::{self, HitKind, MarkerHit};
 use super::super::scrollbar::scroll_from_thumb_pos;
 use super::super::{TimelineCanvas, TimelineState};
@@ -204,6 +205,12 @@ impl TimelineCanvas<'_> {
 
         // Audio clips (reverse order so topmost wins).
         for clip in self.clips.iter().rev() {
+            // A warped clip's marker strip (its bottom edge) comes first:
+            // grab a marker, double-click to add or remove one. A single
+            // press on the bare strip falls through to the body below.
+            if let Some(result) = self.press_warp_strip(state, pos, layout, clip) {
+                return Some(result);
+            }
             let Some(hit) = self.hit_test_audio_lane(pos, layout, clip) else {
                 continue;
             };
@@ -254,6 +261,65 @@ impl TimelineCanvas<'_> {
         }
 
         None
+    }
+
+    /// A press on a warped audio clip's marker strip. `None` when the
+    /// pointer is not on the strip, or is a single press on its bare part
+    /// (which moves the clip like any body press).
+    fn press_warp_strip(
+        &self,
+        state: &mut TimelineState,
+        pos: Point,
+        layout: &crate::view::arrange_layout::ArrangeRowLayout,
+        clip: &crate::state::ClipState,
+    ) -> UpdateResult {
+        let (hit, indent) = self.warp_hit(pos, layout, clip)?;
+        let now = Instant::now();
+        let marker = match hit {
+            WarpHit::Marker(index) => Some(index),
+            WarpHit::Strip { .. } => None,
+        };
+        let is_double = state.last_warp_click.is_some_and(|(t, id, m)| {
+            id == clip.id && m == marker && now.duration_since(t).as_millis() <= DOUBLE_CLICK_MS
+        });
+        state.last_warp_click = Some((now, clip.id, marker));
+        let set_markers = |markers| {
+            Message::Clip(ClipMessage::Warp(ClipWarpMessage::SetWarpMarkers {
+                clip_id: clip.id,
+                markers,
+            }))
+        };
+        match hit {
+            WarpHit::Marker(index) if is_double => {
+                state.last_warp_click = None;
+                captured(set_markers(clip.warp.markers_without(index)))
+            }
+            WarpHit::Marker(index) => {
+                state.clip_interaction = Some(ClipInteraction::WarpMarker { indent });
+                captured(Message::Clip(ClipMessage::Warp(
+                    ClipWarpMessage::StartMarkerDrag {
+                        clip_id: clip.id,
+                        index,
+                    },
+                )))
+            }
+            WarpHit::Strip { beat } if is_double => {
+                state.last_warp_click = None;
+                // Land the new marker on the grid, like every other edit.
+                let frames_per_beat = self.sample_rate as f64 * 60.0 / self.bpm.max(1.0) as f64;
+                let at = clip.start_sample + (beat.max(0.0) * frames_per_beat) as u64;
+                let snapped = self.snap_sample(at);
+                let beat = (snapped as f64 - clip.start_sample as f64).max(0.0) / frames_per_beat;
+                let markers = clip.warp.markers_with_added(
+                    beat,
+                    clip.trim_start_frames,
+                    self.bpm,
+                    self.sample_rate,
+                )?;
+                captured(set_markers(markers))
+            }
+            WarpHit::Strip { .. } => None,
+        }
     }
 
     /// Try to handle the press on a take lane (epic #15, todo #414):
@@ -572,6 +638,9 @@ impl TimelineCanvas<'_> {
             Some(ClipInteraction::MidiTrim) => captured(Message::MidiClip(
                 MidiClipMessage::UpdateMidiClipTrim(pos.x),
             )),
+            Some(ClipInteraction::WarpMarker { indent }) => captured(Message::Clip(
+                ClipMessage::Warp(ClipWarpMessage::UpdateMarkerDrag(pos.x - indent)),
+            )),
             None => None,
         }
     }
@@ -641,6 +710,9 @@ impl TimelineCanvas<'_> {
                 }
                 ClipInteraction::MidiTrim => {
                     captured(Message::MidiClip(MidiClipMessage::EndMidiClipTrim))
+                }
+                ClipInteraction::WarpMarker { .. } => {
+                    captured(Message::Clip(ClipMessage::Warp(ClipWarpMessage::EndMarkerDrag)))
                 }
             };
         }

@@ -66,6 +66,7 @@ fn push_take(app: &mut Resonance, track_id: u64) {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     });
 }
 

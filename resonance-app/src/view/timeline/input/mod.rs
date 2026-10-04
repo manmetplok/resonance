@@ -34,6 +34,10 @@ pub(crate) enum ClipInteraction {
     Gain,
     MidiMove,
     MidiTrim,
+    /// Dragging a warp marker along a warped clip's marker strip.
+    /// `indent` is the clip's group indent, taken off the pointer x so the
+    /// reducer sees plain timeline x.
+    WarpMarker { indent: f32 },
 }
 
 /// Active drag on an arrangement marker: either the start pole (moves the

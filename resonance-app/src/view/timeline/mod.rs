@@ -380,6 +380,9 @@ pub struct TimelineState {
     pub(super) last_reported_content_height: f32,
     /// Tracks the most recent click on a MIDI clip for double-click detection.
     pub(super) last_midi_click: Option<(Instant, ClipId)>,
+    /// Last press on a warped clip's marker strip (marker index, `None` =
+    /// bare strip), for double-click add / remove detection.
+    pub(super) last_warp_click: Option<(Instant, ClipId, Option<usize>)>,
     /// Vertical scrollbar drag in progress (y-offset within the thumb).
     pub(super) v_scrollbar_grab: Option<f32>,
     /// Tracks the most recent click on a global track for double-click detection.
@@ -653,21 +656,8 @@ impl<'a> TimelineCanvas<'a> {
         }
         let chord_lane_hash = ch.finish();
 
-        // Hash every clip's geometry + fade/gain shaping so the cached
-        // clip layer invalidates on move / trim / fade / gain edits.
-        let mut clip_h = std::collections::hash_map::DefaultHasher::new();
-        for c in self.clips {
-            c.id.hash(&mut clip_h);
-            c.track_id.hash(&mut clip_h);
-            c.start_sample.hash(&mut clip_h);
-            c.duration_samples.hash(&mut clip_h);
-            c.fade_in_frames.hash(&mut clip_h);
-            c.fade_in_curve.hash(&mut clip_h);
-            c.fade_out_frames.hash(&mut clip_h);
-            c.fade_out_curve.hash(&mut clip_h);
-            c.gain_db.to_bits().hash(&mut clip_h);
-        }
-        let clips_hash = clip_h.finish();
+        // Every clip's geometry + fade/gain/warp shaping (`draw::clip`).
+        let clips_hash = draw::clips_fingerprint(self.clips);
 
         // Hash every MIDI clip's geometry + note-minimap content so the
         // cached layer invalidates on move / trim / rename / note edits.

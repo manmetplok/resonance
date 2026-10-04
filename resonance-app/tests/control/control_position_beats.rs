@@ -169,6 +169,7 @@ fn loop_set_and_clip_split_use_the_same_beat() {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     });
     let split: SplitResult = call(
         &mut app,

@@ -127,6 +127,7 @@ fn no_follow_while_dragging_a_clip() {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     });
     app.test_dispatch(Message::Clip(ClipMessage::StartClipDrag {
         clip_id: 7,

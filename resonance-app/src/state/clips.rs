@@ -157,6 +157,9 @@ pub struct ClipState {
     /// points at it; the link is persisted in the project file and
     /// rebuilt on load so imported audio survives save/reload.
     pub asset_ref: Option<crate::state::pool::AssetRef>,
+    /// Mirror of the clip's warp ("follow tempo") settings and markers
+    /// (`clip_warp`). Default = unwarped. Persisted and undoable.
+    pub warp: super::clip_warp::ClipWarpState,
 }
 
 /// GUI-side MIDI clip state.

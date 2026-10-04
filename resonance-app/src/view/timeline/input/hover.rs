@@ -6,6 +6,7 @@
 use iced::{mouse, Rectangle};
 
 use crate::message::*;
+use super::super::draw::WarpHit;
 use super::super::hit_test::{HitKind, MarkerHit};
 use super::super::{TimelineCanvas, TimelineState};
 use super::{captured, ClipInteraction, UpdateResult};
@@ -78,6 +79,7 @@ impl TimelineCanvas<'_> {
             | Some(ClipInteraction::MidiTrim)
             | Some(ClipInteraction::Fade) => return Interaction::ResizingHorizontally,
             Some(ClipInteraction::Gain) => return Interaction::ResizingVertically,
+            Some(ClipInteraction::WarpMarker { .. }) => return Interaction::ResizingHorizontally,
             Some(ClipInteraction::Move) | Some(ClipInteraction::MidiMove) => {
                 return Interaction::Grabbing
             }
@@ -143,6 +145,13 @@ impl TimelineCanvas<'_> {
             }
         }
         for clip in self.clips.iter().rev() {
+            // A warp marker's handle reads as a horizontal drag, the bare
+            // strip as "double-click adds here".
+            match self.warp_hit(pos, &layout, clip) {
+                Some((WarpHit::Marker(_), _)) => return Interaction::ResizingHorizontally,
+                Some((WarpHit::Strip { .. }, _)) => return Interaction::Crosshair,
+                None => {}
+            }
             if let Some(hit) = self.hit_test_audio_lane(pos, &layout, clip) {
                 return match hit {
                     HitKind::Trim(_) | HitKind::FadeIn | HitKind::FadeOut => {
@@ -197,6 +206,18 @@ impl TimelineCanvas<'_> {
         // group's *last* take removes the whole lane (ba todo #1401) — the
         // card the user clicked is the last thing in it, so the stack
         // disappearing is what they asked for.
+        // A warp marker: right-click removes it (same convention).
+        let layout = self.arrange_layout();
+        for clip in self.clips.iter().rev() {
+            if let Some((WarpHit::Marker(index), _)) = self.warp_hit(pos, &layout, clip) {
+                return captured(Message::Clip(ClipMessage::Warp(
+                    ClipWarpMessage::SetWarpMarkers {
+                        clip_id: clip.id,
+                        markers: clip.warp.markers_without(index),
+                    },
+                )));
+            }
+        }
         if let Some(hit) = self.take_card_at(pos) {
             state.take_promote_drag = None;
             return captured(Message::Take(TakeMessage::DeleteTake {

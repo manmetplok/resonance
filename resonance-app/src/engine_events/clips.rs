@@ -63,6 +63,7 @@ pub(super) fn imported(
             // placement orchestration (doc #175) sets this link app-side
             // once the clip exists. A recorded/bounced clip stays `None`.
             asset_ref: None,
+            warp: Default::default(),
         });
     }
 }
@@ -80,6 +81,12 @@ pub(super) fn deleted_echo(r: &mut Resonance, clip_id: ClipId) {
 /// Mirror an audio clip's deletion.
 pub(crate) fn deleted(r: &mut Resonance, clip_id: ClipId) {
     r.clips.retain(|c| c.id != clip_id);
+    // A tempo detection still running on it will never reply.
+    r.ui.interaction.tempo_detect.remove(&clip_id);
+    r.control.jobs.fail_token(
+        &crate::control_jobs::JobToken::DetectTempo { clip_id },
+        format!("clip {clip_id} was deleted before its tempo was detected"),
+    );
     // The Pool "used ×N" badge / `pool.list` count (review VIEW-30).
     r.recompute_pool_usage();
     // Drop any vocal-audio-clip side-table entries that reference
@@ -158,6 +165,64 @@ pub(super) fn gain_changed(r: &mut Resonance, clip_id: ClipId, gain_db: f32) {
     }
 }
 
+pub(super) fn warp_changed(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    warp_enabled: bool,
+    original_bpm: Option<f32>,
+    transpose_semitones: f32,
+    warp_algorithm: WarpAlgorithm,
+) {
+    // An edit of the instance whose deletion is still owed (A-13i).
+    if r.io.restore_echoes.clip_deletion_owed(clip_id) {
+        return;
+    }
+    if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
+        clip.warp.enabled = warp_enabled;
+        clip.warp.original_bpm = original_bpm;
+        clip.warp.transpose_semitones = transpose_semitones;
+        clip.warp.algorithm = warp_algorithm;
+    }
+}
+
+pub(super) fn warp_markers_changed(r: &mut Resonance, clip_id: ClipId, markers: Vec<WarpMarker>) {
+    // An edit of the instance whose deletion is still owed (A-13i).
+    if r.io.restore_echoes.clip_deletion_owed(clip_id) {
+        return;
+    }
+    // A marker drag owns the live set until it is released; its echo
+    // follows the release, so nothing is lost by skipping one mid-drag.
+    if r
+        .ui
+        .interaction
+        .warp_marker_drag
+        .as_ref()
+        .is_some_and(|d| d.clip_id == clip_id)
+    {
+        return;
+    }
+    if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
+        clip.warp.markers = markers;
+    }
+}
+
+/// `ClipTempoDetected`: record the result for the inspector and resolve a
+/// `clip.detect_tempo` job waiting on this clip. `bpm == 0` is the
+/// detector's "no tempo found".
+pub(super) fn tempo_detected(r: &mut Resonance, clip_id: ClipId, bpm: f32, confidence: f32) {
+    use crate::state::TempoDetectStatus;
+    let found = bpm.is_finite() && bpm > 0.0;
+    if r.clips.iter().any(|c| c.id == clip_id) {
+        let status = if found {
+            TempoDetectStatus::Detected { bpm, confidence }
+        } else {
+            TempoDetectStatus::NotFound
+        };
+        r.ui.interaction.tempo_detect.insert(clip_id, status);
+    }
+    crate::update::control::clip_tempo_detected(r, clip_id, bpm, confidence);
+}
+
 pub(super) fn recording_finished(
     r: &mut Resonance,
     clip_id: ClipId,
@@ -195,6 +260,7 @@ pub(super) fn recording_finished(
         vocal_tuning: None,
         // A freshly recorded clip isn't a pool import.
         asset_ref: None,
+        warp: Default::default(),
     });
     r.transport.recording = false;
     r.transport.record_pending = false;

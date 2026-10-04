@@ -46,6 +46,7 @@ fn app_with_placed_clip() -> Resonance {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: Some(AssetRef::new(ASSET)),
+        warp: Default::default(),
     });
     app.test_relink_clip(10, Some(ASSET));
     assert_eq!(app.test_pool().usage_count(ASSET), 1);

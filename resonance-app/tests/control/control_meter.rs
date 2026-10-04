@@ -173,6 +173,7 @@ fn four_second_clip(sample_rate: u32) -> resonance_app::state::ClipState {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     }
 }
 

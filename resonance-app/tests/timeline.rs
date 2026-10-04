@@ -51,6 +51,10 @@ mod clip_fade_gain_persistence;
 mod clip_fade_gain_snapshot;
 #[path = "timeline/clip_inspector_flyout.rs"]
 mod clip_inspector_flyout;
+#[path = "timeline/clip_warp_snapshot.rs"]
+mod clip_warp_snapshot;
+#[path = "timeline/clip_warp_ui.rs"]
+mod clip_warp_ui;
 #[path = "timeline/drag_after_auto_follow.rs"]
 mod drag_after_auto_follow;
 #[path = "timeline/drag_placement_handlers.rs"]

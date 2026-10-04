@@ -43,6 +43,8 @@ mod control_clip_confirm_place_guard;
 mod control_clip_place;
 #[path = "control/control_clip_split.rs"]
 mod control_clip_split;
+#[path = "control/control_clip_warp.rs"]
+mod control_clip_warp;
 #[path = "control/control_edit_undo.rs"]
 mod control_edit_undo;
 #[path = "control/control_endpoint.rs"]

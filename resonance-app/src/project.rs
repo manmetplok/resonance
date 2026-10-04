@@ -46,14 +46,14 @@ pub use sections::{
 // Re-export model: format constants, all serde structs, and tag helpers.
 pub use model::{
     AUTOSAVE_JSON, PROJECT_FORMAT_VERSION, PROJECT_JSON,
-    LoadedProject, ProjectBus, ProjectChordRegion, ProjectChordTrack, ProjectClip,
+    LoadedProject, ProjectBus, ProjectChordRegion, ProjectChordTrack, ProjectClip, ProjectClipWarp,
     ProjectExternalInstrument, ProjectFile, ProjectKeyChange,
     ProjectMidiClip, ProjectMidiNote, ProjectPerformance, ProjectPlugin, ProjectPluginParam, ProjectPoolAsset,
     ProjectReference,
     ProjectReferenceMarker, ProjectReferenceSettings, ProjectSend, ProjectSidechainRoute,
-    ProjectTrack, SaveCollector,
+    ProjectTrack, ProjectWarpMarker, SaveCollector,
     audio_format_from_tag, audio_format_tag, clip_audio_file, fade_curve_from_tag, fade_curve_tag,
-    send_source_from_tag, send_source_tag,
+    send_source_from_tag, send_source_tag, warp_algorithm_from_tag, warp_algorithm_tag,
 };
 
 // Re-export the take-recording reader (epic #15, todo #1400): the take

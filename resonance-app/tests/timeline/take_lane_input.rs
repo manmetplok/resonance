@@ -1012,6 +1012,7 @@ fn build_crowded_lane() -> (Resonance, TempDir) {
         waveform_peaks: vec![(-0.5, 0.5); 64],
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     });
     // Two gain breakpoints at value 0: one inside the slot (where the take
     // lane now competes) and one well past its end (where it must not).
@@ -1286,6 +1287,7 @@ fn build_app_with_only_the_breakpoints() -> (Resonance, TempDir) {
         waveform_peaks: vec![(-0.5, 0.5); 64],
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     });
     for frame in [at(&app, 2), slot.end() + 3 * app.sample_rate as u64] {
         let _ = app.update(Message::Automation(AutomationMessage::AddBreakpoint {

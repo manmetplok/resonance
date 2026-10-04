@@ -12,6 +12,7 @@ use crate::view::arrange_layout::ArrangeRowLayout;
 use super::super::hit_test::{self, ClipHandles, HitKind, MarkerHit};
 use super::super::scrollbar::ScrollbarRects;
 use super::super::snap::snap_sample_to_grid_tempo;
+use super::super::draw::WarpHit;
 use super::super::TimelineCanvas;
 
 #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
@@ -130,6 +131,42 @@ impl TimelineCanvas<'_> {
             HitKind::Miss => None,
             hit => Some(hit),
         }
+    }
+
+    /// Hit-test a pointer against a warped audio clip's marker strip.
+    /// Returns the hit and the clip's group indent (the drag reducer works
+    /// in un-indented timeline x), or `None` when the clip is not warped,
+    /// is hidden, or the pointer is outside the strip.
+    pub(in crate::view::timeline) fn warp_hit(
+        &self,
+        pos: Point,
+        layout: &ArrangeRowLayout,
+        clip: &state::ClipState,
+    ) -> Option<(WarpHit, f32)> {
+        if !clip.warp.enabled {
+            return None;
+        }
+        let header_height = self.fixed_header_height();
+        let (body_y, body_height, indent) = super::super::draw::clip_lane_rect(
+            self,
+            clip.track_id,
+            layout,
+            header_height,
+            self.scroll_offset_y,
+            f32::INFINITY,
+        )?;
+        let rect = hit_test::clip_pixel_rect(
+            hit_test::ClipLaneBody {
+                y: body_y,
+                height: body_height,
+                indent,
+            },
+            clip.start_sample,
+            clip.duration_samples,
+            self.zoom,
+            self.sample_rate,
+        );
+        self.warp_hit_in_rect(clip, rect, pos).map(|hit| (hit, indent))
     }
 
     /// Build the fade/gain handle geometry for an audio clip.

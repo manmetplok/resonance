@@ -59,8 +59,39 @@ pub const SET_GAIN: &str = "clip.set_gain";
 /// [`FadeResult`]).
 pub const SET_FADE: &str = "clip.set_fade";
 
+/// `clip.set_warp` — switch warp ("follow tempo") on or off and set the
+/// source tempo, transpose and algorithm ([`SetWarpParams`] ->
+/// [`WarpResult`]).
+pub const SET_WARP: &str = "clip.set_warp";
+/// `clip.set_warp_markers` — replace a clip's warp-marker set
+/// ([`SetWarpMarkersParams`] -> [`WarpResult`]).
+pub const SET_WARP_MARKERS: &str = "clip.set_warp_markers";
+/// `clip.detect_tempo` — estimate the tempo of a clip's source audio
+/// ([`DetectTempoParams`] -> a job whose result is [`DetectTempoResult`]).
+/// Analysis only: nothing about the clip changes.
+pub const DETECT_TEMPO: &str = "clip.detect_tempo";
+
 /// All `clip.*` method names.
-pub const METHODS: &[&str] = &[PLACE, MOVE, TRIM, SPLIT, DELETE, SET_GAIN, SET_FADE];
+pub const METHODS: &[&str] = &[
+    PLACE,
+    MOVE,
+    TRIM,
+    SPLIT,
+    DELETE,
+    SET_GAIN,
+    SET_FADE,
+    SET_WARP,
+    SET_WARP_MARKERS,
+    DETECT_TEMPO,
+];
+
+/// Slowest / fastest source tempo `clip.set_warp` accepts, in BPM.
+pub const MIN_WARP_BPM: f32 = 20.0;
+pub const MAX_WARP_BPM: f32 = 999.0;
+/// Widest transpose `clip.set_warp` accepts, in semitones either way.
+pub const MAX_TRANSPOSE_SEMITONES: f32 = 48.0;
+/// Most markers `clip.set_warp_markers` accepts for one clip.
+pub const MAX_WARP_MARKERS: usize = 1024;
 
 /// Widest per-clip gain the app accepts, in decibels. Values outside
 /// `-inf..=MAX_GAIN_DB` are clamped, not rejected.
@@ -331,4 +362,109 @@ pub struct FadeResult {
     pub fade_in_shape: FadeShape,
     pub fade_out_shape: FadeShape,
     pub revision: u64,
+}
+
+/// The resynthesis algorithm a warped clip is stretched with, lowercase
+/// on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum WarpAlgorithm {
+    /// Transient-preserving (WSOLA): keeps drum hits and plucks crisp.
+    /// The default, and the safe choice for unknown material.
+    #[default]
+    Transient,
+    /// Phase vocoder: smoothest on sustained, harmonic material (pads,
+    /// vocals), at the cost of softened attacks.
+    Tonal,
+    /// Forward-compat catch-all for algorithms introduced by newer peers.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Params for `clip.set_warp`. Every field but `clip_id` is optional and
+/// omitted ones keep their current value; a call that sets nothing is
+/// `invalid_params`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SetWarpParams {
+    pub clip_id: ClipId,
+    /// Switch warp on or off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The tempo the source audio was performed at, in BPM
+    /// ([`MIN_WARP_BPM`]..=[`MAX_WARP_BPM`]). This is what lets a warped
+    /// clip follow the project tempo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_bpm: Option<f32>,
+    /// Forget the source tempo (back to "unknown"). Cannot be combined
+    /// with `original_bpm`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_original_bpm: bool,
+    /// Pitch shift on the warp path, in semitones
+    /// (±[`MAX_TRANSPOSE_SEMITONES`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transpose_semitones: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<WarpAlgorithm>,
+}
+
+/// One warp marker on the wire: the frame `source_frame` of the clip's
+/// source audio (counted from the start of the file, independent of
+/// trim) is heard `beat` beats after the clip's start.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct WarpMarkerSpec {
+    pub source_frame: u64,
+    /// Beats from the clip's start, at the project's base tempo; `>= 0`.
+    pub beat: f64,
+}
+
+/// Params for `clip.set_warp_markers`: the clip's complete new marker
+/// set (an empty list removes every marker). Order does not matter; the
+/// markers are sorted by `beat`, and must then never run the source
+/// backwards (`source_frame` non-decreasing).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SetWarpMarkersParams {
+    pub clip_id: ClipId,
+    pub markers: Vec<WarpMarkerSpec>,
+}
+
+/// A clip's warp state after `clip.set_warp` / `clip.set_warp_markers`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct WarpResult {
+    pub clip_id: ClipId,
+    pub enabled: bool,
+    /// `None` when the source tempo is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_bpm: Option<f32>,
+    pub transpose_semitones: f32,
+    pub algorithm: WarpAlgorithm,
+    /// Sorted by `beat`.
+    pub markers: Vec<WarpMarkerSpec>,
+    pub revision: u64,
+}
+
+/// Params for `clip.detect_tempo`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DetectTempoParams {
+    pub clip_id: ClipId,
+}
+
+/// Job result of `clip.detect_tempo`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DetectTempoResult {
+    pub clip_id: ClipId,
+    /// Estimated tempo in BPM.
+    pub bpm: f32,
+    /// How sure the detector is, `0.0..=1.0`.
+    pub confidence: f32,
 }

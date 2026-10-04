@@ -78,6 +78,7 @@ impl TimelineCanvas<'_> {
             } else {
                 draw_clip_hatch(frame, x, y, w, clip_height);
             }
+            self.draw_clip_warp(frame, clip, x, y, w, clip_height);
         });
 
         // Overlays drawn on top of the border: the fade-handle / gain
@@ -304,4 +305,34 @@ impl TimelineCanvas<'_> {
             draw_crossfade_badge(frame, x0 + ow / 2.0, y + 9.0);
         }
     }
+}
+
+/// Hash of everything the cached clip layer draws for the audio clips —
+/// geometry, fade/gain shaping and the warp badge + markers — so it
+/// invalidates on move / trim / fade / gain / warp edits (several of which
+/// mutate the mirror in place mid-drag, so a count alone would leave a
+/// stale render). Warp transpose and algorithm are not drawn and are left
+/// out.
+pub(in crate::view::timeline) fn clips_fingerprint(clips: &[ClipState]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for c in clips {
+        c.id.hash(&mut h);
+        c.track_id.hash(&mut h);
+        c.start_sample.hash(&mut h);
+        c.duration_samples.hash(&mut h);
+        c.fade_in_frames.hash(&mut h);
+        c.fade_in_curve.hash(&mut h);
+        c.fade_out_frames.hash(&mut h);
+        c.fade_out_curve.hash(&mut h);
+        c.gain_db.to_bits().hash(&mut h);
+        c.warp.enabled.hash(&mut h);
+        c.warp.original_bpm.map(f32::to_bits).hash(&mut h);
+        c.warp.markers.len().hash(&mut h);
+        for m in &c.warp.markers {
+            m.source_frame.hash(&mut h);
+            m.timeline_beat.to_bits().hash(&mut h);
+        }
+    }
+    h.finish()
 }

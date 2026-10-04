@@ -31,6 +31,7 @@ fn clip() -> ClipState {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: None,
+        warp: Default::default(),
     }
 }
 
