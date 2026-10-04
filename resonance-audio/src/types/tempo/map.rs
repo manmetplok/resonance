@@ -219,11 +219,10 @@ impl TempoMap {
     }
 
     /// Whether [`sync_bpm_at`](Self::sync_bpm_at) would actually move
-    /// the stable `bpm`. The engine loop checks this under a read lock
-    /// before escalating to a write lock — for static-tempo projects
-    /// (the common case) the answer is always `false`, which keeps the
-    /// audio thread's `tempo_map.try_read()` from contending with us
-    /// every engine tick.
+    /// the stable `bpm`. The engine loop checks this on the current
+    /// `ArcSwap` snapshot and only clones + publishes a new map when it
+    /// is `true` — for static-tempo projects (the common case) it never
+    /// is, so the engine tick allocates nothing and retires nothing.
     pub fn sync_bpm_would_change(&self, sample_pos: u64, sample_rate: u32) -> bool {
         if self.bar_table.is_empty() {
             return false;

@@ -456,6 +456,43 @@ fn crate_dag_matches_architecture_md() {
     );
 }
 
+/// ARCHITECTURE.md → Crate Layering: "Adding a crate means deciding its
+/// layer here". The diagram had drifted (code review ARCH2-09: no
+/// `resonance-control`, `resonance-mcp` or `resonance-dsp-test-support`)
+/// while `allowed_internal_deps` carried their rows, so the prose and the
+/// table disagreed silently. Every non-plugin workspace package must be
+/// named in that section; plugins are drawn as a class ("every plugin"),
+/// so they are exempt.
+///
+/// Exercised 2026-10-04: deleted the `resonance-dsp-test-support` line of
+/// the diagram → failed with "resonance-dsp-test-support is not named";
+/// restored.
+#[test]
+fn every_crate_is_named_in_the_layering_section() {
+    let root = workspace_root();
+    let doc = fs::read_to_string(root.join("ARCHITECTURE.md")).expect("ARCHITECTURE.md");
+    let start = doc.find("## Crate Layering").expect("a `## Crate Layering` section");
+    let section = &doc[start..];
+    let section = &section[..section[3..].find("\n## ").map_or(section.len(), |i| i + 3)];
+    let named = |name: &str| {
+        section.match_indices(name).any(|(i, _)| {
+            let before = section[..i].chars().next_back();
+            let after = section[i + name.len()..].chars().next();
+            let edge = |c: Option<char>| !c.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_');
+            edge(before) && edge(after)
+        })
+    };
+    let violations: Vec<String> = packages()
+        .iter()
+        .filter(|p| !p.is_plugin(&root) && !named(&p.name))
+        .map(|p| format!("{} is not named in ARCHITECTURE.md → Crate Layering", p.name))
+        .collect();
+    report(
+        "ARCHITECTURE.md → Crate Layering names every workspace crate",
+        &violations,
+    );
+}
+
 /// ARCHITECTURE.md: "`resonance-dsp`, `resonance-metering`,
 /// `resonance-common` are framework-agnostic — no Iced, no CLAP";
 /// "`resonance-audio` ... still doesn't know about Iced"; `plugin-gui-core`
