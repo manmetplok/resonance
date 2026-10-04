@@ -265,11 +265,22 @@ fn factory_entries(crate_name: &str) -> Vec<(String, String, String)> {
     out
 }
 
-fn clap_id_of(lib_rs: &str) -> &str {
-    let key = "const CLAP_ID: &'static str = \"";
-    let at = lib_rs.find(key).expect("every plugin declares CLAP_ID");
+/// A plugin's CLAP id, read from its `lib.rs`: every first-party plugin
+/// declares `CLAP_ID` as a `resonance_plugin::first_party` constant (code
+/// review ARCH2-03), whose name spells the id (`GRANULAR_DELAY` →
+/// `com.resonance.granular-delay`); the result is checked against
+/// `first_party::ALL`.
+fn clap_id_of(lib_rs: &str) -> &'static str {
+    let key = "const CLAP_ID: &'static str = resonance_plugin::first_party::";
+    let at = lib_rs.find(key).expect("every plugin declares CLAP_ID from first_party");
     let rest = &lib_rs[at + key.len()..];
-    &rest[..rest.find('"').unwrap()]
+    let name = &rest[..rest.find(';').unwrap()];
+    let id = format!("com.resonance.{}", name.to_ascii_lowercase().replace('_', "-"));
+    resonance_plugin::first_party::ALL
+        .iter()
+        .copied()
+        .find(|known| *known == id)
+        .unwrap_or_else(|| panic!("first_party::{name} is not a first-party id"))
 }
 
 /// Every factory entry in the fleet is a format-1 file whose id and name
