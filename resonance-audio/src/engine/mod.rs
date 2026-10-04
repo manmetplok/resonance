@@ -252,6 +252,11 @@ pub struct SharedState {
     /// touching a plugin, and Play / Record / realtime bounce / MIDI-clock
     /// start refuse — see [`Self::offline_render_active`].
     pub offline_render_count: AtomicU32,
+    /// Whether the audio callback is inside a block right now, and how
+    /// many it has run: raising the gate above waits on it, so a callback
+    /// that passed the gate an instant before cannot still be processing
+    /// the live plugins once the render starts (code review RT-09).
+    pub callback_activity: bounce::CallbackActivity,
     /// External-instrument round-trip offsets per track
     /// (`latency_offset_samples`, positive = the hardware return
     /// arrives that late). Published by the engine control thread
@@ -587,6 +592,7 @@ impl Default for SharedState {
             count_in_total: AtomicU64::new(0),
             count_in_record_arm: AtomicU8::new(count_in_arm::IDLE),
             offline_render_count: AtomicU32::new(0),
+            callback_activity: bounce::CallbackActivity::default(),
             external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
             dsp_load_ema_bits: AtomicU32::new(0),
             dsp_load_peak_bits: AtomicU32::new(0),

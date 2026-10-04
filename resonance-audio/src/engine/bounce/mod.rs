@@ -173,13 +173,96 @@ pub const MEASURE_BUSY_MSG: &str = "Another offline render is in progress";
 pub const OFFLINE_RENDER_BUSY_MSG: &str =
     "An offline render (export, bounce, freeze or stem render) is in progress";
 
+/// The audio callback's in-flight marker (code review RT-09).
+///
+/// Raising the offline-render gate only stops callbacks that *start*
+/// after it: one that loaded the gate an instant before keeps processing
+/// the live plugin instances while the render worker resets and drives
+/// the same ones. So the callback brackets every block with
+/// [`Self::enter`] (odd = inside a block), and the gate's raisers
+/// ([`OfflineRenderGuard::mark`] / `try_acquire_exclusive`) wait, after
+/// raising it, until a callback seen in flight has left its block. Two
+/// `SeqCst` fences make it a Dekker handshake: either the callback sees
+/// the raised gate, or the raiser sees the callback in flight and waits.
+#[derive(Debug, Default)]
+pub struct CallbackActivity {
+    seq: std::sync::atomic::AtomicU64,
+}
+
+/// Longest a gate raiser waits for an in-flight callback. A block is a
+/// few milliseconds; a callback stuck far longer is a wedged plugin,
+/// which waiting cannot fix, so the render goes ahead.
+const CALLBACK_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+impl CallbackActivity {
+    /// Mark the callback inside a block until the returned guard drops.
+    /// One atomic add and a fence each way: audio-thread safe.
+    #[inline]
+    pub(crate) fn enter(&self) -> CallbackInFlight<'_> {
+        use std::sync::atomic::{fence, Ordering};
+        self.seq.fetch_add(1, Ordering::SeqCst);
+        // Pairs with the fence in `wait_idle`: the gate load that follows
+        // cannot be ordered before this increment.
+        fence(Ordering::SeqCst);
+        CallbackInFlight(self)
+    }
+
+    /// Whether a callback is inside a block right now.
+    pub fn in_flight(&self) -> bool {
+        self.seq.load(std::sync::atomic::Ordering::SeqCst) & 1 == 1
+    }
+
+    /// Blocks the callback has started since the engine came up.
+    pub fn blocks_started(&self) -> u64 {
+        self.seq.load(std::sync::atomic::Ordering::SeqCst).div_ceil(2)
+    }
+
+    /// After the gate went up: wait until no callback that might have
+    /// missed it is still in its block. Returns at once when the callback
+    /// is idle (or there is no audio device at all). `false` on timeout.
+    fn wait_idle(&self) -> bool {
+        use std::sync::atomic::{fence, Ordering};
+        fence(Ordering::SeqCst);
+        let seen = self.seq.load(Ordering::SeqCst);
+        if seen & 1 == 0 {
+            return true;
+        }
+        let deadline = std::time::Instant::now() + CALLBACK_IDLE_TIMEOUT;
+        // The in-flight block left once the counter moves on; the next one
+        // sees the gate.
+        while self.seq.load(Ordering::SeqCst) == seen {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(100));
+        }
+        true
+    }
+}
+
+/// See [`CallbackActivity::enter`].
+pub(crate) struct CallbackInFlight<'a>(&'a CallbackActivity);
+
+impl Drop for CallbackInFlight<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.0
+            .seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 impl OfflineRenderGuard {
     /// Join the set of running offline renders unconditionally. `pub`
     /// (doc-hidden re-export) so the gate tests can hold the real guard.
+    ///
+    /// Returns once the live callback has let go of the plugins: a block
+    /// that started before the gate went up is waited out (RT-09).
     pub fn mark(shared: &Arc<SharedState>) -> Self {
         shared
             .offline_render_count
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        shared.callback_activity.wait_idle();
         Self {
             shared: Arc::clone(shared),
         }
@@ -193,12 +276,16 @@ impl OfflineRenderGuard {
             .compare_exchange(
                 0,
                 1,
-                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::SeqCst,
                 std::sync::atomic::Ordering::Acquire,
             )
             .ok()
-            .map(|_| Self {
-                shared: Arc::clone(shared),
+            .map(|_| {
+                // As in `mark`: wait out a block already past the gate.
+                shared.callback_activity.wait_idle();
+                Self {
+                    shared: Arc::clone(shared),
+                }
             })
     }
 }

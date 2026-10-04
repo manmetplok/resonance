@@ -51,6 +51,10 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
     // CLAP `thread-check`: this thread renders for the whole callback. A
     // TLS swap, restored on return.
     let _audio = crate::clap_host::thread_check::AudioThreadScope::enter();
+    // In flight until this returns, on every path: an offline render that
+    // raises the gate below waits for this block to leave (code review
+    // RT-09). Entered before the gate load, which its fence orders after.
+    let _in_flight = inputs.shared.callback_activity.enter();
 
     // The one "offline render in progress" gate (code review MIX-02 /
     // ENG-05). Every offline renderer (export, stems, bounce in place,

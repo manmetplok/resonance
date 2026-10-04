@@ -79,6 +79,9 @@ struct MonitorState {
     /// of holding its first sample — for the seam test, which needs every
     /// frame the host handed over.
     copy_key: bool,
+    /// Report one output parameter value from every `process()`, as a
+    /// plugin moving its own parameter does (FU-R2b).
+    emit_param: bool,
 }
 
 unsafe fn monitor_state<'a>(plugin: *const clap_plugin) -> &'a mut MonitorState {
@@ -120,6 +123,33 @@ unsafe extern "C" fn m_process(plugin: *const clap_plugin, process: *const clap_
     }
     let p = &*process;
     let frames = p.frames_count as usize;
+
+    if monitor_state(plugin).emit_param && !p.out_events.is_null() {
+        use clap_sys::events::{
+            clap_event_header, clap_event_param_value, CLAP_CORE_EVENT_SPACE_ID,
+            CLAP_EVENT_PARAM_VALUE,
+        };
+        let event = clap_event_param_value {
+            header: clap_event_header {
+                size: std::mem::size_of::<clap_event_param_value>() as u32,
+                time: 0,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: CLAP_EVENT_PARAM_VALUE,
+                flags: 0,
+            },
+            param_id: 0,
+            cookie: ptr::null_mut(),
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value: 0.5,
+        };
+        let out = &*p.out_events;
+        if let Some(push) = out.try_push {
+            push(out, &event.header);
+        }
+    }
 
     // The host passes every declared port (HOST-05), so "no key" is the
     // key port flagged all-constant silence — what the first-party bridge
@@ -220,16 +250,21 @@ fn key_monitor() -> PluginSlot {
 }
 
 fn key_monitor_with_calls(calls: Option<Arc<AtomicUsize>>) -> PluginSlot {
-    key_monitor_built(calls, false)
+    key_monitor_built(calls, false, false)
 }
 
-fn key_monitor_built(calls: Option<Arc<AtomicUsize>>, copy_key: bool) -> PluginSlot {
+fn key_monitor_built(
+    calls: Option<Arc<AtomicUsize>>,
+    copy_key: bool,
+    emit_param: bool,
+) -> PluginSlot {
     let inst = __instance_from_raw_for_test(
         move |_host| {
             let state = Box::into_raw(Box::new(MonitorState {
                 active: false,
                 calls,
                 copy_key,
+                emit_param,
             }));
             let plugin = Box::new(clap_plugin {
                 desc: ptr::null(),
@@ -866,7 +901,7 @@ fn the_key_stays_contiguous_across_a_loop_seam() {
         SR,
         true,
     );
-    h.edit_plugins(|p| p.insert(MONITOR_ID, Arc::new(key_monitor_built(None, true))));
+    h.edit_plugins(|p| p.insert(MONITOR_ID, Arc::new(key_monitor_built(None, true, false))));
     h.edit_master(|m| m.plugin_ids.push(MONITOR_ID));
     live_route(&h, SendSource::Track(SOURCE));
     h.shared()
@@ -913,4 +948,25 @@ fn the_key_stays_contiguous_across_a_loop_seam() {
         prev_source = Some(source_frames);
     }
     assert!(seams_checked >= 2, "the run must cross the seam at least twice");
+}
+
+/// FU-R2b: the offline master pass flags a plugin's own output parameter
+/// events for the engine's poll, as every live `process()` site does —
+/// before, an export's master-chain edits waited for the next live block.
+#[test]
+fn an_offline_master_pass_flags_output_param_events() {
+    let state = fixture();
+    let slot = Arc::new(key_monitor_built(None, false, true));
+    state.shared.edit_plugins(|p| p.insert(MONITOR_ID, Arc::clone(&slot)));
+    state.shared.edit_master(|master| master.plugin_ids.push(MONITOR_ID));
+    // A new instance starts flagged (its kit info is read by the first
+    // poll); clear that so only the render can raise it.
+    slot.take_poll_pending();
+    assert!(!slot.poll_pending());
+
+    render_second_chunk(&state, StemSource::Master);
+    assert!(
+        slot.poll_pending(),
+        "the master plugin's own parameter event must reach the poll"
+    );
 }
