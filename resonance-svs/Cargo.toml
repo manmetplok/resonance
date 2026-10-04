@@ -13,8 +13,13 @@ path = "src/lib.rs"
 [[bin]]
 name = "resonance-svs"
 path = "src/main.rs"
+# `clap`/`tracing-subscriber` are CLI-only (DEP-07); gate the bin behind
+# `cli` so the app — which depends on this crate's lib unconditionally —
+# never pulls them in.
+required-features = ["cli"]
 
-# Debug helper: prints the I/O signature of an ONNX file.
+# Debug helper: prints the I/O signature of an ONNX file. Doesn't touch
+# clap/tracing-subscriber, so it needs no feature.
 [[example]]
 name = "probe"
 path = "examples/probe.rs"
@@ -26,6 +31,7 @@ path = "examples/probe.rs"
 [[example]]
 name = "render_resonance_vocal"
 path = "examples/render_resonance_vocal.rs"
+required-features = ["cli"]
 
 [features]
 default = []
@@ -34,6 +40,11 @@ default = []
 cuda = ["ort/cuda"]
 rocm = ["ort/rocm"]
 # Useful for CI smoke without local model files: build only, no runtime.
+# `clap` (derive) + `tracing-subscriber` are only used by `src/main.rs` and
+# the `render_resonance_vocal` example's argument parsing/logging setup —
+# every app build compiled both unconditionally even though the app never
+# runs the CLI (DEP-07, code-review-2026-10-02).
+cli = ["dep:clap", "dep:tracing-subscriber"]
 
 [dependencies]
 # `download-binaries` still pulls a prebuilt ONNX Runtime binary for the host
@@ -55,10 +66,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 hound.workspace = true
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"], optional = true }
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
 regex = "1"
 resonance-music-theory = { path = "../resonance-music-theory" }
 
