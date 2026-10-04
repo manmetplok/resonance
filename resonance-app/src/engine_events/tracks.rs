@@ -34,7 +34,7 @@ fn drop_duplicate_track_added(r: &mut Resonance, track_id: TrackId) {
 /// this id — one that's either already gone (a `*TrackAdded`, which would
 /// push a phantom) or has since been replaced by a fresh one a later
 /// restore put back under the same id (a scalar echo like
-/// `TrackFxBypassChanged` / `TrackPlaybackSourceChanged`, which would
+/// a track's `FxBypassChanged` / `TrackPlaybackSourceChanged`, which would
 /// clobber that fresh track's restored value). Either way, not trusted
 /// until the owed removal is heard from.
 fn stale_track_echo(r: &Resonance, track_id: TrackId) -> bool {
@@ -350,28 +350,7 @@ pub(super) fn finalize_bounce(
     }
 }
 
-pub(super) fn fx_bypass_changed(r: &mut Resonance, track_id: TrackId, bypassed: bool) {
-    // A late echo of a command sent to the *old* incarnation of this id
-    // (ARCH-01 A-13i): FIFO puts it before the removal a diff restore or a
-    // live delete already mirrored, so — as for a stale `*TrackAdded` echo
-    // (`stale_track_echo`) — it names an instance that either no longer
-    // exists or has already been replaced by a fresh one under the same
-    // id, whose own restored value this must not clobber.
-    if stale_track_echo(r, track_id) {
-        return;
-    }
-    if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
-        track.fx_bypassed = bypassed;
-    }
-}
-
-/// Mirror the engine's echo of `SetTrackPlaybackSource` (doc #257, todo
-/// #1100): the track's external-instrument playback source changed —
-/// either from the inspector toggle or from the auto-switch after a
-/// recorded take lands. Engine-owned state like monitor/arm; the mirror
-/// simply follows.
-///
-/// Guarded the same way as [`fx_bypass_changed`] (ARCH-01 A-13i): a late
+/// Guarded the same way as `plugins::fx_bypass_changed` (ARCH-01 A-13i): a late
 /// echo naming a track whose removal is still owed predates that removal
 /// and must not overwrite whatever a later restore mirrored under the
 /// same id.
@@ -454,13 +433,13 @@ pub(crate) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
         // Close the window on, and unfocus, any slot of the removed chain.
         r.ui.mixer.forget_plugin(id);
         // The chain's automation lanes (the per-plugin removal path does
-        // this in `engine_events::plugins::bus_removed`; a bus deletion
+        // this in `engine_events::plugins::removed`; a bus deletion
         // takes the whole chain without one).
         crate::engine_events::plugins::drop_plugin_lanes(r, id);
         crate::update::plugin_preset_ui::forget_instance(r, id);
         r.plugin_mirror.index.remove(&id);
         // A bus deletion takes the bus's whole insert chain with it
-        // without a per-plugin `BusPluginRemoved` echo, so a key route
+        // without a per-plugin `PluginRemoved` echo, so a key route
         // *onto* one of those plugins has to be pruned here as well as
         // one keyed *off* the bus (ba todo #1311).
         r.sidechain.clear_plugin(id);
@@ -480,8 +459,3 @@ pub(crate) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
     r.ui.view_caches.rebuild_output(&r.registry.busses);
 }
 
-pub(super) fn bus_fx_bypass_changed(r: &mut Resonance, bus_id: BusId, bypassed: bool) {
-    if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
-        bus.fx_bypassed = bypassed;
-    }
-}

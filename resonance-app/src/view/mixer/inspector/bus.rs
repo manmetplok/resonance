@@ -15,15 +15,14 @@
 
 use iced::widget::{column, container, pick_list, row, text, Space};
 use iced::{alignment, Element, Length};
-use resonance_audio::types::{ScannedPlugin, SendSource, TrackOutput};
+use resonance_audio::types::{ChainOwner, ScannedPlugin, SendSource, TrackOutput};
 
 use crate::message::{
-    BusMessage, Message, MixerMessage, PluginMessage, PresetAddOwner, PresetUiMessage,
+    BusMessage, Message, MixerMessage, PluginMessage, PresetUiMessage,
 };
 use crate::state::{BusState, MixerInspectorGroup, RenameTarget};
 use crate::theme;
 use crate::view::mixer::automation::AutoChan;
-use crate::view::mixer::picks::PluginOwner;
 
 /// The inspector body for `bus`. The whole body below the title sits in
 /// one lazy region keyed on everything it reads ([`fingerprint`]); none
@@ -298,7 +297,7 @@ fn chain_group(
     // only limits on a move are the two ends.
     col = col.push(super::chain::chain_rows(
         r,
-        PluginOwner::Bus(bus.id),
+        ChainOwner::Bus(bus.id),
         &bus.plugins,
         None,
     ));
@@ -324,7 +323,7 @@ fn chain_group(
                 None::<crate::state::presets::PresetAddPick>,
                 move |pick| {
                     Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::AddWithPreset {
-                        owner: PresetAddOwner::Bus(bus_id),
+                        owner: ChainOwner::Bus(bus_id),
                         pick,
                     }))
                 },

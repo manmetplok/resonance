@@ -106,6 +106,7 @@ pub use automation::{
 };
 mod bounce_realtime;
 mod busses;
+mod chain;
 pub(crate) mod clip_loads;
 mod clips;
 mod external_instrument;
@@ -144,7 +145,6 @@ pub use import_pool::{
 mod import_queue;
 #[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
 pub use import_queue::{ImportQueue, MAX_CONCURRENT_IMPORTS};
-mod master;
 pub(crate) mod probe;
 pub(crate) mod midi;
 mod midi_map;

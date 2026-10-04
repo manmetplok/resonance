@@ -18,7 +18,8 @@ use resonance_audio::test_support::{
     MAX_COMP_LATENCY,
 };
 use resonance_audio::types::{
-    AudioCommand, AudioClip, AuxSend, Bus, BusId, ClipSource, FadeCurve, FrozenSource, SendId,
+    AudioCommand, AudioClip, AuxSend, Bus, BusId, ChainOwner, ClipSource, FadeCurve, FrozenSource,
+    SendId,
     SendSource, Track, TrackId, TrackOutput, TrackType,
 };
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
@@ -214,18 +215,21 @@ fn freeze_and_bypass_commands_refresh_the_comp_table() {
         source: None,
     }));
     assert!(affects_latency(&AudioCommand::UnfreezeTrack { track_id: 1 }));
-    assert!(affects_latency(&AudioCommand::SetTrackFxBypass {
-        track_id: 1,
+    assert!(affects_latency(&AudioCommand::SetFxBypass {
+        owner: ChainOwner::Track(1),
         bypassed: true,
     }));
-    assert!(affects_latency(&AudioCommand::SetBusFxBypass {
-        bus_id: 5,
+    assert!(affects_latency(&AudioCommand::SetFxBypass {
+        owner: ChainOwner::Bus(5),
         bypassed: true,
     }));
     // Master bypass changes no per-track comp, but it does change the
     // published master latency the reference A/B aligns with — so it
     // must run the refresh too (finding #19).
-    assert!(affects_latency(&AudioCommand::SetMasterFxBypass { bypassed: true }));
+    assert!(affects_latency(&AudioCommand::SetFxBypass {
+        owner: ChainOwner::Master,
+        bypassed: true,
+    }));
     // Loading plugin state cycles the instance's activation and
     // re-reads its latency (finding #10) — the comp table must pick
     // the new value up.

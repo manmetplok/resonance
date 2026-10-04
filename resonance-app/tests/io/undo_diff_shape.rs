@@ -32,7 +32,7 @@ use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::reconcile::{domain_order, Origin};
 use resonance_app::{Resonance, TestChain};
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, SendSource};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, SendSource};
 
 struct Fixture {
     app: Resonance,
@@ -214,7 +214,7 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
             AudioEvent::BusRoleChanged { bus_id, is_return }
         }
         AudioCommand::AddPlugin {
-            track_id,
+            owner: ChainOwner::Track(track_id),
             clap_file_path,
             clap_plugin_id,
             id,
@@ -222,7 +222,7 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
             // A "multi" plugin has three outputs: two sub-tracks.
             let ports = if clap_plugin_id.contains("multi") { 3 } else { 1 };
             AudioEvent::PluginAdded {
-                track_id,
+                owner: ChainOwner::Track(track_id),
                 instance_id: id,
                 plugin_name: clap_plugin_id.clone(),
                 clap_plugin_id,
@@ -234,13 +234,13 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
                 output_port_names: (0..ports).map(|p| format!("Out {p}")).collect(),
             }
         }
-        AudioCommand::AddPluginToBus {
-            bus_id,
+        AudioCommand::AddPlugin {
+            owner: ChainOwner::Bus(bus_id),
             clap_file_path,
             clap_plugin_id,
             id,
-        } => AudioEvent::BusPluginAdded {
-            bus_id,
+        } => AudioEvent::PluginAdded {
+            owner: ChainOwner::Bus(bus_id),
             instance_id: id,
             plugin_name: clap_plugin_id.clone(),
             clap_plugin_id,
@@ -248,12 +248,16 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
             params: plugin_params(),
             has_gui: false,
             has_sidechain_input: true,
+            output_port_count: 1,
+            output_port_names: Vec::new(),
         },
-        AudioCommand::AddPluginToMaster {
+        AudioCommand::AddPlugin {
+            owner: ChainOwner::Master,
             clap_file_path,
             clap_plugin_id,
             id,
-        } => AudioEvent::MasterPluginAdded {
+        } => AudioEvent::PluginAdded {
+            owner: ChainOwner::Master,
             instance_id: id,
             plugin_name: clap_plugin_id.clone(),
             clap_plugin_id,
@@ -261,46 +265,50 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
             params: plugin_params(),
             has_gui: false,
             has_sidechain_input: true,
+            output_port_count: 1,
+            output_port_names: Vec::new(),
         },
         AudioCommand::RemovePlugin {
-            track_id,
+            owner: ChainOwner::Track(track_id),
             instance_id,
         } => AudioEvent::PluginRemoved {
-            track_id,
+            owner: ChainOwner::Track(track_id),
             instance_id,
         },
-        AudioCommand::RemovePluginFromBus {
-            bus_id,
+        AudioCommand::RemovePlugin {
+            owner: ChainOwner::Bus(bus_id),
             instance_id,
-        } => AudioEvent::BusPluginRemoved {
-            bus_id,
+        } => AudioEvent::PluginRemoved {
+            owner: ChainOwner::Bus(bus_id),
             instance_id,
         },
-        AudioCommand::RemovePluginFromMaster { instance_id } => {
-            AudioEvent::MasterPluginRemoved { instance_id }
+        AudioCommand::RemovePlugin { owner: ChainOwner::Master, instance_id } => {
+            AudioEvent::PluginRemoved { owner: ChainOwner::Master, instance_id }
         }
         AudioCommand::MovePlugin {
-            track_id,
+            owner: ChainOwner::Track(track_id),
             instance_id,
             to_index,
         } => AudioEvent::PluginMoved {
-            track_id,
+            owner: ChainOwner::Track(track_id),
             instance_id,
             to_index,
         },
-        AudioCommand::MovePluginInBus {
-            bus_id,
+        AudioCommand::MovePlugin {
+            owner: ChainOwner::Bus(bus_id),
             instance_id,
             to_index,
-        } => AudioEvent::BusPluginMoved {
-            bus_id,
+        } => AudioEvent::PluginMoved {
+            owner: ChainOwner::Bus(bus_id),
             instance_id,
             to_index,
         },
-        AudioCommand::MovePluginInMaster {
+        AudioCommand::MovePlugin {
+            owner: ChainOwner::Master,
             instance_id,
             to_index,
-        } => AudioEvent::MasterPluginMoved {
+        } => AudioEvent::PluginMoved {
+            owner: ChainOwner::Master,
             instance_id,
             to_index,
         },
@@ -357,8 +365,8 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
         AudioCommand::AddVocalTrack { id, .. } => AudioEvent::VocalTrackAdded { track_id: id },
         AudioCommand::DeleteClip { clip_id } => AudioEvent::ClipDeleted { clip_id },
         AudioCommand::DeleteMidiClip { clip_id } => AudioEvent::MidiClipDeleted { clip_id },
-        AudioCommand::SetTrackFxBypass { track_id, bypassed } => {
-            AudioEvent::TrackFxBypassChanged { track_id, bypassed }
+        AudioCommand::SetFxBypass { owner: ChainOwner::Track(track_id), bypassed } => {
+            AudioEvent::FxBypassChanged { owner: ChainOwner::Track(track_id), bypassed }
         }
         AudioCommand::SetTrackPlaybackSource { track_id, source } => {
             AudioEvent::TrackPlaybackSourceChanged { track_id, source }
@@ -1251,7 +1259,7 @@ fn adding_and_removing_a_bus_with_routing_undoes_through_the_diff_path() {
             format!("SetBusVolume {{ bus_id: {bus}, volume: 1.0 }}"),
             format!("SetBusPan {{ bus_id: {bus}, pan: 0.0 }}"),
             format!("SetBusMute {{ bus_id: {bus}, muted: false }}"),
-            format!("SetBusFxBypass {{ bus_id: {bus}, bypassed: false }}"),
+            format!("SetFxBypass {{ owner: Bus({bus}), bypassed: false }}"),
             format!("SetBusRole {{ bus_id: {bus}, is_return: true }}"),
             format!(
                 "AddAuxSend {{ id: {send}, source: Track({DRUMS}), dest: {bus}, level_db: 0.0, \
@@ -1416,46 +1424,35 @@ fn move_in(chain: TestChain, instance_id: u64, to_index: usize) -> Message {
 /// How the engine names a remove / move on `chain`, for the pinned
 /// command lists.
 fn remove_cmd(chain: TestChain, instance_id: u64) -> String {
-    match chain {
-        TestChain::Track(track_id) => {
-            format!("RemovePlugin {{ track_id: {track_id}, instance_id: {instance_id} }}")
-        }
-        TestChain::Bus(bus_id) => {
-            format!("RemovePluginFromBus {{ bus_id: {bus_id}, instance_id: {instance_id} }}")
-        }
-        TestChain::Master => format!("RemovePluginFromMaster {{ instance_id: {instance_id} }}"),
-    }
+    format!(
+        "RemovePlugin {{ owner: {}, instance_id: {instance_id} }}",
+        owner_debug(chain)
+    )
 }
 
 fn move_cmd(chain: TestChain, instance_id: u64, to_index: usize) -> String {
-    match chain {
-        TestChain::Track(track_id) => format!(
-            "MovePlugin {{ track_id: {track_id}, instance_id: {instance_id}, to_index: {to_index} }}"
-        ),
-        TestChain::Bus(bus_id) => format!(
-            "MovePluginInBus {{ bus_id: {bus_id}, instance_id: {instance_id}, to_index: {to_index} }}"
-        ),
-        TestChain::Master => {
-            format!("MovePluginInMaster {{ instance_id: {instance_id}, to_index: {to_index} }}")
-        }
-    }
+    format!(
+        "MovePlugin {{ owner: {}, instance_id: {instance_id}, to_index: {to_index} }}",
+        owner_debug(chain)
+    )
 }
 
 fn add_cmd(chain: TestChain, instance_id: u64, id: &str) -> String {
     let (path, clap) = (format!("/plugins/{id}.clap"), format!("com.resonance.{id}"));
+    format!(
+        "AddPlugin {{ owner: {}, clap_file_path: {path:?}, clap_plugin_id: {clap:?}, id: \
+         {instance_id} }}",
+        owner_debug(chain)
+    )
+}
+
+/// `chain` as the `ChainOwner` the engine commands carry, in its Debug
+/// spelling.
+fn owner_debug(chain: TestChain) -> String {
     match chain {
-        TestChain::Track(track_id) => format!(
-            "AddPlugin {{ track_id: {track_id}, clap_file_path: {path:?}, clap_plugin_id: \
-             {clap:?}, id: {instance_id} }}"
-        ),
-        TestChain::Bus(bus_id) => format!(
-            "AddPluginToBus {{ bus_id: {bus_id}, clap_file_path: {path:?}, clap_plugin_id: \
-             {clap:?}, id: {instance_id} }}"
-        ),
-        TestChain::Master => format!(
-            "AddPluginToMaster {{ clap_file_path: {path:?}, clap_plugin_id: {clap:?}, id: \
-             {instance_id} }}"
-        ),
+        TestChain::Track(track_id) => format!("Track({track_id})"),
+        TestChain::Bus(bus_id) => format!("Bus({bus_id})"),
+        TestChain::Master => "Master".to_owned(),
     }
 }
 
@@ -1833,75 +1830,78 @@ impl EngineChains {
     fn answer(&mut self, cmd: &AudioCommand) -> Option<Vec<AudioEvent>> {
         let (key, clap_file_path, clap_plugin_id, id) = match cmd {
             AudioCommand::AddPlugin {
-                track_id,
+                owner: ChainOwner::Track(track_id),
                 clap_file_path,
                 clap_plugin_id,
                 id,
             } => (ChainKey::Track(*track_id), clap_file_path, clap_plugin_id, *id),
-            AudioCommand::AddPluginToBus {
-                bus_id,
+            AudioCommand::AddPlugin {
+                owner: ChainOwner::Bus(bus_id),
                 clap_file_path,
                 clap_plugin_id,
                 id,
             } => (ChainKey::Bus(*bus_id), clap_file_path, clap_plugin_id, *id),
-            AudioCommand::AddPluginToMaster {
+            AudioCommand::AddPlugin {
+                owner: ChainOwner::Master,
                 clap_file_path,
                 clap_plugin_id,
                 id,
             } => (ChainKey::Master, clap_file_path, clap_plugin_id, *id),
             AudioCommand::RemovePlugin {
-                track_id,
+                owner: ChainOwner::Track(track_id),
                 instance_id,
             } => {
                 self.remove(ChainKey::Track(*track_id), *instance_id);
                 return None;
             }
-            AudioCommand::RemovePluginFromBus {
-                bus_id,
+            AudioCommand::RemovePlugin {
+                owner: ChainOwner::Bus(bus_id),
                 instance_id,
             } => {
                 self.remove(ChainKey::Bus(*bus_id), *instance_id);
                 return None;
             }
-            AudioCommand::RemovePluginFromMaster { instance_id } => {
+            AudioCommand::RemovePlugin { owner: ChainOwner::Master, instance_id } => {
                 self.remove(ChainKey::Master, *instance_id);
                 return None;
             }
             AudioCommand::MovePlugin {
-                track_id,
+                owner: ChainOwner::Track(track_id),
                 instance_id,
                 to_index,
             } => {
                 let to = self.move_to(ChainKey::Track(*track_id), *instance_id, *to_index);
                 return Some(to.map_or_else(Vec::new, |to_index| {
                     vec![AudioEvent::PluginMoved {
-                        track_id: *track_id,
+                        owner: ChainOwner::Track(*track_id),
                         instance_id: *instance_id,
                         to_index,
                     }]
                 }));
             }
-            AudioCommand::MovePluginInBus {
-                bus_id,
+            AudioCommand::MovePlugin {
+                owner: ChainOwner::Bus(bus_id),
                 instance_id,
                 to_index,
             } => {
                 let to = self.move_to(ChainKey::Bus(*bus_id), *instance_id, *to_index);
                 return Some(to.map_or_else(Vec::new, |to_index| {
-                    vec![AudioEvent::BusPluginMoved {
-                        bus_id: *bus_id,
+                    vec![AudioEvent::PluginMoved {
+                        owner: ChainOwner::Bus(*bus_id),
                         instance_id: *instance_id,
                         to_index,
                     }]
                 }));
             }
-            AudioCommand::MovePluginInMaster {
+            AudioCommand::MovePlugin {
+                owner: ChainOwner::Master,
                 instance_id,
                 to_index,
             } => {
                 let to = self.move_to(ChainKey::Master, *instance_id, *to_index);
                 return Some(to.map_or_else(Vec::new, |to_index| {
-                    vec![AudioEvent::MasterPluginMoved {
+                    vec![AudioEvent::PluginMoved {
+                        owner: ChainOwner::Master,
                         instance_id: *instance_id,
                         to_index,
                     }]
@@ -2129,7 +2129,7 @@ fn default_track_scalars(t: u64, mono: bool) -> Vec<String> {
         format!("SetTrackMonitor {{ track_id: {t}, enabled: false }}"),
         format!("SetTrackPlaybackSource {{ track_id: {t}, source: Live }}"),
         format!("SetTrackMono {{ track_id: {t}, mono: {mono} }}"),
-        format!("SetTrackFxBypass {{ track_id: {t}, bypassed: false }}"),
+        format!("SetFxBypass {{ owner: Track({t}), bypassed: false }}"),
         format!("SetTrackInputPort {{ track_id: {t}, port_index: 0 }}"),
     ]
 }
@@ -2532,7 +2532,7 @@ fn undoing_a_track_delete_before_its_echo_keeps_the_track() {
 }
 
 /// FU-A13i: a scalar echo carries no per-track generation of its own, so a
-/// `TrackFxBypassChanged` sent for a toggle made right before a delete can
+/// track `FxBypassChanged` sent for a toggle made right before a delete can
 /// still be in flight when an undo re-adds the track under the same id.
 /// Guarded the same way as a stale `*TrackAdded` echo (`stale_track_echo`
 /// in `engine_events::tracks`): while the delete's own `TrackRemoved` is
@@ -2551,13 +2551,13 @@ fn a_late_track_fx_bypass_echo_does_not_clobber_a_re_added_track() {
     let stale_bypass_on = drain(&f.rx);
     assert!(
         sent(&stale_bypass_on)
-            .contains(&format!("SetTrackFxBypass {{ track_id: {t}, bypassed: true }}")),
+            .contains(&format!("SetFxBypass {{ owner: Track({t}), bypassed: true }}")),
         "the toggle sends the bypass command: {:?}",
         sent(&stale_bypass_on)
     );
     let stale_bypass_on: Vec<_> = stale_bypass_on
         .into_iter()
-        .filter(|c| matches!(c, AudioCommand::SetTrackFxBypass { .. }))
+        .filter(|c| matches!(c, AudioCommand::SetFxBypass { .. }))
         .collect();
 
     // Toggle back off — a real edit, echoed normally: the delete below,

@@ -10,7 +10,7 @@ use crate::common::call;
 use resonance_app::message::{AutomationMessage, Message};
 use resonance_app::state::{FreezeStatus, ViewMode};
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_common::{AutomationTarget, CurveKind, FreezeCacheRef, FreezeCacheStatus};
 use resonance_control::methods::automation::{
     AutomationCurve, AutomationValue, LaneControl, LaneEditResult, LaneStatus, LanesResult,
@@ -118,7 +118,7 @@ fn mount(
     params: Vec<ParamInfo>,
 ) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         plugin_name: name.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),

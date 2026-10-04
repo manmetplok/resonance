@@ -9,7 +9,7 @@
 //! built plugin follows.
 
 use resonance_audio::test_support::{ClapBundle, EngineHandlerHarness};
-use resonance_audio::types::AudioEvent;
+use resonance_audio::types::{AudioEvent, ChainOwner};
 use resonance_audio::Track;
 
 use crate::plugin_binaries::plugin_binary;
@@ -52,21 +52,22 @@ fn the_color_bundle_loads_on_a_track_and_a_bus() {
     harness.add_bus(BUS, Some("Drum Bus".to_string()));
     harness.drain_events();
 
-    harness.add_plugin(TRACK, path.clone(), COLOR_CLAP_ID.to_string(), 100);
+    harness.add_plugin(ChainOwner::Track(TRACK), path.clone(), COLOR_CLAP_ID.to_string(), 100);
     let track_events = harness.drain_events();
-    let bus_events = harness.add_plugin_to_bus(BUS, path, COLOR_CLAP_ID.to_string(), 101);
+    harness.add_plugin(ChainOwner::Bus(BUS), path, COLOR_CLAP_ID.to_string(), 101);
+    let bus_events = harness.drain_events();
 
     let track_params = track_events
         .iter()
         .find_map(|e| match e {
             AudioEvent::PluginAdded {
-                track_id,
+                owner,
                 clap_plugin_id,
                 params,
                 has_gui,
                 has_sidechain_input,
                 ..
-            } if *track_id == TRACK && clap_plugin_id == COLOR_CLAP_ID => {
+            } if *owner == ChainOwner::Track(TRACK) && clap_plugin_id == COLOR_CLAP_ID => {
                 assert!(*has_gui, "the plugin ships an editor");
                 assert!(!*has_sidechain_input, "the plugin has no key port");
                 Some(params.clone())
@@ -77,15 +78,17 @@ fn the_color_bundle_loads_on_a_track_and_a_bus() {
     let bus_params = bus_events
         .iter()
         .find_map(|e| match e {
-            AudioEvent::BusPluginAdded {
-                bus_id,
+            AudioEvent::PluginAdded {
+                owner,
                 clap_plugin_id,
                 params,
                 ..
-            } if *bus_id == BUS && clap_plugin_id == COLOR_CLAP_ID => Some(params.clone()),
+            } if *owner == ChainOwner::Bus(BUS) && clap_plugin_id == COLOR_CLAP_ID => {
+                Some(params.clone())
+            }
             _ => None,
         })
-        .unwrap_or_else(|| panic!("no BusPluginAdded for the bus: {bus_events:?}"));
+        .unwrap_or_else(|| panic!("no PluginAdded for the bus: {bus_events:?}"));
 
     for params in [&track_params, &bus_params] {
         let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();

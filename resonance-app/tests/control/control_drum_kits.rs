@@ -15,6 +15,7 @@ use resonance_control::methods::drum_kits::{
 use resonance_control::ErrorKind;
 
 use crate::common::call;
+use resonance_audio::types::ChainOwner;
 
 /// A small kit manifest: `pieces` pieces, two mic setups, 3 layers × 2
 /// round robins each (the sample files are not needed: a scan never opens
@@ -197,7 +198,7 @@ fn drum_kits_list_names_the_tracks_that_play_a_kit() {
     // has no slot and so is no library kit's user.
     for (track_id, instance_id, slot) in [(1, 40, 1.0), (2, 41, -1.0), (3, 42, -2.0)] {
         app.test_apply_engine_event(AudioEvent::PluginAdded {
-            track_id,
+            owner: ChainOwner::Track(track_id),
             instance_id,
             plugin_name: "Resonance Drums".to_owned(),
             clap_plugin_id: "com.resonance.drums".to_owned(),
@@ -376,7 +377,7 @@ fn setting_kit_select_resets_the_mirrored_load_progress() {
     app.test_set_project_path(PathBuf::from("/tmp/control-drum-kits-progress.rprj"));
     app.test_add_track(1, TrackType::Instrument);
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: 1,
+        owner: ChainOwner::Track(1),
         instance_id: DRUMS,
         plugin_name: "Resonance Drums".to_owned(),
         clap_plugin_id: "com.resonance.drums".to_owned(),
@@ -513,7 +514,7 @@ fn edit_undo_of_a_kit_select_set_puts_the_old_kit_back() {
     app.test_set_project_path(PathBuf::from("/tmp/control-drum-kits-undo.rprj"));
     app.test_add_track(1, TrackType::Instrument);
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: 1,
+        owner: ChainOwner::Track(1),
         instance_id: DRUMS,
         plugin_name: "Resonance Drums".to_owned(),
         clap_plugin_id: "com.resonance.drums".to_owned(),

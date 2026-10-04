@@ -9,7 +9,7 @@ use iced::Task;
 use resonance_audio::types::PluginInstanceId;
 
 use crate::message::{Message, PluginMessage, PluginWindowDrag};
-use crate::state::{PluginLocator, PluginWindowState, ViewMode, PLUGIN_WINDOW_DEFAULT_POSITION};
+use crate::state::{ChainOwner, PluginWindowState, ViewMode, PLUGIN_WINDOW_DEFAULT_POSITION};
 use crate::Resonance;
 
 /// Open `instance_id`'s window: its own editor when it has a GUI and is
@@ -68,7 +68,7 @@ pub(crate) fn focus(r: &mut Resonance, instance_id: PluginInstanceId) {
         return;
     };
     match owner {
-        PluginLocator::Track(track_id) => {
+        ChainOwner::Track(track_id) => {
             let selected = r.ui.interaction.selected_tracks.contains(&track_id);
             if selected || r.ui.interaction.select_additive {
                 // An owner change drops the old owner's transient CHAIN
@@ -81,10 +81,10 @@ pub(crate) fn focus(r: &mut Resonance, instance_id: PluginInstanceId) {
                 ))));
             }
         }
-        PluginLocator::Bus(bus_id) => {
+        ChainOwner::Bus(bus_id) => {
             let _ = r.update(Message::Ui(crate::message::UiMessage::SelectBus(Some(bus_id))));
         }
-        PluginLocator::Master => {
+        ChainOwner::Master => {
             let _ = r.update(Message::Ui(crate::message::UiMessage::SelectMaster));
         }
     }
@@ -180,23 +180,23 @@ pub(crate) fn preset_target(r: &Resonance) -> Option<PluginInstanceId> {
 /// master when it is selected, else the selected track — the precedence
 /// `view::mixer::inspector::view` draws with. A selection naming a
 /// channel that is gone describes nothing.
-pub(crate) fn inspector_owner(r: &Resonance) -> Option<PluginLocator> {
+pub(crate) fn inspector_owner(r: &Resonance) -> Option<ChainOwner> {
     if let Some(bus) = r
         .ui
         .mixer
         .selected_bus
         .filter(|id| r.registry.busses.iter().any(|b| b.id == *id))
     {
-        return Some(PluginLocator::Bus(bus));
+        return Some(ChainOwner::Bus(bus));
     }
     if r.ui.mixer.selected_master {
-        return Some(PluginLocator::Master);
+        return Some(ChainOwner::Master);
     }
     r.ui
         .interaction
         .selected_track
         .filter(|id| r.registry.tracks.iter().any(|t| t.id == *id))
-        .map(PluginLocator::Track)
+        .map(ChainOwner::Track)
 }
 
 /// Whether `instance_id` sits in the chain of the channel the inspector

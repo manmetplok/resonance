@@ -22,14 +22,13 @@ use iced::widget::{
     button, column, container, mouse_area, pick_list, row, text, text_input, Space,
 };
 use iced::{alignment, Element, Length};
-use resonance_audio::types::{PluginInstanceId, ScannedPlugin};
+use resonance_audio::types::{ChainOwner, PluginInstanceId, ScannedPlugin};
 
 use crate::message::{
-    ChainUiMessage, Message, PluginMessage, PresetAddOwner, PresetUiMessage,
+    ChainUiMessage, Message, PluginMessage, PresetUiMessage,
 };
 use crate::state::{PluginSlotState, TrackState};
 use crate::theme;
-use crate::view::mixer::picks::PluginOwner;
 use crate::view::mixer::reorder;
 
 /// Font Awesome Solid `grip-vertical` — the row's drag handle.
@@ -75,7 +74,7 @@ pub(super) fn chain_group(
     let instrument_index = crate::plugin_chain::displayed_instrument_slot(r, track);
     col = col.push(chain_rows(
         r,
-        PluginOwner::Track(track.id),
+        ChainOwner::Track(track.id),
         &track.plugins,
         instrument_index,
     ));
@@ -169,7 +168,7 @@ fn push_add_pickers(
             None::<crate::state::presets::PresetAddPick>,
             move |pick| {
                 Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::AddWithPreset {
-                    owner: PresetAddOwner::Track(track_id),
+                    owner: ChainOwner::Track(track_id),
                     pick,
                 }))
             },
@@ -192,7 +191,7 @@ fn push_add_pickers(
 /// that does not drag (the slot is fixed).
 pub(super) fn chain_rows(
     r: &crate::Resonance,
-    owner: PluginOwner,
+    owner: ChainOwner,
     plugins: &[PluginSlotState],
     instrument_index: Option<usize>,
 ) -> Element<'static, Message> {
@@ -276,7 +275,7 @@ fn pick(m: Message) -> Message {
 /// One plugin row: `⠿ ● Name   ↗ ☰ ×`.
 fn chain_row(
     r: &crate::Resonance,
-    owner: PluginOwner,
+    owner: ChainOwner,
     plugin: &PluginSlotState,
     is_instrument_slot: bool,
     dragging: bool,
@@ -452,7 +451,7 @@ fn drop_indicator() -> Element<'static, Message> {
 /// so the menu and the chain rule cannot disagree.
 pub(crate) fn slot_menu_entries(
     r: &crate::Resonance,
-    owner: PluginOwner,
+    owner: ChainOwner,
     plugin: &PluginSlotState,
     index: usize,
     len: usize,
@@ -499,7 +498,7 @@ pub(crate) fn slot_menu_entries(
 /// The open ☰ menu: a small card, right-aligned under its row.
 fn slot_menu(
     r: &crate::Resonance,
-    owner: PluginOwner,
+    owner: ChainOwner,
     plugin: &PluginSlotState,
     index: usize,
     len: usize,
@@ -597,7 +596,7 @@ fn preset_save_prompt(prompt: &crate::state::SlotPresetSaveState) -> Element<'st
 /// since the app started.
 fn missing_recovery(
     r: &crate::Resonance,
-    owner: PluginOwner,
+    owner: ChainOwner,
     plugin: &PluginSlotState,
     reason: &str,
 ) -> Element<'static, Message> {

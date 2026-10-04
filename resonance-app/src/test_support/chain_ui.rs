@@ -90,30 +90,30 @@ impl Resonance {
         &self,
         instance_id: PluginInstanceId,
     ) -> Vec<(String, Option<Message>)> {
-        use crate::view::mixer::picks::PluginOwner;
+        use crate::state::ChainOwner;
         let Some((locator, index)) = crate::update::plugin_replace::locate_slot(self, instance_id)
         else {
             return Vec::new();
         };
         let (owner, chain) = match locator {
-            state::PluginLocator::Track(id) => (
-                PluginOwner::Track(id),
+            state::ChainOwner::Track(id) => (
+                ChainOwner::Track(id),
                 self.registry
                     .tracks
                     .iter()
                     .find(|t| t.id == id)
                     .map(|t| t.plugins.as_slice()),
             ),
-            state::PluginLocator::Bus(id) => (
-                PluginOwner::Bus(id),
+            state::ChainOwner::Bus(id) => (
+                ChainOwner::Bus(id),
                 self.registry
                     .busses
                     .iter()
                     .find(|b| b.id == id)
                     .map(|b| b.plugins.as_slice()),
             ),
-            state::PluginLocator::Master => {
-                (PluginOwner::Master, Some(self.master.plugins.as_slice()))
+            state::ChainOwner::Master => {
+                (ChainOwner::Master, Some(self.master.plugins.as_slice()))
             }
         };
         let Some(chain) = chain else {

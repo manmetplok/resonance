@@ -9,7 +9,7 @@ use resonance_common::{
 use resonance_common::{AutomationLane, AutomationTarget, DeviceParam, PlaybackSource};
 
 use super::{
-    ABSource, AudioMeasureSource, BusId, ClipId, DetailSet, ExportSettings, FadeCurve, FrozenSource, MeasureSource,
+    ABSource, AudioMeasureSource, BusId, ChainOwner, ClipId, DetailSet, ExportSettings, FadeCurve, FrozenSource, MeasureSource,
     MidiNote, PluginInstanceId, ProbeSpec, ProbeStage, ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth,
     StemSource, StemTarget, TempoPoint, TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
 };
@@ -280,8 +280,15 @@ pub enum AudioCommand {
     SetMetronomeEnabled {
         enabled: bool,
     },
+    /// Add a plugin to `owner`'s insert chain — a track's, a bus's or the
+    /// master's (code review ARCH2-02: one command for all three). On a
+    /// track the engine appends to the track's chain; on a bus or the
+    /// master to that chain, which runs over the summed group / the
+    /// finished mix. Answered by exactly one of
+    /// [`AudioEvent::PluginAdded`](super::AudioEvent::PluginAdded) and
+    /// [`AudioEvent::PluginLoadFailed`](super::AudioEvent::PluginLoadFailed).
     AddPlugin {
-        track_id: TrackId,
+        owner: ChainOwner,
         clap_file_path: String,
         clap_plugin_id: String,
         /// The app allocates every plugin instance id
@@ -291,15 +298,24 @@ pub enum AudioCommand {
         /// silently re-numbering the add.
         id: PluginInstanceId,
     },
+    /// Remove `instance_id` from `owner`'s chain and destroy the instance.
+    /// The engine drops the instance's sidechain (key) route with it, on
+    /// every owner, so a recycled id never inherits someone else's key.
+    /// Always echoed with
+    /// [`AudioEvent::PluginRemoved`](super::AudioEvent::PluginRemoved),
+    /// an unknown instance included.
     RemovePlugin {
-        track_id: TrackId,
+        owner: ChainOwner,
         instance_id: PluginInstanceId,
     },
-    /// Reorder a track's insert chain: move `instance_id` to `to_index`,
+    /// Reorder `owner`'s insert chain: move `instance_id` to `to_index`,
     /// shifting the plugins between its old and new slot by one. Order is
     /// audible — an EQ before a compressor is a different sound from an EQ
     /// after it — and before this command the only way to reorder a chain
-    /// was to tear it down and rebuild it.
+    /// was to tear it down and rebuild it. On the master the order also
+    /// decides whether the chain works at all: a limiter holding a ceiling
+    /// must be last, because anything after it can push the sum back over
+    /// that ceiling.
     ///
     /// `to_index` is clamped to the last slot, so an out-of-range value
     /// moves the plugin to the end rather than failing. Moving a plugin to
@@ -311,14 +327,27 @@ pub enum AudioCommand {
     /// the track's FX are bypassed, and what every sub-track inherits its
     /// latency from (`latency::chain_latencies`). The engine performs
     /// whatever move it is asked to, so a caller that only means to reorder
-    /// *effects* must keep the instrument pinned at index 0 itself.
+    /// *effects* must keep the instrument pinned at index 0 itself. A bus
+    /// chain and the master chain have no structural slot: every entry is
+    /// an effect over the sum, so any order is valid.
     ///
-    /// An unknown track, or an `instance_id` that is not on that track's
+    /// An unknown owner, or an `instance_id` that is not on that owner's
     /// chain, leaves the chain untouched and reports `AudioEvent::Error`.
     MovePlugin {
-        track_id: TrackId,
+        owner: ChainOwner,
         instance_id: PluginInstanceId,
         to_index: usize,
+    },
+    /// Bypass every effect plugin on `owner`'s chain. On a track,
+    /// instrument plugins (slot 0 on instrument tracks) keep running.
+    ///
+    /// The change is not instantaneous: the mixer crossfades the chain
+    /// out (or back in) over a few milliseconds, so bypassing a reverb
+    /// mid-playback fades its tail instead of truncating it. Echoed with
+    /// [`AudioEvent::FxBypassChanged`](super::AudioEvent::FxBypassChanged).
+    SetFxBypass {
+        owner: ChainOwner,
+        bypassed: bool,
     },
     ScanPlugins,
     /// Look for newly installed plugins WITHOUT disturbing anything that
@@ -1177,43 +1206,6 @@ pub enum AudioCommand {
         track_id: TrackId,
         output: TrackOutput,
     },
-    AddPluginToBus {
-        bus_id: BusId,
-        clap_file_path: String,
-        clap_plugin_id: String,
-        /// The app allocates every plugin instance id
-        /// (`Resonance::allocate_plugin_id`, ARCH-04 D-1); the engine
-        /// only ever honours it. Rejected with `EngineError::internal`
-        /// (`AudioEvent::Error`) if `id` is already live, rather than
-        /// silently re-numbering the add.
-        id: PluginInstanceId,
-    },
-    RemovePluginFromBus {
-        bus_id: BusId,
-        instance_id: PluginInstanceId,
-    },
-    /// Reorder a bus's insert chain: move `instance_id` to `to_index`,
-    /// shifting the plugins between its old and new slot by one. The bus
-    /// twin of [`MovePlugin`](Self::MovePlugin), and audible for the
-    /// same reason — a bus chain is applied front to back over the
-    /// SUMMED group, so an EQ before a compressor is a different sound
-    /// from an EQ after it.
-    ///
-    /// `to_index` is clamped to the last slot, so an out-of-range value
-    /// moves the plugin to the end rather than failing. Moving a plugin
-    /// to the slot it already occupies is a no-op that still confirms
-    /// with [`AudioEvent::BusPluginMoved`](super::AudioEvent::BusPluginMoved).
-    ///
-    /// Unlike a track chain, a bus chain has no structural slot 0: every
-    /// entry is an effect over the group sum, so any order is valid.
-    ///
-    /// An unknown bus, or an `instance_id` that is not on that bus's
-    /// chain, leaves the chain untouched and reports `AudioEvent::Error`.
-    MovePluginInBus {
-        bus_id: BusId,
-        instance_id: PluginInstanceId,
-        to_index: usize,
-    },
 
     // -- Aux sends + return busses --
     /// Mark a bus as an aux *return* bus (or clear the flag). Emits
@@ -1263,63 +1255,6 @@ pub enum AudioCommand {
         send_id: SendId,
     },
 
-    // -- Master FX chain + bypass --
-    /// Add a plugin to the master bus insert chain. Master FX run after
-    /// every track/bus has been summed, before the master volume pass.
-    AddPluginToMaster {
-        clap_file_path: String,
-        clap_plugin_id: String,
-        /// The app allocates every plugin instance id
-        /// (`Resonance::allocate_plugin_id`, ARCH-04 D-1); the engine
-        /// only ever honours it. Rejected with `EngineError::internal`
-        /// (`AudioEvent::Error`) if `id` is already live, rather than
-        /// silently re-numbering the add.
-        id: PluginInstanceId,
-    },
-    RemovePluginFromMaster {
-        instance_id: PluginInstanceId,
-    },
-    /// Reorder the master insert chain: move `instance_id` to
-    /// `to_index`, shifting the plugins between its old and new slot by
-    /// one. The master twin of
-    /// [`MovePluginInBus`](Self::MovePluginInBus), and audible for the
-    /// same reason — the chain runs front to back over the finished mix.
-    /// On the master it also decides whether the chain works at all: a
-    /// limiter holding a ceiling must be last, because anything after it
-    /// can push the sum back over that ceiling.
-    ///
-    /// `to_index` is clamped to the last slot, so an out-of-range value
-    /// moves the plugin to the end rather than failing. Moving a plugin
-    /// to the slot it already occupies is a no-op that still confirms
-    /// with [`AudioEvent::MasterPluginMoved`](super::AudioEvent::MasterPluginMoved).
-    ///
-    /// Like a bus chain — and unlike a track's — the master has no
-    /// structural slot 0: every entry is an effect over the summed mix,
-    /// so any order is valid.
-    ///
-    /// An `instance_id` that is not on the master chain leaves it
-    /// untouched and reports `AudioEvent::Error`.
-    MovePluginInMaster {
-        instance_id: PluginInstanceId,
-        to_index: usize,
-    },
-    /// Bypass every effect plugin on a track. Instrument plugins
-    /// (slot 0 on instrument tracks) keep running.
-    ///
-    /// The change is not instantaneous: the mixer crossfades the chain
-    /// out (or back in) over a few milliseconds, so bypassing a reverb
-    /// mid-playback fades its tail instead of truncating it.
-    SetTrackFxBypass {
-        track_id: TrackId,
-        bypassed: bool,
-    },
-    SetBusFxBypass {
-        bus_id: BusId,
-        bypassed: bool,
-    },
-    SetMasterFxBypass {
-        bypassed: bool,
-    },
     /// Bypass **one** slot of a chain, wherever it lives — a track, a
     /// sub-track, a bus or the master (ba doc #275 finding X3). The slot
     /// is named by its plugin instance id, which is unique across every

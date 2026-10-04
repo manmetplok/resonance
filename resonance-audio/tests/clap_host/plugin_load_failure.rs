@@ -1,7 +1,7 @@
 //! An add that produces no instance has to be **addressable** (ba doc
 //! #275 P5, todo #1309).
 //!
-//! Every `AddPlugin` / `AddPluginToBus` / `AddPluginToMaster` gets
+//! Every `AddPlugin` (whatever its `ChainOwner`) gets
 //! exactly one of two answers: `PluginAdded` or `PluginLoadFailed`. The
 //! second one is new — before it, a `.clap` the engine could not load
 //! reached the app as a bare `AudioEvent::Error` string. That string

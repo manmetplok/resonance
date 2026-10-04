@@ -379,7 +379,7 @@ impl Resonance {
     pub fn test_plugin_index(
         &self,
         instance_id: resonance_audio::types::PluginInstanceId,
-    ) -> Option<crate::state::PluginLocator> {
+    ) -> Option<crate::state::ChainOwner> {
         self.plugin_mirror.index.get(&instance_id).copied()
     }
 

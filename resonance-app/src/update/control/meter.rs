@@ -712,11 +712,7 @@ fn probe(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
 }
 
 fn owner_label(owner: super::plugin_target::ChainOwner) -> String {
-    match owner {
-        super::plugin_target::ChainOwner::Master => "the master".to_owned(),
-        super::plugin_target::ChainOwner::Track(id) => format!("track {id}"),
-        super::plugin_target::ChainOwner::Bus(id) => format!("bus {id}"),
-    }
+    owner.to_string()
 }
 
 fn owner_source(owner: super::plugin_target::ChainOwner) -> StemSource {

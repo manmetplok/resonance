@@ -2122,3 +2122,47 @@ fn every_audio_command_has_an_app_caller() {
         &violations,
     );
 }
+
+// ---------------------------------------------------------------------------
+// One plugin chain API for every owner (code review ARCH2-02)
+// ---------------------------------------------------------------------------
+
+/// ARCH2-02: the track/bus/master insert chains share one command and one
+/// event per edit, parameterised by `ChainOwner` — `AddPlugin { owner, .. }`,
+/// not `AddPlugin` / `AddPluginToBus` / `AddPluginToMaster`. Nine
+/// command/event pairs meant every chain behaviour was written and fixed
+/// three times (and fixed on two surfaces, missed on the third: FU-A13c/h).
+/// A variant name that spells out a bus or master twin is that triplication
+/// coming back.
+///
+/// Exercised 2026-10-04: added `AddPluginToBus { bus_id: BusId },` to
+/// `AudioCommand` (text only) → failed naming it; reverted.
+#[test]
+fn plugin_chain_commands_and_events_take_a_chain_owner() {
+    let root = workspace_root();
+    let twins = ["ToBus", "InBus", "FromBus", "ToMaster", "InMaster", "FromMaster"];
+    let mut violations = Vec::new();
+    for (file, name) in [
+        ("resonance-audio/src/types/commands.rs", "AudioCommand"),
+        ("resonance-audio/src/types/events.rs", "AudioEvent"),
+    ] {
+        let variants = enum_variants(&root.join(file), name);
+        assert!(
+            variants.len() > 50,
+            "found only {} {name} variants — parser broken?",
+            variants.len()
+        );
+        for v in variants {
+            if let Some(twin) = twins.iter().find(|t| v.contains(*t)) {
+                violations.push(format!(
+                    "{name}::{v}: a per-owner chain variant (`{twin}`) — carry a `ChainOwner` on \
+                     the shared variant instead"
+                ));
+            }
+        }
+    }
+    report(
+        "ARCH2-02: plugin chain commands and events are owner-parameterised, never per-owner twins",
+        &violations,
+    );
+}

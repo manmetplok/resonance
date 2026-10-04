@@ -136,8 +136,8 @@ pub(super) fn resolve_chain_clear_target(
 /// Refuse a key route onto a plugin instance with no sidechain input,
 /// naming the plugins on `host`'s chain that do have one.
 ///
-/// The flag comes from the engine's `PluginAdded` / `BusPluginAdded` /
-/// `MasterPluginAdded` echo — the same `has_sidechain_input` the mixer
+/// The flag comes from the engine's `PluginAdded` echo (for any chain
+/// owner) — the same `has_sidechain_input` the mixer
 /// keys off — so this predicate cannot drift from the one that decides
 /// delivery.
 ///

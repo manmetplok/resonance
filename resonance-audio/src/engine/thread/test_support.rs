@@ -21,7 +21,7 @@ use ringbuf::traits::Split;
 use resonance_common::{CompSegment, TakeGroup, TakeGroupId, TakeId};
 
 use crate::engine::{
-    automation::AutomationSnapshot, busses, master, plugins, takes, tracks, transport,
+    automation::AutomationSnapshot, busses, chain, plugins, takes, tracks, transport,
     OfflineRenderGuard, SharedState,
 };
 use crate::midi_clock::MidiClockEvent;
@@ -453,13 +453,22 @@ impl EngineHandlerHarness {
         self.with_ctx(crate::engine::bounce_realtime::poll_pending_bounce);
     }
 
-    /// Run the real `MovePluginInMaster` handler (ARCH-05/C-1's
-    /// `EngineError::not_found` guard: an instance id absent from the
-    /// master chain).
-    pub fn move_plugin_in_master(&mut self, instance_id: PluginInstanceId, to_index: usize) {
-        self.with_ctx(|ctx, _state| {
-            master::handle_move_plugin_in_master(ctx, instance_id, to_index)
-        });
+    /// Run the real `AudioCommand::MovePlugin` handler for any chain owner
+    /// (ARCH-05/C-1's `EngineError::not_found` guard: an instance id
+    /// absent from the owner's chain).
+    pub fn move_plugin(
+        &mut self,
+        owner: ChainOwner,
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    ) {
+        self.with_ctx(|ctx, _state| chain::handle_move_plugin(ctx, owner, instance_id, to_index));
+    }
+
+    /// Run the real `AudioCommand::RemovePlugin` handler for any chain
+    /// owner.
+    pub fn remove_plugin(&mut self, owner: ChainOwner, instance_id: PluginInstanceId) {
+        self.with_ctx(|ctx, state| chain::handle_remove_plugin(ctx, state, owner, instance_id));
     }
 
     /// Run the real `AddTrack` handler (ARCH-04 D-4's
@@ -560,23 +569,6 @@ impl EngineHandlerHarness {
         self.with_ctx(|ctx, _state| busses::handle_set_bus_name(ctx, id, name));
     }
 
-    /// Run the real `AudioCommand::MovePluginInBus` handler.
-    pub fn move_plugin_in_bus(&mut self, id: BusId, instance_id: PluginInstanceId, to_index: usize) {
-        self.with_ctx(|ctx, _state| {
-            busses::handle_move_plugin_in_bus(ctx, id, instance_id, to_index)
-        });
-    }
-
-    /// Run the real `AudioCommand::RemovePluginFromBus` handler.
-    pub fn remove_plugin_from_bus(&mut self, id: BusId, instance_id: PluginInstanceId) {
-        self.with_ctx(|ctx, _state| busses::handle_remove_plugin_from_bus(ctx, id, instance_id));
-    }
-
-    /// Run the real `AudioCommand::RemovePluginFromMaster` handler.
-    pub fn remove_plugin_from_master(&mut self, instance_id: PluginInstanceId) {
-        self.with_ctx(|ctx, _state| master::handle_remove_plugin_from_master(ctx, instance_id));
-    }
-
     /// Run the real `AudioCommand::SetTrackOutput` handler.
     pub fn set_track_output(&mut self, track_id: TrackId, output: TrackOutput) {
         self.with_ctx(|ctx, _state| busses::handle_set_track_output(ctx, track_id, output));
@@ -594,42 +586,21 @@ impl EngineHandlerHarness {
         self.with_ctx(|ctx, _state| busses::handle_set_bus_volume(ctx, id, volume));
     }
 
-    /// Run the real `AddPlugin` handler (ARCH-04 D-1's
-    /// `EngineErrorKind::Internal` guard: `id` already live in
-    /// `ctx.plugins()` refuses the add rather than replacing the instance).
+    /// Run the real `AddPlugin` handler for any chain owner (ARCH-04
+    /// D-1's `EngineErrorKind::Internal` guard: `id` already live in
+    /// `ctx.plugins()` refuses the add rather than replacing the instance —
+    /// on a bus or the master as much as on a track, since ARCH2-02 it is
+    /// one handler).
     pub fn add_plugin(
         &mut self,
-        track_id: TrackId,
+        owner: ChainOwner,
         clap_file_path: String,
         clap_plugin_id: String,
         id: PluginInstanceId,
     ) {
         self.with_ctx(|ctx, state| {
-            plugins::handle_add_plugin(ctx, state, track_id, clap_file_path, clap_plugin_id, id)
+            chain::handle_add_plugin(ctx, state, owner, clap_file_path, clap_plugin_id, id)
         });
-    }
-
-    /// Run the real `AddPluginToBus` handler — the bus twin of
-    /// [`Self::add_plugin`], for the ARCH-04 D-1 guard that the
-    /// duplicate-id refusal isn't a track-only special case.
-    pub fn add_plugin_to_bus(
-        &mut self,
-        bus_id: BusId,
-        clap_file_path: String,
-        clap_plugin_id: String,
-        id: PluginInstanceId,
-    ) -> Vec<AudioEvent> {
-        self.with_ctx(|ctx, state| {
-            busses::handle_add_plugin_to_bus(
-                ctx,
-                state,
-                bus_id,
-                clap_file_path,
-                clap_plugin_id,
-                id,
-            )
-        });
-        self.drain_events()
     }
 
     /// The plugin ids on `track_id`'s chain, in order — what `push_plugin`

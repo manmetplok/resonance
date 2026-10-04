@@ -1,16 +1,11 @@
 //! Bus handlers: create/destroy, per-bus volume/pan/mute/name,
-//! track→bus routing, and bus-owned plugin CRUD. Bus plugin
-//! add/remove reuses `ensure_bundle` / `resolve_plugin_id` from
-//! the `plugins` module.
+//! track→bus routing, aux sends. The bus insert chain is edited by the
+//! owner-generic handlers in `chain.rs` (ARCH2-02).
 
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::types::*;
 
-use super::plugins::{
-    ensure_bundle, reject_if_plugin_id_in_use, report_plugin_load_failure, resolve_plugin_id,
-};
 use super::thread::{HandlerCtx, HandlerState};
 use super::MAX_BUSSES;
 
@@ -97,15 +92,6 @@ pub(crate) fn handle_set_bus_mute(ctx: &HandlerCtx, bus_id: BusId, muted: bool) 
     }
 }
 
-pub(crate) fn handle_set_bus_fx_bypass(ctx: &HandlerCtx, bus_id: BusId, bypassed: bool) {
-    if let Some(bus) = ctx.shared.graph.load().bus(bus_id) {
-        super::plugins::apply_bypass_request(ctx.shared, bus.fx_bypass(), bypassed);
-    }
-    let _ = ctx
-        .event_tx
-        .send(AudioEvent::BusFxBypassChanged { bus_id, bypassed });
-}
-
 pub(crate) fn handle_set_bus_name(ctx: &HandlerCtx, bus_id: BusId, name: String) {
     ctx.shared.edit_bus(bus_id, |bus| bus.name = name);
 }
@@ -114,138 +100,6 @@ pub(crate) fn handle_set_track_output(ctx: &HandlerCtx, track_id: TrackId, outpu
     // Structural (ARCH-02 B-3): a copy-on-write edit of the track,
     // published in a new render graph.
     ctx.shared.edit_track(track_id, |track| track.set_output(output));
-}
-
-pub(crate) fn handle_add_plugin_to_bus(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    bus_id: BusId,
-    clap_file_path: String,
-    clap_plugin_id: String,
-    id: PluginInstanceId,
-) {
-    if reject_if_plugin_id_in_use(ctx, id, &clap_plugin_id) {
-        return;
-    }
-    let path = Path::new(&clap_file_path);
-    let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id) {
-        Ok(idx) => idx,
-        Err(reason) => {
-            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason.to_string());
-            return;
-        }
-    };
-    let actual_plugin_id =
-        match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id.clone()) {
-            Ok(resolved) => resolved,
-            Err(reason) => {
-                report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason.to_string());
-                return;
-            }
-        };
-    let plugin_name = state.bundles[bundle_idx]
-        .descriptors()
-        .iter()
-        .find(|d| d.id == actual_plugin_id)
-        .map(|d| d.name.clone())
-        .unwrap_or_else(|| actual_plugin_id.clone());
-    match state.bundles[bundle_idx].create_instance(&actual_plugin_id, ctx.sample_rate) {
-        Ok(instance) => {
-            let instance_id = id;
-            let params = instance.query_params();
-            let has_gui = instance.has_gui();
-            let has_sidechain_input = instance.has_sidechain_input();
-            let slot = Arc::new(crate::clap_host::PluginSlot::new(instance));
-            ctx.shared.edit_plugins(|plugins| plugins.insert(instance_id, slot));
-            ctx.shared
-                .edit_bus(bus_id, |bus| bus.plugin_ids.push(instance_id));
-            let _ = ctx.event_tx.send(AudioEvent::BusPluginAdded {
-                bus_id,
-                instance_id,
-                plugin_name,
-                clap_plugin_id: actual_plugin_id,
-                clap_file_path,
-                params,
-                has_gui,
-                has_sidechain_input,
-            });
-        }
-        Err(e) => report_plugin_load_failure(
-            ctx,
-            Some(id),
-            &actual_plugin_id,
-            &clap_file_path,
-            format!("Failed to create plugin instance: {}", e),
-        ),
-    }
-}
-
-pub(crate) fn handle_remove_plugin_from_bus(
-    ctx: &HandlerCtx,
-    bus_id: BusId,
-    instance_id: PluginInstanceId,
-) {
-    let on_chain = ctx
-        .shared
-        .graph
-        .load()
-        .bus(bus_id)
-        .is_some_and(|bus| bus.plugin_ids.contains(&instance_id));
-    if on_chain {
-        ctx.shared
-            .edit_bus(bus_id, |bus| bus.plugin_ids.retain(|&id| id != instance_id));
-    }
-    super::plugins::remove_plugin_slots(ctx.shared, &[instance_id]);
-    let _ = ctx.event_tx.send(AudioEvent::BusPluginRemoved {
-        bus_id,
-        instance_id,
-    });
-}
-
-/// Reorder a bus's insert chain (ba doc #273, todo #1237).
-///
-/// A bus chain is a plain `Vec<PluginInstanceId>` on the bus, so this
-/// mirrors `handle_remove_plugin_from_bus`'s pattern (copy-on-write the
-/// bus in a new render graph, no plugin instance touched — only the
-/// order they are visited in). A plugin that is not on the chain
-/// publishes nothing.
-pub(crate) fn handle_move_plugin_in_bus(
-    ctx: &HandlerCtx,
-    bus_id: BusId,
-    instance_id: PluginInstanceId,
-    to_index: usize,
-) {
-    let on_chain = ctx
-        .shared
-        .graph
-        .load()
-        .bus(bus_id)
-        .is_some_and(|bus| bus.plugin_ids.contains(&instance_id));
-    let moved = on_chain
-        .then(|| {
-            ctx.shared
-                .edit_bus(bus_id, |bus| bus.move_plugin(instance_id, to_index))
-                .flatten()
-        })
-        .flatten();
-    match moved {
-        // Report the *clamped* index so the app mirrors what the engine
-        // actually did rather than what was requested.
-        Some(to_index) => {
-            let _ = ctx.event_tx.send(AudioEvent::BusPluginMoved {
-                bus_id,
-                instance_id,
-                to_index,
-            });
-        }
-        None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::not_found(format!(
-                "Cannot reorder plugin {} on bus {}: no such bus, or that \
-                 plugin is not on its chain",
-                instance_id, bus_id
-            ))));
-        }
-    }
 }
 
 /// Lower / upper bound on aux-send level in dB. Mirrors the spirit of

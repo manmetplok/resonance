@@ -15,7 +15,7 @@
 //! never saw would flip the state back.
 
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioCommand, AudioEvent};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent};
 use resonance_control::methods::track::{AddResult, PluginParamsView};
 use resonance_control::{ErrorKind, MutationAck};
 use crate::common::call;
@@ -47,7 +47,7 @@ fn track_with_two_effects(app: &mut Resonance) -> (u64, u64, u64) {
     let track_id = add_track(app);
     for (instance_id, clap) in [(10u64, PLUGIN), (11u64, OTHER)] {
         app.test_apply_engine_event(AudioEvent::PluginAdded {
-            track_id,
+            owner: ChainOwner::Track(track_id),
             instance_id,
             plugin_name: clap.to_owned(),
             clap_plugin_id: clap.to_owned(),
@@ -189,7 +189,7 @@ fn occurrence_picks_between_two_copies_of_one_plugin() {
     let track_id = add_track(&mut app);
     for instance_id in [20u64, 21u64] {
         app.test_apply_engine_event(AudioEvent::PluginAdded {
-            track_id,
+            owner: ChainOwner::Track(track_id),
             instance_id,
             plugin_name: PLUGIN.to_owned(),
             clap_plugin_id: PLUGIN.to_owned(),

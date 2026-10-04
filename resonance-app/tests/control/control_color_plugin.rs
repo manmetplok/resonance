@@ -11,7 +11,7 @@
 
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_control::methods::bus::PluginParamsView as BusChain;
 use resonance_control::methods::plugins::{PluginCatalog, CATALOG};
 use resonance_control::methods::track::{AddPluginResult, PluginKind, PluginParamsView};
@@ -112,7 +112,7 @@ fn it_loads_on_a_track_and_takes_params_by_name() {
         .expect("an AddPlugin reached the engine");
 
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         plugin_name: "Resonance Color".to_owned(),
         clap_plugin_id: COLOR.to_owned(),
@@ -169,7 +169,7 @@ fn it_loads_on_a_bus_and_takes_params_by_name() {
     assert_eq!(added.plugin_id, COLOR);
     let instance_id = std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPluginToBus {
+            AudioCommand::AddPlugin {
                 id,
                 clap_plugin_id,
                 clap_file_path,
@@ -181,10 +181,10 @@ fn it_loads_on_a_bus_and_takes_params_by_name() {
             }
             _ => None,
         })
-        .expect("an AddPluginToBus reached the engine");
+        .expect("a bus AddPlugin reached the engine");
 
-    app.test_apply_engine_event(AudioEvent::BusPluginAdded {
-        bus_id,
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Bus(bus_id),
         instance_id,
         plugin_name: "Resonance Color".to_owned(),
         clap_plugin_id: COLOR.to_owned(),
@@ -192,6 +192,8 @@ fn it_loads_on_a_bus_and_takes_params_by_name() {
         params: params(),
         has_gui: true,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 
     let rx = app.test_capture_engine();

@@ -6,16 +6,6 @@
 use resonance_audio::MidiDeviceInfo;
 use resonance_audio::types::*;
 
-/// Which container a plugin slot belongs to. Used so the inspector's
-/// CHAIN rows and add pickers emit the right message whether they are
-/// rendering a track's, a bus's or the master's chain.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum PluginOwner {
-    Track(TrackId),
-    Bus(BusId),
-    Master,
-}
-
 /// Wrapper type for the output-destination pick_list so iced can render
 /// it via `Display` and `PartialEq`. Variants correspond 1:1 with
 /// `TrackOutput` but carry a display name for the chosen bus.

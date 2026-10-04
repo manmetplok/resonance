@@ -18,7 +18,7 @@
 use resonance_app::project::{load_project, save_project, ProjectFile};
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, TrackType};
 
 const GTR: u64 = 1;
 const BUS: u64 = 10;
@@ -35,7 +35,7 @@ fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
 
 fn add_track_plugin(app: &mut Resonance, track_id: u64, instance_id: u64) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id,
+        owner: ChainOwner::Track(track_id),
         instance_id,
         plugin_name: "EQ".to_string(),
         clap_plugin_id: EQ.to_string(),
@@ -49,8 +49,8 @@ fn add_track_plugin(app: &mut Resonance, track_id: u64, instance_id: u64) {
 }
 
 fn add_bus_plugin(app: &mut Resonance, bus_id: u64, instance_id: u64) {
-    app.test_apply_engine_event(AudioEvent::BusPluginAdded {
-        bus_id,
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Bus(bus_id),
         instance_id,
         plugin_name: "EQ".to_string(),
         clap_plugin_id: EQ.to_string(),
@@ -58,11 +58,14 @@ fn add_bus_plugin(app: &mut Resonance, bus_id: u64, instance_id: u64) {
         params: Vec::<ParamInfo>::new(),
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 }
 
 fn add_master_plugin(app: &mut Resonance, instance_id: u64) {
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id,
         plugin_name: "EQ".to_string(),
         clap_plugin_id: EQ.to_string(),
@@ -70,6 +73,8 @@ fn add_master_plugin(app: &mut Resonance, instance_id: u64) {
         params: Vec::<ParamInfo>::new(),
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 }
 

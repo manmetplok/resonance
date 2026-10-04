@@ -16,7 +16,7 @@
 
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_control::methods::track::PluginParamsView;
 use resonance_control::{ErrorKind, MutationAck, Response};
 use crate::common::call;
@@ -107,7 +107,7 @@ fn app() -> Resonance {
 }],
     });
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: DELAY,
         plugin_name: "Resonance Delay".to_owned(),
         clap_plugin_id: PLUGIN.to_owned(),
@@ -414,7 +414,7 @@ fn a_label_whose_plugin_went_away_meanwhile_is_not_found() {
     let mut app = app();
     let rx = app.test_capture_engine();
     let (replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
-    app.test_apply_engine_event(AudioEvent::PluginRemoved { track_id: TRACK, instance_id: DELAY });
+    app.test_apply_engine_event(AudioEvent::PluginRemoved { owner: ChainOwner::Track(TRACK), instance_id: DELAY });
     let revision = app.revision();
     app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: Some(0.5) });
     let error = replies.try_recv().unwrap().error.expect("the plugin is gone");
@@ -601,8 +601,8 @@ fn bus_with_delay(app: &mut Resonance) -> u64 {
             .result()
             .expect("bus.create succeeds");
     let bus_id = result.bus_id.0;
-    app.test_apply_engine_event(AudioEvent::BusPluginAdded {
-        bus_id,
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Bus(bus_id),
         instance_id: BUS_DELAY,
         plugin_name: "Resonance Delay".to_owned(),
         clap_plugin_id: PLUGIN.to_owned(),
@@ -610,6 +610,8 @@ fn bus_with_delay(app: &mut Resonance) -> u64 {
         params: params(),
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
     bus_id
 }
@@ -655,7 +657,8 @@ fn a_bus_reports_the_same_meaning_and_takes_the_same_label() {
 #[test]
 fn the_master_reports_the_same_meaning_and_takes_the_same_label() {
     let mut app = app();
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id: MASTER_DELAY,
         plugin_name: "Resonance Delay".to_owned(),
         clap_plugin_id: PLUGIN.to_owned(),
@@ -663,6 +666,8 @@ fn the_master_reports_the_same_meaning_and_takes_the_same_label() {
         params: params(),
         has_gui: false,
         has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 
     let view: resonance_control::methods::master::PluginParamsView =

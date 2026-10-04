@@ -16,40 +16,25 @@ use resonance_audio::types::PluginInstanceId;
 use resonance_control::methods::track::{self, PluginKind, PluginParamView, PluginParamsEntry};
 use resonance_control::RpcError;
 
-/// Which chain a plugin sits on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum ChainOwner {
-    Track(u64),
-    Bus(u64),
-    Master,
+/// Which chain a plugin sits on: the engine's own owner type (ARCH2-02),
+/// re-exported so the control layer keeps naming it from here.
+pub(crate) use resonance_audio::types::ChainOwner;
+
+/// The owner's `*.plugin_params` method, for retry advice.
+fn params_method(owner: ChainOwner) -> &'static str {
+    match owner {
+        ChainOwner::Track(_) => "track.plugin_params",
+        ChainOwner::Bus(_) => "bus.plugin_params",
+        ChainOwner::Master => "master.plugin_params",
+    }
 }
 
-impl ChainOwner {
-    /// The owner as a sentence fragment: "track 3", "bus 7", "the master".
-    fn on(self) -> String {
-        match self {
-            Self::Track(id) => format!("track {id}"),
-            Self::Bus(id) => format!("bus {id}"),
-            Self::Master => "the master".to_owned(),
-        }
-    }
-
-    /// The owner's `*.plugin_params` method, for retry advice.
-    fn params_method(self) -> &'static str {
-        match self {
-            Self::Track(_) => "track.plugin_params",
-            Self::Bus(_) => "bus.plugin_params",
-            Self::Master => "master.plugin_params",
-        }
-    }
-
-    /// The owner as the "vanished from ..." object.
-    fn chain_name(self) -> String {
-        match self {
-            Self::Track(id) => format!("track {id}"),
-            Self::Bus(id) => format!("bus {id}"),
-            Self::Master => "the master chain".to_owned(),
-        }
+/// The owner as the "vanished from ..." object.
+fn chain_name(owner: ChainOwner) -> String {
+    match owner {
+        ChainOwner::Track(id) => format!("track {id}"),
+        ChainOwner::Bus(id) => format!("bus {id}"),
+        ChainOwner::Master => "the master chain".to_owned(),
     }
 }
 
@@ -65,23 +50,11 @@ pub(crate) fn chain_slots(
     app: &Resonance,
     owner: ChainOwner,
 ) -> Result<&[PluginSlotState], RpcError> {
-    match owner {
-        ChainOwner::Track(id) => app
-            .registry
-            .tracks
-            .iter()
-            .find(|t| t.id == id)
-            .map(|t| t.plugins.as_slice())
-            .ok_or_else(|| no_track(id)),
-        ChainOwner::Bus(id) => app
-            .registry
-            .busses
-            .iter()
-            .find(|b| b.id == id)
-            .map(|b| b.plugins.as_slice())
-            .ok_or_else(|| no_bus(id)),
-        ChainOwner::Master => Ok(app.master.plugins.as_slice()),
-    }
+    app.chain(owner).ok_or_else(|| match owner {
+        ChainOwner::Track(id) => no_track(id),
+        ChainOwner::Bus(id) => no_bus(id),
+        ChainOwner::Master => unreachable!("the master chain always exists"),
+    })
 }
 
 /// The owner's chain as wire entries, or the owner's `not_found`.
@@ -138,7 +111,7 @@ pub(crate) fn resolve_plugin_target(
         return Err(RpcError::not_found(format!(
             "plugin {:?} vanished from {} between lookup and set",
             entry.plugin_id,
-            owner.chain_name()
+            chain_name(owner)
         )));
     };
     Ok(PluginTarget { entry, instance_id })
@@ -176,8 +149,8 @@ pub(crate) fn initializing(owner: ChainOwner, plugin_id: &str) -> RpcError {
          arrives with the engine echo, usually within a frame. Retry, or read \
          {} until its params array is non-empty. (A plugin that \
          genuinely exposes no parameters reports the same empty list.)",
-        owner.on(),
-        owner.params_method()
+        owner,
+        params_method(owner)
     ))
 }
 

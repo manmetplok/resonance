@@ -1,5 +1,7 @@
-//! Track-plugin handlers: add/remove instances, parameter writes,
-//! GUI open/close, individual + bulk state save/load. Any handler that
+//! Plugin-instance handlers: parameter writes, GUI open/close, individual
+//! + bulk state save/load, and the bundle/instance helpers the chain
+//! handlers in `chain.rs` build on (add/remove/move live there, once for
+//! every chain owner — ARCH2-02). Any handler that
 //! touches a plugin instance must `try_lock` — if the audio callback
 //! holds the lock, the command gets re-enqueued via `cmd_tx_retry` so
 //! the audio thread is never blocked.
@@ -13,7 +15,7 @@ use crate::clap_host::{ClapBundle, ClapBundleError, ParamsRefresh, PresetHostRep
 use crate::types::*;
 
 use super::external_instrument::ExternalInstruments;
-use super::thread::{HandlerCtx, HandlerState};
+use super::thread::HandlerCtx;
 
 /// Failure resolving or loading the `.clap` bundle behind a plugin add
 /// ([`ensure_bundle`] / [`resolve_plugin_id`]). Message text matches the
@@ -40,6 +42,10 @@ impl From<PluginBundleError> for EngineError {
 pub fn affects_latency(cmd: &AudioCommand) -> bool {
     matches!(
         cmd,
+        // Every owner's chain (ARCH2-02). Master-chain edits don't change
+        // per-track comp (master delays every path equally) but they feed
+        // the published master-latency figure the reference A/B monitor
+        // is aligned with (doc #260 finding #19).
         AudioCommand::AddPlugin { .. }
             | AudioCommand::RemovePlugin { .. }
             // Reordering looks latency-neutral — a chain's latency is the
@@ -47,14 +53,11 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
             // *first* plugin is the instrument: it keeps running while the
             // FX chain is bypassed, and every sub-track inherits its
             // latency (see `latency::chain_latencies`). Moving a plugin
-            // into or out of slot 0 therefore changes the comp table.
+            // into or out of slot 0 therefore changes the comp table. Bus
+            // and master chains have no structural slot 0, but the table
+            // is rebuilt per chain, and rebuilding it after a no-op
+            // reorder is cheap next to getting it wrong.
             | AudioCommand::MovePlugin { .. }
-            | AudioCommand::AddPluginToBus { .. }
-            | AudioCommand::RemovePluginFromBus { .. }
-            // Bus chains have no structural slot 0, but the comp
-            // table is rebuilt per chain, and rebuilding it after a
-            // no-op reorder is cheap next to getting it wrong.
-            | AudioCommand::MovePluginInBus { .. }
             | AudioCommand::ScanPlugins
             | AudioCommand::SetTrackOutput { .. }
             | AudioCommand::AddTrack { .. }
@@ -84,25 +87,13 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
             | AudioCommand::LoadPluginState { .. }
             | AudioCommand::LoadPluginPresetState { .. }
             | AudioCommand::LoadPluginPresetFromLocation { .. }
-            | AudioCommand::SetTrackFxBypass { .. }
-            | AudioCommand::SetBusFxBypass { .. }
+            | AudioCommand::SetFxBypass { .. }
             // Per-slot bypass: a host-bypassed slot stops running and its
             // latency leaves its chain (`latency::slot_latency`). A slot
             // that bypasses itself through its own parameter keeps its
             // latency, and the recompute is then a cheap no-op that
             // `delays_match` drops before any delay line is reset.
             | AudioCommand::SetPluginBypass { .. }
-            // Master-chain edits don't change per-track comp (master
-            // delays every path equally) but they feed the published
-            // master-latency figure the reference A/B monitor is
-            // aligned with (doc #260 finding #19).
-            | AudioCommand::AddPluginToMaster { .. }
-            | AudioCommand::RemovePluginFromMaster { .. }
-            // Reordering the master chain leaves its total latency
-            // unchanged, but rebuilding the figure after a no-op reorder
-            // is cheap next to publishing a stale one.
-            | AudioCommand::MovePluginInMaster { .. }
-            | AudioCommand::SetMasterFxBypass { .. }
     )
 }
 
@@ -459,153 +450,6 @@ pub(crate) fn release_all_plugins(shared: &super::SharedState, timeout: std::tim
             return false;
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-}
-
-pub(crate) fn handle_add_plugin(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    track_id: TrackId,
-    clap_file_path: String,
-    clap_plugin_id: String,
-    id: PluginInstanceId,
-) {
-    if reject_if_plugin_id_in_use(ctx, id, &clap_plugin_id) {
-        return;
-    }
-
-    let path = Path::new(&clap_file_path);
-
-    let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id) {
-        Ok(idx) => idx,
-        Err(reason) => {
-            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason.to_string());
-            return;
-        }
-    };
-
-    let actual_plugin_id = match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id.clone())
-    {
-        Ok(resolved) => resolved,
-        Err(reason) => {
-            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason.to_string());
-            return;
-        }
-    };
-
-    let plugin_name = state.bundles[bundle_idx]
-        .descriptors()
-        .iter()
-        .find(|d| d.id == actual_plugin_id)
-        .map(|d| d.name.clone())
-        .unwrap_or_else(|| actual_plugin_id.clone());
-
-    match state.bundles[bundle_idx].create_instance(&actual_plugin_id, ctx.sample_rate) {
-        Ok(instance) => {
-            let instance_id = id;
-
-            // Query params + has_gui + output port layout before moving
-            // instance into shared map.
-            let params = instance.query_params();
-            let has_gui = instance.has_gui();
-            let has_sidechain_input = instance.has_sidechain_input();
-            let output_port_count = instance.output_port_count();
-            let output_port_names = instance.output_port_names();
-
-            // Publish the slot first, then name it on the chain: a block
-            // between the two sees the slot unused, never a chain id with
-            // no instance behind it.
-            let slot = Arc::new(crate::clap_host::PluginSlot::new(instance));
-            ctx.shared.edit_plugins(|plugins| plugins.insert(instance_id, slot));
-
-            // `push_plugin` publishes the new chain via `ArcSwap::store`
-            // (shared by every copy of the track), so no render-graph
-            // publish — the audio thread is not blocked by the edit.
-            if let Some(track) = ctx.tracks().get(&track_id) {
-                ctx.shared.retired.retire(track.push_plugin(instance_id));
-            }
-
-            let _ = ctx.event_tx.send(AudioEvent::PluginAdded {
-                track_id,
-                instance_id,
-                plugin_name,
-                clap_plugin_id: actual_plugin_id,
-                clap_file_path,
-                params,
-                has_gui,
-                has_sidechain_input,
-                output_port_count,
-                output_port_names,
-            });
-        }
-        Err(e) => report_plugin_load_failure(
-            ctx,
-            Some(id),
-            &actual_plugin_id,
-            &clap_file_path,
-            format!("Failed to create plugin instance: {}", e),
-        ),
-    }
-}
-
-pub(crate) fn handle_remove_plugin(
-    ctx: &HandlerCtx,
-    track_id: TrackId,
-    instance_id: PluginInstanceId,
-) {
-    // `retain_plugins` publishes a new chain via `ArcSwap::store` (shared
-    // by every copy of the track), so reading the published track map is
-    // enough — no render-graph publish, and the audio thread is never
-    // blocked on the chain edit.
-    if let Some(track) = ctx.tracks().get(&track_id) {
-        ctx.shared
-            .retired
-            .retire(track.retain_plugins(|&id| id != instance_id));
-    }
-    // Unpublish the instance. The slot is retired, not dropped: the
-    // engine loop's sweep destroys it once no block pins it (B-4).
-    remove_plugin_slots(ctx.shared, &[instance_id]);
-    let _ = ctx.event_tx.send(AudioEvent::PluginRemoved {
-        track_id,
-        instance_id,
-    });
-}
-
-pub(crate) fn handle_move_plugin(
-    ctx: &HandlerCtx,
-    track_id: TrackId,
-    instance_id: PluginInstanceId,
-    to_index: usize,
-) {
-    // Same shape as `handle_remove_plugin`: `move_plugin` builds the
-    // reordered Vec here on the engine thread and publishes it with one
-    // `ArcSwap::store`, so reading the published track map is enough. The
-    // audio thread is never blocked on the edit and never allocates, and
-    // no lock is held across a `process()` call — the plugin instances
-    // themselves are untouched, only the order they are visited in.
-    let moved = ctx
-        .tracks()
-        .get(&track_id)
-        .and_then(|track| {
-            track.move_plugin_into(instance_id, to_index, |old| ctx.shared.retired.retire(old))
-        });
-    match moved {
-        // Report the *clamped* index so the app mirrors what the engine
-        // actually did rather than what was requested.
-        Some(to_index) => {
-            let _ = ctx.event_tx.send(AudioEvent::PluginMoved {
-                track_id,
-                instance_id,
-                to_index,
-            });
-        }
-        None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::not_found(format!(
-                "Cannot reorder plugin {} on track {}: no such track, or that \
-                 plugin is not on its chain",
-                instance_id, track_id
-            ))));
-        }
     }
 }
 

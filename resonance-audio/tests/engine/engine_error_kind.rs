@@ -7,7 +7,7 @@
 //! would branch on — not just that *an* error fired.
 
 use resonance_audio::test_support::{EngineHandlerHarness, MAX_BUSSES};
-use resonance_audio::types::{AudioEvent, EngineErrorKind};
+use resonance_audio::types::{AudioEvent, ChainOwner, EngineErrorKind};
 
 fn error_kind(events: &[AudioEvent]) -> Option<EngineErrorKind> {
     events.iter().find_map(|e| match e {
@@ -17,12 +17,12 @@ fn error_kind(events: &[AudioEvent]) -> Option<EngineErrorKind> {
 }
 
 /// Reordering a plugin instance the master chain doesn't have is a
-/// `NotFound` (`engine/master.rs::handle_move_plugin_in_master`), not the
+/// `NotFound` (`engine/chain.rs::handle_move_plugin`), not the
 /// historical bare string.
 #[test]
 fn unknown_plugin_on_master_reorder_is_not_found() {
     let mut harness = EngineHandlerHarness::new();
-    harness.move_plugin_in_master(9999, 0);
+    harness.move_plugin(ChainOwner::Master, 9999, 0);
     let events = harness.drain_events();
     assert_eq!(
         error_kind(&events),

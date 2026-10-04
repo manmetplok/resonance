@@ -391,9 +391,6 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             target_track_id,
             clip,
         } => tracks::bounce_completed(r, source_track_id, target_track_id, clip),
-        E::TrackFxBypassChanged { track_id, bypassed } => {
-            tracks::fx_bypass_changed(r, track_id, bypassed)
-        }
         // External-instrument playback source echo (doc #257): mirror
         // the engine-owned mode into the track state, whether it came
         // from the inspector toggle or the auto-switch after a take.
@@ -402,9 +399,6 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         }
         E::BusAdded { bus_id, name } => tracks::bus_added(r, bus_id, name),
         E::BusRemoved { bus_id } => tracks::bus_removed_echo(r, bus_id),
-        E::BusFxBypassChanged { bus_id, bypassed } => {
-            tracks::bus_fx_bypass_changed(r, bus_id, bypassed)
-        }
 
         // Aux send / return-bus events. Mirrored into app state purely
         // from these events (todo #478) — the engine-side data model,
@@ -428,9 +422,9 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             reason,
         } => aux_sends::send_rejected(r, source, dest, reason),
 
-        // Plugin lifecycle
+        // Plugin lifecycle, on every chain owner (ARCH2-02)
         E::PluginAdded {
-            track_id,
+            owner,
             instance_id,
             plugin_name,
             clap_plugin_id,
@@ -441,9 +435,9 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             output_port_count,
             output_port_names,
         } => {
-            plugins::track_added(
+            plugins::added(
                 r,
-                track_id,
+                owner,
                 instance_id,
                 plugin_name,
                 clap_plugin_id,
@@ -456,15 +450,13 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             );
             automation::sync_preset_ignored_params(r, instance_id, false);
         }
-        E::PluginRemoved {
-            track_id,
-            instance_id,
-        } => plugins::track_removed_echo(r, track_id, instance_id),
+        E::PluginRemoved { owner, instance_id } => plugins::removed_echo(r, owner, instance_id),
         E::PluginMoved {
-            track_id,
+            owner,
             instance_id,
             to_index,
-        } => plugins::track_moved(r, track_id, instance_id, to_index),
+        } => plugins::moved(r, owner, instance_id, to_index),
+        E::FxBypassChanged { owner, bypassed } => plugins::fx_bypass_changed(r, owner, bypassed),
         E::PluginsScanned { plugins } => plugins::scanned(r, plugins),
         E::PluginLoadFailed {
             instance_id,
@@ -532,67 +524,6 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             open,
             failure,
         } => plugins::editor_state(r, instance_id, open, failure),
-        E::BusPluginAdded {
-            bus_id,
-            instance_id,
-            plugin_name,
-            clap_plugin_id,
-            clap_file_path,
-            params,
-            has_gui,
-            has_sidechain_input,
-        } => {
-            plugins::bus_added(
-                r,
-                bus_id,
-                instance_id,
-                plugin_name,
-                clap_plugin_id,
-                clap_file_path,
-                params,
-                has_gui,
-                has_sidechain_input,
-            );
-            automation::sync_preset_ignored_params(r, instance_id, false);
-        }
-        E::BusPluginRemoved {
-            bus_id,
-            instance_id,
-        } => plugins::bus_removed_echo(r, bus_id, instance_id),
-        E::BusPluginMoved {
-            bus_id,
-            instance_id,
-            to_index,
-        } => plugins::bus_moved(r, bus_id, instance_id, to_index),
-        E::MasterPluginAdded {
-            instance_id,
-            plugin_name,
-            clap_plugin_id,
-            clap_file_path,
-            params,
-            has_gui,
-            has_sidechain_input,
-        } => {
-            plugins::master_added(
-                r,
-                instance_id,
-                plugin_name,
-                clap_plugin_id,
-                clap_file_path,
-                params,
-                has_gui,
-                has_sidechain_input,
-            );
-            automation::sync_preset_ignored_params(r, instance_id, false);
-        }
-        E::MasterPluginRemoved { instance_id } => plugins::master_removed_echo(r, instance_id),
-        E::MasterPluginMoved {
-            instance_id,
-            to_index,
-        } => plugins::master_moved(r, instance_id, to_index),
-        E::MasterFxBypassChanged { bypassed } => {
-            plugins::master_fx_bypass_changed(r, bypassed)
-        }
         // Per-slot bypass echo (ba doc #275 finding X3). The engine half
         // (todo #1304) is complete and reachable over
         // `AudioCommand::SetPluginBypass`; the GUI toggle, project

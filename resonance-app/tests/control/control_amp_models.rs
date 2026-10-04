@@ -15,6 +15,7 @@ use resonance_control::methods::amp_models::{
 use resonance_control::ErrorKind;
 
 use crate::common::call;
+use resonance_audio::types::ChainOwner;
 
 /// A fresh root with three models (two A1 captures and an LSTM, the third
 /// a Tone3000 download with its sidecar) and an app pointed at it. No
@@ -228,7 +229,7 @@ fn with_amp_on_a_track(app: &mut Resonance) {
         }],
     });
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: 1,
+        owner: ChainOwner::Track(1),
         instance_id: 30,
         plugin_name: "Resonance Amp".to_owned(),
         clap_plugin_id: "com.resonance.amp".to_owned(),

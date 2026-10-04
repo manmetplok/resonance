@@ -20,7 +20,7 @@ pub type SamplePos = u64;
 /// Unlike [`TrackId`] above, this space has no engine-vs-app partition:
 /// the app allocates every plugin instance id (`Resonance::allocate_plugin_id`)
 /// and the engine only ever honours the one it is given — an
-/// `AudioCommand::AddPlugin`/`AddPluginToBus`/`AddPluginToMaster` carries a
+/// `AudioCommand::AddPlugin` (for any [`ChainOwner`]) carries a
 /// concrete `id`, not an optional hint, and the add is rejected with
 /// `EngineError::internal` if that id is already live (ARCH-04 D-1,
 /// `refactor-intent.md` Epic D). There is no base to name here because
@@ -114,6 +114,7 @@ impl TrackType {
 }
 
 mod aux_send;
+mod chain_owner;
 pub mod sidechain;
 mod clip;
 mod commands;
@@ -131,6 +132,7 @@ mod track;
 mod vocal_tuning;
 
 pub use aux_send::{aux_send_would_cycle, AuxSend, SendSource};
+pub use chain_owner::ChainOwner;
 pub use sidechain::{SidechainRoute, SidechainTaps, MAX_SIDECHAIN_SOURCES};
 pub use clip::{
     audio_clip_covers, compute_waveform_peaks, move_note_resorted, AudioClip, ClipSource,

@@ -473,15 +473,14 @@ pub enum PluginCustomState {
     Generic,
 }
 
-/// Where a `PluginSlotState` currently lives in the GUI's state tree.
-/// Used by `Resonance::plugin_index` to skip the linear scan over
-/// tracks → busses → master in `with_plugin_mut`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginLocator {
-    Track(TrackId),
-    Bus(BusId),
-    Master,
-}
+/// Where a `PluginSlotState` currently lives in the GUI's state tree —
+/// the engine's own [`ChainOwner`], re-exported so the app, the engine
+/// commands and events, the control layer and the mixer views all name a
+/// chain with one type (code review ARCH2-02; this used to be the app's
+/// `PluginLocator`, one of four copies). Used by `Resonance::plugin_index`
+/// to skip the linear scan over tracks → busses → master in
+/// `with_plugin_mut`.
+pub use resonance_audio::types::ChainOwner;
 
 /// Tracks + busses + id counters. Central registry that handlers borrow to
 /// mutate track/bus/plugin state without touching the rest of `Resonance`.

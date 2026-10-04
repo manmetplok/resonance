@@ -8,15 +8,14 @@ use std::rc::Rc;
 
 use iced::widget::{column, pick_list, row, text, Space};
 use iced::{alignment, Element, Length};
-use resonance_audio::types::ScannedPlugin;
+use resonance_audio::types::{ChainOwner, ScannedPlugin};
 
 use crate::message::{
-    MasterMessage, Message, PluginMessage, PresetAddOwner, PresetUiMessage, ProjectIoMessage,
+    MasterMessage, Message, PluginMessage, PresetUiMessage, ProjectIoMessage,
 };
 use crate::state::MixerInspectorGroup;
 use crate::theme;
 use crate::view::mixer::automation::AutoChan;
-use crate::view::mixer::picks::PluginOwner;
 
 pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
     let title_row = row![
@@ -95,7 +94,7 @@ fn chain_group(r: &crate::Resonance, collapsed: bool) -> Element<'static, Messag
 
     col = col.push(super::chain::chain_rows(
         r,
-        PluginOwner::Master,
+        ChainOwner::Master,
         &r.master.plugins,
         None,
     ));
@@ -120,7 +119,7 @@ fn chain_group(r: &crate::Resonance, collapsed: bool) -> Element<'static, Messag
                 None::<crate::state::presets::PresetAddPick>,
                 |pick| {
                     Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::AddWithPreset {
-                        owner: PresetAddOwner::Master,
+                        owner: ChainOwner::Master,
                         pick,
                     }))
                 },

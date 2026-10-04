@@ -175,7 +175,7 @@ pub struct ProjectIoState {
 /// late echo of the live delete would remove it again.
 ///
 /// A track's own removal-owed flag (`track_removal_owed`) also gates its
-/// *scalar* echoes (`TrackFxBypassChanged`, `TrackPlaybackSourceChanged`,
+/// *scalar* echoes (a track's `FxBypassChanged`, `TrackPlaybackSourceChanged`,
 /// FU-A13i): one sent to the old incarnation of an id can otherwise land
 /// after a later restore re-added a fresh track under that id and
 /// overwrite the value the restore just set, since neither carries an

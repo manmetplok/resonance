@@ -46,7 +46,7 @@ pub struct PluginMirror {
     /// at each add/remove site, and wholesale via `rebuild_plugin_index`
     /// after seed / replay. Replaces the O(tracks × plugins) scan that
     /// `with_plugin_mut` did pre-index.
-    pub index: std::collections::HashMap<PluginInstanceId, crate::state::PluginLocator>,
+    pub index: std::collections::HashMap<PluginInstanceId, crate::state::ChainOwner>,
 
     /// Next plugin instance id the app will hand the engine — every
     /// plugin add now allocates from here (ARCH-04 D-1), not only a

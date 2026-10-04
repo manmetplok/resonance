@@ -7,7 +7,7 @@
 
 use resonance_app::state::{PluginAvailability, PluginSlotState};
 use resonance_app::Resonance;
-use resonance_audio::types::{
+use resonance_audio::types::{ChainOwner, 
     AudioCommand, AudioEvent, ChainProbeReport, ProbeSpec, ProbeStage, ProbedStage, TrackType,
 };
 use resonance_control::job::{JobStarted, JobState, JobStatus};
@@ -190,7 +190,7 @@ fn bypassed_and_missing_slots_are_skipped_and_listed() {
 #[test]
 fn a_chain_bypass_skips_every_insert() {
     let (mut app, cmd_rx) = capture_app();
-    app.test_apply_engine_event(AudioEvent::MasterFxBypassChanged { bypassed: true });
+    app.test_apply_engine_event(AudioEvent::FxBypassChanged { owner: ChainOwner::Master, bypassed: true });
     let mut master = slot(30, "com.resonance.mastering");
     master.bypassed = false;
     app.test_push_master_plugin(master);

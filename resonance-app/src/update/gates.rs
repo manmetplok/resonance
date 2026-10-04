@@ -494,7 +494,7 @@ impl crate::Resonance {
         &self,
         instance_id: resonance_audio::types::PluginInstanceId,
     ) -> Option<resonance_audio::types::TrackId> {
-        if let Some(crate::state::PluginLocator::Track(track_id)) =
+        if let Some(crate::state::ChainOwner::Track(track_id)) =
             self.plugin_mirror.index.get(&instance_id).copied()
         {
             return Some(track_id);

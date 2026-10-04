@@ -123,7 +123,7 @@ fn the_mastering_saturator_in_tape_mode_shows_h2_and_the_live_instance_is_untouc
     let path = path.canonicalize().unwrap().to_string_lossy().into_owned();
     let mut harness = EngineHandlerHarness::new();
     harness.add_track(1, None);
-    harness.add_plugin(1, path.clone(), "com.resonance.mastering".into(), 100);
+    harness.add_plugin(ChainOwner::Track(1), path.clone(), "com.resonance.mastering".into(), 100);
     harness.drain_events();
 
     // Configure the LIVE instance: saturator on, full Tape character.

@@ -9,7 +9,7 @@
 
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_common::factory_presets::FactoryPresetEntry;
 use resonance_control::ids::TrackId as ProtoTrackId;
 use resonance_control::methods::plugin_preset::{
@@ -597,7 +597,7 @@ const EMPTY_TRACK: u64 = 82;
 
 fn echo_added(app: &mut Resonance, instance_id: u64) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: EMPTY_TRACK,
+        owner: ChainOwner::Track(EMPTY_TRACK),
         instance_id,
         plugin_name: "Test Synth".to_owned(),
         clap_plugin_id: PLUGIN_ID.to_owned(),

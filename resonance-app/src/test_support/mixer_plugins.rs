@@ -7,7 +7,7 @@ use crate::state;
 use crate::Resonance;
 
 /// Which plugin chain a [`Resonance::test_chain_move_affordances`] query
-/// is about. Mirrors the view's private `PluginOwner` so a test can name
+/// is about. Mirrors the view's private `ChainOwner` so a test can name
 /// a chain without the whole mixer view module going public.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
@@ -239,7 +239,7 @@ impl Resonance {
         let instance_id = plugin.instance_id;
         if let Some(track) = self.registry.tracks.iter_mut().find(|t| t.id == track_id) {
             track.plugins.push(plugin);
-            self.insert_plugin_index(instance_id, state::PluginLocator::Track(track_id));
+            self.insert_plugin_index(instance_id, state::ChainOwner::Track(track_id));
         }
     }
 
@@ -287,7 +287,7 @@ impl Resonance {
         let instance_id = plugin.instance_id;
         if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id) {
             bus.plugins.push(plugin);
-            self.insert_plugin_index(instance_id, state::PluginLocator::Bus(bus_id));
+            self.insert_plugin_index(instance_id, state::ChainOwner::Bus(bus_id));
         }
     }
 
@@ -296,7 +296,7 @@ impl Resonance {
     pub fn test_push_master_plugin(&mut self, plugin: state::PluginSlotState) {
         let instance_id = plugin.instance_id;
         self.master.plugins.push(plugin);
-        self.insert_plugin_index(instance_id, state::PluginLocator::Master);
+        self.insert_plugin_index(instance_id, state::ChainOwner::Master);
     }
 
     /// Test-only: park an opaque CLAP state blob against an instance,
@@ -419,14 +419,14 @@ impl Resonance {
         &self,
         chain: TestChain,
     ) -> Vec<(Option<crate::message::Message>, Option<crate::message::Message>)> {
-        use crate::view::mixer::picks::PluginOwner;
-        let (owner, slots): (PluginOwner, Vec<_>) = match chain {
+        use crate::state::ChainOwner;
+        let (owner, slots): (ChainOwner, Vec<_>) = match chain {
             TestChain::Track(track_id) => {
                 let Some(t) = self.registry.tracks.iter().find(|t| t.id == track_id) else {
                     return Vec::new();
                 };
                 (
-                    PluginOwner::Track(track_id),
+                    ChainOwner::Track(track_id),
                     t.plugins.iter().map(|p| p.instance_id).collect(),
                 )
             }
@@ -435,12 +435,12 @@ impl Resonance {
                     return Vec::new();
                 };
                 (
-                    PluginOwner::Bus(bus_id),
+                    ChainOwner::Bus(bus_id),
                     b.plugins.iter().map(|p| p.instance_id).collect(),
                 )
             }
             TestChain::Master => (
-                PluginOwner::Master,
+                ChainOwner::Master,
                 self.master.plugins.iter().map(|p| p.instance_id).collect(),
             ),
         };

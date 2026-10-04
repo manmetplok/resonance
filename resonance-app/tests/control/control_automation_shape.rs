@@ -9,7 +9,7 @@
 use crate::common::call;
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_control::methods::automation::{
     AutomationCurve, AutomationValue, LaneEditResult, LaneView, LanesResult,
 };
@@ -43,7 +43,7 @@ fn app() -> Resonance {
         }],
     });
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: SYNTH,
         plugin_name: "Wavetable".to_owned(),
         clap_plugin_id: "com.resonance.wavetable".to_owned(),

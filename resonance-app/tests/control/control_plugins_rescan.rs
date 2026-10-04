@@ -15,7 +15,7 @@
 use resonance_app::message::{Message, PluginMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::types::{
+use resonance_audio::types::{ChainOwner, 
     AudioCommand, AudioEvent, ParamInfo, PluginScanFailure, ScannedPlugin, TrackType,
 };
 use resonance_control::methods::plugins::PluginCatalog;
@@ -148,7 +148,7 @@ fn a_rescan_leaves_an_instantiated_plugin_alone() {
     let mut app = app();
     // A plugin on a track, with its parameters mirrored.
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: REVERB,
         plugin_name: "Resonance Reverb".to_owned(),
         clap_plugin_id: "com.resonance.reverb".to_owned(),

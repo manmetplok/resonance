@@ -40,7 +40,7 @@
 
 use resonance_audio::types::{AudioCommand, PluginInstanceId, ScannedPlugin};
 
-use crate::state::{PluginLocator, PluginSlotState};
+use crate::state::{ChainOwner, PluginSlotState};
 use crate::Resonance;
 
 /// What a replace turns out to mean for a given slot.
@@ -70,8 +70,8 @@ pub(crate) fn classify(
     instance_id: PluginInstanceId,
     new_clap_plugin_id: &str,
 ) -> Option<ReplaceKind> {
-    let (locator, index) = locate_slot(r, instance_id)?;
-    let slot = chain(r, locator)?.get(index)?;
+    let (owner, index) = locate_slot(r, instance_id)?;
+    let slot = r.chain(owner)?.get(index)?;
     Some(
         match (
             slot.clap_plugin_id == new_clap_plugin_id,
@@ -94,12 +94,12 @@ pub(crate) fn replace_plugin_slot(
     plugin: ScannedPlugin,
 ) -> Option<ReplaceKind> {
     let kind = classify(r, instance_id, &plugin.clap_plugin_id)?;
-    let (locator, index) = locate_slot(r, instance_id)?;
+    let (owner, index) = locate_slot(r, instance_id)?;
     match kind {
         ReplaceKind::AlreadyLoaded => {}
-        ReplaceKind::Relocate => relocate(r, instance_id, locator, plugin),
+        ReplaceKind::Relocate => relocate(r, instance_id, owner, plugin),
         ReplaceKind::Swap => {
-            swap(r, instance_id, locator, index, plugin);
+            swap(r, instance_id, owner, index, plugin);
         }
     }
     Some(kind)
@@ -119,7 +119,7 @@ pub(crate) fn replace_plugin_slot(
 fn relocate(
     r: &mut Resonance,
     instance_id: PluginInstanceId,
-    locator: PluginLocator,
+    owner: ChainOwner,
     plugin: ScannedPlugin,
 ) {
     let clap_file_path = plugin.clap_file_path.clone();
@@ -129,12 +129,12 @@ fn relocate(
         // has been showing whatever the project file recorded.
         slot.plugin_name = plugin.name.clone();
     });
-    let _ = r.engine.send(add_command(
-        locator,
-        &plugin.clap_plugin_id,
-        &clap_file_path,
-        instance_id,
-    ));
+    let _ = r.engine.send(AudioCommand::AddPlugin {
+        owner,
+        clap_file_path,
+        clap_plugin_id: plugin.clap_plugin_id,
+        id: instance_id,
+    });
 }
 
 /// Put a *different* plugin in the slot's position.
@@ -151,7 +151,7 @@ fn relocate(
 fn swap(
     r: &mut Resonance,
     old_id: PluginInstanceId,
-    locator: PluginLocator,
+    owner: ChainOwner,
     index: usize,
     plugin: ScannedPlugin,
 ) -> PluginInstanceId {
@@ -160,11 +160,14 @@ fn swap(
     // Drop the outgoing instance first. For a missing plugin the engine
     // has nothing to drop and this is only its echo; for a live one it
     // is what stops the plugin processing.
-    let _ = r.engine.send(remove_command(locator, old_id));
+    let _ = r.engine.send(AudioCommand::RemovePlugin {
+        owner,
+        instance_id: old_id,
+    });
     // The removal is mirrored below, so its echo is owed, as on a live
     // delete: an undo landing before it re-adds `old_id`, and the late
     // echo must not drop that slot (and its lanes) again (A-13h). The
-    // engine echoes every `RemovePlugin*`, a missing instance included,
+    // engine echoes every `RemovePlugin`, a missing instance included,
     // so the debt always settles.
     r.io.restore_echoes.expect_plugin_removed(old_id);
 
@@ -180,15 +183,9 @@ fn swap(
     // id, which the replacement does not inherit (automation-control-api
     // D1). Undo of the swap brings them back with the old slot.
     crate::engine_events::plugins::drop_plugin_lanes(r, old_id);
-    if r.sidechain.clear_plugin(old_id) && !matches!(locator, PluginLocator::Track(_)) {
-        // The engine drops a key route itself on `RemovePlugin`, but not
-        // on the bus/master removals — same asymmetry
-        // `engine_events::plugins::drop_route_onto_removed_chain_plugin`
-        // exists for.
-        let _ = r
-            .engine
-            .send(AudioCommand::ClearSidechainRoute { plugin: old_id });
-    }
+    // Its key route: the engine drops it itself on `RemovePlugin`, for
+    // every owner (ARCH2-02), so only the mirror is pruned here.
+    r.sidechain.clear_plugin(old_id);
     // The replacement takes the outgoing slot's focus (it sits in the
     // same place); the window closes, as it shows the old instance.
     let was_focused = r.ui.mixer.focused_slot == Some(old_id);
@@ -205,20 +202,24 @@ fn swap(
         Vec::new(),
         false,
     );
-    if let Some(chain) = chain_mut(r, locator) {
+    if let Some(chain) = r.chain_mut(owner) {
         chain[index] = replacement;
     }
     r.remove_plugin_index(old_id);
-    r.insert_plugin_index(new_id, locator);
+    r.insert_plugin_index(new_id, owner);
 
-    let _ = r.engine.send(add_command(
-        locator,
-        &plugin.clap_plugin_id,
-        &plugin.clap_file_path,
-        new_id,
-    ));
-    if let Some(to_index) = live_index(r, locator, index) {
-        let _ = r.engine.send(move_command(locator, new_id, to_index));
+    let _ = r.engine.send(AudioCommand::AddPlugin {
+        owner,
+        clap_file_path: plugin.clap_file_path,
+        clap_plugin_id: plugin.clap_plugin_id,
+        id: new_id,
+    });
+    if let Some(to_index) = live_index(r, owner, index) {
+        let _ = r.engine.send(AudioCommand::MovePlugin {
+            owner,
+            instance_id: new_id,
+            to_index,
+        });
     }
     new_id
 }
@@ -227,134 +228,29 @@ fn swap(
 pub(crate) fn locate_slot(
     r: &Resonance,
     instance_id: PluginInstanceId,
-) -> Option<(PluginLocator, usize)> {
+) -> Option<(ChainOwner, usize)> {
     let position =
         |chain: &[PluginSlotState]| chain.iter().position(|p| p.instance_id == instance_id);
     for track in &r.registry.tracks {
         if let Some(i) = position(&track.plugins) {
-            return Some((PluginLocator::Track(track.id), i));
+            return Some((ChainOwner::Track(track.id), i));
         }
     }
     for bus in &r.registry.busses {
         if let Some(i) = position(&bus.plugins) {
-            return Some((PluginLocator::Bus(bus.id), i));
+            return Some((ChainOwner::Bus(bus.id), i));
         }
     }
-    position(&r.master.plugins).map(|i| (PluginLocator::Master, i))
-}
-
-fn chain(r: &Resonance, locator: PluginLocator) -> Option<&[PluginSlotState]> {
-    match locator {
-        PluginLocator::Track(track_id) => r
-            .registry
-            .tracks
-            .iter()
-            .find(|t| t.id == track_id)
-            .map(|t| t.plugins.as_slice()),
-        PluginLocator::Bus(bus_id) => r
-            .registry
-            .busses
-            .iter()
-            .find(|b| b.id == bus_id)
-            .map(|b| b.plugins.as_slice()),
-        PluginLocator::Master => Some(r.master.plugins.as_slice()),
-    }
-}
-
-fn chain_mut(r: &mut Resonance, locator: PluginLocator) -> Option<&mut Vec<PluginSlotState>> {
-    match locator {
-        PluginLocator::Track(track_id) => r
-            .registry
-            .tracks
-            .iter_mut()
-            .find(|t| t.id == track_id)
-            .map(|t| &mut t.plugins),
-        PluginLocator::Bus(bus_id) => r
-            .registry
-            .busses
-            .iter_mut()
-            .find(|b| b.id == bus_id)
-            .map(|b| &mut b.plugins),
-        PluginLocator::Master => Some(&mut r.master.plugins),
-    }
+    position(&r.master.plugins).map(|i| (ChainOwner::Master, i))
 }
 
 /// The engine-side index that corresponds to app-chain index `index`.
 ///
-/// Just [`plugin_chain::engine_slot_index`] against this locator's
+/// Just [`plugin_chain::engine_slot_index`] against this owner's
 /// chain. The translation rule lives there rather than here because
 /// `engine_events::plugins` needs the same answer when a missing plugin
 /// comes back, and two copies of a rule that must agree is how they
 /// drift apart.
-fn live_index(r: &Resonance, locator: PluginLocator, index: usize) -> Option<usize> {
-    Some(crate::plugin_chain::engine_slot_index(
-        chain(r, locator)?,
-        index,
-    ))
-}
-
-fn add_command(
-    locator: PluginLocator,
-    clap_plugin_id: &str,
-    clap_file_path: &str,
-    id: PluginInstanceId,
-) -> AudioCommand {
-    let clap_plugin_id = clap_plugin_id.to_owned();
-    let clap_file_path = clap_file_path.to_owned();
-    match locator {
-        PluginLocator::Track(track_id) => AudioCommand::AddPlugin {
-            track_id,
-            clap_file_path,
-            clap_plugin_id,
-            id,
-        },
-        PluginLocator::Bus(bus_id) => AudioCommand::AddPluginToBus {
-            bus_id,
-            clap_file_path,
-            clap_plugin_id,
-            id,
-        },
-        PluginLocator::Master => AudioCommand::AddPluginToMaster {
-            clap_file_path,
-            clap_plugin_id,
-            id,
-        },
-    }
-}
-
-fn remove_command(locator: PluginLocator, instance_id: PluginInstanceId) -> AudioCommand {
-    match locator {
-        PluginLocator::Track(track_id) => AudioCommand::RemovePlugin {
-            track_id,
-            instance_id,
-        },
-        PluginLocator::Bus(bus_id) => AudioCommand::RemovePluginFromBus {
-            bus_id,
-            instance_id,
-        },
-        PluginLocator::Master => AudioCommand::RemovePluginFromMaster { instance_id },
-    }
-}
-
-fn move_command(
-    locator: PluginLocator,
-    instance_id: PluginInstanceId,
-    to_index: usize,
-) -> AudioCommand {
-    match locator {
-        PluginLocator::Track(track_id) => AudioCommand::MovePlugin {
-            track_id,
-            instance_id,
-            to_index,
-        },
-        PluginLocator::Bus(bus_id) => AudioCommand::MovePluginInBus {
-            bus_id,
-            instance_id,
-            to_index,
-        },
-        PluginLocator::Master => AudioCommand::MovePluginInMaster {
-            instance_id,
-            to_index,
-        },
-    }
+fn live_index(r: &Resonance, owner: ChainOwner, index: usize) -> Option<usize> {
+    Some(crate::plugin_chain::engine_slot_index(r.chain(owner)?, index))
 }

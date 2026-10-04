@@ -1,9 +1,9 @@
-//! Plugin command dispatch: add/remove/param/editor/state/scan.
+//! Plugin command dispatch: chain edits (any owner), param/editor/state/scan.
 
 use crate::types::*;
 
 use super::super::{HandlerCtx, HandlerState};
-use super::super::super::{plugins, scan};
+use super::super::super::{chain, plugins, scan};
 
 pub(super) fn dispatch_plugins(
     ctx: &HandlerCtx,
@@ -12,30 +12,22 @@ pub(super) fn dispatch_plugins(
 ) {
     match cmd {
         AudioCommand::AddPlugin {
-            track_id,
+            owner,
             clap_file_path,
             clap_plugin_id,
             id,
-        } => plugins::handle_add_plugin(
-            ctx,
-            state,
-            track_id,
-            clap_file_path,
-            clap_plugin_id,
-            id,
-        ),
-        AudioCommand::RemovePlugin {
-            track_id,
-            instance_id,
-        } => {
-            plugins::handle_remove_plugin(ctx, track_id, instance_id);
-            crate::engine::sidechain::drop_plugin_route(ctx, state, instance_id);
+        } => chain::handle_add_plugin(ctx, state, owner, clap_file_path, clap_plugin_id, id),
+        AudioCommand::RemovePlugin { owner, instance_id } => {
+            chain::handle_remove_plugin(ctx, state, owner, instance_id)
         }
         AudioCommand::MovePlugin {
-            track_id,
+            owner,
             instance_id,
             to_index,
-        } => plugins::handle_move_plugin(ctx, track_id, instance_id, to_index),
+        } => chain::handle_move_plugin(ctx, owner, instance_id, to_index),
+        AudioCommand::SetFxBypass { owner, bypassed } => {
+            chain::handle_set_fx_bypass(ctx, owner, bypassed)
+        }
         AudioCommand::ScanPlugins => {
             scan::scan_plugins(ctx.shared, &ctx.tracks(), &mut state.bundles, ctx.event_tx)
         }

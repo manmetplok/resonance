@@ -10,7 +10,7 @@
 
 use resonance_app::state::{PluginSlotState, TrackState};
 use resonance_app::Resonance;
-use resonance_audio::types::AudioEvent;
+use resonance_audio::types::{ChainOwner, AudioEvent};
 
 fn slot(instance_id: u64) -> PluginSlotState {
     PluginSlotState::new(
@@ -46,7 +46,7 @@ fn chain(app: &Resonance) -> Vec<u64> {
 
 fn moved(instance_id: u64, to_index: usize) -> AudioEvent {
     AudioEvent::PluginMoved {
-        track_id: 1,
+        owner: ChainOwner::Track(1),
         instance_id,
         to_index,
     }
@@ -89,7 +89,7 @@ fn unknown_instance_or_track_is_ignored() {
     assert_eq!(chain(&app), vec![10, 20, 30]);
 
     app.test_apply_engine_event(AudioEvent::PluginMoved {
-        track_id: 42,
+        owner: ChainOwner::Track(42),
         instance_id: 10,
         to_index: 2,
     });

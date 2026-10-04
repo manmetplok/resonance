@@ -11,11 +11,11 @@ use crate::common;
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::commands::CommandId;
-use resonance_app::message::{Message, PluginMessage, PresetAddOwner, PresetUiMessage, UiMessage};
+use resonance_app::message::{Message, PluginMessage, PresetUiMessage, UiMessage};
 use resonance_app::state::presets::PresetAddPick;
 use resonance_app::state::{Overlay, PluginSlotState, ViewMode};
 use resonance_app::{theme, Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{AudioCommand, AudioEvent, ChainOwner, ParamInfo, ScannedPlugin, TrackType};
 use resonance_common::factory_presets::FactoryPresetEntry;
 use resonance_plugin::presets::PresetSource as PluginPresetSource;
 
@@ -269,7 +269,7 @@ fn adding_with_a_preset_loads_it_when_the_plugin_arrives() {
     ui(
         &mut app,
         PresetUiMessage::AddWithPreset {
-            owner: PresetAddOwner::Track(TRACK),
+            owner: ChainOwner::Track(TRACK),
             pick: PresetAddPick {
                 plugin: scanned(),
                 preset_id: "bright".into(),
@@ -279,7 +279,7 @@ fn adding_with_a_preset_loads_it_when_the_plugin_arrives() {
         },
     );
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: next,
         plugin_name: "Test EQ".to_owned(),
         clap_plugin_id: PLUGIN_ID.to_owned(),
@@ -656,7 +656,7 @@ fn removing_the_plugin_closes_its_browser_without_a_revert() {
     let bright = row_index(&app, "bright");
     ui(&mut app, PresetUiMessage::BrowserAudition(bright));
     app.test_apply_engine_event(AudioEvent::PluginRemoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: INSTANCE,
     });
     assert!(app.test_presets().host_browser.is_none());

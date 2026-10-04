@@ -164,7 +164,7 @@ fn per_track_setters_write_through_without_publishing() {
         AudioCommand::SetTrackMute { track_id: 1, muted: true },
         AudioCommand::SetTrackSolo { track_id: 2, soloed: true },
         AudioCommand::SetTrackRecordArm { track_id: 1, armed: true },
-        AudioCommand::SetTrackFxBypass { track_id: 1, bypassed: true },
+        AudioCommand::SetFxBypass { owner: ChainOwner::Track(1), bypassed: true },
         AudioCommand::SetTrackPlaybackSource {
             track_id: 1,
             source: PlaybackSource::Recorded,

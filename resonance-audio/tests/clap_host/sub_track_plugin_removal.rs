@@ -31,7 +31,7 @@
 //! built plugin follows.
 
 use resonance_audio::test_support::EngineHandlerHarness;
-use resonance_audio::types::AudioEvent;
+use resonance_audio::types::{AudioEvent, ChainOwner};
 use resonance_audio::{Track, TrackId};
 
 use crate::plugin_binaries::plugin_binary;
@@ -52,8 +52,8 @@ fn removing_a_parent_track_drops_every_sub_track_plugin_instance() {
     harness.push_track(Track::new_sub_track(SUB, "Parent (2)".to_string(), PARENT, 1));
 
     // One instance on the parent, one on its sub-track.
-    harness.add_plugin(PARENT, path.clone(), EQ_CLAP_ID.to_string(), 10);
-    harness.add_plugin(SUB, path, EQ_CLAP_ID.to_string(), 20);
+    harness.add_plugin(ChainOwner::Track(PARENT), path.clone(), EQ_CLAP_ID.to_string(), 10);
+    harness.add_plugin(ChainOwner::Track(SUB), path, EQ_CLAP_ID.to_string(), 20);
     harness.drain_events();
     assert_eq!(
         harness.plugin_instance_count(),

@@ -28,7 +28,7 @@ use resonance_app::message::{BusMessage, MasterMessage, Message, PluginMessage};
 use resonance_app::state::PluginSlotState;
 use resonance_app::update::automation::AutomationMessage;
 use resonance_app::Resonance;
-use resonance_audio::types::{
+use resonance_audio::types::{ChainOwner, 
     AudioCommand, AudioEvent, ParamInfo, PluginInstanceId, ScannedPlugin, TrackType,
 };
 use resonance_common::{AutomationLane, AutomationTarget, CurveKind};
@@ -257,7 +257,7 @@ fn deleting_a_bus_drops_its_own_and_its_plugins_lanes_and_undo_restores_them() {
 fn an_unmirrored_removal_echo_drops_the_lanes_too() {
     let mut f = fixture("echo");
     f.app.test_apply_engine_event(AudioEvent::PluginRemoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: COMP,
     });
     assert!(!targets(&f).contains(&param(COMP, 1)));
@@ -335,7 +335,7 @@ fn relocating_a_missing_plugin_keeps_its_lanes() {
     assert_eq!(lanes(&f), before, "the relocate keeps every lane");
 
     f.app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: EQ,
         plugin_name: EQ_ID.to_owned(),
         clap_plugin_id: EQ_ID.to_owned(),
@@ -358,7 +358,7 @@ fn relocating_a_missing_plugin_keeps_its_lanes() {
 /// up proves the echo was adopted rather than ignored as owed.
 fn eq_added() -> AudioEvent {
     AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: EQ,
         plugin_name: EQ_ID.to_owned(),
         clap_plugin_id: EQ_ID.to_owned(),
@@ -396,7 +396,7 @@ fn a_late_swap_removal_echo_keeps_the_plugin_an_undo_restored() {
     assert_eq!(lanes(&f), before, "undo of the swap brings the lanes back");
 
     f.app.test_apply_engine_event(AudioEvent::PluginRemoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: EQ,
     });
     assert!(
@@ -429,7 +429,7 @@ fn swapping_out_a_missing_plugin_settles_its_removal_echo() {
     }));
     assert!(!f.app.test_track_plugin_instance_ids(TRACK).contains(&EQ));
     f.app.test_apply_engine_event(AudioEvent::PluginRemoved {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: EQ,
     });
 

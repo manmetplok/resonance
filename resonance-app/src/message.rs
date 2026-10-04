@@ -10,7 +10,9 @@ use crate::compose::ComposeMessage;
 use crate::control_socket::ControlMessage;
 use crate::reference::ReferenceMessage;
 use crate::state::{MixerInspectorGroup, ViewMode};
-use resonance_audio::types::{BusId, PluginInstanceId, ScannedPlugin, SendSource, TrackId};
+use resonance_audio::types::{
+    BusId, ChainOwner, PluginInstanceId, ScannedPlugin, SendSource, TrackId,
+};
 
 pub use crate::update::arrangement::ArrangementMessage;
 pub use crate::update::automation::AutomationMessage;
@@ -162,17 +164,9 @@ pub enum PresetUiMessage {
     /// "with preset…" in an add picker: add the plugin, then load the
     /// preset onto it once it exists.
     AddWithPreset {
-        owner: PresetAddOwner,
+        owner: ChainOwner,
         pick: crate::state::presets::PresetAddPick,
     },
-}
-
-/// Which chain a "with preset…" add appends to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PresetAddOwner {
-    Track(TrackId),
-    Bus(resonance_audio::types::BusId),
-    Master,
 }
 
 #[derive(Debug, Clone)]
@@ -195,7 +189,7 @@ pub enum PluginMessage {
     /// Add a plugin and mirror a placeholder slot into `TrackState.plugins`
     /// immediately, so the caller can address the plugin without waiting
     /// for the engine's `PluginAdded` echo (ba doc #273, todo #1234).
-    /// `engine_events::plugins::track_added` is idempotent, so the echo
+    /// `engine_events::plugins::added` is idempotent, so the echo
     /// fills the placeholder's params in rather than pushing a duplicate.
     ///
     /// Since ARCH-04 D-1 the instance id is app-allocated

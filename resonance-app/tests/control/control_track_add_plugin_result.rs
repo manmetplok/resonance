@@ -14,7 +14,7 @@
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_control::methods::track::{AddPluginResult, PluginParamsView};
 use resonance_control::ErrorKind;
 use crate::common::call;
@@ -133,7 +133,7 @@ fn the_engine_echo_fills_the_placeholder_instead_of_duplicating_it() {
 
     // The echo the engine will send for exactly this instance.
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         plugin_name: "Resonance EQ".to_owned(),
         clap_plugin_id: "com.resonance.eq".to_owned(),
@@ -239,7 +239,7 @@ fn the_initializing_window_is_distinguishable_from_the_other_two_failures() {
     add_effect(&mut app, "com.resonance.eq");
     let instance_id = hinted_instance(&rx);
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id,
         plugin_name: "Resonance EQ".to_owned(),
         clap_plugin_id: "com.resonance.eq".to_owned(),

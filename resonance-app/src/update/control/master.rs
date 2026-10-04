@@ -334,7 +334,7 @@ fn add_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message
     // the id is allocated app-side and the slot mirrored at dispatch, so
     // `master.plugin_params` and `master.set_plugin_param` can address
     // the plugin in the same cycle as this reply instead of racing the
-    // engine's `MasterPluginAdded` echo.
+    // engine's `PluginAdded` echo.
     let instance_id = app.allocate_plugin_id();
     if let Some(found) = &preset {
         crate::update::control::plugin_presets::park_add_preset(

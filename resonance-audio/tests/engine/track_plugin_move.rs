@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 use resonance_audio::test_support::affects_latency;
-use resonance_audio::types::{AudioCommand, Track, TrackId};
+use resonance_audio::types::{AudioCommand, ChainOwner, Track, TrackId};
 
 fn track_with(ids: &[u64]) -> Track {
     let track = Track::new(1, "T1".to_string());
@@ -144,7 +144,7 @@ fn snapshot_taken_before_the_move_keeps_the_old_order() {
 #[test]
 fn move_plugin_refreshes_the_comp_table() {
     assert!(affects_latency(&AudioCommand::MovePlugin {
-        track_id: 1,
+        owner: ChainOwner::Track(1),
         instance_id: 2,
         to_index: 0,
     }));

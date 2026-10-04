@@ -6,7 +6,7 @@
 
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ScannedPlugin, TrackType};
 use resonance_control::methods::song::TracksView;
 use resonance_control::methods::track::AddResult;
 use resonance_control::{ErrorKind, MutationAck, Request};
@@ -304,7 +304,7 @@ fn echo_plugin_with_params(
     params: Vec<resonance_audio::types::ParamInfo>,
 ) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id,
+        owner: ChainOwner::Track(track_id),
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),
@@ -540,7 +540,7 @@ fn add_instrument_and_effect_by_catalog_id() {
     let _ = ack;
     assert!(drain(&rx).iter().any(|c| matches!(
         c,
-        AudioCommand::AddPlugin { track_id, clap_plugin_id, .. }
+        AudioCommand::AddPlugin { owner: ChainOwner::Track(track_id), clap_plugin_id, .. }
         if *track_id == id && clap_plugin_id == "com.resonance.wavetable"
     )));
 
@@ -562,7 +562,7 @@ fn add_instrument_and_effect_by_catalog_id() {
 /// the way the real engine does after `AudioCommand::AddPlugin`.
 fn echo_plugin_added(app: &mut Resonance, track_id: u64, instance_id: u64, plugin_id: &str) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id,
+        owner: ChainOwner::Track(track_id),
         instance_id,
         plugin_name: plugin_id.to_owned(),
         clap_plugin_id: plugin_id.to_owned(),

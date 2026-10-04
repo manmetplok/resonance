@@ -12,7 +12,7 @@
 
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_control::methods::track::PluginParamsView;
 use resonance_control::{ErrorKind, MutationAck, Response};
 use crate::common::call;
@@ -45,7 +45,7 @@ fn app() -> Resonance {
     // widen to, including one range (20..20000) big enough that a fixed
     // absolute epsilon would be the wrong tolerance.
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: COMPRESSOR,
         plugin_name: "Resonance Compressor".to_owned(),
         clap_plugin_id: "com.resonance.compressor".to_owned(),
@@ -238,7 +238,7 @@ fn the_tolerance_scales_with_the_range_rather_than_being_absolute() {
 fn a_nan_bound_is_treated_as_a_malformed_range_rather_than_panicking() {
     let mut app = app();
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: 21,
         plugin_name: "Rogue".to_owned(),
         clap_plugin_id: "com.example.rogue".to_owned(),

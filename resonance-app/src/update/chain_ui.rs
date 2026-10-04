@@ -267,7 +267,7 @@ pub(crate) fn settle(r: &mut Resonance) {
     }
     use crate::update::plugin_window::on_inspector_owner as owned;
     let owner_track = match crate::update::plugin_window::inspector_owner(r) {
-        Some(crate::state::PluginLocator::Track(id)) => Some(id),
+        Some(crate::state::ChainOwner::Track(id)) => Some(id),
         _ => None,
     };
     let keep = |id: Option<PluginInstanceId>| id.filter(|id| owned(r, *id));

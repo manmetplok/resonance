@@ -21,7 +21,7 @@
 use resonance_app::project::{load_project, save_project, ProjectFile};
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, SendSource, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, SendSource, TrackType};
 
 const KICK: u64 = 1;
 const BASS: u64 = 2;
@@ -44,7 +44,7 @@ fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
 /// control layer and the mixer both key off.
 fn add_track_plugin(app: &mut Resonance, track_id: u64, instance_id: u64) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id,
+        owner: ChainOwner::Track(track_id),
         instance_id,
         plugin_name: "Compressor".to_string(),
         clap_plugin_id: COMPRESSOR.to_string(),
@@ -58,8 +58,8 @@ fn add_track_plugin(app: &mut Resonance, track_id: u64, instance_id: u64) {
 }
 
 fn add_bus_plugin(app: &mut Resonance, bus_id: u64, instance_id: u64) {
-    app.test_apply_engine_event(AudioEvent::BusPluginAdded {
-        bus_id,
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Bus(bus_id),
         instance_id,
         plugin_name: "Compressor".to_string(),
         clap_plugin_id: COMPRESSOR.to_string(),
@@ -67,11 +67,14 @@ fn add_bus_plugin(app: &mut Resonance, bus_id: u64, instance_id: u64) {
         params: Vec::<ParamInfo>::new(),
         has_gui: false,
         has_sidechain_input: true,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 }
 
 fn add_master_plugin(app: &mut Resonance, instance_id: u64) {
-    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        owner: ChainOwner::Master,
         instance_id,
         plugin_name: "Compressor".to_string(),
         clap_plugin_id: COMPRESSOR.to_string(),
@@ -79,6 +82,8 @@ fn add_master_plugin(app: &mut Resonance, instance_id: u64) {
         params: Vec::<ParamInfo>::new(),
         has_gui: false,
         has_sidechain_input: true,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
     });
 }
 
@@ -388,7 +393,7 @@ fn removing_the_keyed_plugin_drops_the_route() {
     route(&mut app, TRACK_COMP, SendSource::Track(KICK));
 
     app.test_apply_engine_event(AudioEvent::PluginRemoved {
-        track_id: BASS,
+        owner: ChainOwner::Track(BASS),
         instance_id: TRACK_COMP,
     });
 
@@ -396,48 +401,49 @@ fn removing_the_keyed_plugin_drops_the_route() {
     assert!(app.test_build_project_file().sidechain_routes.is_empty());
 }
 
-/// Taking the plugin off a BUS must also tell the engine, because its
-/// `RemovePluginFromBus` arm — unlike `RemovePlugin` — does not drop the
-/// route itself. Pruning only the mirror would leave the engine keying an
-/// instance id the next `bus.add_effect` can be handed.
+/// Taking the plugin off a BUS prunes the mirror the same way. The engine's
+/// `RemovePlugin` arm drops the route itself for every owner (ARCH2-02 —
+/// before that only the track arm did, and the app sent a separate
+/// `ClearSidechainRoute` for a bus or master removal), so no extra
+/// command goes out: one path, one place the recycled-id misroute is
+/// prevented.
 #[test]
-fn removing_a_keyed_bus_plugin_tells_the_engine_to_drop_the_route_too() {
+fn removing_a_keyed_bus_plugin_prunes_the_mirror_without_a_second_command() {
     let mut app = app_with_chains();
     route(&mut app, BUS_COMP, SendSource::Track(KICK));
     let rx = app.test_capture_engine();
 
-    app.test_apply_engine_event(AudioEvent::BusPluginRemoved {
-        bus_id: BUS,
+    app.test_apply_engine_event(AudioEvent::PluginRemoved {
+        owner: ChainOwner::Bus(BUS),
         instance_id: BUS_COMP,
     });
 
     assert!(app.test_sidechain_routes().is_empty());
     let cmds = drain(&rx);
     assert!(
-        cmds.iter().any(|c| matches!(
-            c,
-            AudioCommand::ClearSidechainRoute { plugin } if *plugin == BUS_COMP
-        )),
-        "expected ClearSidechainRoute for the orphaned route, got {cmds:?}"
+        !cmds
+            .iter()
+            .any(|c| matches!(c, AudioCommand::ClearSidechainRoute { .. })),
+        "the engine's RemovePlugin arm drops the route; no ClearSidechainRoute is owed: {cmds:?}"
     );
 }
 
-/// Same for the master chain, the other arm the engine does not prune.
+/// Same for the master chain.
 #[test]
-fn removing_a_keyed_master_plugin_tells_the_engine_to_drop_the_route_too() {
+fn removing_a_keyed_master_plugin_prunes_the_mirror_without_a_second_command() {
     let mut app = app_with_chains();
     route(&mut app, MASTER_COMP, SendSource::Bus(BUS));
     let rx = app.test_capture_engine();
 
-    app.test_apply_engine_event(AudioEvent::MasterPluginRemoved {
+    app.test_apply_engine_event(AudioEvent::PluginRemoved {
+        owner: ChainOwner::Master,
         instance_id: MASTER_COMP,
     });
 
     assert!(app.test_sidechain_routes().is_empty());
-    assert!(drain(&rx).iter().any(|c| matches!(
-        c,
-        AudioCommand::ClearSidechainRoute { plugin } if *plugin == MASTER_COMP
-    )));
+    assert!(!drain(&rx)
+        .iter()
+        .any(|c| matches!(c, AudioCommand::ClearSidechainRoute { .. })));
 }
 
 #[test]

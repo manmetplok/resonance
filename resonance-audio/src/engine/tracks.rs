@@ -59,15 +59,6 @@ pub(crate) fn handle_set_track_playback_source(
     set_track_playback_source_in_place(&ctx.tracks(), ctx.event_tx, track_id, source);
 }
 
-pub(crate) fn handle_set_track_fx_bypass(ctx: &HandlerCtx, track_id: TrackId, bypassed: bool) {
-    if let Some(track) = ctx.tracks().get(&track_id) {
-        super::plugins::apply_bypass_request(ctx.shared, track.fx_bypass(), bypassed);
-    }
-    let _ = ctx
-        .event_tx
-        .send(AudioEvent::TrackFxBypassChanged { track_id, bypassed });
-}
-
 /// Attach or detach a track's decoded freeze-cache buffer.
 ///
 /// `Some(source)` makes the track frozen — the mixer can replay the cached

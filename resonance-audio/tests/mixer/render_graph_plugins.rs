@@ -247,19 +247,22 @@ fn every_removal_handler_leaves_the_destroy_to_the_engine_sweep() {
     let cases: [(&str, fn(&mut EngineHandlerHarness)); 5] = [
         ("RemovePlugin", |h| {
             h.dispatch(AudioCommand::RemovePlugin {
-                track_id: TRACK,
+                owner: ChainOwner::Track(TRACK),
                 instance_id: PROBE,
             })
         }),
         ("RemoveTrack", |h| h.remove_track(TRACK)),
         ("RemovePluginFromBus", |h| {
-            h.dispatch(AudioCommand::RemovePluginFromBus {
-                bus_id: BUS,
+            h.dispatch(AudioCommand::RemovePlugin {
+                owner: ChainOwner::Bus(BUS),
                 instance_id: PROBE,
             })
         }),
         ("RemovePluginFromMaster", |h| {
-            h.dispatch(AudioCommand::RemovePluginFromMaster { instance_id: PROBE })
+            h.dispatch(AudioCommand::RemovePlugin {
+                owner: ChainOwner::Master,
+                instance_id: PROBE,
+            })
         }),
         ("ClearAll", |h| h.clear_all()),
     ];

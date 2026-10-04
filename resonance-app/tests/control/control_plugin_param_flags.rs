@@ -13,7 +13,7 @@ use crate::common::call;
 use resonance_app::message::{AutomationMessage, Message, PluginMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, TrackType};
 use resonance_common::AutomationTarget;
 use resonance_control::methods::track::PluginParamsView;
 use resonance_control::Response;
@@ -69,7 +69,7 @@ fn app() -> Resonance {
     app.test_set_flat_tempo(120.0);
     app.test_add_track(TRACK, TrackType::Instrument);
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: DRUMS,
         plugin_name: "Drums".to_owned(),
         clap_plugin_id: "com.resonance.drums".to_owned(),

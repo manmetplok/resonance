@@ -15,7 +15,7 @@
 use resonance_app::message::{Message, TrackMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
+use resonance_audio::types::{ChainOwner, AudioCommand, AudioEvent, ParamInfo, TrackType};
 use resonance_control::methods::track::{AddResult, PresetsView};
 use resonance_control::{ErrorKind, MutationAck, Request};
 use crate::common::{call, roundtrip};
@@ -56,7 +56,7 @@ fn app() -> Resonance {
 /// thing worth saving.
 fn with_instrument(app: &mut Resonance) {
     app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
+        owner: ChainOwner::Track(TRACK),
         instance_id: SYNTH,
         plugin_name: "Resonance Wavetable".to_owned(),
         clap_plugin_id: "com.resonance.wavetable".to_owned(),
