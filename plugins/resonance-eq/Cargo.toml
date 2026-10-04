@@ -24,7 +24,6 @@ resonance-dsp = { path = "../../resonance-dsp" }
 # on `editor`: the audio thread's ring push lives in `process()`, which is
 # compiled in headless builds too — same shape as resonance-mastering.
 resonance-metering = { path = "../../resonance-metering" }
-serde_json.workspace = true
 parking_lot.workspace = true
 
 # Only the platform-neutral half of the editor stack is named here. The
@@ -37,6 +36,8 @@ plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
 [dev-dependencies]
 criterion.workspace = true
 resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
+# Only tests/plugin.rs uses this (DEP-08).
+serde_json.workspace = true
 
 # Per-block DSP benchmark. `harness = false` hands main() to criterion.
 [[bench]]

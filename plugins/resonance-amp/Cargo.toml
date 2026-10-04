@@ -64,7 +64,6 @@ webbrowser = { version = "1", optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
-dirs.workspace = true
 resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
 # Turns on `test-internals` for this crate's own tests and benches only
 # (resolver 2 unifies the feature into test/bench builds; a normal build

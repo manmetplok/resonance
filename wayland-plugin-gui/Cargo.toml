@@ -23,20 +23,15 @@ tracing.workspace = true
 # Wayland client + SCTK for windowing, input, XDG shell, decorations, fractional scaling.
 smithay-client-toolkit = "0.20"
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 wayland-egl = "0.32"
 
 # EGL + OpenGL for rendering.
 khronos-egl = { version = "6", features = ["dynamic"] }
-libloading = "0.8"
 glow = "0.17"
 
 # egui's glow painter. egui_glow's default features pull in egui-winit which we
 # don't want, so we disable them and wire glow manually.
 egui_glow.workspace = true
-
-# Misc.
-raw-window-handle = "0.6"
 
 [[example]]
 name = "hello"
