@@ -313,3 +313,67 @@ fn a_bus_source_is_tapped_independently_of_a_track_with_the_same_id() {
     assert_eq!(t.key(SendSource::Track(7)).map(|(l, _)| l[0]), Some(0.1));
     assert_eq!(t.key(SendSource::Bus(7)).map(|(l, _)| l[0]), Some(0.9));
 }
+
+/// Not a sidechain test: it lives here for this binary's thread-local
+/// counting allocator (a `#[global_allocator]` needs its own binary).
+/// `MonitorResampler::process` runs on the cpal input callback, a
+/// realtime thread; its scratch used to start empty and grow there on the
+/// first chunks (code review RT-15). It is sized at construction now.
+#[test]
+fn monitor_resampler_never_allocates_on_the_input_callback() {
+    use resonance_audio::test_support::MonitorResampler;
+    for (src, dst, ch) in [(44_100, 48_000, 2), (48_000, 44_100, 3), (96_000, 48_000, 8)] {
+        let mut rs = MonitorResampler::new(src, dst, ch);
+        for chunk_frames in [64usize, 1024, 4096, 333, 16_384] {
+            let chunk = vec![0.25f32; chunk_frames * ch];
+            let after_vec = THREAD_ALLOCS.with(|c| c.get());
+            let _ = rs.process(&chunk);
+            assert_eq!(
+                THREAD_ALLOCS.with(|c| c.get()),
+                after_vec,
+                "{src}->{dst} x{ch}: process({chunk_frames} frames) allocated"
+            );
+        }
+    }
+}
+
+#[test]
+fn seam_sub_blocks_capture_and_read_at_their_own_offset() {
+    // RT-06: a loop-seam callback renders a head and a tail sub-block
+    // against one bank pair. The tail captures after the head (not over
+    // it) and reads the previous callback's key from the same position.
+    const HEAD: usize = 40;
+    let routes = vec![from_track(1, 10)];
+    let src: Vec<f32> = (0..FRAMES).map(|i| i as f32).collect();
+    let mut t = taps(&routes);
+    t.set_sub_block_offset(0);
+    t.capture(SendSource::Track(10), &src[..HEAD], &src[..HEAD], HEAD);
+    t.set_sub_block_offset(HEAD);
+    t.capture(SendSource::Track(10), &src[HEAD..], &src[HEAD..], FRAMES - HEAD);
+
+    t.begin_block(&routes);
+    let (l, _) = t.key(SendSource::Track(10)).unwrap();
+    assert_eq!(&l[..FRAMES], &src[..], "the whole callback, contiguous");
+    t.set_sub_block_offset(HEAD);
+    let (l, _) = t.key(SendSource::Track(10)).unwrap();
+    assert_eq!(l[0], HEAD as f32, "the tail reads from its own frames");
+    assert_eq!(l.len(), FRAMES - HEAD);
+}
+
+#[test]
+fn a_source_first_captured_in_the_tail_keys_silence_before_it() {
+    // A source that renders only after the seam must not leave the head
+    // frames holding audio from two callbacks ago.
+    const HEAD: usize = 20;
+    let routes = vec![from_track(1, 10)];
+    let mut t = taps(&routes);
+    t.capture(SendSource::Track(10), &ramp(0.7), &ramp(0.7), FRAMES);
+    t.begin_block(&routes);
+    t.begin_block(&routes); // back on the bank holding the 0.7 capture
+    t.set_sub_block_offset(HEAD);
+    t.capture(SendSource::Track(10), &ramp(0.2), &ramp(0.2), FRAMES - HEAD);
+    t.begin_block(&routes);
+    let (l, _) = t.key(SendSource::Track(10)).unwrap();
+    assert!(l[..HEAD].iter().all(|&s| s == 0.0), "head: silence");
+    assert!(l[HEAD..FRAMES].iter().all(|&s| s == 0.2), "tail: this capture");
+}

@@ -10,21 +10,101 @@
 //!   drives them.
 //! - **Pass-through** — [`mix_monitor_passthrough`] de-interleaves the
 //!   input stream, routes each track's chosen channel(s) into its stereo
-//!   L/R pair, runs the track's plugin chain and sums the result into the
-//!   output. Used by the no-playback / count-in branches of the callback,
-//!   which keep every audible monitored track flowing through to the
-//!   master so the performer can hear themselves; the playing-back
-//!   timeline path mixes monitor input inside `render_core` instead.
+//!   L/R pair, runs the track's plugin chain and sends the result where
+//!   the track goes: its output bus (or master) and its aux sends, through
+//!   [`MixTargets`]. Used by the no-playback / count-in branches of the
+//!   callback, which then run the busses and the master chain over it
+//!   (`callback::idle_mix`), so the performer hears themselves through
+//!   the same reverb send, bus compressor and master chain as while
+//!   rolling (code review RT-14); the playing-back timeline path mixes
+//!   monitor input inside `render_core` instead.
 
+
+use std::sync::Arc;
+
+use indexmap::IndexMap;
+use resonance_dsp::db_to_linear;
 
 use crate::bypass::{run_faded, FadeStage, FxDryScratch};
 use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::common::{
-    latch_transport, ramped_stereo_peaks, sum_to_output, track_stereo_gains, TransportSnap,
+    latch_transport, ramped_stereo_peaks, sum_to_output, sum_to_stereo, track_stereo_gains,
+    TransportSnap,
 };
 use super::midi_stash::MidiStash;
+use super::render::context::{BusBufs, GainRamp};
+
+/// Where the stopped / count-in passes send a track's post-fader signal:
+/// the interleaved master output, or the summing buffer of the bus the
+/// track is routed to — plus its aux sends — exactly as the arrangement
+/// render's `route_post_fader` / `apply_track_aux_sends` do (code review
+/// RT-14). The caller runs the bus pass and the master chain afterwards.
+pub(crate) struct MixTargets<'a> {
+    pub(crate) data: &'a mut [f32],
+    pub(crate) channels: usize,
+    /// The active busses' summing buffers, zeroed for this block.
+    pub(crate) bus_bufs: &'a mut BusBufs,
+    pub(crate) busses: &'a IndexMap<BusId, Arc<Bus>>,
+    pub(crate) aux_sends: &'a [AuxSend],
+}
+
+impl MixTargets<'_> {
+    /// The summing buffer of bus `id`, if it is active this block.
+    fn bus_index(&self, id: BusId) -> Option<usize> {
+        self.busses
+            .get_index_of(&id)
+            .filter(|idx| *idx < self.bus_bufs.len())
+    }
+
+    /// Sum a track's post-fader signal into its destination, and — when
+    /// the track is audible — tap its aux sends. A route to a bus that is
+    /// gone or inactive falls back to master, as on the arrangement path.
+    fn route_track(
+        &mut self,
+        track: &Track,
+        src: (&[f32], &[f32]),
+        frames: usize,
+        gains: GainRamp,
+        audible: bool,
+    ) {
+        let (gain_l, gain_r) = gains;
+        let (src_l, src_r) = src;
+        let bus = match track.output() {
+            TrackOutput::Bus(id) => self.bus_index(id),
+            TrackOutput::Master => None,
+        };
+        match bus {
+            Some(idx) => {
+                let (bl, br) = &mut self.bus_bufs[idx];
+                sum_to_stereo(bl, br, frames, src_l, src_r, gain_l, gain_r);
+            }
+            None => sum_to_output(self.data, self.channels, frames, src_l, src_r, gain_l, gain_r),
+        }
+        // A muted / solo-suppressed track sends nothing, pre-fader taps
+        // included.
+        if !audible {
+            return;
+        }
+        for send in self.aux_sends {
+            if !send.enabled || send.source != SendSource::Track(track.id) {
+                continue;
+            }
+            let Some(dst) = self.bus_index(send.dest) else {
+                continue;
+            };
+            let lin = db_to_linear(send.level_db);
+            let (send_l, send_r) = if send.pre_fader {
+                ((lin, lin), (lin, lin))
+            } else {
+                ((gain_l.0 * lin, gain_l.1 * lin), (gain_r.0 * lin, gain_r.1 * lin))
+            };
+            let (dl, dr) = &mut self.bus_bufs[dst];
+            sum_to_stereo(dl, dr, frames, src_l, src_r, send_l, send_r);
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Ring pacing
@@ -263,12 +343,11 @@ fn run_track_chain(
 
 /// Monitor pass-through for the count-in and stopped branches of
 /// `mix_audio`: route every audible monitored track through its plugin
-/// chain and sum it straight into the output with ramped gains and VU
-/// peaks. Returns whether any track was mixed.
+/// chain and on to its bus / master and aux sends ([`MixTargets`]) with
+/// ramped gains and VU peaks. Returns whether any track was mixed.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn mix_monitor_passthrough(
-    data: &mut [f32],
-    channels: usize,
+    out: &mut MixTargets<'_>,
     tracks_guard: &TrackMap,
     plugins_guard: &PluginMap,
     monitor_temp: &[f32],
@@ -313,14 +392,12 @@ pub(super) fn mix_monitor_passthrough(
             ramped_stereo_peaks(track_buf_l, track_buf_r, processed_frames, gain_l, gain_r);
         track.update_peak_l(peak_l);
         track.update_peak_r(peak_r);
-        sum_to_output(
-            data,
-            channels,
+        out.route_track(
+            track,
+            (&track_buf_l[..processed_frames], &track_buf_r[..processed_frames]),
             processed_frames,
-            track_buf_l,
-            track_buf_r,
-            gain_l,
-            gain_r,
+            (gain_l, gain_r),
+            true,
         );
         track.set_last_gains(target_l, target_r);
     }
@@ -400,8 +477,7 @@ fn chain_wants_idle_process(
 /// not heard. Returns whether any track was mixed audibly.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn mix_idle_instruments(
-    data: &mut [f32],
-    channels: usize,
+    out: &mut MixTargets<'_>,
     frames: usize,
     tracks_guard: &TrackMap,
     plugins_guard: &PluginMap,
@@ -453,7 +529,7 @@ pub(super) fn mix_idle_instruments(
         let (peak_l, peak_r) = ramped_stereo_peaks(buf_l, buf_r, frames, gain_l, gain_r);
         track.update_peak_l(peak_l);
         track.update_peak_r(peak_r);
-        sum_to_output(data, channels, frames, buf_l, buf_r, gain_l, gain_r);
+        out.route_track(track, (&*buf_l, &*buf_r), frames, (gain_l, gain_r), audible);
         track.set_last_gains(target_l, target_r);
         mixed_any |= audible;
     }

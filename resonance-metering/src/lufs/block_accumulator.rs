@@ -63,8 +63,12 @@ impl BlockAccumulator {
         }
     }
 
+    /// O(1): the ring is not cleared. `push_sample` only ever subtracts a
+    /// ring entry once `samples_pushed` shows it was written since the
+    /// reset, so the stale contents are never read — and a reset is cheap
+    /// enough for the audio thread to issue on every transport start and
+    /// seek (code review RT-03), where clearing 3 s of `f64` was not.
     pub fn reset(&mut self) {
-        self.ring.fill(0.0);
         self.write_pos = 0;
         self.samples_pushed = 0;
         self.sum_m = 0.0;

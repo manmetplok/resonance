@@ -13,6 +13,7 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::engine::audition::{audition_gen, AUDITION_PLAYING};
 use crate::engine::SharedState;
 
 /// Mix the active audition preview (if any) into `data` in place.
@@ -22,13 +23,14 @@ use crate::engine::SharedState;
 /// (and stopping) on a non-looping run that reaches the end. A no-op when no
 /// preview is playing.
 pub fn mix_audition_overlay(data: &mut [f32], channels: usize, shared: &SharedState) {
-    // Acquire pairs with the Release store in `start_audition_in_place`: a
-    // `true` observed here guarantees the pos/ratio/loop stores sequenced
-    // before it are visible, so the preview cannot start from a stale playhead
-    // on weakly-ordered CPUs.
-    if !shared.audition_playing.load(Ordering::Acquire) {
+    // Acquire pairs with the Release in `start_audition_in_place`: a
+    // playing word observed here guarantees the source / start / ratio /
+    // loop stores sequenced before it are visible.
+    let ctl = shared.audition_ctl.load(Ordering::Acquire);
+    if ctl & AUDITION_PLAYING == 0 {
         return;
     }
+    let run = audition_gen(ctl);
     let guard = shared.audition_source.load();
     let Some(source) = guard.as_ref() else {
         return;
@@ -37,8 +39,7 @@ pub fn mix_audition_overlay(data: &mut [f32], channels: usize, shared: &SharedSt
     if frame_count == 0 {
         // Degenerate empty source: report finished so the engine thread
         // emits AuditionStopped, and stop.
-        shared.audition_playing.store(false, Ordering::Relaxed);
-        shared.audition_finished.store(true, Ordering::Relaxed);
+        latch_finish(shared, ctl);
         return;
     }
 
@@ -46,9 +47,18 @@ pub fn mix_audition_overlay(data: &mut [f32], channels: usize, shared: &SharedSt
     let fc = frame_count as f64;
     let looping = shared.audition_loop.load(Ordering::Relaxed);
     let ratio = f32::from_bits(shared.audition_ratio_bits.load(Ordering::Relaxed)).max(0.0) as f64;
-    let mut pos = f64::from_bits(shared.audition_pos_bits.load(Ordering::Relaxed));
+    // Continue from the position this run last reached; a run this
+    // callback has not advanced yet starts where the engine asked (code
+    // review RT-11: the old unconditional load/store pair carried a
+    // previous run's position over a restart).
+    let mut pos = if shared.audition_pos_gen.load(Ordering::Relaxed) == run {
+        f64::from_bits(shared.audition_pos_bits.load(Ordering::Relaxed))
+    } else {
+        f64::from_bits(shared.audition_start_bits.load(Ordering::Relaxed))
+    };
 
     let out_frames = data.len() / channels;
+    let mut finished = false;
     for f in 0..out_frames {
         if pos >= fc {
             if looping {
@@ -58,8 +68,7 @@ pub fn mix_audition_overlay(data: &mut [f32], channels: usize, shared: &SharedSt
                     pos -= fc;
                 }
             } else {
-                shared.audition_playing.store(false, Ordering::Relaxed);
-                shared.audition_finished.store(true, Ordering::Relaxed);
+                finished = true;
                 break;
             }
         }
@@ -89,7 +98,29 @@ pub fn mix_audition_overlay(data: &mut [f32], channels: usize, shared: &SharedSt
         pos += ratio;
     }
 
+    // Sole writer of the position's generation; a restart that landed
+    // during this block bumped the run, so the next block ignores this
+    // position and starts the new run from its own start.
     shared
         .audition_pos_bits
         .store(pos.to_bits(), Ordering::Relaxed);
+    shared.audition_pos_gen.store(run, Ordering::Relaxed);
+    if finished {
+        latch_finish(shared, ctl);
+    }
+}
+
+/// End the run this block played (`ctl`), unless the engine restarted or
+/// stopped it meanwhile: the compare-exchange fails then, leaving the new
+/// run playing (RT-11).
+fn latch_finish(shared: &SharedState, ctl: u64) {
+    if shared
+        .audition_ctl
+        .compare_exchange(ctl, ctl & !AUDITION_PLAYING, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        shared
+            .audition_finished
+            .store(audition_gen(ctl) + 1, Ordering::Release);
+    }
 }

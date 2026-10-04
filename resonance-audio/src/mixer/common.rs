@@ -72,7 +72,6 @@ pub fn commit_playhead(shared: &SharedState, observed: u64, new_playhead: u64) -
 /// (it is parked on contention); this lets it issue one whenever the
 /// block it is about to render does not continue the last one it
 /// rendered. Audio-thread owned; two words, no allocation.
-#[derive(Default)]
 pub(crate) struct TransportContinuity {
     /// Where the last rendered playing block said the next one starts;
     /// `None` while the transport is not rolling.
@@ -80,6 +79,30 @@ pub(crate) struct TransportContinuity {
     /// The last block's `commit_playhead` lost: the control thread moved
     /// the transport under it. Flush regardless of where it moved to.
     repositioned: bool,
+    /// Frames the stopped branch keeps running the busses and the master
+    /// chain for after the last audible input — the transport stopping, or
+    /// a monitored / previewed signal going quiet — so their reverb and
+    /// delay tails ring out instead of being cut with a step (code review
+    /// RT-14). Zero = idle: the stopped branch runs no bus or master
+    /// plugin at all.
+    pub(crate) tail_hold: usize,
+    /// The stopped / count-in mix stage runs its busses without plugin
+    /// delay compensation (live monitoring wants no added latency, and
+    /// the playhead does not move, which every delay line would read as a
+    /// seek per block). Built here, off the audio thread, so the callback
+    /// never constructs one.
+    pub(crate) idle_comp: crate::latency::LatencyComp,
+}
+
+impl Default for TransportContinuity {
+    fn default() -> Self {
+        Self {
+            expected: None,
+            repositioned: false,
+            tail_hold: 0,
+            idle_comp: crate::latency::LatencyComp::empty(),
+        }
+    }
 }
 
 impl TransportContinuity {
@@ -107,7 +130,8 @@ impl TransportContinuity {
 
     /// The voices have been flushed for a stop.
     pub(crate) fn stopped(&mut self) {
-        *self = Self::default();
+        self.expected = None;
+        self.repositioned = false;
     }
 }
 
@@ -277,6 +301,8 @@ pub(super) fn panic_instrument_tracks(
         if !track.track_type.accepts_midi() {
             continue;
         }
+        // The flush releases every timeline-held key (RT-05).
+        track.set_timeline_held([0, 0]);
         let Some(inst_id) = track.plugins().first().copied() else {
             continue;
         };

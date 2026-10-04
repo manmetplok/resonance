@@ -495,6 +495,10 @@ pub(super) fn render_chunk(
                         right: &mut scratch.track_buf_r[..frames],
                     }];
                     inst.0.process_multi_with_key(&mut outs, key, frames);
+                    // Like every live process() site: flag the plugin's
+                    // own output param events for the engine's poll
+                    // (FU-R2b), or they wait until a live block runs.
+                    inst.0.publish_out_events();
                 }
             }
             for f in 0..frames {

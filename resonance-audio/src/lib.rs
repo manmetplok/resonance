@@ -102,6 +102,9 @@ pub mod test_support {
     /// `_in` variant takes the directories to scan, so the test drives a
     /// temp dir rather than the machine's real plugin folders.
     pub use crate::engine::scan::{rescan_plugins, rescan_plugins_in};
+    /// The startup scan's plugin teardown, which retires the replaced
+    /// chains (code review RT-18) — `tests/retire_queue.rs`.
+    pub use crate::engine::scan::unpublish_all_plugins;
     /// The discovery worker's lifecycle (slice P8 review), for a blocking
     /// provider.
     pub use crate::engine::scan::{

@@ -11,6 +11,7 @@
 
 pub mod block_accumulator;
 pub mod gating;
+pub mod incremental;
 pub mod integrated;
 
 use crate::k_weighting::KWeightingFilter;
@@ -100,6 +101,26 @@ impl LufsMeter {
         }
     }
 
+    /// Gated integrated loudness from the incremental gate: what a meter
+    /// read from the audio callback uses. Its cost does not grow with the
+    /// session (code review RT-03); [`Self::integrated_lufs`] stays the
+    /// exact `O(blocks)` reference for offline analysis.
+    pub fn integrated_lufs_live(&self) -> f32 {
+        let v = self.integrated.integrated_lufs_live();
+        if v.is_finite() {
+            v as f32
+        } else {
+            f32::NEG_INFINITY
+        }
+    }
+
+    /// Cache key for [`Self::integrated_lufs_live`]: it changes exactly
+    /// when the live reading can (a block passed the absolute gate) and,
+    /// unlike [`Self::integrated_block_count`], keeps counting past the
+    /// 60-minute cap. Zero after a reset.
+    pub fn integrated_live_blocks(&self) -> u64 {
+        self.integrated.live_gated_blocks()
+    }
 
     /// Whether the integrated meter hit its session block cap and started
     /// dropping blocks. Lock-free, safe to poll from a UI thread.

@@ -75,3 +75,84 @@ fn block_ms_round_trip() {
         assert!((back - lufs).abs() < 1e-10);
     }
 }
+
+/// Deterministic pseudo-random block loudness in [-80, -5] LUFS, so the
+/// set straddles both the absolute and the relative gate.
+fn spread_blocks(n: usize) -> Vec<f64> {
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    (0..n)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let u = (x >> 11) as f64 / (1u64 << 53) as f64;
+            lufs_to_ms(-80.0 + 75.0 * u)
+        })
+        .collect()
+}
+
+#[test]
+fn live_gate_matches_exact_gate() {
+    // RT-03: the realtime readout is an incremental histogram gate; it
+    // must agree with the exact two-pass gate over the same blocks.
+    for n in [1usize, 7, 100, 3_000, 30_000] {
+        let mut acc = IntegratedAccumulator::new();
+        for ms in spread_blocks(n) {
+            acc.push_block(ms);
+        }
+        let exact = acc.integrated_lufs();
+        let live = acc.integrated_lufs_live();
+        if exact.is_finite() {
+            assert!((exact - live).abs() < 0.01, "n={n}: exact {exact} live {live}");
+        } else {
+            assert!(live.is_infinite(), "n={n}: live {live}");
+        }
+    }
+}
+
+#[test]
+fn live_gate_matches_steady_and_silent_material() {
+    let mut acc = IntegratedAccumulator::new();
+    assert!(acc.integrated_lufs_live().is_infinite());
+    for _ in 0..50 {
+        acc.push_block(0.0);
+    }
+    assert!(acc.integrated_lufs_live().is_infinite());
+    for _ in 0..100 {
+        acc.push_block(lufs_to_ms(-23.0));
+    }
+    let live = acc.integrated_lufs_live();
+    assert!((live - -23.0).abs() < 1e-9, "live {live}");
+    acc.reset();
+    assert!(acc.integrated_lufs_live().is_infinite());
+}
+
+#[test]
+fn live_gate_never_runs_the_full_history_gate() {
+    use resonance_metering::lufs::gating::full_gate_calls_on_this_thread;
+    let mut acc = IntegratedAccumulator::new();
+    let before = full_gate_calls_on_this_thread();
+    for ms in spread_blocks(5_000) {
+        acc.push_block(ms);
+        let _ = acc.integrated_lufs_live();
+    }
+    assert_eq!(full_gate_calls_on_this_thread(), before);
+    let _ = acc.integrated_lufs();
+    assert_eq!(full_gate_calls_on_this_thread(), before + 1);
+}
+
+#[test]
+fn live_gate_keeps_reading_past_the_session_cap() {
+    // The exact list stops at 60 minutes; the histogram has no cap, so a
+    // level change after the cap still moves the live reading.
+    let mut acc = IntegratedAccumulator::new();
+    while acc.dropped_blocks() == 0 {
+        acc.push_block(lufs_to_ms(-30.0));
+    }
+    let cap = acc.len();
+    for _ in 0..cap {
+        acc.push_block(lufs_to_ms(-20.0));
+    }
+    let live = acc.integrated_lufs_live();
+    assert!(live > -25.0, "live {live}");
+}

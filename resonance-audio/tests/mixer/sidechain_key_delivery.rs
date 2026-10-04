@@ -75,6 +75,13 @@ struct MonitorState {
     /// `process()` calls, when the test wants to know whether this
     /// instance ran at all.
     calls: Option<Arc<AtomicUsize>>,
+    /// Copy the whole key buffer sample for sample (left channel) instead
+    /// of holding its first sample — for the seam test, which needs every
+    /// frame the host handed over.
+    copy_key: bool,
+    /// Report one output parameter value from every `process()`, as a
+    /// plugin moving its own parameter does (FU-R2b).
+    emit_param: bool,
 }
 
 unsafe fn monitor_state<'a>(plugin: *const clap_plugin) -> &'a mut MonitorState {
@@ -117,10 +124,38 @@ unsafe extern "C" fn m_process(plugin: *const clap_plugin, process: *const clap_
     let p = &*process;
     let frames = p.frames_count as usize;
 
+    if monitor_state(plugin).emit_param && !p.out_events.is_null() {
+        use clap_sys::events::{
+            clap_event_header, clap_event_param_value, CLAP_CORE_EVENT_SPACE_ID,
+            CLAP_EVENT_PARAM_VALUE,
+        };
+        let event = clap_event_param_value {
+            header: clap_event_header {
+                size: std::mem::size_of::<clap_event_param_value>() as u32,
+                time: 0,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: CLAP_EVENT_PARAM_VALUE,
+                flags: 0,
+            },
+            param_id: 0,
+            cookie: ptr::null_mut(),
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value: 0.5,
+        };
+        let out = &*p.out_events;
+        if let Some(push) = out.try_push {
+            push(out, &event.header);
+        }
+    }
+
     // The host passes every declared port (HOST-05), so "no key" is the
     // key port flagged all-constant silence — what the first-party bridge
     // reads as unrouted.
     let mut value = NO_KEY;
+    let mut key_chan: *const f32 = ptr::null();
     if p.audio_inputs_count >= 2 && !p.audio_inputs.is_null() {
         let key: &clap_audio_buffer = &*p.audio_inputs.add(1);
         let all_constant = key.channel_count > 0
@@ -130,6 +165,7 @@ unsafe extern "C" fn m_process(plugin: *const clap_plugin, process: *const clap_
             let chan = *key.data32;
             if !chan.is_null() && frames > 0 {
                 value = *chan;
+                key_chan = chan;
             }
         }
     }
@@ -143,7 +179,11 @@ unsafe extern "C" fn m_process(plugin: *const clap_plugin, process: *const clap_
                     continue;
                 }
                 for f in 0..frames {
-                    *chan.add(f) = value;
+                    *chan.add(f) = if monitor_state(plugin).copy_key && !key_chan.is_null() {
+                        *key_chan.add(f)
+                    } else {
+                        value
+                    };
                 }
             }
         }
@@ -210,11 +250,21 @@ fn key_monitor() -> PluginSlot {
 }
 
 fn key_monitor_with_calls(calls: Option<Arc<AtomicUsize>>) -> PluginSlot {
+    key_monitor_built(calls, false, false)
+}
+
+fn key_monitor_built(
+    calls: Option<Arc<AtomicUsize>>,
+    copy_key: bool,
+    emit_param: bool,
+) -> PluginSlot {
     let inst = __instance_from_raw_for_test(
         move |_host| {
             let state = Box::into_raw(Box::new(MonitorState {
                 active: false,
                 calls,
+                copy_key,
+                emit_param,
             }));
             let plugin = Box::new(clap_plugin {
                 desc: ptr::null(),
@@ -789,4 +839,134 @@ fn a_solo_suppressed_key_source_still_keys_live() {
     for &s in &out {
         assert_keyed(s, at_master(KEY_LEVEL), "solo-suppressed key source, live");
     }
+}
+
+/// A loop seam splits a callback into two sub-blocks that share one
+/// key-bank pair. Both used to capture from frame 0, so the tail's capture
+/// overwrote the head's and the next callback's key was the post-wrap
+/// audio followed by zeros; the tail's consumer likewise re-read the
+/// previous callback's first frames (code review RT-06). Now the key a
+/// consumer sees is the previous callback's source audio, contiguous
+/// across the wrap.
+#[test]
+fn the_key_stays_contiguous_across_a_loop_seam() {
+    use std::sync::atomic::Ordering;
+    const SOURCE: TrackId = 1;
+    const BLOCK: usize = 128;
+    // A ramp: frame `i` of the timeline carries `i * STEP`, so every key
+    // sample says which timeline frame it came from.
+    const STEP: f32 = 1.0e-5;
+    const LOOP_IN: u64 = 1_000;
+    // Not a multiple of the block: the seam lands 72 frames into block 3
+    // of each pass.
+    const LOOP_OUT: u64 = LOOP_IN + 3 * BLOCK as u64 + 72;
+
+    let frames = 16 * BLOCK;
+    let samples: Vec<f32> = (0..2 * frames).map(|i| (i / 2) as f32 * STEP).collect();
+    let clip = AudioClip {
+        id: 1,
+        track_id: SOURCE,
+        start_sample: 0,
+        source: ClipSource::memory(samples),
+        name: "ramp".into(),
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: FadeCurve::Linear,
+        fade_out_frames: 0,
+        fade_out_curve: FadeCurve::Linear,
+        gain_db: 0.0,
+        vocal_tuning: None,
+        warp_enabled: false,
+        original_bpm: None,
+        transpose_semitones: 0.0,
+        warp_algorithm: Default::default(),
+        warp_markers: Vec::new(),
+        tuning_render_cache: None,
+    };
+    let mut source = Track::new(SOURCE, "ramp".into());
+    source.set_output(TrackOutput::Master);
+    // Fader zero: the key is tapped pre-fader, so the master hears only
+    // the monitor's copy of the key.
+    source.set_volume(0.0);
+    let mut h = MixAudioHarness::new(
+        vec![source],
+        Vec::new(),
+        vec![clip],
+        Vec::new(),
+        Vec::new(),
+        TempoMap::default(),
+        BLOCK,
+        2,
+        SR,
+        true,
+    );
+    h.edit_plugins(|p| p.insert(MONITOR_ID, Arc::new(key_monitor_built(None, true, false))));
+    h.edit_master(|m| m.plugin_ids.push(MONITOR_ID));
+    live_route(&h, SendSource::Track(SOURCE));
+    h.shared()
+        .master_volume_bits
+        .store(1.0f32.to_bits(), Ordering::Relaxed);
+    h.shared()
+        .set_loop_range(resonance_audio::test_support::LoopRange::new(true, LOOP_IN, LOOP_OUT));
+    h.shared().playhead.store(LOOP_IN, Ordering::Release);
+    h.shared().playing.store(true, Ordering::Relaxed);
+
+    // The timeline frame each output frame of the previous callback
+    // rendered: callback `n`'s key must equal callback `n-1`'s source,
+    // frame for frame, seam or no seam.
+    let mut prev_source: Option<Vec<u64>> = None;
+    let mut seams_checked = 0;
+    for block in 0..12 {
+        let start = h.shared().playhead.load(Ordering::Acquire);
+        let out: Vec<f32> = h.render().chunks(2).map(|f| f[0]).collect();
+        let source_frames: Vec<u64> = (0..BLOCK as u64)
+            .map(|f| {
+                let t = start + f;
+                if t >= LOOP_OUT {
+                    LOOP_IN + (t - LOOP_OUT)
+                } else {
+                    t
+                }
+            })
+            .collect();
+        if let Some(prev) = &prev_source {
+            let seam_before = prev.windows(2).any(|w| w[1] < w[0]);
+            for (f, (&got, &t)) in out.iter().zip(prev).enumerate() {
+                let want = t as f32 * STEP;
+                assert!(
+                    (got - want).abs() < 1e-6,
+                    "block {block} frame {f}: key {got}, but the previous callback's source \
+                     frame there was {t} ({want}){}",
+                    if seam_before { " — that callback crossed the seam" } else { "" }
+                );
+            }
+            if seam_before {
+                seams_checked += 1;
+            }
+        }
+        prev_source = Some(source_frames);
+    }
+    assert!(seams_checked >= 2, "the run must cross the seam at least twice");
+}
+
+/// FU-R2b: the offline master pass flags a plugin's own output parameter
+/// events for the engine's poll, as every live `process()` site does —
+/// before, an export's master-chain edits waited for the next live block.
+#[test]
+fn an_offline_master_pass_flags_output_param_events() {
+    let state = fixture();
+    let slot = Arc::new(key_monitor_built(None, false, true));
+    state.shared.edit_plugins(|p| p.insert(MONITOR_ID, Arc::clone(&slot)));
+    state.shared.edit_master(|master| master.plugin_ids.push(MONITOR_ID));
+    // A new instance starts flagged (its kit info is read by the first
+    // poll); clear that so only the render can raise it.
+    slot.take_poll_pending();
+    assert!(!slot.poll_pending());
+
+    render_second_chunk(&state, StemSource::Master);
+    assert!(
+        slot.poll_pending(),
+        "the master plugin's own parameter event must reach the poll"
+    );
 }

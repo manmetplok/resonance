@@ -763,8 +763,11 @@ pub fn pw_delay_to_engine_samples(
 /// the existing stereo [`StreamingLinearResampler`] (the same one the
 /// recording drain uses; band-limited since LIB-01, with ~1 ms of
 /// lookahead) over channel pairs, preserving the interleaved N-channel
-/// layout. Allocation-free once its scratch Vecs have grown. The native PipeWire input negotiates the engine
-/// rate in the graph and never needs this.
+/// layout. Its scratch is sized at construction for chunks up to
+/// [`MONITOR_RESAMPLER_MAX_FRAMES`] input frames, so `process` — which runs
+/// on the cpal input callback, a realtime thread — never allocates for
+/// any chunk a device delivers (code review RT-15). The native PipeWire
+/// input negotiates the engine rate in the graph and never needs this.
 ///
 /// The recording push is untouched — takes stay at the device rate and
 /// are resampled once at drain time, exactly as before.
@@ -776,18 +779,41 @@ pub struct MonitorResampler {
     out: Vec<f32>,
 }
 
+/// Largest input chunk, in frames, the cpal-fallback [`MonitorResampler`]
+/// is pre-sized for: well past any callback buffer a device hands over
+/// (cpal's default buffers are a few thousand frames at most). A larger
+/// chunk still converts correctly; it grows the scratch once.
+pub const MONITOR_RESAMPLER_MAX_FRAMES: usize = 16_384;
+
 impl MonitorResampler {
     pub fn new(source_rate: u32, target_rate: u32, channels: usize) -> Self {
+        Self::with_max_frames(source_rate, target_rate, channels, MONITOR_RESAMPLER_MAX_FRAMES)
+    }
+
+    /// [`Self::new`] with the scratch sized for input chunks of up to
+    /// `max_frames` frames: `process` allocates nothing for those.
+    pub fn with_max_frames(
+        source_rate: u32,
+        target_rate: u32,
+        channels: usize,
+        max_frames: usize,
+    ) -> Self {
         let channels = channels.max(1);
         let n_pairs = channels.div_ceil(2);
+        // Output frames for `max_frames` input frames, rounded up, plus
+        // slack for the streaming filter's phase (it may release one more
+        // frame than the plain ratio on a given chunk).
+        let max_out = (max_frames as u64 * target_rate.max(1) as u64)
+            .div_ceil(source_rate.max(1) as u64) as usize
+            + 4;
         Self {
             channels,
             pairs: (0..n_pairs)
                 .map(|_| crate::decode::StreamingLinearResampler::new(source_rate, target_rate))
                 .collect(),
-            pair_in: Vec::new(),
-            pair_outs: (0..n_pairs).map(|_| Vec::new()).collect(),
-            out: Vec::new(),
+            pair_in: Vec::with_capacity(max_frames * 2),
+            pair_outs: (0..n_pairs).map(|_| Vec::with_capacity(max_out * 2)).collect(),
+            out: Vec::with_capacity(max_out * channels),
         }
     }
 

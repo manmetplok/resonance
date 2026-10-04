@@ -178,6 +178,62 @@ fn report_slot_hands_each_report_to_the_engine_loop_once() {
     assert_eq!(slot.take_new(&mut seen), None);
 }
 
+/// RT-16: the seqlock never hands out a torn report while a writer
+/// publishes flat out. Every field of report `i` is derived from `i`, so
+/// a mix of two publishes is detectable. (x86 is strongly ordered enough
+/// to pass even without the fences; on aarch64 this is the race they
+/// close.)
+#[test]
+fn report_slot_never_hands_out_a_torn_report() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    fn report(i: u64) -> CycleLoadReport {
+        CycleLoadReport {
+            avg: i as f32,
+            peak: i as f32,
+            overruns_window: i,
+            overruns_lifetime: i,
+            shortfalls_window: i,
+            shortfalls_lifetime: i,
+            lock_misses_window: i,
+            lock_misses_lifetime: i,
+            pool: PoolReport {
+                threads: i as u32,
+                critical_us: i as u32,
+                critical_track: Some(i),
+                efficiency: i as f32,
+                join_wait_us: i as f32,
+            },
+        }
+    }
+
+    let slot = Arc::new(CycleReportSlot::default());
+    let done = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let (slot, done) = (Arc::clone(&slot), Arc::clone(&done));
+        std::thread::spawn(move || {
+            let mut i = 1u64;
+            while !done.load(Ordering::Relaxed) {
+                slot.publish(&report(i % 1_000_000));
+                i += 1;
+            }
+        })
+    };
+    let mut seen = 0u64;
+    let mut read = 0;
+    let deadline = Instant::now() + Duration::from_millis(200);
+    while Instant::now() < deadline {
+        if let Some(r) = slot.take_new(&mut seen) {
+            assert_eq!(r, report(r.overruns_window), "torn report");
+            read += 1;
+        }
+    }
+    done.store(true, Ordering::Relaxed);
+    writer.join().unwrap();
+    assert!(read > 0, "the reader saw reports");
+}
+
 /// A minimal playing project: one track, one clip.
 fn playing_harness() -> MixAudioHarness {
     let mut track = Track::new(1, "clips".into());

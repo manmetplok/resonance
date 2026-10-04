@@ -418,18 +418,8 @@ impl MixAudioHarness {
 
     /// Load an audition preview source and start it (the overlay branch).
     pub fn start_audition(&self, samples: Vec<f32>, looping: bool) {
-        use std::sync::atomic::Ordering;
         let source = crate::engine::AuditionSource::from_samples(samples, self.sample_rate);
-        crate::engine::retire::publish_opt(
-            &self.shared.audition_source,
-            Some(std::sync::Arc::new(source)),
-            &self.shared.retired,
-        );
-        self.shared.audition_pos_bits.store(0f64.to_bits(), Ordering::Relaxed);
-        self.shared.audition_loop.store(looping, Ordering::Relaxed);
-        // Release pairs with the overlay's Acquire gate, matching
-        // `start_audition_in_place`.
-        self.shared.audition_playing.store(true, Ordering::Release);
+        crate::engine::start_audition_in_place(&self.shared, source, 0, 120.0, looping, false);
     }
 
     /// Queue a live hardware-MIDI event for the callback's pickup pass.

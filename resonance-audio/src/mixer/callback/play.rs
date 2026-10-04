@@ -73,6 +73,13 @@ pub(super) fn render_playing_block(
     if scratch.continuity.jumped(playhead) {
         panic_instrument_tracks(tracks, plugins, scratch.midi_stash, false);
         scratch.sidechain.clear();
+        // The mix meter's integrated / range readings describe one
+        // continuous run of the timeline; a jump starts a new one (code
+        // review RT-03).
+        scratch.ab_meters.mix.reset();
+    } else if !scratch.continuity.was_rolling() {
+        // Transport start: a fresh integrated reading per run.
+        scratch.ab_meters.mix.reset();
     }
 
     // Snapshot the parameter-automation lanes once per buffer (wait-free,
