@@ -13,14 +13,56 @@
 
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::probe::{Hint, Probe};
 use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
+use symphonia::default::codecs::{FlacDecoder, PcmDecoder};
+use symphonia::default::formats::{FlacReader, WavReader};
 use thiserror::Error;
+
+/// Format probe for the plugin-facing, in-memory WAV decode path
+/// (`decode_wav_stereo`, `decode_wav_channels`, `decode_wav_native`,
+/// `decode_wav_split` — IR/drums/sample-plugin loaders, always hinted
+/// `"wav"`). Registers only RIFF/WAV and FLAC, never the compressed
+/// formats (MP3, AAC, Ogg/Vorbis, MP4) the workspace `symphonia` feature
+/// list also enables for [`decode_file`]'s arbitrary-file import path.
+///
+/// Built explicitly rather than through `symphonia::default::get_probe()`,
+/// which eagerly registers every format the enabled features allow. Cargo
+/// features are unified across a whole build graph — `scripts/bundle.sh`
+/// builds every plugin in one invocation, so per-crate feature trimming on
+/// the `symphonia` dependency can't shrink what's *compiled*, only what's
+/// *referenced*. Registering only wav+flac here means no plugin cdylib's
+/// reachable code calls into the mp3/aac/ogg/vorbis registration or decode
+/// paths, so the linker can still drop them from the shipped binary
+/// (DEP-06, code-review-2026-10-02; verify with `nm -C` on a release
+/// build). `decode_file` keeps the app's full-codec `default::get_probe()`.
+fn plugin_probe() -> &'static Probe {
+    static PROBE: OnceLock<Probe> = OnceLock::new();
+    PROBE.get_or_init(|| {
+        let mut probe = Probe::default();
+        probe.register_format::<WavReader<'_>>();
+        probe.register_format::<FlacReader<'_>>();
+        probe
+    })
+}
+
+/// Codec half of [`plugin_probe`]: PCM (plain WAV samples) and FLAC.
+fn plugin_codecs() -> &'static CodecRegistry {
+    static REGISTRY: OnceLock<CodecRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let mut registry = CodecRegistry::new();
+        registry.register_audio_decoder::<PcmDecoder>();
+        registry.register_audio_decoder::<FlacDecoder>();
+        registry
+    })
+}
 
 /// Failure decoding a WAV (or, for [`decode_file`], any workspace-enabled
 /// `symphonia` format) into samples. `kind` labels which entry point failed
@@ -127,7 +169,7 @@ pub fn decode_wav_native(
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
     let mut hint = Hint::new();
     hint.with_extension("wav");
-    let decoded = decode_source_to_interleaved(mss, hint, "WAV")?;
+    let decoded = decode_source_to_interleaved(mss, hint, "WAV", plugin_probe(), plugin_codecs())?;
     let source_rate = decoded.sample_rate;
     let resample = (source_rate - target_sample_rate).abs() > 1.0;
     if decoded.channels == 1 {
@@ -498,7 +540,7 @@ pub fn decode_wav_split(
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
     let mut hint = Hint::new();
     hint.with_extension("wav");
-    let decoded = decode_source_to_interleaved(mss, hint, "WAV")?;
+    let decoded = decode_source_to_interleaved(mss, hint, "WAV", plugin_probe(), plugin_codecs())?;
     let source_rate = decoded.sample_rate;
     let resample = (source_rate - target_sample_rate).abs() > 1.0;
     let kernel = if resample {
@@ -664,7 +706,7 @@ pub fn decode_file(
         hint.with_extension(ext);
     }
 
-    let decoded = decode_source_to_interleaved(mss, hint, "audio")?;
+    let decoded = decode_source_to_interleaved(mss, hint, "audio", symphonia::default::get_probe(), symphonia::default::get_codecs())?;
     let source_rate = decoded.sample_rate;
     let stereo = to_stereo_interleaved(&decoded.samples, decoded.channels);
 
@@ -684,9 +726,9 @@ struct Decoded {
     channels: usize,
 }
 
-/// Run the input bytes through symphonia's default decoder registry
-/// and return the full interleaved `f32` sample stream plus the
-/// source rate and channel count.
+/// Run the input bytes through the plugin-side wav+flac decoder registry
+/// ([`plugin_probe`]/[`plugin_codecs`]) and return the full interleaved
+/// `f32` sample stream plus the source rate and channel count.
 fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, WavDecodeError> {
     let cursor = Cursor::new(data.to_vec());
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
@@ -694,17 +736,22 @@ fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, WavDecodeError> {
     let mut hint = Hint::new();
     hint.with_extension("wav");
 
-    decode_source_to_interleaved(mss, hint, "WAV")
+    decode_source_to_interleaved(mss, hint, "WAV", plugin_probe(), plugin_codecs())
 }
 
 /// Shared symphonia probe → decode loop behind both the in-memory WAV
-/// API and `decode_file`. `kind` only labels error messages.
+/// API and `decode_file`. `kind` only labels error messages. `probe`/
+/// `codecs` let callers pick the minimal plugin-side registry
+/// ([`plugin_probe`]/[`plugin_codecs`]) or the app's full-codec
+/// `symphonia::default` one (DEP-06, code-review-2026-10-02).
 fn decode_source_to_interleaved(
     mss: MediaSourceStream,
     hint: Hint,
     kind: &'static str,
+    probe: &Probe,
+    codecs: &CodecRegistry,
 ) -> Result<Decoded, WavDecodeError> {
-    let mut format = symphonia::default::get_probe()
+    let mut format = probe
         .probe(
             &hint,
             mss,
@@ -740,7 +787,7 @@ fn decode_source_to_interleaved(
         .unwrap_or(1)
         .max(1);
 
-    let mut decoder = symphonia::default::get_codecs()
+    let mut decoder = codecs
         .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())
         .map_err(|source| WavDecodeError::Decoder { kind, source })?;
 
