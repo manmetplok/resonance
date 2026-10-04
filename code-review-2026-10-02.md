@@ -81,8 +81,8 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | merged | 2b41b974 |
 | 6 | W1 MIDI learn UI | FU-A1a1: EnterMidiLearn/CancelMidiLearn/ClearMidiBinding/ClearAllMidiBindings, SetControllerMap, SetControlSurfaceInput | opus | running | |
 | 6 | W2 clip warp UI | FU-A1a1: SetClipWarp, SetClipWarpMarkers, DetectClipTempo | opus | merged | de2625d3 |
-| 6 | W3 loop-record mode + I/O latency | FU-A1a1: SetLoopRecordMode, QueryIoLatency | sonnet | running | |
-| 6 | W4 freeze auto-stale, pool remove/relink, delete dead helpers | FU-A1a3 | opus | running | |
+| 6 | W3 loop-record mode + I/O latency | FU-A1a1: SetLoopRecordMode, QueryIoLatency | sonnet | merged | 1482d278 |
+| 6 | W4 freeze auto-stale, pool remove/relink, delete dead helpers | FU-A1a3 | opus | merged | c1a4621a |
 
 ### Follow-ups raised by batches
 
@@ -222,6 +222,18 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 - **FU-W2c:** `song.tracks` doesn't report warp state.
 - **FU-W2d:** `hit_test.rs::clip_handles` assumes fades are 0, so a fade handle can only be grabbed at the clip's corners.
 - **FU-W2e:** the warp marker strip shadows the trim handle at the bottom corners.
+- **FU-W3a:** no automated test covers `QueryIoLatency` against the real PipeWire engine.
+- **FU-W3b:** loop-record mode has a setting only (Settings → Recording), with no control in the transport bar. Add one once a reusable popover widget exists.
+- *W3:* loop-record mode is saved per project and is undoable.
+- **FU-W4a:** removed pool assets leave their `audio/asset_N.wav` files on disk. Consider purging files nothing references at save time.
+- **FU-W4b:** a clip whose audio file is missing looks like any other clip on the timeline.
+- **FU-W4c:** there is no `clip.relink` control method. It needs a job, plus a `missing` flag in the clip and song views.
+- **FU-W4d:** a third-party plugin that changes params while its editor is closed, without announcing them, isn't caught by freeze auto-stale.
+- **FU-W4e:** undoing a clip relink restores the asset link but not the silence. This is the same limitation as asset relink.
+- **FU-W4f:** `pool_usage_staleness.rs` drops its capture receiver, which can trip the FU-S2a trap.
+- *W4:*
+  - The unwired freeze-fingerprint helpers compared incompatible hashes, so they were replaced. Auto-stale now fires on plugin-side param edits and on a rescan while the editor is open; the existing pre-dispatch gate and the UPD-05 fingerprint cover the rest.
+  - "Remove unused" removes entries from the pool index only, and is undoable.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
