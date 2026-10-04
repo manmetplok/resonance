@@ -143,17 +143,126 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// `(line number, line)` pairs with `//` comments cut off, so a rule
-/// about code is not tripped by a sentence about the rule.
+/// about code is not tripped by a sentence about the rule. String
+/// literals are kept (some rules look for one) and a `//` inside one is
+/// not a comment (code review ARCH2-07: cutting at the first `//` made
+/// everything after a `"https://…"` invisible to every rule).
 fn code_lines(path: &Path) -> Vec<(usize, String)> {
-    fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-        .lines()
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let mut lexer = Lexer::Code;
+    text.lines()
         .enumerate()
-        .map(|(i, line)| {
-            let code = line.split("//").next().unwrap_or("");
-            (i + 1, code.to_owned())
-        })
+        .map(|(i, line)| (i + 1, strip_line_comment(line, &mut lexer)))
         .collect()
+}
+
+/// Where a line starts, as far as comment stripping cares: string
+/// literals may span lines.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Lexer {
+    Code,
+    /// Inside a `"…"` literal (escapes apply).
+    Str,
+    /// Inside a raw `r#…#"…"#…#` literal with this many `#`s.
+    RawStr(usize),
+}
+
+/// `line` up to its `//` comment, if any, honouring string and char
+/// literals; `state` carries an open string literal to the next line.
+fn strip_line_comment(line: &str, state: &mut Lexer) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match *state {
+            Lexer::Str => match chars[i] {
+                '\\' => i += 2,
+                '"' => {
+                    *state = Lexer::Code;
+                    i += 1;
+                }
+                _ => i += 1,
+            },
+            Lexer::RawStr(hashes) => {
+                if chars[i] == '"' && chars[i + 1..].iter().take(hashes).filter(|c| **c == '#').count() == hashes {
+                    *state = Lexer::Code;
+                    i += 1 + hashes;
+                } else {
+                    i += 1;
+                }
+            }
+            Lexer::Code => {
+                let c = chars[i];
+                let prev_ident = i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+                if c == '/' && chars.get(i + 1) == Some(&'/') {
+                    return chars[..i].iter().collect();
+                } else if c == '"' {
+                    *state = Lexer::Str;
+                    i += 1;
+                } else if c == 'r' && !prev_ident || (c == 'b' && chars.get(i + 1) == Some(&'r') && !prev_ident) {
+                    // Raw string: `r"`, `r#"`, `br##"` …; else an identifier.
+                    let start = if c == 'b' { i + 2 } else { i + 1 };
+                    let hashes = chars[start..].iter().take_while(|c| **c == '#').count();
+                    if chars.get(start + hashes) == Some(&'"') {
+                        *state = Lexer::RawStr(hashes);
+                        i = start + hashes + 1;
+                    } else {
+                        i += 1;
+                    }
+                } else if c == '\'' {
+                    // A char literal (`'"'`, `'\''`, `'/'`) — or a lifetime.
+                    if chars.get(i + 1) == Some(&'\\') {
+                        let close = chars[i + 2..].iter().position(|c| *c == '\'');
+                        i = close.map_or(i + 1, |p| i + 2 + p + 1);
+                    } else if chars.get(i + 2) == Some(&'\'') {
+                        i += 3;
+                    } else {
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    line.to_owned()
+}
+
+/// The comment stripper itself: `//` inside a string is code, and every
+/// workspace source file lexes back to plain code at its end (a file that
+/// ends "inside a string" means a literal was misread, which would hide
+/// the rest of that file from every rule).
+#[test]
+fn comment_stripper_honours_string_literals() {
+    let mut s = Lexer::Code;
+    assert_eq!(
+        strip_line_comment(r#"let u = "https://x"; f(); // note"#, &mut s),
+        r#"let u = "https://x"; f(); "#
+    );
+    assert_eq!(strip_line_comment(r##"let r = r#"a // b"#; g() // c"##, &mut s), r##"let r = r#"a // b"#; g() "##);
+    assert_eq!(strip_line_comment(r#"let q = '"'; h() // d"#, &mut s), r#"let q = '"'; h() "#);
+    assert_eq!(strip_line_comment(r#"fn f<'a>(x: &'a str) // e"#, &mut s), r#"fn f<'a>(x: &'a str) "#);
+    assert_eq!(strip_line_comment(r#"let m = "one"#, &mut s), r#"let m = "one"#);
+    assert_eq!(s, Lexer::Str, "a string left open carries to the next line");
+    assert_eq!(strip_line_comment(r#"two // still string"; k() // f"#, &mut s), r#"two // still string"; k() "#);
+    assert_eq!(s, Lexer::Code);
+
+    let root = workspace_root();
+    let mut unbalanced = Vec::new();
+    for p in packages() {
+        let mut files = Vec::new();
+        rust_files(&p.dir, &mut files);
+        for file in files {
+            let text = fs::read_to_string(&file).unwrap_or_default();
+            let mut state = Lexer::Code;
+            for line in text.lines() {
+                strip_line_comment(line, &mut state);
+            }
+            if state != Lexer::Code {
+                unbalanced.push(file.strip_prefix(&root).unwrap_or(&file).display().to_string());
+            }
+        }
+    }
+    report("arch-invariants: the comment stripper misread a string literal in", &unbalanced);
 }
 
 fn report(rule: &str, violations: &[String]) {
@@ -187,15 +296,28 @@ fn report(rule: &str, violations: &[String]) {
 /// `plugins_never_name_a_platform_runtime`. `resonance-mastering-assist`
 /// is the mastering plugin's ("`resonance-mastering-assist` ──►
 /// resonance-mastering plugin").
+///
+/// Those two, and music theory, are per-plugin edges, not fleet-wide
+/// ones (code review ARCH2-07): [`PLUGIN_EXTRA_DEPS`] grants each to the
+/// plugin the diagram draws it to. `resonance-dsp-test-support` is a test
+/// harness, so any crate may have it only as a dev-dependency
+/// (`test_support_crates_are_dev_dependencies_only`).
 const PLUGIN_DEPS: &[&str] = &[
     "resonance-plugin",
     "resonance-common",
     "resonance-dsp",
     "resonance-metering",
-    "resonance-mastering-assist",
-    "resonance-music-theory",
     "plugin-gui-core",
     "resonance-dsp-test-support",
+];
+
+/// Edges of the diagram that reach one plugin only.
+const PLUGIN_EXTRA_DEPS: &[(&str, &[&str])] = &[
+    // "resonance-mastering-assist ──► resonance-mastering plugin"
+    ("resonance-mastering", &["resonance-mastering-assist"]),
+    // "resonance-music-theory ──► resonance-granular-delay plugin
+    // (scale-quantized grain pitch)"
+    ("resonance-granular-delay", &["resonance-music-theory"]),
 ];
 
 /// The edge list of ARCHITECTURE.md's crate diagram, per crate, any
@@ -257,6 +379,10 @@ fn allowed_internal_deps(name: &str) -> Option<&'static [&'static str]> {
 /// "../plugins/resonance-mastering", default-features = false }` back in
 /// `resonance-app/Cargo.toml` → failed with `resonance-app ->
 /// resonance-mastering (normal)`; reverted.
+/// Exercised 2026-10-04 (ARCH2-07: per-plugin rows): added
+/// `resonance-mastering-assist = { path = "../../resonance-mastering-assist" }`
+/// to `plugins/resonance-compressor/Cargo.toml` → failed with
+/// `resonance-compressor -> resonance-mastering-assist (normal)`; reverted.
 #[test]
 fn crate_dag_matches_architecture_md() {
     let root = workspace_root();
@@ -281,11 +407,15 @@ fn crate_dag_matches_architecture_md() {
             }
             continue;
         }
-        let allowed = if p.is_plugin(&root) {
-            PLUGIN_DEPS
+        let allowed: Vec<&str> = if p.is_plugin(&root) {
+            let extra = PLUGIN_EXTRA_DEPS
+                .iter()
+                .filter(|(plugin, _)| *plugin == p.name)
+                .flat_map(|(_, deps)| deps.iter());
+            PLUGIN_DEPS.iter().chain(extra).copied().collect()
         } else {
             match allowed_internal_deps(&p.name) {
-                Some(a) => a,
+                Some(a) => a.to_vec(),
                 None => {
                     violations.push(format!(
                         "{}: not in the layering table — decide its layer in \
@@ -337,25 +467,39 @@ fn crate_dag_matches_architecture_md() {
 /// Exercised 2026-09-26: re-added `iced = { workspace = true, optional =
 /// true }` to `resonance-plugin/Cargo.toml` → failed with
 /// `resonance-plugin -> iced`; reverted.
+/// Exercised 2026-10-04 (ARCH2-07: prefix matching): added `iced_widget =
+/// "0.14"` to `resonance-audio/Cargo.toml` → failed with
+/// `resonance-audio -> iced_widget`; then `winit = "0.30"` to
+/// `plugins/resonance-gate/Cargo.toml` → failed; both reverted.
 #[test]
 fn framework_crates_stay_where_the_diagram_puts_them() {
     let pkgs = packages();
-    // (dependency name prefix, crates that may name it directly)
+    let internal: BTreeSet<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+    // (dependency name prefix, crates that may name it directly). A
+    // prefix covers the crate and its family (`iced` → `iced_widget`,
+    // `iced_core`, …; `egui` → `egui_extras`, `egui-wgpu`); the LONGEST
+    // matching prefix decides, so `egui_glow` has its own, narrower row.
+    // An empty owner list bans the stack outright.
     let table: &[(&str, &[&str])] = &[
         ("iced", &["resonance-app"]),
-        ("iced_test", &["resonance-app"]),
         ("egui", &["plugin-gui-core", "wayland-plugin-gui", "cocoa-plugin-gui"]),
         ("egui_glow", &["wayland-plugin-gui", "cocoa-plugin-gui"]),
-        ("wayland-client", &["wayland-plugin-gui"]),
-        ("wayland-protocols", &["wayland-plugin-gui"]),
-        ("wayland-egl", &["wayland-plugin-gui"]),
-        ("smithay-client-toolkit", &["wayland-plugin-gui"]),
-        ("khronos-egl", &["wayland-plugin-gui"]),
+        ("glow", &["wayland-plugin-gui", "cocoa-plugin-gui"]),
+        ("eframe", &[]),
+        ("winit", &[]),
+        ("wgpu", &[]),
+        ("wayland", &["wayland-plugin-gui"]),
+        ("smithay", &["wayland-plugin-gui"]),
+        ("khronos", &["wayland-plugin-gui"]),
         ("objc2", &["cocoa-plugin-gui"]),
-        ("objc2-foundation", &["cocoa-plugin-gui"]),
-        ("objc2-app-kit", &["cocoa-plugin-gui"]),
         ("dispatch2", &["cocoa-plugin-gui"]),
     ];
+    let family = |dep: &str, prefix: &str| {
+        dep == prefix
+            || dep
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('_') || rest.starts_with('-'))
+    };
     // CLAP is the plugin ABI: the SDK speaks it, the host speaks it, the
     // plugins' in-process host tests speak it. Nothing below them does.
     let no_clap: &[&str] = &[
@@ -374,7 +518,12 @@ fn framework_crates_stay_where_the_diagram_puts_them() {
     let mut violations = Vec::new();
     for p in &pkgs {
         for d in &p.deps {
-            if let Some((_, owners)) = table.iter().find(|(dep, _)| *dep == d.name) {
+            // Workspace crates (`wayland-plugin-gui`) are the DAG test's.
+            let row = table
+                .iter()
+                .filter(|(prefix, _)| family(&d.name, prefix))
+                .max_by_key(|(prefix, _)| prefix.len());
+            if let (Some((_, owners)), false) = (row, internal.contains(d.name.as_str())) {
                 if !owners.contains(&p.name.as_str()) {
                     violations.push(format!("{} -> {} ({})", p.name, d.name, d.kind));
                 }
@@ -901,6 +1050,10 @@ fn audio_test_binaries_are_the_known_groups() {
 ///
 /// Exercised 2026-09-26: added `#[cfg(test)] mod tests {}` to
 /// `resonance-dsp/src/lib.rs` → failed on that line; reverted.
+/// Exercised 2026-10-04 (ARCH2-07: any `cfg(…test…)`, inner attributes
+/// too): added `#[cfg(all(test, unix))] mod t {}` to
+/// `resonance-dsp/src/lib.rs` → failed; then `#![cfg(test)]` at the top
+/// of `resonance-dsp/src/biquad.rs` → failed; both reverted.
 #[test]
 fn no_inline_test_modules_outside_the_documented_exception() {
     let root = workspace_root();
@@ -922,7 +1075,7 @@ fn no_inline_test_modules_outside_the_documented_exception() {
             .display()
             .to_string();
             for (n, code) in code_lines(&file) {
-                if code.trim_start().starts_with("#[cfg(test)]") && !allowed.contains(rel.as_str()) {
+                if is_test_cfg(&code) && !allowed.contains(rel.as_str()) {
                     violations.push(format!("{rel}:{n}: inline test module — write `tests/<feature>.rs` instead"));
                 }
             }
@@ -932,6 +1085,26 @@ fn no_inline_test_modules_outside_the_documented_exception() {
         "ARCHITECTURE.md → Test Layout: no `#[cfg(test)]` in src/ beyond the documented exception",
         &violations,
     );
+}
+
+/// Whether `code` is a `#[cfg(…)]` / `#![cfg(…)]` / `#[cfg_attr(…)]`
+/// attribute that names the bare `test` cfg anywhere in its predicate —
+/// `cfg(test)`, `cfg(all(test, unix))`, `cfg(any(test, feature = …))` —
+/// but not a feature that merely contains the word (`feature =
+/// "test-internals"`).
+fn is_test_cfg(code: &str) -> bool {
+    let t = code.trim_start();
+    let Some(attr) = ["#[cfg(", "#![cfg(", "#[cfg_attr(", "#![cfg_attr("]
+        .iter()
+        .find_map(|p| t.strip_prefix(p))
+    else {
+        return false;
+    };
+    // Drop quoted feature names, then look for `test` as a whole token.
+    let unquoted: String = attr.split('"').step_by(2).collect::<Vec<_>>().join(" ");
+    unquoted
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(|tok| tok == "test")
 }
 
 // ---------------------------------------------------------------------------
@@ -1163,15 +1336,23 @@ fn library_crates_log_through_tracing_not_stderr() {
 /// there; latch the value into `SharedState` and log it from the engine
 /// loop instead (`cycle_load::OversizeBufferLatch`, `CycleReportSlot`).
 ///
+/// The same holds for `resonance-audio/src/render_pool/` (code review
+/// ARCH2-07): its workers render track and bus jobs inside the callback's
+/// deadline (realtime-multithreading.md), so they are audio threads too.
+///
 /// Exercised 2026-09-26: added `tracing::warn!("x");` to
 /// `resonance-audio/src/mixer/callback/mod.rs` → failed on that line;
-/// reverted.
+/// reverted. Exercised 2026-10-04: the same line in
+/// `resonance-audio/src/render_pool/mod.rs` → failed; reverted.
 #[test]
 fn audio_callback_never_logs() {
     let root = workspace_root();
     let mut files = Vec::new();
-    rust_files(&root.join("resonance-audio/src/mixer"), &mut files);
-    assert!(!files.is_empty(), "resonance-audio/src/mixer moved? update this test");
+    for dir in ["resonance-audio/src/mixer", "resonance-audio/src/render_pool"] {
+        let before = files.len();
+        rust_files(&root.join(dir), &mut files);
+        assert!(files.len() > before, "{dir} moved? update this test");
+    }
     let mut violations = Vec::new();
     for file in files {
         for (n, code) in code_lines(&file) {
@@ -1190,7 +1371,7 @@ fn audio_callback_never_logs() {
         }
     }
     report(
-        "ARCH-05: nothing under resonance-audio/src/mixer/ logs or prints (audio thread)",
+        "ARCH-05: nothing under resonance-audio/src/{mixer,render_pool}/ logs or prints (audio threads)",
         &violations,
     );
 }
@@ -1490,6 +1671,155 @@ fn view_layer_never_hardcodes_pure_white_or_black() {
     }
     report(
         "ux-guidelines.md → Color Rules: no Color::WHITE / Color::BLACK in view/ — use a theme token",
+        &violations,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Rules added by code review ARCH2-07
+// ---------------------------------------------------------------------------
+
+/// Test-harness crates no production build may link: they exist for
+/// `tests/` and `benches/` (`resonance-dsp-test-support`: the DSP golden
+/// / bless helpers).
+const TEST_SUPPORT_CRATES: &[&str] = &["resonance-dsp-test-support"];
+
+/// ARCH2-07: "`resonance-dsp-test-support` is allowed as a normal
+/// dependency" — the plugin allow-list named it, so any plugin could ship
+/// it. It may only ever be a dev-dependency, of any crate.
+///
+/// Exercised 2026-10-04: moved `resonance-dsp-test-support` from
+/// `[dev-dependencies]` to `[dependencies]` in
+/// `plugins/resonance-gate/Cargo.toml` → failed with `resonance-gate ->
+/// resonance-dsp-test-support (normal)`; reverted.
+#[test]
+fn test_support_crates_are_dev_dependencies_only() {
+    let mut violations = Vec::new();
+    for p in packages() {
+        for d in p.deps.iter().filter(|d| TEST_SUPPORT_CRATES.contains(&d.name.as_str())) {
+            if d.kind != "dev" {
+                violations.push(format!("{} -> {} ({})", p.name, d.name, d.kind));
+            }
+        }
+    }
+    report(
+        "ARCH2-07: test-support crates are dev-dependencies only",
+        &violations,
+    );
+}
+
+/// ARCHITECTURE.md / `update/control/mod.rs` (`run_via_update`): "This is
+/// the only way a mutating control method may touch state" — a control
+/// handler synthesizes a domain `Message` and routes it through
+/// `update()`, which runs the gates, the undo recorder and the
+/// transaction. Sending an `AudioCommand` straight from a handler skips
+/// all three (and the mirror the handler's echo would update). Zero sites
+/// when the rule was written.
+///
+/// Exercised 2026-10-04: added `let _ = app.engine.send(
+/// resonance_audio::types::AudioCommand::Stop);` to a handler in
+/// `resonance-app/src/update/control/transport.rs` → failed on that line;
+/// reverted.
+#[test]
+fn control_handlers_never_send_engine_commands() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-app/src/update/control"), &mut files);
+    assert!(!files.is_empty(), "update/control moved? update this test");
+    let mut violations = Vec::new();
+    for file in files {
+        let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+        for (n, code) in code_lines(&file) {
+            if code.contains("engine.send(") {
+                violations.push(format!(
+                    "{rel}:{n}: a control handler sends an engine command — synthesize the \
+                     domain Message and `run_via_update` it"
+                ));
+            }
+        }
+    }
+    report(
+        "update/control: handlers reach the engine only through update() (run_via_update)",
+        &violations,
+    );
+}
+
+/// Top-level test files (one binary each) per crate outside the app and
+/// the engine, which have their own exact lists above. A ratchet, not a
+/// ban (code review ARCH2-07: ~410 such files when it was written; moving
+/// them is not worth the churn): the count must equal the cap, so a new
+/// file fails until someone either makes it a module of an existing
+/// binary (preferred — every binary relinks the crate) or raises the cap
+/// deliberately, and merging files must lower it.
+const TEST_BINARY_CAPS: &[(&str, usize)] = &[
+    ("cocoa-plugin-gui", 3),
+    ("plugin-gui-core", 4),
+    ("plugins/resonance-amp", 29),
+    ("plugins/resonance-color", 14),
+    ("plugins/resonance-compressor", 14),
+    ("plugins/resonance-delay", 15),
+    ("plugins/resonance-drums", 43),
+    ("plugins/resonance-eq", 14),
+    ("plugins/resonance-gate", 14),
+    ("plugins/resonance-granular-delay", 24),
+    ("plugins/resonance-ir", 11),
+    ("plugins/resonance-mastering", 35),
+    ("plugins/resonance-reverb", 10),
+    ("plugins/resonance-stereo", 6),
+    ("plugins/resonance-wavetable", 28),
+    ("resonance-common", 24),
+    ("resonance-control", 6),
+    ("resonance-dsp", 33),
+    ("resonance-dsp-test-support", 1),
+    ("resonance-mastering-assist", 2),
+    ("resonance-mcp", 7),
+    ("resonance-metering", 25),
+    ("resonance-music-theory", 42),
+    ("resonance-plugin", 33),
+    ("resonance-svs", 5),
+    ("tools/arch-invariants", 1),
+    ("wayland-plugin-gui", 5),
+];
+
+/// The CLAUDE.md test-binary rule, extended to every crate as a ratchet
+/// (see [`TEST_BINARY_CAPS`]).
+///
+/// Exercised 2026-10-04: created `resonance-dsp/tests/scratch.rs` →
+/// failed with "34 top-level test files, cap 33"; deleted.
+#[test]
+fn test_binary_counts_only_grow_deliberately() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    for p in packages() {
+        let rel = p.rel_dir(&root).display().to_string();
+        if rel == "resonance-app" || rel == "resonance-audio" {
+            continue;
+        }
+        let count = fs::read_dir(p.dir.join("tests"))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|x| x == "rs"))
+                    .count()
+            })
+            .unwrap_or(0);
+        match TEST_BINARY_CAPS.iter().find(|(dir, _)| *dir == rel) {
+            None if count > 0 => violations.push(format!(
+                "{rel}: {count} top-level test files and no row in `TEST_BINARY_CAPS`"
+            )),
+            None => {}
+            Some((_, cap)) if count > *cap => violations.push(format!(
+                "{rel}: {count} top-level test files, cap {cap} — add a module to an existing \
+                 test binary instead (or raise the cap deliberately)"
+            )),
+            Some((_, cap)) if count < *cap => violations.push(format!(
+                "{rel}: {count} top-level test files, cap {cap} — lower the cap to {count}"
+            )),
+            Some(_) => {}
+        }
+    }
+    report(
+        "ARCH2-07: per-crate test-binary counts are a ratchet (TEST_BINARY_CAPS)",
         &violations,
     );
 }
