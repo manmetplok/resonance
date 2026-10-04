@@ -1804,7 +1804,7 @@ const TEST_BINARY_CAPS: &[(&str, usize)] = &[
     ("plugins/resonance-reverb", 10),
     ("plugins/resonance-stereo", 6),
     ("plugins/resonance-wavetable", 28),
-    ("resonance-common", 24),
+    ("resonance-common", 25), // +1 ARCH2-04: the content_index conformance suite
     ("resonance-control", 6),
     ("resonance-dsp", 33),
     ("resonance-dsp-test-support", 1),

@@ -31,17 +31,25 @@
 //! `library.json` runs under an exclusive `File::lock` on `library.lock`,
 //! re-reading the index under the lock first, so two processes never put
 //! two models in one slot. Nothing here may run on an audio thread.
+//!
+//! The slot table, index I/O, lock and lookup are
+//! [`crate::content_index`], shared with the drum-kit library; this module
+//! is what a NAM model is (code review ARCH2-04).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::File;
-use std::io::Read;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::atomic_file::{atomic_write, quarantine_corrupt, AtomicWriteError};
+use crate::atomic_file::{atomic_write, AtomicWriteError};
+use crate::content_index::{
+    self, canonical_ids, mtime_ns, slots_and_duplicates, stat_stamp, with_lock, Entries,
+    IndexFile, IndexedEntry, SlotTable,
+};
+pub use crate::content_index::{
+    hash_bytes, hash_file, LIBRARY_FILE, LOCK_FILE, MAX_SLOT, SLOT_COUNT,
+};
 
 mod header;
 mod sidecar;
@@ -68,15 +76,6 @@ pub const TONE3000_DIR: &str = "tone3000";
 /// Where Import copies files, under the root.
 pub const IMPORTED_DIR: &str = "imported";
 
-pub const LIBRARY_FILE: &str = "library.json";
-pub const LOCK_FILE: &str = "library.lock";
-
-/// How many slots `file_select` can address (`0..=MAX_SLOT`).
-pub const SLOT_COUNT: u32 = 1000;
-pub const MAX_SLOT: u32 = SLOT_COUNT - 1;
-
-const INDEX_VERSION: u32 = 1;
-
 /// The library root: [`AMP_MODEL_DIR_ENV`] if set and non-empty, else
 /// `<data dir>/resonance/amp-models`.
 pub fn default_root() -> Option<PathBuf> {
@@ -91,21 +90,6 @@ pub fn mark_key(id: &str) -> String {
     crate::library_marks::mark_key(KIND, id)
 }
 
-/// sha256 of a file's bytes, lowercase hex. Streams in 64 KiB chunks.
-pub fn hash_file(path: &Path) -> std::io::Result<String> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex(&hasher.finalize()))
-}
-
 /// Write a downloaded model's bytes to `path` atomically (a temporary
 /// sibling, fsync, rename), creating the directory: a scan or a crash
 /// never sees a half-written `.nam` under its real name.
@@ -115,19 +99,6 @@ pub fn write_model_file(path: &Path, bytes: &[u8]) -> Result<(), LibraryError> {
     }
     atomic_write(path, bytes)?;
     Ok(())
-}
-
-/// sha256 of a byte slice, lowercase hex.
-pub fn hash_bytes(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 /// Where a model came from.
@@ -201,6 +172,24 @@ impl Entry {
 
     pub fn is_ok(&self) -> bool {
         self.status == EntryStatus::Ok
+    }
+}
+
+impl IndexedEntry for Entry {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn slot(&self) -> Option<u32> {
+        self.slot
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn is_duplicate(&self) -> bool {
+        matches!(self.status, EntryStatus::DuplicateOf(_))
+    }
+    fn key_path(&self) -> &Path {
+        &self.path
     }
 }
 
@@ -285,33 +274,12 @@ impl HeaderRecord {
     }
 }
 
-/// `library.json`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `library.json`: the shared slot table, then the file records.
+#[derive(Debug, Clone, Default, Serialize)]
 struct IndexDoc {
-    version: u32,
-    generation: u64,
-    /// The slot after the highest ever handed out.
-    next_slot: u32,
-    /// slot → id.
-    slots: BTreeMap<u32, String>,
-    /// id → the slot it held before it disappeared, so a model that comes
-    /// back gets it again while it is still free.
-    #[serde(default)]
-    retired: BTreeMap<String, u32>,
+    #[serde(flatten)]
+    table: SlotTable,
     files: Vec<FileRecord>,
-}
-
-impl Default for IndexDoc {
-    fn default() -> Self {
-        Self {
-            version: INDEX_VERSION,
-            generation: 0,
-            next_slot: 0,
-            slots: BTreeMap::new(),
-            retired: BTreeMap::new(),
-            files: Vec::new(),
-        }
-    }
 }
 
 /// Failure reading, scanning or changing the library.
@@ -358,49 +326,13 @@ pub struct ScanReport {
 }
 
 /// What an import did.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ImportOutcome {
-    /// Copied into `imported/`.
-    Added(Entry),
-    /// A file with the same bytes is already in the library (not copied).
-    AlreadyPresent(Entry),
-}
-
-impl ImportOutcome {
-    pub fn entry(&self) -> &Entry {
-        match self {
-            ImportOutcome::Added(e) | ImportOutcome::AlreadyPresent(e) => e,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Stamp {
-    len: u64,
-    mtime: Option<std::time::SystemTime>,
-}
-
-fn stat_stamp(path: &Path) -> Option<Stamp> {
-    let m = std::fs::metadata(path).ok()?;
-    Some(Stamp {
-        len: m.len(),
-        mtime: m.modified().ok(),
-    })
-}
+pub type ImportOutcome = content_index::ImportOutcome<Entry>;
 
 /// A file's mtime in nanoseconds since the epoch: the resolution the index
 /// compares at, exposed so callers checking "is this the indexed file?"
 /// compare the same way.
 pub fn file_mtime_ns(meta: &std::fs::Metadata) -> u64 {
     mtime_ns(meta)
-}
-
-fn mtime_ns(meta: &std::fs::Metadata) -> u64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0)
 }
 
 /// Sort rank of a file's directory: downloads first, then imports, then
@@ -447,13 +379,8 @@ fn scan_files(root: &Path) -> Vec<PathBuf> {
 /// The model library: the index plus its derived entries.
 #[derive(Debug, Clone)]
 pub struct Library {
-    root: Option<PathBuf>,
-    doc: IndexDoc,
-    stamp: Option<Stamp>,
-    entries: Vec<Entry>,
-    by_id: HashMap<String, usize>,
-    by_slot: HashMap<u32, usize>,
-    by_path: HashMap<PathBuf, usize>,
+    index: IndexFile<IndexDoc>,
+    entries: Entries<Entry>,
 }
 
 impl Library {
@@ -461,30 +388,28 @@ impl Library {
     /// [`LibraryError::NoRoot`]. For a platform with no data dir.
     pub fn empty() -> Self {
         Self {
-            root: None,
-            doc: IndexDoc::default(),
-            stamp: None,
-            entries: Vec::new(),
-            by_id: HashMap::new(),
-            by_slot: HashMap::new(),
-            by_path: HashMap::new(),
+            index: IndexFile {
+                root: None,
+                stamp: None,
+                doc: IndexDoc::default(),
+            },
+            entries: Entries::default(),
         }
     }
 
     /// Load the cached index under `root` without scanning. A missing
-    /// index is an empty library; a corrupt one is quarantined
-    /// (`library.json.corrupt`) and reads as empty (the next rescan
-    /// rebuilds it).
+    /// index is an empty library; a corrupt one reads as empty (the next
+    /// rescan quarantines and rebuilds it).
     pub fn open(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         let path = root.join(LIBRARY_FILE);
-        let stamp = stat_stamp(&path);
-        let doc = read_index(&path, false);
         let mut lib = Self {
-            root: Some(root),
-            doc,
-            stamp,
-            ..Self::empty()
+            index: IndexFile {
+                stamp: stat_stamp(&path),
+                doc: read_index(&path, false),
+                root: Some(root),
+            },
+            entries: Entries::default(),
         };
         lib.rebuild_entries();
         lib
@@ -498,21 +423,21 @@ impl Library {
     }
 
     pub fn root(&self) -> Option<&Path> {
-        self.root.as_deref()
+        self.index.root.as_deref()
     }
 
     pub fn tone3000_dir(&self) -> Option<PathBuf> {
-        self.root.as_ref().map(|r| r.join(TONE3000_DIR))
+        self.index.root.as_ref().map(|r| r.join(TONE3000_DIR))
     }
 
     pub fn imported_dir(&self) -> Option<PathBuf> {
-        self.root.as_ref().map(|r| r.join(IMPORTED_DIR))
+        self.index.root.as_ref().map(|r| r.join(IMPORTED_DIR))
     }
 
     /// The paths a [`crate::library_marks::FreshnessPoll`] should watch
     /// for this library: the root, its two subdirectories and the index.
     pub fn watch_paths(&self) -> Vec<PathBuf> {
-        match &self.root {
+        match &self.index.root {
             Some(r) => vec![
                 r.clone(),
                 r.join(TONE3000_DIR),
@@ -525,41 +450,41 @@ impl Library {
 
     /// The index's write counter.
     pub fn generation(&self) -> u64 {
-        self.doc.generation
+        self.index.doc.table.generation
     }
 
     /// Every entry, slotted ones first in slot order, then the rest
     /// (duplicates, the overflow past 1000) by path.
     pub fn entries(&self) -> &[Entry] {
-        &self.entries
+        &self.entries.list
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.list.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.list.is_empty()
     }
 
     /// Total bytes on disk.
     pub fn total_bytes(&self) -> u64 {
-        self.entries.iter().map(|e| e.size_bytes).sum()
+        self.entries.list.iter().map(|e| e.size_bytes).sum()
     }
 
     /// The canonical entry of a content id.
     pub fn entry(&self, id: &str) -> Option<&Entry> {
-        self.by_id.get(id).map(|&i| &self.entries[i])
+        self.entries.by_id(id)
     }
 
     /// The entry that holds `slot`.
     pub fn by_slot(&self, slot: u32) -> Option<&Entry> {
-        self.by_slot.get(&slot).map(|&i| &self.entries[i])
+        self.entries.by_slot(slot)
     }
 
     /// The entry of the file at `path` (exact path match).
     pub fn by_path(&self, path: &Path) -> Option<&Entry> {
-        self.by_path.get(path).map(|&i| &self.entries[i])
+        self.entries.by_key(path)
     }
 
     /// The slot of `id`, if it holds one.
@@ -569,85 +494,42 @@ impl Library {
 
     /// The entry of a Tone3000 model id, if it is installed.
     pub fn tone3000_model(&self, model_id: i64) -> Option<&Entry> {
-        self.entries.iter().find(|e| {
+        self.entries.list.iter().find(|e| {
             matches!(e.source, Source::Tone3000 { model_id: m, .. } if m == model_id)
                 && !matches!(e.status, EntryStatus::DuplicateOf(_))
         })
     }
 
     /// Resolve free text to a slotted entry, for `string_to_value` and
-    /// label addressing: an exact name (folded: case and diacritics), then an id
-    /// prefix of at least 6 hex digits, then a unique name prefix, then a
-    /// unique name substring. `None` when nothing or several match.
+    /// label addressing ([`content_index`]'s lookup): an exact name
+    /// (folded: case and diacritics), then an id prefix of at least 6 hex
+    /// digits, then a unique name prefix, then a unique name substring.
+    /// `None` when nothing or several match.
     pub fn find(&self, text: &str) -> Option<&Entry> {
-        let t = text.trim();
-        if t.is_empty() {
-            return None;
-        }
-        // Names match through the one library fold (case and Latin
-        // diacritics), as every browser searches them.
-        use crate::library_marks::vocab::fold;
-        let lower = fold(t);
-        let slotted = || self.entries.iter().filter(|e| e.slot.is_some());
-        // Two models can share a display name (two captures of one amp):
-        // an exact name that is not unique resolves to nothing, so the
-        // caller errors rather than silently taking the first.
-        let mut exact = slotted().filter(|e| fold(&e.name) == lower);
-        match (exact.next(), exact.next()) {
-            (Some(e), None) => return Some(e),
-            (Some(_), Some(_)) => return None,
-            _ => {}
-        }
-        if t.len() >= 6 && t.chars().all(|c| c.is_ascii_hexdigit()) {
-            let hex = t.to_ascii_lowercase();
-            let mut hits = slotted().filter(|e| e.id.starts_with(&hex));
-            if let (Some(e), None) = (hits.next(), hits.next()) {
-                return Some(e);
-            }
-        }
-        let unique = |pred: &dyn Fn(&Entry) -> bool| {
-            let mut hits = slotted().filter(|e| pred(e));
-            match (hits.next(), hits.next()) {
-                (Some(e), None) => Some(e),
-                _ => None,
-            }
-        };
-        unique(&|e: &Entry| fold(&e.name).starts_with(&lower))
-            .or_else(|| unique(&|e: &Entry| fold(&e.name).contains(&lower)))
+        self.entries.find(text)
     }
 
     /// Re-read `library.json` if its stamp (size, mtime) moved, and rebuild
     /// the entries from it. Returns whether it was re-read. One `stat` when
     /// nothing moved.
-    ///
-    /// The generation is not a reliable "unchanged" signal: an index that
-    /// was deleted and rebuilt, or rewritten by another tool, can carry the
-    /// generation this reader already has with different contents.
     pub fn reload_if_changed(&mut self) -> bool {
-        let Some(root) = &self.root else {
-            return false;
-        };
-        let path = root.join(LIBRARY_FILE);
-        let now = stat_stamp(&path);
-        if now == self.stamp {
-            return false;
+        let reread = self.index.reload_if_changed(|p| read_index(p, false));
+        if reread {
+            self.rebuild_entries();
         }
-        self.doc = read_index(&path, false);
-        self.stamp = now;
-        self.rebuild_entries();
-        true
+        reread
     }
 
     /// Scan the files, re-hash only new or changed ones, assign and free
     /// slots, and write `library.json` if anything changed. Runs under the
     /// `library.lock` file lock, re-reading the index under it.
     pub fn rescan(&mut self) -> Result<ScanReport, LibraryError> {
-        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let root = self.index.root.clone().ok_or(LibraryError::NoRoot)?;
         if !root.is_dir() {
             // Nothing installed yet: an empty library, and nothing is
             // created until the first download or import.
-            self.doc = IndexDoc::default();
-            self.stamp = None;
+            self.index.doc = IndexDoc::default();
+            self.index.stamp = None;
             self.rebuild_entries();
             return Ok(ScanReport::default());
         }
@@ -657,20 +539,7 @@ impl Library {
         if self.scan_is_current(&root) {
             return Ok(ScanReport::default());
         }
-        let lock_path = root.join(LOCK_FILE);
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .map_err(io_err("open", &lock_path))?;
-        let locked = crate::library_marks::lock_or_best_effort(&lock, &lock_path)
-            .map_err(io_err("lock", &lock_path))?;
-        let result = self.rescan_locked(&root);
-        if locked {
-            let _ = lock.unlock();
-        }
-        result
+        with_lock(&root, |op, path, e| io_err(op, path)(e), || self.rescan_locked(&root))
     }
 
     fn rescan_locked(&mut self, root: &Path) -> Result<ScanReport, LibraryError> {
@@ -728,60 +597,19 @@ impl Library {
         }
 
         // Canonical file per id: the first in scan order.
-        let mut canonical: Vec<&str> = Vec::new();
-        let mut seen_ids: HashSet<&str> = HashSet::new();
-        for r in &records {
-            if seen_ids.insert(r.id.as_str()) {
-                canonical.push(r.id.as_str());
-            }
-        }
-        let live: HashSet<&str> = canonical.iter().copied().collect();
-
-        // Free the slots of ids that are gone.
-        let gone: Vec<(u32, String)> = doc
-            .slots
-            .iter()
-            .filter(|(_, id)| !live.contains(id.as_str()))
-            .map(|(s, id)| (*s, id.clone()))
-            .collect();
-        for (slot, id) in gone {
-            doc.slots.remove(&slot);
-            doc.retired.insert(id.clone(), slot);
-            report.removed.push(id);
-        }
-        // Slot the new ones, in scan order.
-        let slotted: HashSet<String> = doc.slots.values().cloned().collect();
-        for id in canonical {
-            if slotted.contains(id) {
-                continue;
-            }
-            let reclaim = doc
-                .retired
-                .get(id)
-                .copied()
-                .filter(|s| !doc.slots.contains_key(s));
-            let slot = reclaim.or_else(|| allocate_slot(&doc));
-            if let Some(slot) = slot {
-                doc.slots.insert(slot, id.to_string());
-                doc.next_slot = doc.next_slot.max(slot + 1);
-                doc.retired.remove(id);
-                report.added.push(id.to_string());
-            }
-        }
-        // Forget retired slots somebody else now holds.
-        let held: HashSet<u32> = doc.slots.keys().copied().collect();
-        doc.retired.retain(|_, s| !held.contains(s));
+        let canonical = canonical_ids(records.iter().map(|r| r.id.as_str()));
+        let changes = doc.table.reconcile(&canonical);
+        report.added = changes.added;
+        report.removed = changes.removed;
 
         doc.files = records;
         report.changed = files_changed || !report.added.is_empty() || !report.removed.is_empty();
         if report.changed {
-            doc.generation = doc.generation.wrapping_add(1);
-            doc.version = INDEX_VERSION;
-            let bytes = serde_json::to_vec_pretty(&doc)?;
-            atomic_write(&index_path, &bytes)?;
+            doc.table.bump();
+            content_index::write_index::<LibraryError>(&index_path, &doc)?;
         }
-        self.doc = doc;
-        self.stamp = stat_stamp(&index_path);
+        self.index.doc = doc;
+        self.index.stamp = stat_stamp(&index_path);
         self.rebuild_entries();
         Ok(report)
     }
@@ -835,7 +663,7 @@ impl Library {
     /// (`library.json`, a sidecar, a user's file) can be deleted through
     /// this, and neither can anything outside it.
     pub fn delete(&mut self, path: &Path) -> Result<Entry, LibraryError> {
-        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let root = self.index.root.clone().ok_or(LibraryError::NoRoot)?;
         let outside = || LibraryError::OutsideLibrary {
             path: path.to_path_buf(),
         };
@@ -875,12 +703,13 @@ impl Library {
     /// distinct id slotted (while slots remain). Stats and reads sidecars;
     /// hashes nothing, locks nothing, writes nothing.
     fn scan_is_current(&self, root: &Path) -> bool {
+        let doc = &self.index.doc;
         let paths = scan_files(root);
-        if paths.len() != self.doc.files.len() {
+        if paths.len() != doc.files.len() {
             return false;
         }
         let by_path: HashMap<&Path, &FileRecord> =
-            self.doc.files.iter().map(|r| (r.path.as_path(), r)).collect();
+            doc.files.iter().map(|r| (r.path.as_path(), r)).collect();
         for p in &paths {
             let Some(r) = by_path.get(p.as_path()) else {
                 return false;
@@ -892,71 +721,27 @@ impl Library {
                 return false;
             }
         }
-        let slotted: HashSet<&str> = self.doc.slots.values().map(String::as_str).collect();
-        let full = self.doc.slots.len() >= SLOT_COUNT as usize;
-        full || self.doc.files.iter().all(|r| slotted.contains(r.id.as_str()))
+        doc.table.covers(doc.files.iter().map(|r| r.id.as_str()))
     }
 
     fn rebuild_entries(&mut self) {
-        let root = self.root.clone().unwrap_or_default();
-        let slot_of: HashMap<&str, u32> = self
-            .doc
-            .slots
-            .iter()
-            .map(|(s, id)| (id.as_str(), *s))
-            .collect();
-        let mut first_path: HashMap<&str, &Path> = HashMap::new();
-        let mut entries = Vec::with_capacity(self.doc.files.len());
-        let mut records: Vec<&FileRecord> = self.doc.files.iter().collect();
+        let root = self.index.root.clone().unwrap_or_default();
+        let doc = &self.index.doc;
+        let mut records: Vec<&FileRecord> = doc.files.iter().collect();
         records.sort_by(|a, b| {
             dir_rank(&root, &a.path)
                 .cmp(&dir_rank(&root, &b.path))
                 .then_with(|| a.path.to_string_lossy().cmp(&b.path.to_string_lossy()))
         });
-        for r in records {
-            let duplicate_of = match first_path.get(r.id.as_str()) {
-                Some(p) => Some(p.to_path_buf()),
-                None => {
-                    first_path.insert(r.id.as_str(), r.path.as_path());
-                    None
-                }
-            };
-            let slot = if duplicate_of.is_none() {
-                slot_of.get(r.id.as_str()).copied()
-            } else {
-                None
-            };
-            entries.push(make_entry(&root, r, slot, duplicate_of));
-        }
-        entries.sort_by(|a, b| match (a.slot, b.slot) {
-            (Some(x), Some(y)) => x.cmp(&y),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.path.cmp(&b.path),
-        });
-        self.by_id.clear();
-        self.by_slot.clear();
-        self.by_path.clear();
-        for (i, e) in entries.iter().enumerate() {
-            if !matches!(e.status, EntryStatus::DuplicateOf(_)) {
-                self.by_id.insert(e.id.clone(), i);
-            }
-            if let Some(s) = e.slot {
-                self.by_slot.insert(s, i);
-            }
-            self.by_path.insert(e.path.clone(), i);
-        }
-        self.entries = entries;
+        let placed =
+            slots_and_duplicates(records.iter().map(|r| (r.id.as_str(), r.path.as_path())), &doc.table);
+        let entries = records
+            .iter()
+            .zip(placed)
+            .map(|(r, (slot, duplicate_of))| make_entry(&root, r, slot, duplicate_of))
+            .collect();
+        self.entries = Entries::new(entries);
     }
-}
-
-/// Next slot under the no-reuse rule: past the high-water mark while there
-/// is room, else the lowest free one; `None` when all 1000 are taken.
-fn allocate_slot(doc: &IndexDoc) -> Option<u32> {
-    if doc.next_slot <= MAX_SLOT && !doc.slots.contains_key(&doc.next_slot) {
-        return Some(doc.next_slot);
-    }
-    (0..SLOT_COUNT).find(|s| !doc.slots.contains_key(s))
 }
 
 fn unique_dest(dir: &Path, src: &Path) -> PathBuf {
@@ -980,42 +765,13 @@ fn unique_dest(dir: &Path, src: &Path) -> PathBuf {
 /// rescan does under the lock, never a reader, so a reader can never
 /// rename away a file a writer has just installed.
 fn read_index(path: &Path, quarantine: bool) -> IndexDoc {
-    let Ok(bytes) = std::fs::read(path) else {
+    const WHAT: &str = "model library";
+    let Some(value) = content_index::read_index_value(path, quarantine, WHAT) else {
         return IndexDoc::default();
     };
-    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(e) => {
-            if quarantine {
-                tracing::error!("model library index {} unreadable ({e}); rebuilding", path.display());
-                quarantine_corrupt(path);
-            }
-            return IndexDoc::default();
-        }
-    };
-    fn lenient<T: serde::de::DeserializeOwned>(v: &serde_json::Value, k: &str) -> Option<T> {
-        serde_json::from_value(v.get(k)?.clone()).ok()
-    }
-    let files = match value.get("files") {
-        Some(serde_json::Value::Array(items)) => items
-            .iter()
-            .filter_map(|r| match serde_json::from_value::<FileRecord>(r.clone()) {
-                Ok(rec) => Some(rec),
-                Err(e) => {
-                    tracing::warn!("model library index: dropping a bad file record ({e})");
-                    None
-                }
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
     IndexDoc {
-        version: lenient(&value, "version").unwrap_or(INDEX_VERSION),
-        generation: lenient(&value, "generation").unwrap_or(0),
-        next_slot: lenient(&value, "next_slot").unwrap_or(0),
-        slots: lenient(&value, "slots").unwrap_or_default(),
-        retired: lenient(&value, "retired").unwrap_or_default(),
-        files,
+        table: SlotTable::from_value(&value),
+        files: content_index::lenient_records(&value, "files", WHAT),
     }
 }
 
