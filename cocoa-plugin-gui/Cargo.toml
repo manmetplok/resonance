@@ -26,9 +26,9 @@ dispatch2 = "0.3"
 # the GL context provider differs (NSOpenGLContext instead of EGL).
 egui.workspace = true
 egui_glow.workspace = true
-glow = "0.17"
+glow.workspace = true
 # dlopen of the OpenGL framework for glow's function loader.
-libloading = "0.8"
+libloading.workspace = true
 
 [[example]]
 name = "hello"

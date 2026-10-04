@@ -709,6 +709,24 @@ fn plugins_disable_default_features_on_resonance_common() {
     );
 }
 
+// Caveat on A7-3 (DEP-05, code-review-2026-10-02): the test above checks
+// each plugin's *manifest* in isolation, which is correct for `cargo build
+// -p <plugin>`. `scripts/bundle.sh`, though, builds the whole bundle set in
+// one `cargo build --release -p a -p b -p c ...` invocation, and Cargo
+// unifies features across a single build graph — so if *any* crate in that
+// invocation (or a dependency shared between two of them) pulls in
+// `resonance-common`'s `model` feature, every other plugin in the same
+// build gets it compiled in too, this invariant's per-manifest check
+// notwithstanding. In practice LTO strips the unreachable code back out of
+// each cdylib (verified: gate.clap has zero symphonia symbols despite the
+// bundle enabling `decode`/`drumkit-zip` workspace-wide), so the trim holds
+// at the *shipped binary* level even though it doesn't hold at the
+// resolved-feature-set level the comment above might suggest. Don't take a
+// clean run of `plugins_disable_default_features_on_resonance_common` as
+// proof the bundle build compiled less — check with `cargo tree -e
+// features` over the bundle's actual `-p` set, or `nm` on the release
+// artifact, if that distinction matters.
+
 /// `scripts/bundle.sh` derives the bundle from `plugins/*/` and cross-checks
 /// it against the workspace members both ways, then requires every plugin
 /// to be a cdylib — but only when someone bundles. The same three checks,

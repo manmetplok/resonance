@@ -13,8 +13,13 @@ path = "src/lib.rs"
 [[bin]]
 name = "resonance-svs"
 path = "src/main.rs"
+# `clap`/`tracing-subscriber` are CLI-only (DEP-07); gate the bin behind
+# `cli` so the app — which depends on this crate's lib unconditionally —
+# never pulls them in.
+required-features = ["cli"]
 
-# Debug helper: prints the I/O signature of an ONNX file.
+# Debug helper: prints the I/O signature of an ONNX file. Doesn't touch
+# clap/tracing-subscriber, so it needs no feature.
 [[example]]
 name = "probe"
 path = "examples/probe.rs"
@@ -26,6 +31,7 @@ path = "examples/probe.rs"
 [[example]]
 name = "render_resonance_vocal"
 path = "examples/render_resonance_vocal.rs"
+required-features = ["cli"]
 
 [features]
 default = []
@@ -34,20 +40,36 @@ default = []
 cuda = ["ort/cuda"]
 rocm = ["ort/rocm"]
 # Useful for CI smoke without local model files: build only, no runtime.
+# `clap` (derive) + `tracing-subscriber` are only used by `src/main.rs` and
+# the `render_resonance_vocal` example's argument parsing/logging setup —
+# every app build compiled both unconditionally even though the app never
+# runs the CLI (DEP-07, code-review-2026-10-02).
+cli = ["dep:clap", "dep:tracing-subscriber"]
 
 [dependencies]
-# Defaults pull a prebuilt ONNX Runtime binary for the host platform, so the PoC builds with no
-# system onnxruntime install. `ndarray` enables interop with the ndarray crate for tensor I/O.
-ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
+# `download-binaries` still pulls a prebuilt ONNX Runtime binary for the host
+# platform at build time (cached under `~/.cache/ort.pyke.io`), so the vocal
+# synth builds with no system onnxruntime install — but default features also
+# bring in `tls-native`, which pulls openssl into the build. We want the
+# fetch without the openssl build dependency, so features are listed
+# explicitly with `tls-rustls` in its place (DEP-02).
+#
+# For an offline or vendored build, point `ORT_LIB_LOCATION` at a local
+# onnxruntime install/checkout instead of letting `download-binaries` fetch
+# one (see ort's `ort-sys` build script for the exact layout it expects).
+# `ndarray` enables interop with the ndarray crate for tensor I/O.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = [
+    "std", "ndarray", "tracing", "download-binaries", "copy-dylibs", "api-24", "tls-rustls",
+] }
 ndarray = "0.17"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde.workspace = true
+serde_json.workspace = true
 serde_yaml_ng = "0.10"
 hound.workspace = true
-clap = { version = "4.5", features = ["derive"] }
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+clap = { version = "4.5", features = ["derive"], optional = true }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["fmt"], optional = true }
 regex = "1"
 resonance-music-theory = { path = "../resonance-music-theory" }
 

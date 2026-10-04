@@ -25,7 +25,7 @@ editor = [
     "dep:tiny_http",
     "dep:sha2",
     "dep:base64",
-    "dep:rand",
+    "dep:getrandom",
     "dep:webbrowser",
 ]
 
@@ -55,16 +55,18 @@ rfd = { workspace = true, optional = true }
 
 # Tone3000 browser — all optional and gated behind the `editor` feature
 # so headless builds stay lean.
-ureq = { version = "3", features = ["json"], optional = true }
+ureq = { workspace = true, optional = true }
 tiny_http = { version = "0.12", optional = true }
-sha2 = { version = "0.10", optional = true }
-base64 = { version = "0.22", optional = true }
-rand = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+# PKCE verifier/challenge + OAuth state nonce (DEP-09: `rand` was the only
+# user, for 64-80 raw random bytes — `getrandom` alone does that with a
+# far smaller dependency tree).
+getrandom = { version = "0.4", optional = true }
 webbrowser = { version = "1", optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
-dirs.workspace = true
 resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
 # Turns on `test-internals` for this crate's own tests and benches only
 # (resolver 2 unifies the feature into test/bench builds; a normal build

@@ -18,7 +18,7 @@ editor-widgets = [
 ]
 
 [dependencies]
-base64 = "0.22"
+base64.workspace = true
 clack-plugin = { workspace = true }
 clack-extensions = { workspace = true }
 resonance-common = { path = "../resonance-common", default-features = false }

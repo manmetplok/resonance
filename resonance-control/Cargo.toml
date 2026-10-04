@@ -13,7 +13,7 @@ schemars = { workspace = true, optional = true }
 # `socket::process_uid` and the macOS `confstr` temp dir only. Kept target-gated so the wire types stay
 # buildable anywhere.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
 
 [features]
 # Derive `schemars::JsonSchema` on every param/result/view type so

@@ -37,17 +37,20 @@ time = { workspace = true, features = ["formatting", "parsing"] }
 tracing.workspace = true
 thiserror.workspace = true
 # Content ids of NAM models (`nam_library`): sha256 of the file bytes.
-sha2 = "0.10"
+sha2.workspace = true
 # Kit import from a .zip (`drumkit_library`, feature `drumkit-zip`); the
 # same build the drums plugin's downloader uses, so the workspace compiles
 # one zip.
-zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
+zip = { workspace = true, optional = true }
 
 # The import disk check (`drumkit_library::free_space`, statvfs).
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
 
 [dev-dependencies]
 # The zip tests of `drumkit_library` build archives and need the feature.
+# That self-dependency activates the optional `zip` dep above for the
+# whole test build already, so a second direct `zip` dev-dependency here
+# was a duplicate (DEP-08) — `tests/drumkit_library.rs`'s `use zip::...`
+# resolves against the one above.
 resonance-common = { path = ".", features = ["drumkit-zip"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }

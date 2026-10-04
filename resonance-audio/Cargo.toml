@@ -8,8 +8,8 @@ cpal = "0.17"
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
 ringbuf = "0.5"
-clap-sys = "0.5"
-libloading = "0.8"
+clap-sys.workspace = true
+libloading.workspace = true
 indexmap = "2"
 resonance-common = { path = "../resonance-common" }
 resonance-dsp = { path = "../resonance-dsp" }
@@ -58,7 +58,7 @@ opus = ["dep:opus", "dep:ogg"]
 test-internals = []
 
 [dev-dependencies]
-base64 = "0.22"
+base64.workspace = true
 # Turns on `test-internals` for this crate's own tests and benches. As a
 # dev-dependency, resolver 2 unifies the feature into test/bench builds
 # only — `cargo build` of this crate or of resonance-app never sees it.
@@ -81,14 +81,13 @@ harness = false
 name = "render_pool"
 harness = false
 
+# `pthread_{get,set}schedparam`/`gettid` (linux, render_pool::sched) and
+# `pthread_main_np` (macos, engine/plugins.rs's debug-build deadlock-rule
+# assertion) both come from libc — one `cfg(unix)` table instead of
+# repeating the pin per platform (DEP-09, code-review-2026-10-02).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa-sys = "0.3"
-# `pthread_{get,set}schedparam` and `gettid` for the render pool's
-# realtime workers (`render_pool::sched`).
-libc = "0.2"
 pipewire = { version = "0.9", features = ["v0_3_49"] }
-
-# `pthread_main_np` only, for the debug-build editor deadlock-rule
-# assertion in `engine/plugins.rs`.
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"

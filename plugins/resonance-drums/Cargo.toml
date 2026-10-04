@@ -49,17 +49,17 @@ rfd = { workspace = true, optional = true }
 
 # Drumkit download — gated behind the `editor` feature so headless builds
 # stay lean.
-ureq = { version = "3", features = ["json"], optional = true }
+ureq = { workspace = true, optional = true }
 # The sha256 of a download, hashed as it streams in (and seeded from the
 # kept bytes on a resume) — never by re-reading the zip. Extraction is the
 # kit library's (`resonance-common`, `drumkit-zip`).
-sha2 = { version = "0.10", optional = true }
+sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The tests reach the isolation hooks (feature `test-hooks`).
 resonance-drums = { path = ".", features = ["test-hooks"] }
 # The download and library tests build kit zips.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip.workspace = true
 criterion.workspace = true
 resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
 # `tests/state_upgrade.rs` drives the plugin through a real (in-process)

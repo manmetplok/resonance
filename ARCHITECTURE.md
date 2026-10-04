@@ -64,6 +64,37 @@ Discipline:
 - The editor is **feature-gated** (`default = ["editor"]`). Headless builds for tests/CI use `--no-default-features` and skip the egui and platform-runtime deps.
 - `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 13 plugins re-exports the shared design system with `pub use plugin_gui_core::theme::lavender::*` (the canonical tokens — see above), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
 
+## Bumping the clack git pin (DEP-13)
+
+`clack-plugin`/`clack-extensions`/`clack-host` are pinned to a git `rev`
+in the root `Cargo.toml` (`[workspace.dependencies]`) rather than a
+crates.io release — clack has none that cover the features this
+codebase needs. That means there's no semver signal on a bump, and a
+rewritten upstream history or an unreachable GitHub is a build break,
+not a version conflict. `clap-sys` (`resonance-audio`'s own dependency
+on the raw CLAP C headers) must stay in lockstep with whatever ABI
+version clack's pin assumes — check clack's own `clap-sys` requirement
+when bumping, not just its crate version.
+
+Procedure for a bump:
+
+1. Update the `rev` on all three `clack-*` entries together (they come
+   from the same upstream commit; never let them drift).
+2. `cargo update -p clack-plugin -p clack-extensions -p clack-host` to
+   pull the new commit into `Cargo.lock`, then `cargo build --workspace`.
+3. Run the `clap_host` test group (`./scripts/run-tests.py -p
+   resonance-audio` covers it, or directly: the real-ABI tests in
+   `resonance-audio/tests/clap_host/` and `resonance-plugin`'s own
+   state/preset tests that drive a plugin through clack-host).
+4. Run the editor lifecycle guard by hand from a live session (see
+   CLAUDE.md's "Tests" section) — `editor_open` / `editor_size` on both
+   the Wayland and Cocoa runtimes if you can reach both machines. A
+   clack bump is exactly the kind of change that can silently shift the
+   create → show → size → set_size → hide → drop sequence those tests
+   pin down, and their failure mode is a hang, not a compile error.
+5. Re-bundle (`scripts/bundle.sh`) and spot check a plugin's GUI opens
+   in a real host, since clack mediates the whole CLAP ABI surface.
+
 ## Mastering as the Reference Decomposition
 
 `plugins/resonance-mastering` is the model for how a non-trivial component should be decomposed. Use it as the template when a plugin or module grows past ~1500 lines:

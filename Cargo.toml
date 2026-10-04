@@ -16,7 +16,14 @@ thiserror = "2"
 # subscriber is installed by the binaries (the app, and each CLAP bundle via
 # `resonance-plugin`, whose cdylib carries its own copy of the dispatcher).
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# DEP-12 (code-review-2026-10-02): default features bring in `tracing-log`
+# (a `log` -> `tracing` bridge), which every plugin bundle compiled in even
+# though `resonance-plugin/src/logging.rs` deliberately installs no log
+# bridge and nothing in the workspace imports the `log` crate. Named the
+# features actually used instead of inheriting the default set.
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "std", "fmt", "ansi", "env-filter", "smallvec",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 parking_lot = "0.12"
@@ -39,6 +46,25 @@ schemars = "1"
 # the dependency tree small (no plotters/gnuplot HTML report generation).
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
+# DEP-09 (code-review-2026-10-02): versions pinned per crate instead of
+# here caused avoidable duplicate copies in the lock file (base64 0.22
+# vs. the 0.23 ureq/rmcp already pull in; two libc tables in
+# resonance-audio alone). Moved here so a crate that needs extra
+# features adds them with `features = [...]` on top of this entry
+# rather than repeating (and risking drifting) the base version.
+base64 = "0.23"
+glow = "0.17"
+# Must track clack's own clap-sys version (resonance-plugin's CLAP ABI
+# bridge and clack both talk to the same C headers).
+clap-sys = "0.5"
+tokio = "1"
+anyhow = "1"
+libc = "0.2"
+libloading = "0.8"
+sha2 = "0.10"
+ureq = { version = "3", features = ["json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [profile.release]
 lto = "thin"
 # CLAP plugins ship as cdylibs that the host loads via dlopen. Setting
@@ -46,6 +72,23 @@ lto = "thin"
 # borders are inlining barriers); the DSP-heavy plugin code benefits
 # noticeably from this. Trade-off: longer release builds.
 codegen-units = 1
+# DEP-10 (code-review-2026-10-02): the bundled .clap files were shipping
+# ~18% symtab/strtab (gate.clap: 2.1 MB of 11.7 MB) nothing dlopens by
+# name — a plugin exports exactly 2 dynamic symbols (the CLAP entry
+# point table). "debuginfo" rather than "symbols": nothing in this
+# workspace installs a panic hook that captures a `Backtrace`, but the
+# default one still prints a symbolicated stack on `RUST_BACKTRACE=1`
+# off the binary's symbol table, and that's worth keeping for a release
+# build a crash report comes back from; "symbols" would reduce every
+# frame to a bare address. DWARF line tables (the bulk of "debuginfo")
+# aren't needed since nothing here reads them outside a debugger.
+strip = "debuginfo"
+
+# The app isn't a dlopen'd cdylib and doesn't benefit the way the DSP
+# plugin cdylibs do from cross-CGU inlining, so give it its build time
+# back: 16 codegen units instead of the workspace-wide 1.
+[profile.release.package.resonance-app]
+codegen-units = 16
 
 # Compile resonance-dsp at -O2 even in debug builds so debug runs of the
 # audio engine don't dropout under realtime load. Other crates stay at
@@ -59,3 +102,14 @@ opt-level = 2
 # (ba doc #285 §3).
 [profile.dev.package.resonance-common]
 opt-level = 2
+
+# DEP-11 (code-review-2026-10-02): wgpu/naga/iced/ort/zbus/etc. all build
+# with full (debug = 2) debuginfo by default, which is most of the disk
+# cost of a `target/debug` tree (worktrees have piled up to 629 GB across
+# ~16 of them). `package."*"` only ever matches *dependency* packages —
+# never the current workspace's own members — so this does not touch
+# resonance-dsp's or resonance-common's `opt-level` overrides above, and
+# every workspace crate keeps full (line + variable) debug info; only the
+# third-party dependency tree drops to file/line tables.
+[profile.dev.package."*"]
+debug = "line-tables-only"
