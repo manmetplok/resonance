@@ -111,13 +111,54 @@ pub fn compute_sync_ratio(natural_frames: u64, sample_rate: u32, bpm: f64, sync:
     (beats_natural / target_beats) as f32
 }
 
+/// Bit 0 of [`SharedState::audition_ctl`]: a preview is playing.
+pub(crate) const AUDITION_PLAYING: u64 = 1;
+
+/// The run generation in an `audition_ctl` word.
+#[inline]
+pub(crate) fn audition_gen(ctl: u64) -> u64 {
+    ctl >> 1
+}
+
+impl SharedState {
+    /// Whether a preview is playing.
+    pub fn audition_playing(&self) -> bool {
+        self.audition_ctl.load(Ordering::Acquire) & AUDITION_PLAYING != 0
+    }
+
+    /// Whether the audio callback latched a natural finish the engine loop
+    /// has not consumed yet.
+    pub fn audition_finish_pending(&self) -> bool {
+        self.audition_finished.load(Ordering::Acquire) != 0
+    }
+
+    /// Begin a new run (`playing`) or stop (`!playing`): bump the
+    /// generation so a callback block of the previous run can neither
+    /// carry its position into this one nor latch its finish over it
+    /// (code review RT-11). Release: everything stored before — source,
+    /// start, ratio, flags — is visible to a callback that sees the new
+    /// word. Returns the previous word.
+    fn audition_new_run(&self, playing: bool) -> u64 {
+        let bit = if playing { AUDITION_PLAYING } else { 0 };
+        self.audition_ctl
+            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |c| {
+                Some(((audition_gen(c) + 1) << 1) | bit)
+            })
+            .unwrap_or_else(|c| c)
+    }
+}
+
 /// Publish `source` and seed the playback state so the audio callback starts
 /// previewing it. `start_frame` is clamped to the source length. The source
-/// and every flag are stored before `audition_playing` flips true with
-/// Release ordering, so an audio thread that Acquire-loads `playing == true`
-/// observes a fully-initialised state — program order alone is not enough on
-/// a weakly-ordered CPU; only the Release/Acquire pair makes the earlier
-/// Relaxed stores visible.
+/// and every option are stored before the run word flips to a new playing
+/// generation with Release ordering, so an audio thread that Acquire-loads
+/// it observes a fully-initialised state.
+///
+/// A restart while a preview plays is race-free (code review RT-11): the
+/// audio callback used to store the position it loaded at the top of its
+/// block back over the new start, and could latch the old preview's finish
+/// over the new one. The new generation makes the callback restart from
+/// `audition_start_bits` and its finish latch a compare-exchange that fails.
 pub fn start_audition_in_place(
     shared: &SharedState,
     source: AuditionSource,
@@ -134,34 +175,33 @@ pub fn start_audition_in_place(
         .audition_ratio_bits
         .store(ratio.to_bits(), Ordering::Relaxed);
     shared
+        .audition_start_bits
+        .store(start.to_bits(), Ordering::Relaxed);
+    // For the position report before the first block; the callback itself
+    // reads `audition_start_bits` for a new run.
+    shared
         .audition_pos_bits
         .store(start.to_bits(), Ordering::Relaxed);
-    shared.audition_finished.store(false, Ordering::Relaxed);
+    shared.audition_finished.store(0, Ordering::Relaxed);
     // The previous source (a whole sample's PCM) is retired, not dropped:
     // the overlay may be mid-block on it (code review MIX-04).
     super::retire::publish_opt(&shared.audition_source, Some(Arc::new(source)), &shared.retired);
-    // Flip playing last, with Release: the audio callback gates on this
-    // flag and only then loads the source + flags above. The Release
-    // store publishes every Relaxed store before it, pairing with the
-    // callback's Acquire load — without the pair, the callback could see
-    // playing = true with a stale position/ratio and clobber the intended
-    // start. The pos/ratio/loop/sync stores themselves stay Relaxed: they
-    // are sequenced before this store, which is all Release needs.
-    shared.audition_playing.store(true, Ordering::Release);
+    // Last, with Release: the audio callback gates on this word and only
+    // then loads the source and options above.
+    shared.audition_new_run(true);
 }
 
 /// Stop any in-flight preview and drop its source. Returns `true` when a
 /// preview was actually playing, so the caller can decide whether to emit
 /// `AuditionStopped` (a stop on an idle audition is a silent no-op).
 pub fn stop_audition_in_place(shared: &SharedState) -> bool {
-    // Relaxed is enough on the stop side: unlike start, nothing is
-    // *published under* the flag — a callback that still sees a stale
-    // `playing = true` for a block reads a source `ArcSwap` guard (which
-    // synchronises itself) and mixes one extra block of preview, which is
-    // the same outcome as the stop landing a block later.
-    let was_playing = shared.audition_playing.swap(false, Ordering::Relaxed);
+    // A callback that still sees the old playing word for a block reads a
+    // source `ArcSwap` guard (which synchronises itself) and mixes one
+    // extra block of preview — the same outcome as the stop landing a
+    // block later. The new generation voids any finish it latches.
+    let was_playing = shared.audition_new_run(false) & AUDITION_PLAYING != 0;
     super::retire::publish_opt(&shared.audition_source, None, &shared.retired);
-    shared.audition_finished.store(false, Ordering::Relaxed);
+    shared.audition_finished.store(0, Ordering::Relaxed);
     was_playing
 }
 
@@ -219,19 +259,22 @@ pub(crate) fn handle_audition_file(ctx: &HandlerCtx, path: std::path::PathBuf, s
 /// throttled `AuditionPosition` events for the scrub playhead.
 pub(crate) fn poll_audition(ctx: &HandlerCtx, last_report: &mut Instant) {
     // Natural finish latched by the audio callback: emit once, drop the
-    // source. Runs even though `audition_playing` is already false.
-    if ctx.shared.audition_finished.swap(false, Ordering::Relaxed) {
-        super::retire::publish_opt(&ctx.shared.audition_source, None, &ctx.shared.retired);
-        let _ = ctx.event_tx.send(AudioEvent::AuditionStopped);
+    // source — but only for the run still current. A finish latched by a
+    // block of a run that was restarted or stopped since is stale, and
+    // acting on it would drop the new preview's source (RT-11).
+    let finished = ctx.shared.audition_finished.swap(0, Ordering::Acquire);
+    if finished != 0 {
+        let ctl = ctx.shared.audition_ctl.load(Ordering::Acquire);
+        if finished - 1 == audition_gen(ctl) && ctl & AUDITION_PLAYING == 0 {
+            super::retire::publish_opt(&ctx.shared.audition_source, None, &ctx.shared.retired);
+            let _ = ctx.event_tx.send(AudioEvent::AuditionStopped);
+        }
     }
 
-    // Acquire pairs with the Release store in `start_audition_in_place`:
+    // Acquire pairs with the Release in `start_audition_in_place`:
     // everything read below the gate (source, ratio inputs, position) is
-    // published before the flag flips true. Start and poll both run on the
-    // engine thread today, but the gate should not silently rot if that
-    // ever changes, and the position read below must not be a stale
-    // pre-start value.
-    if !ctx.shared.audition_playing.load(Ordering::Acquire) {
+    // published before the run word flips to playing.
+    if !ctx.shared.audition_playing() {
         return;
     }
 

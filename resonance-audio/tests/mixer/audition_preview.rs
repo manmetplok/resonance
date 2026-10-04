@@ -84,10 +84,10 @@ fn start_seeds_playback_state() {
     let shared = SharedState::default();
     start_audition_in_place(&shared, source(&[(0.1, 0.2), (0.3, 0.4)]), 0, 120.0, true, false);
 
-    assert!(shared.audition_playing.load(Ordering::Relaxed));
+    assert!(shared.audition_playing());
     assert!(shared.audition_loop.load(Ordering::Relaxed));
     assert!(!shared.audition_sync.load(Ordering::Relaxed));
-    assert!(!shared.audition_finished.load(Ordering::Relaxed));
+    assert!(!shared.audition_finish_pending());
     assert_eq!(ratio_of(&shared), 1.0);
     assert_eq!(pos_of(&shared), 0.0);
     assert!(shared.audition_source.load().is_some());
@@ -106,7 +106,7 @@ fn stop_reports_playing_and_clears_source() {
     start_audition_in_place(&shared, source(&[(1.0, 1.0)]), 0, 120.0, false, false);
 
     assert!(stop_audition_in_place(&shared));
-    assert!(!shared.audition_playing.load(Ordering::Relaxed));
+    assert!(!shared.audition_playing());
     assert!(shared.audition_source.load().is_none());
 
     // Stopping an already-idle audition is a silent no-op (returns false).
@@ -157,7 +157,7 @@ fn overlay_plays_samples_and_advances_position() {
     assert!((data[2] - 0.3).abs() < 1e-6);
     assert!((data[3] - 0.4).abs() < 1e-6);
     assert_eq!(pos_of(&shared), 2.0);
-    assert!(shared.audition_playing.load(Ordering::Relaxed));
+    assert!(shared.audition_playing());
 }
 
 #[test]
@@ -195,8 +195,8 @@ fn overlay_non_loop_finishes_at_end() {
     assert_eq!(data[0], 1.0);
     assert_eq!(data[2], 1.0);
     assert_eq!(data[4], 0.0); // nothing past the end
-    assert!(!shared.audition_playing.load(Ordering::Relaxed));
-    assert!(shared.audition_finished.load(Ordering::Relaxed));
+    assert!(!shared.audition_playing());
+    assert!(shared.audition_finish_pending());
 }
 
 #[test]
@@ -213,8 +213,8 @@ fn overlay_loop_wraps_and_keeps_playing() {
     assert!((data[4] - 0.1).abs() < 1e-6);
     assert!((data[6] - 0.2).abs() < 1e-6);
     assert_eq!(pos_of(&shared), 2.0);
-    assert!(shared.audition_playing.load(Ordering::Relaxed));
-    assert!(!shared.audition_finished.load(Ordering::Relaxed));
+    assert!(shared.audition_playing());
+    assert!(!shared.audition_finish_pending());
 }
 
 #[test]
@@ -252,8 +252,77 @@ fn overlay_empty_source_finishes_immediately() {
 
     let mut data = vec![0.0f32; 4];
     mix_audition_overlay(&mut data, 2, &shared);
-    assert!(!shared.audition_playing.load(Ordering::Relaxed));
-    assert!(shared.audition_finished.load(Ordering::Relaxed));
+    assert!(!shared.audition_playing());
+    assert!(shared.audition_finish_pending());
+}
+
+// ---- restart race (code review RT-11) ------------------------------------
+
+/// A restart that lands while the callback is mid-block: the block's own
+/// position store must not carry the old preview's position into the new
+/// one. Modelled deterministically: one block renders, the engine restarts
+/// the preview from frame 0 *after* that block loaded its position (here:
+/// between two blocks, with the old position still stored), and the next
+/// block must start the new source at its own start.
+#[test]
+fn a_restart_starts_the_new_preview_at_its_start_not_the_old_position() {
+    let shared = SharedState::default();
+    let old: Vec<(f32, f32)> = (0..64).map(|_| (0.1, 0.1)).collect();
+    start_audition_in_place(&shared, source(&old), 0, 120.0, false, false);
+    let mut data = vec![0.0f32; 16 * 2];
+    mix_audition_overlay(&mut data, 2, &shared);
+    assert_eq!(pos_of(&shared), 16.0);
+
+    // New preview, started at frame 4, with a ramp so the frame it plays
+    // from is visible.
+    let ramp: Vec<(f32, f32)> = (0..64).map(|i| (i as f32 / 100.0, 0.0)).collect();
+    start_audition_in_place(&shared, source(&ramp), 4, 120.0, false, false);
+    // The race: the old run's block finishes after the restart and stores
+    // the position it advanced to.
+    shared
+        .audition_pos_bits
+        .store(32f64.to_bits(), Ordering::Relaxed);
+
+    let mut data = vec![0.0f32; 2 * 2];
+    mix_audition_overlay(&mut data, 2, &shared);
+    assert!((data[0] - 0.04).abs() < 1e-6, "new run plays from its start, got {}", data[0]);
+    assert!((data[2] - 0.05).abs() < 1e-6);
+    assert_eq!(pos_of(&shared), 6.0);
+}
+
+/// The old preview's natural finish, latched by a block that started
+/// before the restart, must neither stop the new preview nor make the
+/// engine drop its source.
+#[test]
+fn a_finish_latched_by_the_previous_run_does_not_stop_the_new_one() {
+    let shared = SharedState::default();
+    start_audition_in_place(&shared, source(&[(1.0, 1.0); 4]), 0, 120.0, false, false);
+    // The block that will reach the end loads the run word...
+    let stale_ctl = shared.audition_ctl.load(Ordering::Acquire);
+    // ...the engine restarts with a new preview...
+    start_audition_in_place(&shared, source(&[(0.5, 0.5); 64]), 0, 120.0, false, false);
+    // ...and the stale block's finish latch is a compare-exchange on the
+    // word it loaded, which now fails.
+    let latched = shared
+        .audition_ctl
+        .compare_exchange(stale_ctl, stale_ctl & !1, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok();
+    assert!(!latched, "a restarted run cannot be finished by the old block");
+    assert!(shared.audition_playing());
+
+    // The overlay end to end: an old run that reaches its end after a
+    // restart leaves the new one playing.
+    let shared = SharedState::default();
+    start_audition_in_place(&shared, source(&[(1.0, 1.0); 2]), 0, 120.0, false, false);
+    let mut data = vec![0.0f32; 4 * 2];
+    mix_audition_overlay(&mut data, 2, &shared);
+    assert!(!shared.audition_playing(), "the short preview finished");
+    start_audition_in_place(&shared, source(&[(0.5, 0.5); 64]), 0, 120.0, false, false);
+    assert!(shared.audition_playing());
+    assert!(!shared.audition_finish_pending(), "the restart clears the old finish");
+    let mut data = vec![0.0f32; 4 * 2];
+    mix_audition_overlay(&mut data, 2, &shared);
+    assert!((data[0] - 0.5).abs() < 1e-6);
 }
 
 // ---- decode boundary ----------------------------------------------------

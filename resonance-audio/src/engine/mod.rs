@@ -416,14 +416,28 @@ pub struct SharedState {
     /// read by the audio callback. `None` when no preview is loaded. See
     /// [`audition`].
     pub audition_source: arc_swap::ArcSwapOption<audition::AuditionSource>,
-    /// Whether a preview is currently playing. The audio callback checks this
-    /// first each block; it clears the flag itself when a non-looping preview
-    /// reaches the end.
-    pub audition_playing: AtomicBool,
+    /// The preview's run state as one word: bit 0 = playing, the rest a
+    /// run generation the engine thread bumps on every start and stop.
+    /// One word so the audio callback's natural-finish latch is a
+    /// compare-exchange that fails, rather than stopping the new preview,
+    /// when a restart landed during its block (code review RT-11). Read it
+    /// through [`Self::audition_playing`].
+    pub audition_ctl: AtomicU64,
+    /// Where the current run starts, in source frames (bit-punned `f64`),
+    /// stored by the engine thread before it bumps the generation.
+    pub audition_start_bits: AtomicU64,
     /// Audition playhead in source frames, stored as bit-punned `f64` (it can
-    /// be fractional under sync-to-tempo varispeed). Sole writer is the audio
-    /// callback; the engine thread reads it for `AuditionPosition` events.
+    /// be fractional under sync-to-tempo varispeed). The audio callback
+    /// advances it; the engine thread reads it for `AuditionPosition`
+    /// events and seeds it on a start for that report. The callback only
+    /// continues from it when [`Self::audition_pos_gen`] says it belongs
+    /// to the current run — otherwise it restarts from
+    /// `audition_start_bits` — so a block that loaded the old position
+    /// can no longer carry it into a new run (RT-11).
     pub audition_pos_bits: AtomicU64,
+    /// The run generation `audition_pos_bits` was last advanced for.
+    /// Audio callback only.
+    pub audition_pos_gen: AtomicU64,
     /// Loop the preview when it reaches the end (vs. stopping).
     pub audition_loop: AtomicBool,
     /// Sync-to-tempo (varispeed) enabled for the preview.
@@ -432,8 +446,10 @@ pub struct SharedState {
     /// computed by the engine thread; `1.0` is natural speed.
     pub audition_ratio_bits: AtomicU32,
     /// Latched by the audio callback when a non-looping preview reaches its
-    /// end; consumed by the engine thread to emit `AuditionStopped` once.
-    pub audition_finished: AtomicBool,
+    /// end, as the finished run's generation + 1 (0 = nothing latched);
+    /// consumed by the engine thread to emit `AuditionStopped` once, and
+    /// only for the run that is still current (RT-11).
+    pub audition_finished: AtomicU64,
 }
 
 impl SharedState {
@@ -621,12 +637,14 @@ impl Default for SharedState {
             sidechain_routes: arc_swap::ArcSwap::from_pointee(Vec::new()),
             take_comp: arc_swap::ArcSwap::from_pointee(crate::mixer::CompRenderTable::default()),
             audition_source: arc_swap::ArcSwapOption::empty(),
-            audition_playing: AtomicBool::new(false),
+            audition_ctl: AtomicU64::new(0),
+            audition_start_bits: AtomicU64::new(0),
             audition_pos_bits: AtomicU64::new(0),
+            audition_pos_gen: AtomicU64::new(0),
             audition_loop: AtomicBool::new(false),
             audition_sync: AtomicBool::new(false),
             audition_ratio_bits: AtomicU32::new(1.0f32.to_bits()),
-            audition_finished: AtomicBool::new(false),
+            audition_finished: AtomicU64::new(0),
         }
     }
 }

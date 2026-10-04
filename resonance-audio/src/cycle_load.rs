@@ -43,7 +43,7 @@
 //!
 //! See `tests/mixer/cycle_load.rs` for behaviour coverage.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::engine::SharedState;
@@ -159,7 +159,14 @@ impl CycleReportSlot {
     /// Store `report` for the engine loop. Audio-thread side: atomics
     /// only.
     pub fn publish(&self, report: &CycleLoadReport) {
-        self.seq.fetch_add(1, Ordering::Release);
+        // The standard seqlock writer (code review RT-16): a Release RMW
+        // only orders what came *before* it, so on a weakly ordered CPU
+        // (aarch64, the macOS target) the field stores below could become
+        // visible before `seq` turns odd, and a reader would accept a torn
+        // report. The Release fence keeps every later store after the odd
+        // count.
+        self.seq.fetch_add(1, Ordering::Relaxed);
+        fence(Ordering::Release);
         self.avg_bits.store(report.avg.to_bits(), Ordering::Relaxed);
         self.peak_bits.store(report.peak.to_bits(), Ordering::Relaxed);
         self.overruns_window
@@ -216,7 +223,12 @@ impl CycleReportSlot {
                     join_wait_us: f32::from_bits(self.pool_join_wait_bits.load(Ordering::Relaxed)),
                 },
             };
-            if self.seq.load(Ordering::Acquire) == before {
+            // The reader half (RT-16): the Relaxed field loads above may
+            // not be reordered after the re-check, which an Acquire load
+            // alone does not forbid; the Acquire fence does, pairing with
+            // the writer's fence.
+            fence(Ordering::Acquire);
+            if self.seq.load(Ordering::Relaxed) == before {
                 *last_seen = before;
                 return Some(report);
             }

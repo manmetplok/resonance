@@ -199,6 +199,41 @@ fn sweep_keeps_entries_pinned_elsewhere_and_frees_the_rest() {
     assert!(retired.is_empty());
 }
 
+/// RT-18: the startup scan empties every track's plugin chain. It used to
+/// drop the replaced chain on the spot, so a callback block still holding
+/// it became its last owner and freed it on the audio thread. The chain is
+/// retired now, like every other publish.
+#[test]
+fn startup_scan_teardown_retires_the_replaced_plugin_chains() {
+    use resonance_audio::test_support::unpublish_all_plugins;
+    let shared = SharedState::default();
+    shared.edit_tracks(|m| {
+        for id in 1..=2 {
+            let t = Track::new(id, format!("t{id}"));
+            t.push_plugin(100 + id);
+            m.insert(id, Arc::new(t));
+        }
+    });
+    let tracks = shared.tracks();
+    // A block mid-render pins track 1's chain.
+    let pinned = tracks.get(&1).unwrap().plugin_chain_snapshot();
+    assert_eq!(*pinned, vec![101]);
+    let before = shared.retired.len();
+
+    unpublish_all_plugins(&shared, &tracks);
+
+    assert!(tracks.values().all(|t| t.plugins().is_empty()));
+    assert!(
+        shared.retired.holds(&pinned),
+        "the replaced chain waits in the retire queue, not on the pinning block"
+    );
+    assert!(shared.retired.len() >= before + 2, "both tracks' chains retired");
+    // The block lets go; the engine's sweep frees it, not the block.
+    drop(pinned);
+    shared.retired.sweep();
+    assert!(shared.retired.is_empty());
+}
+
 fn frozen(frames: usize) -> FrozenSource {
     let cache_ref = FreezeCacheRef::new("retire.wav".into(), 48_000, 32, 1, FreezeCacheStatus::Frozen);
     FrozenSource::new(cache_ref, Arc::new(vec![0.25; frames * 2]), 48_000, frames as u64)

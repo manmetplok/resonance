@@ -48,15 +48,7 @@ pub(crate) fn scan_plugins(
     // `bundles.clear()` below, which is safe because a bundle's library
     // is never unloaded (`ClapBundle`'s `Drop`), so the instance's
     // `destroy` still has its code to call into.
-    shared.edit_plugins(|plugins| plugins.clear());
-    // `clear_plugins` publishes a new empty chain via `ArcSwap::store`
-    // (shared by every copy of the track), so reading the published track
-    // map is enough — no render-graph publish.
-    for track in tracks.values() {
-        // The old chain is dropped here on the scan thread, not by the
-        // callback: a tiny `Vec`, but the rule is uniform (MIX-04).
-        drop(track.clear_plugins());
-    }
+    unpublish_all_plugins(shared, tracks);
     // Clear previous scan results to avoid duplicates.
     bundles.clear();
 
@@ -64,6 +56,25 @@ pub(crate) fn scan_plugins(
     let (scanned, failures) = load_bundles(&dirs, bundles);
     report(&dirs, scanned, failures, event_tx);
     spawn_discovery(bundles, event_tx, false);
+}
+
+/// The startup scan's teardown: unpublish every plugin instance and empty
+/// every track's chain, retiring what was replaced. `pub` (doc-hidden
+/// re-export) so `tests/retire_queue.rs` can pin RT-18 without scanning
+/// the machine's plugin folders.
+pub fn unpublish_all_plugins(shared: &super::SharedState, tracks: &TrackMap) {
+    shared.edit_plugins(|plugins| plugins.clear());
+    // `clear_plugins` publishes a new empty chain via `ArcSwap::store`
+    // (shared by every copy of the track), so reading the published track
+    // map is enough — no render-graph publish.
+    for track in tracks.values() {
+        // The replaced chain goes to the retire queue like every other
+        // publish: a callback may still hold it through a `plugins()`
+        // guard, and dropping our reference here would leave that block
+        // the last owner, freeing it on the audio thread (code review
+        // RT-18). The sweep frees it once no block pins it.
+        shared.retired.retire(track.clear_plugins());
+    }
 }
 
 /// The live rescan: pick up newly installed plugins WITHOUT disturbing
