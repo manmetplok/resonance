@@ -2018,15 +2018,6 @@ fn enum_variants(file: &Path, name: &str) -> Vec<String> {
 /// make (wire it, or delete it from the engine), never a place to park a
 /// new command: a new variant must have an app caller when it lands.
 const ORPHANED_AUDIO_COMMANDS: &[&str] = &[
-    // MIDI learn / controller maps / control surfaces: the engine side
-    // (bindings, learn capture, `MidiLearnCaptured`) exists; there is no
-    // learn UI, only `test_support` arms it.
-    "EnterMidiLearn",
-    "CancelMidiLearn",
-    "ClearMidiBinding",
-    "ClearAllMidiBindings",
-    "SetControllerMap",
-    "SetControlSurfaceInput",
     // Loop-record mode (takes vs. merge): no transport toggle yet.
     "SetLoopRecordMode",
     // Round-trip I/O latency probe: no settings surface reads it.

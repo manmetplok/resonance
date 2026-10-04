@@ -1,79 +1,220 @@
-//! MIDI Learn & hardware-controller mapping — command handlers
-//! (architecture doc #167 §2, epic #21).
+//! MIDI Learn & hardware-controller mapping on the engine control thread
+//! (architecture doc #167 §2 E3, epic #21).
 //!
-//! This module owns the engine-thread side of the control-surface mapping
-//! command/event boundary (doc #105). **This is the E2 plumbing slice**: the
-//! command variants, the matching events, and the handler entry points wired
-//! into [`super::thread::dispatch`] exist and compile, but the handlers are
-//! intentionally stubs.
+//! The engine owns the **active binding set** and the **learn arm**, and
+//! does the one thing only it can do cheaply: look at every message the
+//! control-surface port delivers ([`LiveControlEvent`]) and decide what it
+//! is for.
 //!
-//! The real behaviour — maintaining the active binding set, draining
-//! `LiveControlEvent`s, soft-takeover, and emitting `MidiBindingChanged` /
-//! `MidiLearnCaptured` / `ControlSurfaceParamChanged` — lands in **E3**
-//! (binding application on the engine control thread). Keeping the handlers
-//! here, named and routed, gives E3 a single place to grow into without
-//! re-touching the command/event enums or the dispatch table.
+//! - **Learn armed** — the first CC, or the first note-*on*, is captured:
+//!   `AudioEvent::MidiLearnCaptured { target, source }`, and the arm drops.
+//!   A CC is captured as [`CcMode::Absolute`]; relative encoders come from
+//!   a controller map, which says so explicitly.
+//! - **A bound control** — `AudioEvent::ControlSurfaceMoved { binding,
+//!   value }` carries the binding the message matched and its raw 7-bit
+//!   value (the CC value, or the note-on velocity). A note-off is dropped:
+//!   toggles and triggers fire on the press.
+//! - **Anything else** is dropped, so an unmapped knob costs no event.
 //!
-//! No read-getters: app state is rebuilt purely from the events these
-//! handlers will emit, matching the rest of the engine boundary.
+//! Applying the value is the **app's** job, not this module's. The app
+//! holds the model a move has to land in — the track's dB, the plugin's
+//! `min..=max`, the undo history, automation write — and already has one
+//! message per control that does all of that. A hardware move that went
+//! straight into the mixer here would have to be mirrored back into each
+//! of those by hand, and the soft-takeover and relative-encoder math need
+//! the target's *current* value, which the app is the authority on. So
+//! the engine matches and the app applies, through the same messages a
+//! mouse drag sends ([`resonance_common::midi_map`] holds the shared
+//! mapping math both use).
+//!
+//! No read-getters: every change to the set is echoed back as
+//! `MidiBindingChanged` / `MidiBindingCleared`, so the app's mirror is a
+//! projection of events (doc #105).
 
-use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
+use indexmap::IndexMap;
+use resonance_common::{
+    BindingId, CcMode, ControlSource, ControllerMap, MidiBinding, MidiTarget,
+};
 
-use super::thread::HandlerCtx;
+use crate::midi_hardware::LiveControlEvent;
+use crate::types::AudioEvent;
 
-/// Insert or replace a single binding by id.
-///
-/// Stub (E2): the active binding set lives on the engine thread and is
-/// introduced with the drain/application logic in E3, which will store the
-/// binding and echo it back via `AudioEvent::MidiBindingChanged`.
-pub(crate) fn handle_set_midi_binding(_ctx: &HandlerCtx, _binding: MidiBinding) {
-    // TODO(E3): upsert into the active binding set + emit MidiBindingChanged.
+use super::thread::{HandlerCtx, HandlerState};
+
+/// The engine-thread half of the mapping: the active bindings (in the
+/// order they were set, so echoes and a controller map's stream arrive in
+/// a stable order) and the armed learn target.
+#[derive(Debug, Default)]
+pub struct ActiveMidiMap {
+    bindings: IndexMap<BindingId, MidiBinding>,
+    learn: Option<MidiTarget>,
 }
 
-/// Remove the active binding with this id.
-///
-/// Stub (E2): E3 removes it from the active set and emits
-/// `AudioEvent::MidiBindingCleared`.
-pub(crate) fn handle_clear_midi_binding(_ctx: &HandlerCtx, _id: BindingId) {
-    // TODO(E3): remove from the active set + emit MidiBindingCleared.
+impl ActiveMidiMap {
+    /// The binding a control message from `(channel, cc)` / `(channel,
+    /// note)` drives, if any. A CC binding matches whatever its mode: the
+    /// mode says how to read the value, not which control it is.
+    fn matching(&self, event: &LiveControlEvent) -> Option<&MidiBinding> {
+        self.bindings.values().find(|b| match (b.source, event) {
+            (
+                ControlSource::Cc { channel, cc, .. },
+                LiveControlEvent::Cc {
+                    channel: ch, cc: n, ..
+                },
+            ) => channel == *ch && cc == *n,
+            (
+                ControlSource::Note { channel, note },
+                LiveControlEvent::Note {
+                    channel: ch,
+                    note: n,
+                    ..
+                },
+            ) => channel == *ch && note == *n,
+            _ => false,
+        })
+    }
+
+    /// Insert or replace `binding`. A physical control drives one target,
+    /// so any OTHER binding on the same control is dropped; its id is
+    /// returned so the caller can echo the removal.
+    fn upsert(&mut self, binding: MidiBinding) -> Vec<BindingId> {
+        let same_control = |a: ControlSource, b: ControlSource| match (a, b) {
+            (
+                ControlSource::Cc { channel, cc, .. },
+                ControlSource::Cc {
+                    channel: ch, cc: n, ..
+                },
+            ) => channel == ch && cc == n,
+            (a, b) => a == b,
+        };
+        let displaced: Vec<BindingId> = self
+            .bindings
+            .values()
+            .filter(|b| b.id != binding.id && same_control(b.source, binding.source))
+            .map(|b| b.id)
+            .collect();
+        for id in &displaced {
+            self.bindings.shift_remove(id);
+        }
+        self.bindings.insert(binding.id, binding);
+        displaced
+    }
 }
 
-/// Replace the entire active binding set from a controller-map preset.
-///
-/// Stub (E2): E3 swaps the active set and emits one
-/// `AudioEvent::MidiBindingChanged` per resulting binding so the app can
-/// rebuild its state from events alone.
-pub(crate) fn handle_set_controller_map(_ctx: &HandlerCtx, _map: ControllerMap) {
-    // TODO(E3): replace the active set + emit MidiBindingChanged per binding.
+fn emit(ctx: &HandlerCtx, event: AudioEvent) {
+    let _ = ctx.event_tx.send(event);
 }
 
-/// Drop every active binding.
-///
-/// Stub (E2): E3 clears the active set and emits
-/// `AudioEvent::MidiBindingCleared` per removed binding.
-pub(crate) fn handle_clear_all_midi_bindings(_ctx: &HandlerCtx) {
-    // TODO(E3): clear the active set + emit MidiBindingCleared per binding.
+/// Insert or replace a single binding by id, echoing it (and any binding
+/// it displaced from the same control).
+pub(crate) fn handle_set_midi_binding(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    binding: MidiBinding,
+) {
+    for id in state.midi_hw.map.upsert(binding) {
+        emit(ctx, AudioEvent::MidiBindingCleared { id });
+    }
+    emit(ctx, AudioEvent::MidiBindingChanged { binding });
 }
 
-/// Pick or clear the dedicated control-surface input port.
-///
-/// Stub (E2): E1 adds the control-surface input thread; E3 opens/closes the
-/// selected port here and emits `AudioEvent::ControlSurfaceDevicesChanged`.
-pub(crate) fn handle_set_control_surface_input(_ctx: &HandlerCtx, _device: Option<String>) {
-    // TODO(E3): open/close the control-surface input port.
+/// Remove the active binding with this id; a silent no-op when there is
+/// none.
+pub(crate) fn handle_clear_midi_binding(ctx: &HandlerCtx, state: &mut HandlerState, id: BindingId) {
+    if state.midi_hw.map.bindings.shift_remove(&id).is_some() {
+        emit(ctx, AudioEvent::MidiBindingCleared { id });
+    }
 }
 
-/// Arm MIDI Learn for a target.
-///
-/// Stub (E2): E3 stashes the armed target so the next qualifying control
-/// message is reported via `AudioEvent::MidiLearnCaptured` instead of applied.
-pub(crate) fn handle_enter_midi_learn(_ctx: &HandlerCtx, _target: MidiTarget) {
-    // TODO(E3): arm learn mode for `target`.
+/// Replace the whole active set with `map`'s bindings: one
+/// `MidiBindingCleared` per binding that goes, then one
+/// `MidiBindingChanged` per binding of the map, in map order. Project load
+/// and undo use this, as does loading a controller preset.
+pub(crate) fn handle_set_controller_map(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    map: ControllerMap,
+) {
+    handle_clear_all_midi_bindings(ctx, state);
+    for binding in map.bindings {
+        handle_set_midi_binding(ctx, state, binding);
+    }
 }
 
-/// Cancel an armed MIDI Learn.
-///
-/// Stub (E2): E3 clears the armed target without capturing anything.
-pub(crate) fn handle_cancel_midi_learn(_ctx: &HandlerCtx) {
-    // TODO(E3): disarm learn mode.
+/// Drop every active binding, echoing each removal.
+pub(crate) fn handle_clear_all_midi_bindings(ctx: &HandlerCtx, state: &mut HandlerState) {
+    let gone: Vec<BindingId> = state.midi_hw.map.bindings.keys().copied().collect();
+    state.midi_hw.map.bindings.clear();
+    for id in gone {
+        emit(ctx, AudioEvent::MidiBindingCleared { id });
+    }
+}
+
+/// Pick or clear the dedicated control-surface input port. A device that
+/// is not plugged in is remembered and opened when it appears (the
+/// `ListMidiInputs` poll reconciles it).
+pub(crate) fn handle_set_control_surface_input(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    device: Option<String>,
+) {
+    if let Err(e) = state.midi_hw.control_surface.set_input(device) {
+        emit(ctx, AudioEvent::Error(e.into()));
+    }
+}
+
+/// Arm MIDI Learn for a target, replacing any earlier arm.
+pub(crate) fn handle_enter_midi_learn(state: &mut HandlerState, target: MidiTarget) {
+    state.midi_hw.map.learn = Some(target);
+}
+
+/// Cancel an armed MIDI Learn without capturing anything.
+pub(crate) fn handle_cancel_midi_learn(state: &mut HandlerState) {
+    state.midi_hw.map.learn = None;
+}
+
+/// One drained control-surface message: a learn capture, a bound move, or
+/// nothing (see the module docs).
+pub(crate) fn handle_control_event(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    event: LiveControlEvent,
+) {
+    let map = &mut state.midi_hw.map;
+    if let Some(target) = map.learn {
+        let source = match event {
+            LiveControlEvent::Cc { channel, cc, .. } => Some(ControlSource::Cc {
+                channel,
+                cc,
+                mode: CcMode::Absolute,
+            }),
+            LiveControlEvent::Note {
+                channel,
+                note,
+                velocity,
+                ..
+            } if velocity > 0 => Some(ControlSource::Note { channel, note }),
+            // A release is never what the user meant to learn.
+            LiveControlEvent::Note { .. } => None,
+        };
+        if let Some(source) = source {
+            map.learn = None;
+            emit(ctx, AudioEvent::MidiLearnCaptured { target, source });
+        }
+        return;
+    }
+    let value = match event {
+        LiveControlEvent::Cc { value, .. } => value,
+        LiveControlEvent::Note { velocity: 0, .. } => return,
+        LiveControlEvent::Note { velocity, .. } => velocity,
+    };
+    if let Some(binding) = map.matching(&event).copied() {
+        emit(ctx, AudioEvent::ControlSurfaceMoved { binding, value });
+    }
+}
+
+/// The input-port names to offer as a control surface, from the latest
+/// MIDI input enumeration.
+pub(crate) fn report_control_surface_devices(ctx: &HandlerCtx, inputs: Vec<String>) {
+    emit(ctx, AudioEvent::ControlSurfaceDevicesChanged { inputs });
 }

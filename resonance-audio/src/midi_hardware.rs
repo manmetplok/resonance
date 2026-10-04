@@ -131,19 +131,17 @@ pub enum LiveMidiEvent {
 /// to a track: it carries the raw channel so the mapping layer can match
 /// a binding's [`ControlSource`] by `(channel, cc)` / `(channel, note)`.
 ///
-/// Binding application + soft-takeover consume these (doc #167 §2 E3,
-/// todo #430); for now the engine drains and drops them.
+/// `engine::midi_map` consumes these: a learn capture, or a match
+/// against the active binding set (doc #167 §2 E3).
 ///
 /// [`ControlSource`]: resonance-common's `midi_map::ControlSource`
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // fields consumed by binding application in todo #430 (E3)
 pub enum LiveControlEvent {
     /// Control Change (`0xB0`): a knob/fader/encoder move.
     Cc {
         channel: u8,
         cc: u8,
         value: u8,
-        arrival: std::time::Instant,
     },
     /// Note On/Off (`0x90`/`0x80`): a pad/button used as a toggle or
     /// trigger. `velocity == 0` means the key was released (either an
@@ -154,7 +152,6 @@ pub enum LiveControlEvent {
         channel: u8,
         note: u8,
         velocity: u8,
-        arrival: std::time::Instant,
     },
 }
 
@@ -452,8 +449,7 @@ impl ControlSurfaceInput {
     /// isn't currently present is stored as pending (no error) and opened
     /// by [`Self::reconcile`] once it appears.
     ///
-    /// Wired to `AudioCommand::SetControlSurfaceInput` in todo #429 (E2).
-    #[allow(dead_code)]
+    /// Driven by `AudioCommand::SetControlSurfaceInput`.
     pub fn set_input(&mut self, device_name: Option<String>) -> Result<(), MidiHardwareError> {
         // Already connected to the requested device — nothing to do.
         if let Some(active) = &self.conn {
@@ -497,10 +493,9 @@ impl ControlSurfaceInput {
 }
 
 /// Open the named MIDI input as the control surface and wire up the
-/// message callback. The callback stamps a monotonic `arrival`, parses
-/// the bytes into a [`LiveControlEvent`], and pushes it onto the bounded
-/// channel; a full channel drops the event rather than blocking the
-/// midir thread.
+/// message callback. The callback parses the bytes into a
+/// [`LiveControlEvent`] and pushes it onto the bounded channel; a full
+/// channel drops the event rather than blocking the midir thread.
 fn open_control_input(
     name: &str,
     tx: Sender<LiveControlEvent>,
@@ -526,10 +521,9 @@ fn open_control_input(
             &port,
             "resonance-control-surface-conn",
             move |_timestamp, raw, _| {
-                // midir's `_timestamp` is platform-specific; capture a
-                // monotonic `Instant` ourselves (see `open_input`).
-                let arrival = std::time::Instant::now();
-                if let Some(event) = parse_control_event(raw, arrival) {
+                // No arrival stamp: a control move applies when it is
+                // drained, it is never placed on the timeline.
+                if let Some(event) = parse_control_event(raw) {
                     let _ = tx_callback.try_send(event);
                 }
             },
@@ -553,7 +547,7 @@ fn open_control_input(
 /// running-status note-off convention). Returns `None` for any other
 /// message kind or malformed/truncated data. Listens omni — the channel
 /// is captured on the event for the binding layer to match.
-fn parse_control_event(raw: &[u8], arrival: std::time::Instant) -> Option<LiveControlEvent> {
+fn parse_control_event(raw: &[u8]) -> Option<LiveControlEvent> {
     let status = *raw.first()?;
     let kind = status & 0xF0;
     let channel = status & 0x0F;
@@ -562,20 +556,17 @@ fn parse_control_event(raw: &[u8], arrival: std::time::Instant) -> Option<LiveCo
             channel,
             cc: raw[1] & 0x7F,
             value: raw[2] & 0x7F,
-            arrival,
         }),
         0x90 if raw.len() >= 3 => Some(LiveControlEvent::Note {
             channel,
             note: raw[1] & 0x7F,
             // velocity 0 stays 0 → the mapping layer reads it as release.
             velocity: raw[2] & 0x7F,
-            arrival,
         }),
         0x80 if raw.len() >= 3 => Some(LiveControlEvent::Note {
             channel,
             note: raw[1] & 0x7F,
             velocity: 0,
-            arrival,
         }),
         _ => None,
     }
@@ -907,9 +898,8 @@ pub fn parse_live_event_for_test(
 }
 
 /// Parse raw control-surface MIDI bytes into a [`LiveControlEvent`].
-/// Exposed for tests under `resonance-audio/tests/`. Stamps the result
-/// with a fresh `Instant::now()`; tests that don't care can ignore it.
+/// Exposed for tests under `resonance-audio/tests/`.
 #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn parse_control_event_for_test(raw: &[u8]) -> Option<LiveControlEvent> {
-    parse_control_event(raw, std::time::Instant::now())
+    parse_control_event(raw)
 }

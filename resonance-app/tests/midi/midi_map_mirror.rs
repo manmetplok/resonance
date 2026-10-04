@@ -1,9 +1,9 @@
 //! Engine→app mirroring of the MIDI Learn / hardware control-surface
-//! mapping (todo #431, arch doc #167 §3 A1, epic #21). The engine owns the
-//! active binding set and echoes every change back as events; these tests
-//! prove that `MidiMapState` is rebuilt purely from those events — bindings
-//! upsert/clear, the reverse source index stays consistent, learn mode is
-//! cleared on capture, live values are stashed, and the device list refreshes.
+//! mapping (todo #431, arch doc #167 §3 A1, epic #21). The engine echoes
+//! every change to its binding set back as events; these tests prove that
+//! `MidiMapState` folds them in — bindings upsert/clear, the reverse source
+//! index stays consistent, a capture binds and leaves learn mode, and the
+//! device list refreshes. (The edits themselves: `midi_learn.rs`.)
 
 use resonance_app::Resonance;
 use resonance_audio::types::AudioEvent;
@@ -112,6 +112,7 @@ fn controller_map_replay_rebuilds_the_whole_set() {
 #[test]
 fn learn_captured_records_binding_and_clears_learn_mode() {
     let mut app = Resonance::new_for_test().0;
+    app.test_set_active_project(true);
     let target = MidiTarget::TrackSolo(5);
     app.test_arm_midi_learn(target);
     assert_eq!(app.test_midi_map().learn_target, Some(target));
@@ -141,6 +142,7 @@ fn learn_captured_records_binding_and_clears_learn_mode() {
 #[test]
 fn learn_captured_allocates_ids_clear_of_existing_bindings() {
     let mut app = Resonance::new_for_test().0;
+    app.test_set_active_project(true);
     // A project-loaded binding already occupies a high id.
     app.test_apply_engine_event(AudioEvent::MidiBindingChanged {
         binding: cc_binding(100, 7, MidiTarget::TrackVolume(1)),
@@ -161,19 +163,6 @@ fn learn_captured_allocates_ids_clear_of_existing_bindings() {
     // The freshly-learned id sits past the project-loaded one.
     let learned = map.bindings.values().find(|b| b.target == target).unwrap();
     assert!(learned.id.0 > 100, "learned id {} must clear 100", learned.id.0);
-}
-
-#[test]
-fn control_surface_param_changed_stashes_live_value() {
-    let mut app = Resonance::new_for_test().0;
-    let target = MidiTarget::TrackVolume(3);
-
-    app.test_apply_engine_event(AudioEvent::ControlSurfaceParamChanged {
-        target,
-        value_norm: 0.75,
-    });
-
-    assert_eq!(app.test_midi_map().live_values.get(&target), Some(&0.75));
 }
 
 #[test]

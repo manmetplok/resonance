@@ -144,6 +144,15 @@ pub(crate) fn handle_key(
     {
         return Task::none();
     }
+    // An armed MIDI Learn is non-modal too (the user is reaching for the
+    // controller); Esc disarms it.
+    if is_plain_escape(chord)
+        && !repeat
+        && modal.is_none()
+        && crate::update::midi_map::escape(r)
+    {
+        return Task::none();
+    }
     if modal.is_some() && !has_accelerator(chord) {
         return Task::none();
     }

@@ -50,6 +50,28 @@ impl Reconcile for AutomationLanes {
     }
 }
 
+/// MIDI Learn bindings (doc #167): the engine and the mirror set to
+/// exactly the saved bindings. A disk load always sends the set, empty
+/// included — `ClearAll` does not touch the engine's bindings, so the
+/// previous project's would otherwise stay live. An undo sends it only
+/// when it changed. After the entities, though nothing checks a binding's
+/// target exists: one whose track is gone simply drives nothing.
+pub(crate) struct MidiBindings;
+
+impl Reconcile for MidiBindings {
+    const NAME: &'static str = "midi_bindings";
+
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, _: &ReconcileCtx<'_>) {
+        if old.is_some_and(|old| old.midi_bindings == new.midi_bindings) {
+            return;
+        }
+        // A disarmed learn and a closed menu: neither survives a restore.
+        r.devices.midi_map.learn_target = None;
+        r.devices.midi_map.menu = None;
+        crate::update::midi_map::set_all(r, new.midi_bindings.clone());
+    }
+}
+
 /// The derived-clip map (`(section, placement, track) → ClipId`), from
 /// `ProjectFile::derived_clips` (ARCH-01 A-6), and the raise of the app's
 /// clip-id counter past everything restored (D-7b), through

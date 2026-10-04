@@ -94,6 +94,8 @@ pub struct AppSettings {
     pub arrange: ArrangeSettings,
     /// Audio-engine startup options; absent on older files, defaulted.
     pub audio: AudioSettings,
+    /// MIDI hardware this machine uses; absent on older files, defaulted.
+    pub midi: MidiSettings,
     /// Command-palette memory; absent on older files, defaulted. A
     /// malformed section defaults on its own, keeping the rest.
     #[serde(deserialize_with = "lenient")]
@@ -168,6 +170,18 @@ pub struct PaletteSettings {
     /// first, de-duplicated, as `CommandId::key()` strings. Unknown keys
     /// (a renamed command) are skipped on read.
     pub recent: Vec<String>,
+}
+
+/// The MIDI hardware this machine uses. Per machine, not per project: a
+/// project's MIDI bindings name controls, and the same project opened on
+/// another machine is played from that machine's controller.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MidiSettings {
+    /// The MIDI input port the engine listens to for control-surface
+    /// messages (MIDI Learn bindings), or `None` for none. Re-opened at
+    /// startup, and when the port appears if it is unplugged then.
+    pub control_surface_input: Option<String>,
 }
 
 /// Audio-engine options read once at startup, before the engine exists.

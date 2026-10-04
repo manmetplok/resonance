@@ -196,10 +196,10 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::Performance>(Stage::Content),
     domain::<app_side::TrackGroups>(Stage::Content),
     domain::<app_side::TakeGroups>(Stage::Content),
-    // External instruments before the lanes (a `DeviceParam` lane needs
-    // the device bindings), freeze last.
+    // External instruments before the lanes (a DeviceParam lane needs them); freeze last.
     domain::<restored::ExternalInstruments>(Stage::Tail),
     domain::<restored::AutomationLanes>(Stage::Tail),
+    domain::<restored::MidiBindings>(Stage::Tail),
     domain::<restored::MissingPlugins>(Stage::Tail),
     // Last: a disk load's baseline fingerprints everything above.
     domain::<restored::Freeze>(Stage::Tail),

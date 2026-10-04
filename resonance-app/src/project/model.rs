@@ -164,6 +164,13 @@ pub struct ProjectFile {
     /// with no automation, exactly as before).
     #[serde(default)]
     pub automation_lanes: Vec<resonance_common::AutomationLane>,
+    /// MIDI Learn bindings (doc #167): which hardware control drives
+    /// which track fader / pan / mute / solo, send, plugin parameter or
+    /// transport action, sorted by binding id. The control-surface PORT is
+    /// not here — that is the machine's (`settings.json`). Empty on legacy
+    /// projects, and left out of the file when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_bindings: Vec<resonance_common::MidiBinding>,
     /// Performance-mode footer selection (epic #11, todo #312): which
     /// instrument tuning the live fingering diagrams are drawn for and the
     /// capo offset. Defaults to Guitar 6 / no capo on legacy projects that
@@ -255,6 +262,7 @@ impl Default for ProjectFile {
             groove_library: Vec::new(),
             quantize_settings: crate::state::QuantizeSettings::default(),
             automation_lanes: Vec::new(),
+            midi_bindings: Vec::new(),
             performance: ProjectPerformance::default(),
             take_groups: Vec::new(),
             chord_track: ProjectChordTrack::default(),

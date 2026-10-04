@@ -72,6 +72,7 @@ pub fn describe(message: &Message) -> String {
             _ => "plugin edit",
         },
         Message::MidiEditor(_) => "note edit",
+        Message::MidiMap(m) => m.describe(),
         Message::MidiClip(_) => "MIDI clip edit",
         Message::Clip(_) => "clip edit",
         Message::Compose(c) => match c {

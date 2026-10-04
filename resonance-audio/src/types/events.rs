@@ -1249,12 +1249,14 @@ pub enum AudioEvent {
     MidiBindingCleared {
         id: BindingId,
     },
-    /// Throttled control-rate feedback that a hardware move drove `target` to
-    /// `value_norm` (normalized 0..=1), so the app can update the on-screen
-    /// fader/knob/toggle without round-tripping through the normal value path.
-    ControlSurfaceParamChanged {
-        target: MidiTarget,
-        value_norm: f32,
+    /// A control-surface message matched `binding`: `value` is its raw
+    /// 7-bit value (the CC value, or a note-on's velocity; note-offs are not
+    /// reported). The app applies it to `binding.target` through the same
+    /// message an on-screen edit sends — the engine matches, the app applies
+    /// (`engine::midi_map`).
+    ControlSurfaceMoved {
+        binding: MidiBinding,
+        value: u8,
     },
     /// The set of available control-surface MIDI input device names changed
     /// (hot-plug, or initial enumeration), so the app can refresh its device

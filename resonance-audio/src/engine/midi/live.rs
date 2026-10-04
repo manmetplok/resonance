@@ -233,20 +233,14 @@ pub(crate) fn handle_live_midi_event(
 }
 
 /// Dispatch a single drained [`LiveControlEvent`] from the dedicated
-/// control-surface input.
-///
-/// Binding lookup, soft-takeover, MIDI-learn capture and throttled
-/// feedback land in todo #430 (doc #167 §2 E3). For now the event is
-/// drained and dropped so the bounded control channel can't back up
-/// while a surface is connected but unmapped.
+/// control-surface input: learn capture or binding match
+/// (`engine::midi_map`, doc #167 §2 E3).
 pub(crate) fn handle_live_control_event(
-    _ctx: &HandlerCtx,
-    _state: &mut HandlerState,
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
     event: LiveControlEvent,
 ) {
-    match event {
-        LiveControlEvent::Cc { .. } | LiveControlEvent::Note { .. } => {}
-    }
+    crate::engine::midi_map::handle_control_event(ctx, state, event);
 }
 
 /// Append a live note event into the track's currently-recording

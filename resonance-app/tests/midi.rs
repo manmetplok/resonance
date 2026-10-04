@@ -18,6 +18,8 @@ mod midi_clip_trim_tempo;
 mod midi_editor_selection;
 #[path = "midi/midi_groove_ui.rs"]
 mod midi_groove_ui;
+#[path = "midi/midi_learn.rs"]
+mod midi_learn;
 #[path = "midi/midi_map_mirror.rs"]
 mod midi_map_mirror;
 #[path = "midi/midi_marquee.rs"]

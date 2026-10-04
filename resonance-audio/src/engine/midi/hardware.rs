@@ -30,6 +30,11 @@ pub(crate) fn handle_list_midi_inputs(ctx: &HandlerCtx, state: &mut HandlerState
     state.midi_hw.control_surface.reconcile();
     if devices != state.midi_hw.last_midi_input_devices {
         state.midi_hw.last_midi_input_devices = devices.clone();
+        // The control-surface picker offers the same ports.
+        crate::engine::midi_map::report_control_surface_devices(
+            ctx,
+            devices.iter().map(|d| d.name.clone()).collect(),
+        );
         let _ = ctx
             .event_tx
             .send(AudioEvent::MidiInputDevicesListed { devices });

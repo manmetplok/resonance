@@ -115,7 +115,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         | E::MidiLearnCaptured { .. }
         | E::MidiBindingChanged { .. }
         | E::MidiBindingCleared { .. }
-        | E::ControlSurfaceParamChanged { .. }
+        | E::ControlSurfaceMoved { .. }
         | E::ControlSurfaceDevicesChanged { .. } => route_midi(r, event),
         // Track and bus lifecycle, routing, external instruments and the peak snapshot.
         E::TrackDeviceParamsApplied { .. }
@@ -566,14 +566,13 @@ fn route_midi(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::MidiNotesEdited { clip_id, notes } => midi::notes_edited(r, clip_id, notes),
         E::GrooveExtracted { template } => midi::groove_extracted(r, template),
         // MIDI Learn & hardware control-surface mapping (doc #167 §3 A1).
-        // App state is a pure projection of these events; the active
-        // binding set is rebuilt from MidiBindingChanged / Cleared alone.
-        E::MidiLearnCaptured { target, source } => midi_map::learn_captured(r, target, source),
+        // The echoes fold into the mirror; a capture and a move are edits.
+        E::MidiLearnCaptured { target, source } => {
+            return midi_map::learn_captured(r, target, source)
+        }
         E::MidiBindingChanged { binding } => midi_map::binding_changed(r, binding),
         E::MidiBindingCleared { id } => midi_map::binding_cleared(r, id),
-        E::ControlSurfaceParamChanged { target, value_norm } => {
-            midi_map::param_changed(r, target, value_norm)
-        }
+        E::ControlSurfaceMoved { binding, value } => return midi_map::moved(r, binding, value),
         E::ControlSurfaceDevicesChanged { inputs } => midi_map::devices_changed(r, inputs),
         other => unreachable!("route_midi: {other:?} is not a MIDI event"),
     }
