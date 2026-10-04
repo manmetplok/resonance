@@ -256,11 +256,19 @@ impl ResonancePlugin for ResonanceAmp {
         let copy_r = copy_n.min(self.input_scratch_r.len()).min(right.len());
         self.input_scratch_r[..copy_r].copy_from_slice(&right[..copy_r]);
 
+        // Retry a model a previous block's swap could not admit (parking
+        // full, FU-D1a1) before considering a newer one.
+        self.processor.retry_pending_swap();
+
         // Check mailbox for newly loaded model — start crossfade. The
         // model is already primed on the loader thread, so the fade only
-        // has to mask the handoff itself.
-        if let Some(model) = self.model_mailbox.try_take() {
-            self.processor.install_pending_model(model);
+        // has to mask the handoff itself. Skipped while a swap is still
+        // stuck retrying: the mailbox's single slot holds the next model
+        // safely until then (see `AmpProcessor::has_pending_swap`).
+        if !self.processor.has_pending_swap() {
+            if let Some(model) = self.model_mailbox.try_take() {
+                self.processor.install_pending_model(model);
+            }
         }
 
         // Detect file_select param change from host/DAW.

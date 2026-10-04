@@ -36,6 +36,15 @@ pub struct AmpProcessor {
     /// (`MAX_BLOCK_FRAMES` long; larger host blocks run in chunks).
     mono_in: Vec<f32>,
     mono_out: Vec<f32>,
+    /// A model [`SwapFader::try_begin_swap`] refused because every
+    /// parking slot it could fall back on was taken (FU-D1a1, DSP2-15):
+    /// kept here — never dropped on the audio thread — and retried by
+    /// [`Self::retry_pending_swap`] on a later block. `lib.rs` must not
+    /// collect another model from the mailbox while this is occupied
+    /// (see [`Self::has_pending_swap`]); the mailbox's single slot holds
+    /// it safely in the meantime, and any further supersession there is
+    /// dropped on the loader thread, not this one.
+    pending_swap: Option<Box<dyn NamInference>>,
 }
 
 /// Frames the block scratch is pre-sized for. Hosts in this project run
@@ -64,6 +73,7 @@ impl AmpProcessor {
             output_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
             mono_in: vec![0.0; MAX_BLOCK_FRAMES],
             mono_out: vec![0.0; MAX_BLOCK_FRAMES],
+            pending_swap: None,
         }
     }
 
@@ -97,8 +107,51 @@ impl AmpProcessor {
     /// Install a model that has just landed in the mailbox. If a model
     /// is already active, kicks off a fade-out so the swap happens
     /// transparently mid-block.
+    ///
+    /// Uses [`SwapFader::try_begin_swap`] (FU-D1a1): a NAM model's weight
+    /// buffers are heap-heavy enough that `begin_swap`'s drop-in-place
+    /// fallback would mean a large free inside the sample loop, so when
+    /// every parking slot is taken the model is kept and retried by
+    /// [`Self::retry_pending_swap`] instead of being dropped here. Call
+    /// only when [`Self::has_pending_swap`] is false — see its doc.
     pub fn install_pending_model(&mut self, model: Box<dyn NamInference>) {
-        self.models.begin_swap(model);
+        if let Err(refused) = self.models.try_begin_swap(model) {
+            self.pending_swap = Some(refused);
+        }
+    }
+
+    /// Whether a model is stuck waiting for parking space to free up.
+    /// While true, the caller (`lib.rs`) must not collect another model
+    /// from the mailbox: there is nowhere RT-safe to put a second refused
+    /// payload, and the mailbox's single slot already holds the next one
+    /// safely (superseding it there drops on the loader thread, not this
+    /// one).
+    pub fn has_pending_swap(&self) -> bool {
+        self.pending_swap.is_some()
+    }
+
+    /// Retry a model [`Self::install_pending_model`] had to defer.
+    /// RT-safe to call every block regardless of whether anything is
+    /// pending (FU-D1a1).
+    pub fn retry_pending_swap(&mut self) {
+        if let Some(model) = self.pending_swap.take() {
+            if let Err(refused) = self.models.try_begin_swap(model) {
+                self.pending_swap = Some(refused);
+            }
+        }
+    }
+
+    /// Test-only: replace the janitor-backed retire sink with the
+    /// caller's own channel, so a test can fill every parking slot
+    /// deterministically (e.g. a channel with no reader) instead of
+    /// racing the real janitor thread `new()` spawns. The old sink's
+    /// sender is dropped, which ends that thread (FU-D1a1).
+    #[cfg(feature = "test-internals")]
+    pub fn set_retire_sink_for_test(
+        &mut self,
+        sink: std::sync::mpsc::SyncSender<Box<dyn NamInference>>,
+    ) {
+        self.models.set_retire_sink(sink);
     }
 
     /// Whether a model is installed (main thread, between activations).

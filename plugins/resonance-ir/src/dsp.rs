@@ -172,6 +172,16 @@ pub struct IrEngine {
     bypass_delay_r: DelayLine,
     /// Convolution block size, scaled with sample rate to keep latency ~2.7ms.
     block_size: usize,
+    /// A convolver [`SwapFader::try_begin_swap`] refused because every
+    /// parking slot it could fall back on was taken (FU-D1a1, DSP2-15):
+    /// kept here — never dropped on the audio thread — and retried by
+    /// [`Self::retry_pending`] on a later block. `lib.rs` must not hand
+    /// in another one from the mailbox while this is occupied (see
+    /// [`Self::has_pending_swap`]).
+    pending_swap: Option<StereoConvolver>,
+    /// A clear [`SwapFader::try_begin_clear`] refused; retried the same
+    /// way. No payload to protect, just a deferred state transition.
+    pending_clear: bool,
 }
 
 impl IrEngine {
@@ -186,6 +196,8 @@ impl IrEngine {
             bypass_delay_l: DelayLine::new(block_size),
             bypass_delay_r: DelayLine::new(block_size),
             block_size,
+            pending_swap: None,
+            pending_clear: false,
         }
     }
 
@@ -210,13 +222,64 @@ impl IrEngine {
     /// Hand over a freshly loaded convolver — starts the swap crossfade.
     /// If a convolver is already active it fades out first; otherwise the
     /// new one is swapped in directly and fades in.
+    ///
+    /// Uses [`SwapFader::try_begin_swap`] (FU-D1a1): the partitioned FDL a
+    /// convolver owns is heap-heavy enough that `begin_swap`'s drop-in-place
+    /// fallback would mean a large free inside the sample loop, so when
+    /// every parking slot is taken the convolver is kept and retried by
+    /// [`Self::retry_pending`] instead of being dropped here. Call only
+    /// when [`Self::has_pending_swap`] is false — see its doc.
     pub fn begin_swap(&mut self, conv: StereoConvolver) {
-        self.fader.begin_swap(conv);
+        if let Err(refused) = self.fader.try_begin_swap(conv) {
+            self.pending_swap = Some(refused);
+        }
     }
 
-    /// Fade the IR out and run dry (a preset with `ir_path: ""`).
+    /// Whether a convolver is stuck waiting for parking space to free up.
+    /// While true, the caller (`lib.rs`) must not hand in another one
+    /// from the mailbox: there is nowhere RT-safe to put a second refused
+    /// payload, and the mailbox's single slot already holds the next one
+    /// safely (superseding it there drops on the loader thread, not this
+    /// one).
+    pub fn has_pending_swap(&self) -> bool {
+        self.pending_swap.is_some()
+    }
+
+    /// Fade the IR out and run dry (a preset with `ir_path: ""`), or
+    /// (FU-D1a1) record the request to retry if the fader can't admit it
+    /// right now.
     pub fn begin_clear(&mut self) {
-        self.fader.begin_clear();
+        if !self.fader.try_begin_clear() {
+            self.pending_clear = true;
+        }
+    }
+
+    /// Retry a swap or clear a previous block's [`Self::begin_swap`] /
+    /// [`Self::begin_clear`] had to defer (FU-D1a1). RT-safe to call
+    /// every block regardless of whether anything is pending; call it
+    /// before considering anything new.
+    pub fn retry_pending(&mut self) {
+        if let Some(conv) = self.pending_swap.take() {
+            if let Err(refused) = self.fader.try_begin_swap(conv) {
+                self.pending_swap = Some(refused);
+            }
+        }
+        if self.pending_clear && self.fader.try_begin_clear() {
+            self.pending_clear = false;
+        }
+    }
+
+    /// Test-only: replace the janitor-backed retire sink with the
+    /// caller's own channel, so a test can fill every parking slot
+    /// deterministically (e.g. a channel with no reader) instead of
+    /// racing the real janitor thread `new()` spawns. The old sink's
+    /// sender is dropped, which ends that thread (FU-D1a1).
+    #[cfg(feature = "test-internals")]
+    pub fn set_retire_sink_for_test(
+        &mut self,
+        sink: std::sync::mpsc::SyncSender<StereoConvolver>,
+    ) {
+        self.fader.set_retire_sink(sink);
     }
 
     /// Reset the active convolver's internal state (FDL, overlap, buffers)
