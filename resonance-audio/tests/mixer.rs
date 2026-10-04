@@ -43,6 +43,8 @@ mod freeze_playback_substitution;
 mod graph_rate_assert;
 #[path = "mixer/latency_comp.rs"]
 mod latency_comp;
+#[path = "mixer/latency_comp_republish.rs"]
+mod latency_comp_republish;
 #[path = "mixer/loop_range_snapshot.rs"]
 mod loop_range_snapshot;
 #[path = "mixer/measure_mix.rs"]

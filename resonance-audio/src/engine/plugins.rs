@@ -108,7 +108,8 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
 
 /// Recompute per-track compensation delays from the current topology
 /// and publish a fresh table for the audio callback. Skips the publish
-/// (and thus the delay-line reset) when no delay actually changed.
+/// when no delay actually changed; otherwise the new table carries the
+/// old one's delay lines over (`LatencyComp::following`, code review RT-04).
 /// Runs on the engine thread; delay lines are allocated here, never on
 /// the audio callback.
 pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstruments) {
@@ -200,19 +201,25 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
     {
         return;
     }
+    // The new table carries the old one's delay lines over (code review
+    // RT-04): an unchanged delay keeps playing straight through, and a
+    // changed one crossfades to its new alignment over the bypass fade
+    // length — the same window a chain bypass, the usual trigger, fades
+    // its wet and dry over — instead of every line restarting from
+    // `delay` samples of silence.
+    let next = crate::latency::LatencyComp::following(
+        &ctx.latency_comp.load(),
+        track_max,
+        &track_delays,
+        bus_max,
+        &bus_delays,
+        crate::bypass::fade_frames(ctx.sample_rate) as usize,
+    );
     // The replaced table (delay lines of up to MAX_COMP_LATENCY floats
     // each) is retired, not dropped: the callback may still be inside a
-    // block that loaded it (code review MIX-04).
-    super::retire::publish(
-        ctx.latency_comp,
-        Arc::new(crate::latency::LatencyComp::new(
-            track_max,
-            &track_delays,
-            bus_max,
-            &bus_delays,
-        )),
-        &ctx.shared.retired,
-    );
+    // block that loaded it (code review MIX-04). Lines it shares with the
+    // new table live on in that one.
+    super::retire::publish(ctx.latency_comp, Arc::new(next), &ctx.shared.retired);
 }
 
 /// Service plugin-initiated host callbacks (doc #260 finding #10):

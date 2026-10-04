@@ -50,11 +50,15 @@
 //! Live playback uses a [`LatencyComp`] published through an `ArcSwap`
 //! by the engine thread whenever the track/bus/plugin topology changes;
 //! the audio callback only ever loads it and runs pre-allocated delay
-//! lines. The offline bounce renderer builds its own instance per run
+//! lines. A republished table is built with [`LatencyComp::following`]:
+//! it keeps the lines (and their history) of the table it replaces, and
+//! crossfades any delay that changed instead of restarting it from
+//! silence (code review RT-04). The offline bounce renderer builds its own instance per run
 //! and additionally trims the leading `max_latency` frames so bounced
 //! audio lands exactly on the timeline.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 use parking_lot::Mutex;
@@ -78,8 +82,8 @@ use crate::types::{Bus, BusId, PluginInstanceId, TrackId, TrackMap, TrackType};
 ///   and keeps reporting the same latency, so its contribution is
 ///   unchanged and the comp table does not move at all. This is why the
 ///   host prefers a plugin's own bypass when it declares one: it is the
-///   only way to bypass a latency-carrying plugin without re-publishing
-///   (and thereby resetting) every delay line.
+///   only way to bypass a latency-carrying plugin without re-aligning
+///   every other track around it (a time shift, code review RT-04).
 ///
 /// `host_bypassed` is `PluginSlot::host_bypassed()`.
 #[inline]
@@ -254,21 +258,118 @@ struct DelayState {
     /// is not one: the seam rebases this via
     /// [`LatencyComp::continue_across_loop_wrap`].
     next_playhead: Option<u64>,
-    /// Output samples still owed as silence after a discontinuity.
-    /// Invalidation is lazy: eagerly `clear()`ing both lines would
-    /// memset up to [`MAX_COMP_LATENCY`] samples each, per compensated
-    /// track/bus, inside the first callback after every seek. Instead a mismatch just arms this
-    /// counter to `delay`: the next `delay` outputs read as 0.0 —
-    /// exactly what taps of a freshly cleared line would return —
-    /// while fresh pushes displace the stale tail in place, so it is
-    /// never read again. Continuous playback keeps this at 0 and the
-    /// per-sample path is unchanged.
-    warmup: usize,
+    /// Samples pushed since the last discontinuity (saturating). A tap of
+    /// `d` reads real audio only while `d < filled`; anything older is a
+    /// stale tail from before the discontinuity and reads as 0.0 —
+    /// exactly what a freshly cleared line would return.
+    ///
+    /// Invalidation is lazy: eagerly `clear()`ing both lines would memset
+    /// up to [`MAX_COMP_LATENCY`] samples each, per compensated
+    /// track/bus, inside the first callback after every seek. Resetting
+    /// this counter instead costs nothing, while fresh pushes displace
+    /// the stale tail in place, so it is never read again. Continuous
+    /// playback only ever grows it.
+    filled: usize,
+    /// The delay this line's output is read at (the target of an
+    /// in-flight delay change). A republished table that asks for a
+    /// different delay starts a crossfade from this one (code review
+    /// RT-04).
+    read_delay: usize,
+    /// The delay an in-flight change fades *from*.
+    xfade_from: usize,
+    /// Frames of the delay-change crossfade done so far; it is in flight
+    /// while `xfade_pos < xfade_len`.
+    xfade_pos: usize,
+    /// Length of the delay-change crossfade in flight (0 = none).
+    xfade_len: usize,
+    /// Whether this line has looked at its entry's predecessor yet (see
+    /// [`TrackComp::predecessor`]). Set on the first `apply`.
+    adopted: bool,
 }
+
+/// One delay line pair plus its immutable capacity, shared between
+/// successive comp tables when an entry's delay still fits (code review
+/// RT-04): the line — and its history — survive a republish untouched.
+struct DelayCell {
+    /// The largest delay the lines hold (`capacity − 1`). Fixed for the
+    /// cell's life, so the engine thread can read it without the lock.
+    max_tap: usize,
+    state: Mutex<DelayState>,
+}
+
+impl DelayCell {
+    /// Allocates — engine thread only.
+    fn new(delay: usize) -> Arc<Self> {
+        // +1 so `tap(delay)` stays within capacity even when `delay` is
+        // itself a power of two. `DelayLine` rounds up to a power of two,
+        // which is the headroom a later, longer delay can reuse.
+        let line_l = DelayLine::new(delay + 1);
+        let line_r = DelayLine::new(delay + 1);
+        Arc::new(Self {
+            max_tap: (delay + 1).max(2).next_power_of_two() - 1,
+            state: Mutex::new(DelayState {
+                line_l,
+                line_r,
+                next_playhead: None,
+                filled: 0,
+                read_delay: delay,
+                xfade_from: delay,
+                xfade_pos: 0,
+                xfade_len: 0,
+                adopted: false,
+            }),
+        })
+    }
+}
+
+/// The most history a grown line copies from the one it replaces, per
+/// channel, on the audio thread (code review RT-04). 2^16 frames is 1.4 s
+/// at 48 kHz — beyond any real plugin's latency — and a few hundred
+/// microseconds of copying, once. A longer line warms up from silence
+/// instead, as every line did before.
+const ADOPT_COPY_LIMIT: usize = 1 << 16;
 
 struct TrackComp {
     delay: usize,
-    state: Mutex<DelayState>,
+    cell: Arc<DelayCell>,
+    /// When a republished table needs a longer line than this entry had,
+    /// the old line: on its first `apply` the new line copies the old
+    /// one's history (bounded by [`ADOPT_COPY_LIMIT`]), so the delay
+    /// change is a time shift instead of `delay` samples of silence. Held
+    /// for this table's life so the audio thread never drops the last
+    /// reference to it.
+    predecessor: Option<Arc<DelayCell>>,
+}
+
+impl TrackComp {
+    /// A new entry with an empty line — the offline / first-publish case.
+    fn fresh(delay: usize) -> Self {
+        Self {
+            delay,
+            cell: DelayCell::new(delay),
+            predecessor: None,
+        }
+    }
+
+    /// The entry a republished table uses for an id `old` already had:
+    /// the same line when `delay` fits it (history and all), else a
+    /// bigger line that adopts the old one's history on first use.
+    fn follow(old: &TrackComp, delay: usize) -> Self {
+        if delay <= old.cell.max_tap {
+            Self {
+                delay,
+                cell: Arc::clone(&old.cell),
+                // A line that never ran yet may still owe an adoption.
+                predecessor: old.predecessor.clone(),
+            }
+        } else {
+            Self {
+                delay,
+                cell: DelayCell::new(delay),
+                predecessor: Some(Arc::clone(&old.cell)),
+            }
+        }
+    }
 }
 
 /// Build the delay-line table for one compensation stage (tracks or
@@ -277,69 +378,164 @@ fn build_comp_map(delays: &[(u64, u64)]) -> HashMap<u64, TrackComp> {
     delays
         .iter()
         .filter(|&&(_, d)| d > 0)
-        .map(|&(id, d)| {
+        .map(|&(id, d)| (id, TrackComp::fresh(d.min(MAX_COMP_LATENCY) as usize)))
+        .collect()
+}
+
+/// [`build_comp_map`] for a table that replaces `prev` during playback
+/// (code review RT-04). Every id `prev` had a line for keeps one — even
+/// at delay 0, where the line is a pass-through that keeps recording
+/// history — so a later delay increase replays real audio rather than
+/// warming up from silence. An id gone from `delays` (track / bus
+/// removed) drops its line.
+fn follow_comp_map(prev: &HashMap<u64, TrackComp>, delays: &[(u64, u64)]) -> HashMap<u64, TrackComp> {
+    delays
+        .iter()
+        .filter_map(|&(id, d)| {
             let delay = d.min(MAX_COMP_LATENCY) as usize;
-            (
-                id,
-                TrackComp {
-                    delay,
-                    // +1 so `tap(delay)` stays within capacity even
-                    // when `delay` is itself a power of two.
-                    state: Mutex::new(DelayState {
-                        line_l: DelayLine::new(delay + 1),
-                        line_r: DelayLine::new(delay + 1),
-                        next_playhead: None,
-                        warmup: 0,
-                    }),
-                },
-            )
+            match prev.get(&id) {
+                Some(old) => Some((id, TrackComp::follow(old, delay))),
+                None if delay > 0 => Some((id, TrackComp::fresh(delay))),
+                None => None,
+            }
         })
         .collect()
 }
 
 fn stage_matches(map: &HashMap<u64, TrackComp>, delays: &[(u64, u64)]) -> bool {
     let nonzero = delays.iter().filter(|&&(_, d)| d > 0);
-    nonzero.clone().count() == map.len()
+    nonzero.clone().count() == map.values().filter(|t| t.delay > 0).count()
         && nonzero
             .clone()
             .all(|&(id, d)| map.get(&id).map(|t| t.delay as u64) == Some(d))
 }
 
-fn apply_comp(tc: &TrackComp, left: &mut [f32], right: &mut [f32], playhead: u64) -> bool {
-    let Some(mut st) = tc.state.try_lock() else {
+/// Copy `pred`'s history into the fresh line `st` (see
+/// [`TrackComp::predecessor`]). Only when `pred` ran right up to
+/// `playhead` — otherwise its audio is stale anyway and the line warms up
+/// from silence. Allocation-free; one `try_lock`.
+fn adopt(st: &mut DelayState, max_tap: usize, pred: &DelayCell, playhead: u64) {
+    let Some(p) = pred.state.try_lock() else {
+        return;
+    };
+    if p.next_playhead != Some(playhead) {
+        return;
+    }
+    let n = p.filled.min(pred.max_tap + 1).min(max_tap + 1);
+    if n > ADOPT_COPY_LIMIT {
+        return;
+    }
+    // Oldest first, so the newest sample lands at tap 0.
+    for k in (0..n).rev() {
+        st.line_l.push(p.line_l.tap(k));
+        st.line_r.push(p.line_r.tap(k));
+    }
+    st.filled = n;
+    st.next_playhead = p.next_playhead;
+    st.read_delay = p.read_delay;
+    st.xfade_from = p.xfade_from;
+    st.xfade_pos = p.xfade_pos;
+    st.xfade_len = p.xfade_len;
+}
+
+/// Bring `st` up to this block: adopt a predecessor's history once,
+/// invalidate on a discontinuity, and start a crossfade when the table's
+/// delay differs from the one the line was read at. Returns whether the
+/// block's output can carry audio the input doesn't (a delayed tail or
+/// a delay change in flight).
+fn begin_block(tc: &TrackComp, st: &mut DelayState, playhead: u64, transition: usize) -> bool {
+    if !st.adopted {
+        st.adopted = true;
+        if let Some(pred) = &tc.predecessor {
+            adopt(st, tc.cell.max_tap, pred, playhead);
+        }
+    }
+    if st.next_playhead != Some(playhead) {
+        // Lazy invalidation — see `DelayState::filled`. No memset here.
+        st.filled = 0;
+        st.read_delay = tc.delay;
+        st.xfade_pos = 0;
+        st.xfade_len = 0;
+    } else if st.read_delay != tc.delay {
+        // A republished table moved this line's delay. Fade the read
+        // position from the old delay to the new one: both taps come out
+        // of the same history, so the change is a smooth time shift.
+        // Re-targeted mid-fade, it restarts from whichever delay
+        // dominates the output right now.
+        let in_flight = st.xfade_pos < st.xfade_len;
+        let from = if in_flight && st.xfade_pos * 2 < st.xfade_len {
+            st.xfade_from
+        } else {
+            st.read_delay
+        };
+        st.read_delay = tc.delay;
+        st.xfade_from = from;
+        st.xfade_pos = 0;
+        st.xfade_len = if from != tc.delay { transition } else { 0 };
+    }
+    st.read_delay > 0 || st.xfade_pos < st.xfade_len
+}
+
+#[inline(always)]
+fn tap_or_zero(line: &DelayLine, delay: usize, filled: usize, max_tap: usize) -> f32 {
+    if delay < filled && delay <= max_tap {
+        line.tap(delay)
+    } else {
+        0.0
+    }
+}
+
+/// Push one stereo frame and read the delayed one back.
+#[inline(always)]
+fn step(st: &mut DelayState, max_tap: usize, l: f32, r: f32) -> (f32, f32) {
+    st.line_l.push(l);
+    st.line_r.push(r);
+    st.filled = st.filled.saturating_add(1);
+    if st.xfade_pos < st.xfade_len {
+        st.xfade_pos += 1;
+        let w = crate::bypass::fade_weight(st.xfade_pos as f32 / st.xfade_len as f32);
+        let (from, to, filled) = (st.xfade_from, st.read_delay, st.filled);
+        let a_l = tap_or_zero(&st.line_l, from, filled, max_tap);
+        let a_r = tap_or_zero(&st.line_r, from, filled, max_tap);
+        let b_l = tap_or_zero(&st.line_l, to, filled, max_tap);
+        let b_r = tap_or_zero(&st.line_r, to, filled, max_tap);
+        (a_l * (1.0 - w) + b_l * w, a_r * (1.0 - w) + b_r * w)
+    } else {
+        let (d, filled) = (st.read_delay, st.filled);
+        (
+            tap_or_zero(&st.line_l, d, filled, max_tap),
+            tap_or_zero(&st.line_r, d, filled, max_tap),
+        )
+    }
+}
+
+fn apply_comp(
+    tc: &TrackComp,
+    left: &mut [f32],
+    right: &mut [f32],
+    playhead: u64,
+    transition: usize,
+) -> bool {
+    let Some(mut st) = tc.cell.state.try_lock() else {
         return false;
     };
+    let st = &mut *st;
     let frames = left.len().min(right.len());
-    if st.next_playhead != Some(playhead) {
-        // Lazy invalidation — see `DelayState::warmup`. No memset here.
-        st.warmup = tc.delay;
-    }
+    let carrying = begin_block(tc, st, playhead, transition);
     st.next_playhead = Some(playhead + frames as u64);
-    // Warming up after a discontinuity: pushes still land (refilling the
-    // line in place) but the outputs are the zeros a cleared line would
-    // tap. `silent` is 0 on the continuous path, so that loop vanishes.
-    let silent = st.warmup.min(frames);
-    for f in 0..silent {
-        st.line_l.push(left[f]);
-        left[f] = 0.0;
-        st.line_r.push(right[f]);
-        right[f] = 0.0;
+    let max_tap = tc.cell.max_tap;
+    for f in 0..frames {
+        (left[f], right[f]) = step(st, max_tap, left[f], right[f]);
     }
-    st.warmup -= silent;
-    for f in silent..frames {
-        st.line_l.push(left[f]);
-        left[f] = st.line_l.tap(tc.delay);
-        st.line_r.push(right[f]);
-        right[f] = st.line_r.tap(tc.delay);
-    }
-    true
+    carrying
 }
 
 /// Published delay lines for both compensation stages (module doc):
 /// per-track lines (stage 1), per-bus lines plus the shared dry line for
 /// master-direct signals (stage 2). Built off the audio thread
-/// ([`LatencyComp::new`] allocates); the audio thread only looks up
-/// entries and streams through pre-allocated [`DelayLine`]s.
+/// ([`LatencyComp::new`] / [`LatencyComp::following`] allocate); the
+/// audio thread only looks up entries and streams through pre-allocated
+/// [`DelayLine`]s.
 pub struct LatencyComp {
     /// Total pipeline latency: `max_track_chain + max_bus_chain`.
     max_latency: u64,
@@ -349,8 +545,12 @@ pub struct LatencyComp {
     busses: HashMap<BusId, TrackComp>,
     /// Shared delay for the master-direct sum, `bus_stage` samples, so
     /// dry paths arrive together with signals that traversed a bus.
-    /// `None` when the bus stage is latency-free.
+    /// `None` when the bus stage is latency-free (and never was, for a
+    /// table built by [`LatencyComp::following`]).
     dry: Option<TrackComp>,
+    /// Frames a line whose delay this table changed crossfades over (0 =
+    /// switch on the sample). Only [`LatencyComp::following`] sets it.
+    transition: usize,
 }
 
 impl LatencyComp {
@@ -363,6 +563,7 @@ impl LatencyComp {
             tracks: HashMap::new(),
             busses: HashMap::new(),
             dry: None,
+            transition: 0,
         }
     }
 
@@ -371,6 +572,10 @@ impl LatencyComp {
     /// `track_max`/`track_delays` and `bus_max`/`bus_delays` come from
     /// [`compensation_delays`] over [`chain_latencies`] and
     /// [`bus_chain_latencies`] respectively.
+    ///
+    /// Every line starts empty — right for an offline render, which
+    /// builds its own table per run. A table replacing one the live
+    /// callback is playing through is [`LatencyComp::following`].
     /// Allocates — never call on the audio thread.
     pub fn new(
         track_max: u64,
@@ -379,24 +584,61 @@ impl LatencyComp {
         bus_delays: &[(BusId, u64)],
     ) -> Self {
         let bus_stage = bus_max.min(MAX_COMP_LATENCY);
-        let dry = (bus_stage > 0).then(|| {
-            let delay = bus_stage as usize;
-            TrackComp {
-                delay,
-                state: Mutex::new(DelayState {
-                    line_l: DelayLine::new(delay + 1),
-                    line_r: DelayLine::new(delay + 1),
-                    next_playhead: None,
-                    warmup: 0,
-                }),
-            }
-        });
         Self {
             max_latency: track_max.min(MAX_COMP_LATENCY) + bus_stage,
             bus_stage,
             tracks: build_comp_map(track_delays),
             busses: build_comp_map(bus_delays),
+            dry: (bus_stage > 0).then(|| TrackComp::fresh(bus_stage as usize)),
+            transition: 0,
+        }
+    }
+
+    /// The table that replaces `prev` while the callback plays through it
+    /// (code review RT-04). Arguments as [`LatencyComp::new`], plus the
+    /// crossfade length for a changed delay.
+    ///
+    /// Before, every latency-affecting edit during playback published a
+    /// table of empty lines: every compensated track and bus warmed up
+    /// from `delay` samples of silence, even the ones whose delay had not
+    /// changed. Now:
+    ///
+    /// - an entry whose delay is unchanged keeps `prev`'s line — its
+    ///   output is sample-for-sample what it would have been;
+    /// - an entry whose delay changed keeps the line if the new delay
+    ///   fits (else a bigger line copies the old history on first use),
+    ///   and its output crossfades from the old delay to the new one over
+    ///   `transition_frames`. Both taps read the same history, so the
+    ///   change is a time shift with no dropout and no step. The engine
+    ///   passes the bypass fade length: a chain bypass toggle is what
+    ///   usually moves the table, and the whole mix then fades between
+    ///   the old alignment and the new one over the same few
+    ///   milliseconds the bypassed chain fades between wet and dry;
+    /// - an entry whose delay fell to 0 keeps its line as a pass-through
+    ///   that still records history, so toggling back replays real audio
+    ///   instead of silence.
+    ///
+    /// Allocates — never call on the audio thread.
+    pub fn following(
+        prev: &LatencyComp,
+        track_max: u64,
+        track_delays: &[(TrackId, u64)],
+        bus_max: u64,
+        bus_delays: &[(BusId, u64)],
+        transition_frames: usize,
+    ) -> Self {
+        let bus_stage = bus_max.min(MAX_COMP_LATENCY);
+        let dry = match &prev.dry {
+            Some(old) => Some(TrackComp::follow(old, bus_stage as usize)),
+            None => (bus_stage > 0).then(|| TrackComp::fresh(bus_stage as usize)),
+        };
+        Self {
+            max_latency: track_max.min(MAX_COMP_LATENCY) + bus_stage,
+            bus_stage,
+            tracks: follow_comp_map(&prev.tracks, track_delays),
+            busses: follow_comp_map(&prev.busses, bus_delays),
             dry,
+            transition: transition_frames,
         }
     }
 
@@ -421,8 +663,13 @@ impl LatencyComp {
         self.max_latency - self.bus_stage
     }
 
+    /// True when this table delays nothing. (A table built by
+    /// [`LatencyComp::following`] may still hold zero-delay pass-through
+    /// lines that keep history.)
     pub fn is_empty(&self) -> bool {
-        self.tracks.is_empty() && self.busses.is_empty() && self.dry.is_none()
+        self.tracks.values().all(|t| t.delay == 0)
+            && self.busses.values().all(|t| t.delay == 0)
+            && self.dry.as_ref().is_none_or(|t| t.delay == 0)
     }
 
     /// The delay this comp table applies to `track_id` (0 if none).
@@ -435,14 +682,14 @@ impl LatencyComp {
 
     /// True when both stage maxima and the non-zero entries of both
     /// stages match this table exactly — used by the engine thread to
-    /// skip republishing (and thereby resetting every delay line) on
-    /// topology edits that don't change any compensation amount. The
-    /// maxima must be compared too, not just the per-id delays: a
-    /// topology change can shift every chain latency equally (single
-    /// track, all tracks equal, a multi-output parent's instrument),
-    /// leaving all *relative* delays identical while `max_latency` /
-    /// `track_stage()` move — those feed post-PDC automation timing and
-    /// must not go stale. Arguments mirror [`LatencyComp::new`].
+    /// skip republishing on topology edits that don't change any
+    /// compensation amount. The maxima must be compared too, not just
+    /// the per-id delays: a topology change can shift every chain
+    /// latency equally (single track, all tracks equal, a multi-output
+    /// parent's instrument), leaving all *relative* delays identical
+    /// while `max_latency` / `track_stage()` move — those feed post-PDC
+    /// automation timing and must not go stale. Arguments mirror
+    /// [`LatencyComp::new`].
     pub fn delays_match(
         &self,
         track_max: u64,
@@ -467,7 +714,7 @@ impl LatencyComp {
         let Some(tc) = self.tracks.get(&track_id) else {
             return false;
         };
-        apply_comp(tc, left, right, playhead)
+        apply_comp(tc, left, right, playhead, self.transition)
     }
 
     /// Delay `bus_id`'s summing buffers in place (bus stage, applied
@@ -477,7 +724,7 @@ impl LatencyComp {
         let Some(tc) = self.busses.get(&bus_id) else {
             return false;
         };
-        apply_comp(tc, left, right, playhead)
+        apply_comp(tc, left, right, playhead, self.transition)
     }
 
     /// Tell every delay line that the next block, starting at `loop_in`,
@@ -497,11 +744,19 @@ impl LatencyComp {
     /// warms up as before. Allocation-free and lock-free (`try_lock`, as
     /// in `apply`); a no-op for an empty table.
     pub fn continue_across_loop_wrap(&self, loop_out: u64, loop_in: u64) {
-        let rebase = |tc: &TrackComp| {
-            if let Some(mut st) = tc.state.try_lock() {
+        let rebase_cell = |cell: &DelayCell| {
+            if let Some(mut st) = cell.state.try_lock() {
                 if st.next_playhead == Some(loop_out) {
                     st.next_playhead = Some(loop_in);
                 }
+            }
+        };
+        let rebase = |tc: &TrackComp| {
+            rebase_cell(&tc.cell);
+            // A line still to adopt its predecessor's history checks the
+            // predecessor's continuity, so it rides the wrap too.
+            if let Some(pred) = &tc.predecessor {
+                rebase_cell(pred);
             }
         };
         self.tracks.values().for_each(rebase);
@@ -524,34 +779,22 @@ impl LatencyComp {
         let Some(tc) = &self.dry else {
             return false;
         };
-        let Some(mut st) = tc.state.try_lock() else {
+        let Some(mut st) = tc.cell.state.try_lock() else {
             return false;
         };
-        if st.next_playhead != Some(playhead) {
-            // Lazy invalidation — see `DelayState::warmup`. No memset here.
-            st.warmup = tc.delay;
-        }
+        let st = &mut *st;
+        let carrying = begin_block(tc, st, playhead, self.transition);
         st.next_playhead = Some(playhead + frames as u64);
-        let silent = st.warmup.min(frames);
-        for f in 0..silent {
+        let max_tap = tc.cell.max_tap;
+        for f in 0..frames {
             let idx = f * channels;
-            st.line_l.push(data[idx]);
-            data[idx] = 0.0;
+            let r_in = if channels >= 2 { data[idx + 1] } else { 0.0 };
+            let (l, r) = step(st, max_tap, data[idx], r_in);
+            data[idx] = l;
             if channels >= 2 {
-                st.line_r.push(data[idx + 1]);
-                data[idx + 1] = 0.0;
+                data[idx + 1] = r;
             }
         }
-        st.warmup -= silent;
-        for f in silent..frames {
-            let idx = f * channels;
-            st.line_l.push(data[idx]);
-            data[idx] = st.line_l.tap(tc.delay);
-            if channels >= 2 {
-                st.line_r.push(data[idx + 1]);
-                data[idx + 1] = st.line_r.tap(tc.delay);
-            }
-        }
-        true
+        carrying
     }
 }

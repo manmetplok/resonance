@@ -373,6 +373,13 @@ impl MixAudioHarness {
         );
     }
 
+    /// Publish a compensation table another harness built — the engine's
+    /// own, from `EngineHandlerHarness::published_latency_comp` — so this
+    /// callback renders through exactly what the engine published.
+    pub fn adopt_latency_comp(&self, comp: std::sync::Arc<crate::latency::LatencyComp>) {
+        crate::engine::retire::publish(&self.latency_comp, comp, &self.shared.retired);
+    }
+
     /// Publish a new tempo map (metronome flag included).
     pub fn set_tempo_map(&self, map: TempoMap) {
         crate::engine::retire::publish(
