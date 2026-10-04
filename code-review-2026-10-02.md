@@ -73,7 +73,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 2 | H1 host spec | HOST-05, -06, -09, -11, -12, -13, -15, -16 | opus | merged | 38e62ab9 |
 | 2 | D2 DSP follow-ups | FU-D1b1 (rescale wavetable factory presets to the new envelope timing), FU-D1a1 (amp/IR `try_begin_swap`) | sonnet | merged | 7d5f0a69 |
 | 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | merged | e3f1bd76 |
-| 3 | R4 RT correctness | RT-03, RT-05, RT-06, RT-09, RT-10, RT-11, RT-12, RT-14, RT-15, RT-16, RT-18 | opus | running |  |
+| 3 | R4 RT correctness | RT-03, RT-05, RT-06, RT-09, RT-10, RT-11, RT-12, RT-14, RT-15, RT-16, RT-18 | opus | merged | 4e0b1a60 |
 | 3 | P3 editor runtime | PUX-04, -07, -09, -10, -12, PUX-01 (preset-bar recall), DEP-03, FU-P1a, FU-P2a, FU-P2b, FU-P2e, FU-P2f | sonnet | merged | 1f2eff0c |
 | 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | running |  |
 | 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | merged | ee3d8053 |
@@ -159,6 +159,16 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
   - A latency change during playback is now a 5 ms crossfade to the new alignment, not silence.
   - Own-bypass plugins switch without a host crossfade.
   - Mastering bypasses through its own param, so its latency stays compensated.
+- **FU-R4a:** done in 0573d1d4. Mastering `publish_snapshot` now uses `integrated_lufs_live()`.
+- **FU-R4b:** the 3 s stopped-tail hold is fixed, so longer reverbs are faded. Use the CLAP tail extension per plugin.
+- **FU-R4c:** while stopped, busses run without PDC, and an idle multi-out instrument's extra ports aren't routed to their sub-tracks.
+- **FU-R4d:** RT-05's held-note release doesn't cover live-played notes or hardware MIDI out.
+- *Behaviour change (R4, approved):*
+  - Stopped and count-in monitoring now goes through busses, sends and master FX.
+  - Bus and master tails ring 3 s after Stop.
+  - Master-gain automation at loop seams is read post-wrap.
+  - Loops shorter than a block render one pass, then silence.
+  - The live integrated LUFS resets on Play and on seek.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
