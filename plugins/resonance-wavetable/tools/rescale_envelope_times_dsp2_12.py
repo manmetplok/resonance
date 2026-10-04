@@ -40,7 +40,7 @@ decay/release 0.001-10.0 s — `src/params/env.rs`); a handful of slow pads
 and the drone preset hit the ceiling and lose a little of their former
 length rather than exceed it (printed below as they're found).
 
-Usage: python3 rescale_envelope_times_dsp2_12.py <presets-dir>
+Usage: python3 tools/rescale_envelope_times_dsp2_12.py presets/
 """
 import glob
 import math
