@@ -107,6 +107,15 @@ impl Reconcile for Transport {
                 loop_out: new.loop_out,
             });
         }
+        // Cycle-record mode (W3): re-applied on every load/reconcile the
+        // same way the loop range is, so the engine's `rec.loop_record`
+        // flag never drifts from the project that is actually open.
+        if differs(old, new, |f| f.loop_record_mode) {
+            r.transport.loop_record_mode = new.loop_record_mode;
+            let _ = r
+                .engine
+                .send(AudioCommand::SetLoopRecordMode(new.loop_record_mode));
+        }
     }
 }
 

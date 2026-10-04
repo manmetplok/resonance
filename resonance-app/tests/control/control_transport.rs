@@ -262,6 +262,49 @@ fn set_time_signature_directly_and_undoably() {
     assert_eq!(app.test_transport_time_sig(), (6, 8));
 }
 
+// ---------------- loop-record mode ----------------
+
+#[test]
+fn set_loop_record_mode_sends_the_engine_command_and_is_undoable() {
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let before = app.revision();
+    assert!(!app.test_loop_record_mode(), "distinct takes off by default");
+
+    let result: TransportResult = call(
+        &mut app,
+        "transport.set_loop_record_mode",
+        serde_json::json!({ "distinct_takes": true }),
+    )
+    .result()
+    .expect("set_loop_record_mode succeeds");
+    assert!(result.loop_record_mode);
+    assert!(app.test_loop_record_mode());
+    assert_eq!(result.revision, before + 1);
+    assert!(app.test_can_undo());
+    assert!(drain(&rx)
+        .iter()
+        .any(|c| matches!(c, AudioCommand::SetLoopRecordMode(true))));
+
+    // The GUI's Cmd-Z reverts the remote edit, same as tempo/time sig.
+    let _ = app.update(Message::Undo);
+    assert!(!app.test_loop_record_mode());
+}
+
+#[test]
+fn set_loop_record_mode_misspelled_field_is_rejected() {
+    let mut app = app();
+    let response = call(
+        &mut app,
+        "transport.set_loop_record_mode",
+        serde_json::json!({ "distinct_take": true }),
+    );
+    assert_eq!(
+        response.error.expect("unknown field rejected").kind(),
+        ErrorKind::InvalidParams
+    );
+}
+
 // ---------------- key ----------------
 
 #[test]

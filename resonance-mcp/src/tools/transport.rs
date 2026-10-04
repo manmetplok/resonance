@@ -132,4 +132,20 @@ impl ResonanceMcp {
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(transport::SET_KEY, &params).await
     }
+
+    #[tool(
+        description = "Set cycle-record mode for loop recording: distinct_takes=true rolls \
+                       each loop pass into its own take at the seam (comp or solo them \
+                       afterwards); distinct_takes=false merges the whole cycle-recorded run \
+                       into one clip, as before takes existed.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<transport::TransportResult>()
+    )]
+    async fn transport_set_loop_record_mode(
+        &self,
+        Parameters(params): Parameters<transport::SetLoopRecordModeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(transport::SET_LOOP_RECORD_MODE, &params)
+            .await
+    }
 }

@@ -39,6 +39,25 @@ pub(super) fn input_devices_listed(
     // full Vec every frame.
     r.ui.view_caches
         .rebuild_input_devices(&r.devices.input.devices);
+    // The device list changing can change the I/O latency figures
+    // (W3): re-query so Settings → Audio never shows a stale reading
+    // past a device swap, whether or not the overlay is open.
+    let _ = r.engine.send(AudioCommand::QueryIoLatency);
+}
+
+/// Mirror the engine's I/O latency reply (doc #260 finding #13) for the
+/// Settings → Audio readout (W3).
+pub(super) fn io_latency_report(
+    r: &mut Resonance,
+    capture_samples: u64,
+    playback_samples: u64,
+    round_trip_samples: u64,
+) {
+    r.devices.io_latency = Some(crate::state::IoLatencyInfo {
+        capture_samples,
+        playback_samples,
+        round_trip_samples,
+    });
 }
 
 pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {

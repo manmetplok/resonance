@@ -27,6 +27,7 @@ fn make_minimal_project() -> ProjectFile {
         master_fx_bypassed: false,
         loop_enabled: false,
         loop_in: 0,
+        loop_record_mode: false,
         loop_out: 0,
         tracks: Vec::new(),
         clips: Vec::new(),

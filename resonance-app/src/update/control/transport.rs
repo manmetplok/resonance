@@ -14,8 +14,8 @@ use crate::message::{ChordTrackMessage, Message, TransportMessage};
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::transport::{
-    self, LoopSetParams, SeekParams, SetKeyParams, SetTempoParams, SetTimeSignatureParams,
-    TransportResult,
+    self, LoopSetParams, SeekParams, SetKeyParams, SetLoopRecordModeParams, SetTempoParams,
+    SetTimeSignatureParams, TransportResult,
 };
 use resonance_control::{PositionSpec, Request, Response, RpcError};
 
@@ -38,6 +38,7 @@ pub(super) fn try_handle(
         transport::SET_TEMPO => set_tempo(app, request),
         transport::SET_TIME_SIGNATURE => set_time_signature(app, request),
         transport::SET_KEY => set_key(app, request),
+        transport::SET_LOOP_RECORD_MODE => set_loop_record_mode(app, request),
         _ => return None,
     };
     Some(out)
@@ -49,6 +50,7 @@ fn echo(app: &Resonance, request: &Request) -> Response {
         state: super::view_model::transport_state(app),
         playhead: super::view_model::song_position(app, app.transport.playhead),
         looping: app.transport.loop_enabled,
+        loop_record_mode: app.transport.loop_record_mode,
         revision: app.revision(),
     };
     super::success(request, &result)
@@ -187,6 +189,18 @@ fn set_key(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) 
         }),
     );
     (echo(app, request), task)
+}
+
+fn set_loop_record_mode(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: SetLoopRecordModeParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    simple(
+        app,
+        request,
+        TransportMessage::SetLoopRecordMode(params.distinct_takes),
+    )
 }
 
 // ---------------------------------------------------------------------------

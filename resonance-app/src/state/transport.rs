@@ -34,6 +34,13 @@ pub struct TransportState {
     pub loop_out: u64,
     pub loop_range_set: bool,
     pub dragging_loop: Option<LoopDragTarget>,
+    /// Cycle-record mode mirror (`AudioCommand::SetLoopRecordMode`):
+    /// true rolls each loop pass into its own take at the seam (comp/solo
+    /// later), false keeps the legacy single merged clip for the whole
+    /// cycle-recorded run. Persisted on the project (W3) — it decides what
+    /// shape the recorded content takes, same as the loop range itself,
+    /// not a cross-project device preference.
+    pub loop_record_mode: bool,
     /// The BPM field holds typed text not yet committed with Enter (code
     /// review UX-15). Set by `SetBpmText`; cleared by the commit and by
     /// [`Self::revert_bpm_text`]. While set, a press off the field reverts
@@ -93,6 +100,7 @@ impl Default for TransportState {
             loop_out: 0,
             loop_range_set: false,
             dragging_loop: None,
+            loop_record_mode: false,
             bpm_editing: false,
             bpm_hovered: false,
             cpu_load: None,

@@ -2027,10 +2027,6 @@ const ORPHANED_AUDIO_COMMANDS: &[&str] = &[
     "ClearAllMidiBindings",
     "SetControllerMap",
     "SetControlSurfaceInput",
-    // Loop-record mode (takes vs. merge): no transport toggle yet.
-    "SetLoopRecordMode",
-    // Round-trip I/O latency probe: no settings surface reads it.
-    "QueryIoLatency",
 ];
 
 /// `AudioCommand` variants the engine sends to itself, by design never

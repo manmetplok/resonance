@@ -91,6 +91,10 @@ mod project_atomic_write;
 mod project_backups;
 #[path = "io/project_track_groups_persist.rs"]
 mod project_track_groups_persist;
+#[path = "io/loop_record_mode_persistence.rs"]
+mod loop_record_mode_persistence;
+#[path = "io/io_latency_readout.rs"]
+mod io_latency_readout;
 #[path = "io/reference_disk_round_trip.rs"]
 mod reference_disk_round_trip;
 #[path = "io/reference_echo_races.rs"]

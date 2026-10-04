@@ -33,6 +33,10 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::OpenSettings => {
             r.ui.mixer.settings_open = true;
+            // Refresh the Audio section's latency readout (W3): the
+            // engine answers with `AudioEvent::IoLatencyReport`, stored
+            // on `r.devices.io_latency` by `engine_events::transport`.
+            let _ = r.engine.send(resonance_audio::types::AudioCommand::QueryIoLatency);
         }
         UiMessage::CloseSettings => {
             r.ui.mixer.settings_open = false;

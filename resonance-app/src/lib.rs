@@ -596,6 +596,7 @@ impl Resonance {
                 registry: device_registry,
                 external_instruments: std::collections::HashMap::new(),
                 midi_map: MidiMapState::default(),
+                io_latency: None,
             },
             plugin_catalog: state::PluginCatalog::default(),
             missing_plugins: crate::state::MissingPluginState::default(),

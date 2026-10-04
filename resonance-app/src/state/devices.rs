@@ -44,4 +44,23 @@ pub struct DeviceState {
     /// engine's active binding set. A pure projection of `MidiBinding*` /
     /// `ControlSurface*` events — see `state::MidiMapState`.
     pub midi_map: state::MidiMapState,
+    /// Most recent `AudioEvent::IoLatencyReport` (W3): the graph-reported
+    /// capture/playback delay of the native PipeWire streams, in samples
+    /// at the engine rate. `None` until the engine has answered a
+    /// `QueryIoLatency` — asked on Settings-overlay open and whenever the
+    /// input device list re-enumerates.
+    pub io_latency: Option<IoLatencyInfo>,
+}
+
+/// I/O latency readout (doc #260 finding #13), mirrored verbatim from
+/// `AudioEvent::IoLatencyReport`. Samples, not milliseconds — the view
+/// converts using the live engine sample rate so a rate change can never
+/// leave a stale ms figure lying around.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IoLatencyInfo {
+    /// 0 while no input stream is open.
+    pub capture_samples: u64,
+    pub playback_samples: u64,
+    /// `capture_samples + playback_samples`.
+    pub round_trip_samples: u64,
 }

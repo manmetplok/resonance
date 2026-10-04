@@ -52,6 +52,13 @@ pub enum TransportMessage {
     StartLoopDrag(LoopDragTarget),
     UpdateLoopDrag(f32),
     EndLoopDrag,
+    /// Set cycle-record mode directly (Settings → Recording, and the
+    /// control endpoint `transport.set_loop_record_mode`): `true` rolls
+    /// each loop pass into its own take at the seam instead of merging
+    /// the whole cycle-recorded run into one clip. Undoable like
+    /// [`Self::SetLoopRange`] — it decides the shape of what gets
+    /// recorded, the same kind of edit.
+    SetLoopRecordMode(bool),
     /// Toggle MIDI clock send (engine acts as clock master).
     ToggleMidiClockSend,
     /// Pick the hardware port for MIDI clock send. `None` clears.
@@ -98,7 +105,8 @@ impl TransportMessage {
             | Self::SetTimeSignature { .. }
             | Self::SetLoopRange { .. }
             | Self::SetLoopPoint { .. }
-            | Self::ToggleLoop => UndoAction::Record,
+            | Self::ToggleLoop
+            | Self::SetLoopRecordMode(_) => UndoAction::Record,
         }
     }
 }
@@ -368,6 +376,10 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                 loop_in: r.transport.loop_in,
                 loop_out: r.transport.loop_out,
             });
+        }
+        TransportMessage::SetLoopRecordMode(on) => {
+            r.transport.loop_record_mode = on;
+            let _ = r.engine.send(AudioCommand::SetLoopRecordMode(on));
         }
         TransportMessage::StartLoopDrag(target) => {
             r.transport.dragging_loop = Some(target);
