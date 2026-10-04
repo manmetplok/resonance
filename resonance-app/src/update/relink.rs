@@ -2,7 +2,7 @@
 //! #600).
 //!
 //! When a project is loaded whose media pool references a WAV that is no
-//! longer on disk, `restore_pool` keeps that asset — flagged
+//! longer on disk, `restore_pool_assets` keeps that asset — flagged
 //! [`missing`](crate::state::pool::PoolAsset::missing) — so its clips stay
 //! intact (offline). These handlers resolve the file again:
 //!

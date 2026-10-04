@@ -7,7 +7,7 @@
 //! - `mod.rs` (this file): public entry point [`replay_loaded_project`] and
 //!   the re-exported restore helpers.
 //! - `restore.rs`: standalone restore helpers (`restore_performance`,
-//!   `restore_quantize`, `restore_pool`, `restore_references`,
+//!   `restore_quantize`, `restore_pool_assets`, `restore_references`,
 //!   `restore_drum_patterns`, `restore_tempo_events`, `replay_take_groups`)
 //!   used both here and by the diff-based undo replay path.
 //!
@@ -31,7 +31,7 @@ use crate::Resonance;
 // (ARCH-01 A-13f).
 pub use super::reconcile::{migrate_auto_name, sort_plugins_by_saved_order};
 pub(crate) use restore::{
-    replay_take_groups, restore_drum_patterns, restore_performance, restore_pool,
+    replay_take_groups, restore_drum_patterns, restore_performance,
     restore_pool_assets, restore_quantize, restore_track_groups,
     reconcile_references, restore_references, restore_tempo_events,
 };

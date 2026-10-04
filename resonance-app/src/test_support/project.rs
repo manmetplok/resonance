@@ -252,7 +252,9 @@ impl Resonance {
     /// (`EntityIds::clips`, D-7b) would hand out next, without taking it.
     #[doc(hidden)]
     pub fn test_next_clip_id(&self) -> resonance_audio::types::ClipId {
-        self.media.ids.clips.peek()
+        // `IdCounter` is `Copy`: allocate from a copy, leaving the real one.
+        let mut clips = self.media.ids.clips;
+        clips.allocate()
     }
 
     /// Test-only: serialize the current GUI state to the on-disk
@@ -298,7 +300,16 @@ impl Resonance {
     /// snapshot/restore invariant test runs after each restore path.
     #[doc(hidden)]
     pub fn test_snapshot_same_state(a: &crate::undo::UndoSnapshot, b: &crate::undo::UndoSnapshot) -> bool {
-        a.same_state(b)
+        let (a, b) = (&a.project, &b.project);
+        let notes_equal = a.midi_notes.len() == b.midi_notes.len()
+            && a.midi_notes.iter().all(|(id, notes)| {
+                b.midi_notes.get(id).is_some_and(|o| {
+                    // An untouched clip shares its `Arc` (ARCH-09 A9-3).
+                    std::sync::Arc::ptr_eq(notes, o)
+                        || crate::update::project_io::replay_diff::midi_notes_equal(notes, o)
+                })
+            });
+        notes_equal && a.file == b.file
     }
 
     /// Test-only: the gesture-end check `commit_undo_gesture` runs —
@@ -330,7 +341,8 @@ impl Resonance {
     /// with `Origin::Undo`), synchronously and without a `ClearAll`.
     #[doc(hidden)]
     pub fn test_begin_restore_from_snapshot(&mut self, snapshot: crate::undo::UndoSnapshot) {
-        self.begin_restore_from_snapshot(snapshot);
+        let current = crate::update::build_project_file(self);
+        self.restore_from_snapshot_against(&current, snapshot);
     }
 
     /// Test-only: route a message through the *full* `update()` entry,

@@ -31,21 +31,17 @@
 //! fingerprint of everything it reads (ux-guidelines.md → "View Performance").
 
 mod automation;
-mod bus;
+pub(crate) mod bus;
 pub(crate) mod chain;
 mod external_instrument;
 mod io;
-mod master;
+pub(crate) mod master;
 mod onboarding;
 mod routing;
 pub(crate) mod sends;
 mod track_group;
 mod widgets;
 
-#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
-pub(crate) use bus::fingerprint as bus_fingerprint;
-#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
-pub(crate) use master::fingerprint as master_fingerprint;
 
 use iced::widget::{column, container, row, text, Space};
 use iced::{alignment, Element, Length};

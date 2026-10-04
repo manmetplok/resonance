@@ -42,9 +42,9 @@ pub(crate) enum AutoChan {
 /// picker. Plugin params carry their own label; the built-in
 /// gain/pan/mute kinds use a fixed one.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct AutoChoice {
+pub(crate) struct AutoChoice {
     kind: AutoKind,
-    label: Rc<str>,
+    pub(crate) label: Rc<str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,7 +107,7 @@ fn master_base() -> Rc<[AutoChoice]> {
 /// named [`DeviceParam`], clustered by [`DeviceParam::group`] (epic #40, doc
 /// #201 §5). `device_params` is empty when no preset is selected (or the
 /// channel is a bus/master), so the picker hides device params exactly then.
-fn choices_for(
+pub(crate) fn choices_for(
     chan: AutoChan,
     plugins: &[PluginSlotState],
     device_params: &[DeviceParam],
@@ -159,25 +159,6 @@ fn choices_for(
         });
     }
     out
-}
-
-/// Test-only: the ordered picker option labels a *track* strip would show,
-/// given its hosted `plugins` and any resolved `device_params`. Mirrors
-/// [`choices_for`] exactly (a closed `pick_list` renders only its
-/// placeholder, so an integration test can't read the dropdown items off the
-/// rendered tree) — used by `tests/automation_device_params.rs` to assert the
-/// named device params appear, grouped, only when a preset is selected.
-#[doc(hidden)]
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-pub(crate) fn track_choice_labels(
-    track_id: u64,
-    plugins: &[PluginSlotState],
-    device_params: &[DeviceParam],
-) -> Vec<String> {
-    choices_for(AutoChan::Track(track_id), plugins, device_params)
-        .into_iter()
-        .map(|c| c.label.to_string())
-        .collect()
 }
 
 /// Resolve a picked [`AutoChoice`] into the concrete target for `chan`.
@@ -290,7 +271,7 @@ fn target_label(target: &AutomationTarget, device_params: &[DeviceParam]) -> Str
 // ---------------------------------------------------------------------------
 
 /// The message picking `choice` on `chan` raises.
-fn add_lane_message(chan: AutoChan, choice: &AutoChoice) -> Message {
+pub(crate) fn add_lane_message(chan: AutoChan, choice: &AutoChoice) -> Message {
     match target_of(chan, &choice.kind) {
         Some(target) => Message::Automation(AutomationMessage::AddLane(target)),
         // Unreachable for built choices; `AddLane` on an existing lane
@@ -315,25 +296,6 @@ pub(super) fn add_lane_picker(
     .padding([8, 10])
     .width(Length::Fill)
     .into()
-}
-
-/// Test-only: the `AddLane` message the inspector picker raises for the
-/// option labelled `label` on `chan`, or `None` when no option carries
-/// that label. A closed `pick_list` renders only its placeholder, so a
-/// test can't click an option; this resolves one exactly as the picker's
-/// `on_select` does.
-#[doc(hidden)]
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-pub(crate) fn add_lane_message_for_label(
-    chan: AutoChan,
-    plugins: &[PluginSlotState],
-    device_params: &[DeviceParam],
-    label: &str,
-) -> Option<Message> {
-    choices_for(chan, plugins, device_params)
-        .into_iter()
-        .find(|c| &*c.label == label)
-        .map(|c| add_lane_message(chan, &c))
 }
 
 /// Every lane whose target belongs to `chan`, with its label, in the

@@ -14,7 +14,6 @@ use super::super::scrollbar::ScrollbarRects;
 use super::super::snap::snap_sample_to_grid_tempo;
 use super::super::TimelineCanvas;
 
-#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl TimelineCanvas<'_> {
     /// The vertical scrollbar's rects, `None` when the lanes fit. There
     /// is no in-canvas horizontal bar: horizontal scroll is owned by the
@@ -25,7 +24,7 @@ impl TimelineCanvas<'_> {
     /// screen (the [`ViewportProbe`](crate::view::timeline::viewport_probe)
     /// window), not the song's end; with no probe write yet it falls back
     /// to the canvas edge (review VIEW-33).
-    pub(in crate::view::timeline) fn scrollbar_rects(
+    pub(crate) fn scrollbar_rects(
         &self,
         bounds: Rectangle,
     ) -> Option<ScrollbarRects> {
@@ -37,14 +36,6 @@ impl TimelineCanvas<'_> {
             .get()
             .map_or(bounds.width, |v| v.x + v.width);
         scrollbar::v_rects(bounds, right_edge, content_h, self.scroll_offset_y, header_h)
-    }
-
-    /// Test-only: [`scrollbar_rects`](Self::scrollbar_rects) for
-    /// `test_support` (VIEW-33).
-    #[doc(hidden)]
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
-    pub(crate) fn test_scrollbar_rects(&self, bounds: Rectangle) -> Option<ScrollbarRects> {
-        self.scrollbar_rects(bounds)
     }
 
     /// Hit-test a pointer press against a clip lane (MIDI or audio).

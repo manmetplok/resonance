@@ -3,7 +3,7 @@
 //!
 //! The durable fact "this asset's backing WAV is gone" lives on the pool
 //! asset itself ([`PoolAsset::missing`](crate::state::pool::PoolAsset::missing),
-//! set at load time by `restore_pool`). This module holds only the
+//! set at load time by `restore_pool_assets`). This module holds only the
 //! *session* state around resolving those files: which assets are
 //! currently being re-imported (so the UI can show progress and a second
 //! click can't double-import), and the last relink failure to surface.
