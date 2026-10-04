@@ -43,6 +43,8 @@ mod engine_events_plugin_move_mirror;
 mod engine_events_pool_mirror;
 #[path = "io/export_dialog_shell.rs"]
 mod export_dialog_shell;
+#[path = "io/export_stems.rs"]
+mod export_stems;
 #[path = "io/files_tab_rendering.rs"]
 mod files_tab_rendering;
 #[path = "io/id_allocation.rs"]

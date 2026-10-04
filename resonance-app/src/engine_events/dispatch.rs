@@ -11,8 +11,8 @@ use crate::message::*;
 use crate::Resonance;
 
 use super::{
-    automation, aux_sends, clips, freeze, midi, midi_map, plugins, pool, project_io, reference,
-    takes, tracks, transport,
+    automation, aux_sends, clips, export, freeze, midi, midi_map, plugins, pool, project_io,
+    reference, takes, tracks, transport,
 };
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
@@ -90,15 +90,16 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::BounceProgress { fraction } => {
             transport::bounce_progress(r, fraction)
         }
-        // Stem-export plumbing (ba todo #325): the engine emits this
-        // multi-target queue; wiring it into the export modal's progress
-        // UI is a follow-up todo, so consume the events here for now.
-        E::StemExportError(_)
-        | E::StemExportProgress { .. }
-        | E::StemExportTargetDone { .. }
-        | E::StemExportTargetError { .. }
-        | E::StemExportComplete { .. }
-        | E::StemExportCancelled { .. } => {}
+        // Stem export (ba todo #325, code review ARCH2-01): the Export
+        // modal follows the engine's multi-target queue.
+        E::StemExportError(e) => export::error(r, e),
+        E::StemExportProgress {
+            target_index, total, ..
+        } => export::progress(r, target_index, total),
+        E::StemExportTargetDone { index, path } => export::target_done(r, index, path),
+        E::StemExportTargetError { index, message } => export::target_error(r, index, message),
+        E::StemExportComplete { files } => export::complete(r, files),
+        E::StemExportCancelled { files } => export::cancelled(r, files),
         // Mix measurement (ba doc #273, todos #1218 / #1219). These are
         // the terminal events of `AudioCommand::MeasureMix`, which only
         // the control API's `meter.*` issues; the GUI has no measurement

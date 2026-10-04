@@ -664,5 +664,10 @@ pub(crate) fn offline_render_busy_error(app: &Resonance) -> Option<RpcError> {
             "a track freeze is rendering; retry when it finishes",
         ));
     }
+    if app.stem_export_in_progress() {
+        return Some(RpcError::busy(
+            "a stem export is rendering; retry when it finishes",
+        ));
+    }
     None
 }

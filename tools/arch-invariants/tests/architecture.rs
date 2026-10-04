@@ -1493,3 +1493,143 @@ fn view_layer_never_hardcodes_pure_white_or_black() {
         &violations,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Engine features with an app caller (code review ARCH2-01)
+// ---------------------------------------------------------------------------
+
+/// The variant names of `pub enum <name>` in `file`: the identifiers that
+/// open a line at one indent level inside the enum's braces.
+fn enum_variants(file: &Path, name: &str) -> Vec<String> {
+    let lines = code_lines(file);
+    let open = format!("pub enum {name} {{");
+    let start = lines
+        .iter()
+        .position(|(_, l)| l.trim() == open)
+        .unwrap_or_else(|| panic!("`{open}` not found in {}", file.display()));
+    let mut out = Vec::new();
+    for (_, line) in &lines[start + 1..] {
+        if line.starts_with('}') {
+            break;
+        }
+        let Some(rest) = line.strip_prefix("    ") else {
+            continue;
+        };
+        if !rest.starts_with(|c: char| c.is_ascii_uppercase()) {
+            continue;
+        }
+        let ident: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        out.push(ident);
+    }
+    out
+}
+
+/// `AudioCommand` variants nothing in the app sends yet — engine features
+/// that exist and are tested on the engine side but have no UI or control
+/// surface (code review ARCH2-01). Each line is a decision someone has to
+/// make (wire it, or delete it from the engine), never a place to park a
+/// new command: a new variant must have an app caller when it lands.
+const ORPHANED_AUDIO_COMMANDS: &[&str] = &[
+    // MIDI learn / controller maps / control surfaces: the engine side
+    // (bindings, learn capture, `MidiLearnCaptured`) exists; there is no
+    // learn UI, only `test_support` arms it.
+    "EnterMidiLearn",
+    "CancelMidiLearn",
+    "ClearMidiBinding",
+    "ClearAllMidiBindings",
+    "SetControllerMap",
+    "SetControlSurfaceInput",
+    // Loop-record mode (takes vs. merge): no transport toggle yet.
+    "SetLoopRecordMode",
+    // Round-trip I/O latency probe: no settings surface reads it.
+    "QueryIoLatency",
+    // Clip warp (time-stretch to tempo): engine since 2026-06-22, no
+    // clip-inspector controls; its events are dropped in `dispatch.rs`.
+    "SetClipWarp",
+    "SetClipWarpMarkers",
+    "DetectClipTempo",
+];
+
+/// `AudioCommand` variants the engine sends to itself, by design never
+/// from the app: worker threads post them on the retry channel, and
+/// `ShutDown` is sent by `AudioEngine::shutdown` / `Drop`.
+const ENGINE_INTERNAL_AUDIO_COMMANDS: &[&str] =
+    &["BounceTargetCancelled", "ReferenceAnalyzed", "ShutDown"];
+
+/// ARCHITECTURE.md → Audio Engine Public API: an engine feature is an
+/// `AudioCommand` the app sends. ARCH2-01 found ~13 commands (and the
+/// stem export's whole event queue) with no caller, maintained and tested
+/// for nobody. Every variant must be named as `AudioCommand::<Variant>`
+/// somewhere in `resonance-app/src` outside `test_support` (which arms
+/// things production never does), or sit in `ORPHANED_AUDIO_COMMANDS` —
+/// and an entry that gains a caller must leave the list.
+///
+/// Exercised 2026-10-04: added a variant `ArchProbe,` to `AudioCommand`
+/// → failed with "ArchProbe: no app caller"; removed `"QueryIoLatency"`
+/// from the allow-list → failed likewise; both reverted.
+#[test]
+fn every_audio_command_has_an_app_caller() {
+    let root = workspace_root();
+    let variants = enum_variants(
+        &root.join("resonance-audio/src/types/commands.rs"),
+        "AudioCommand",
+    );
+    assert!(
+        variants.len() > 100,
+        "found only {} AudioCommand variants — parser broken?",
+        variants.len()
+    );
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-app/src"), &mut files);
+    let mut code = String::new();
+    for file in &files {
+        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string();
+        if rel.split('/').any(|seg| seg.starts_with("test_support")) {
+            continue;
+        }
+        for (_, line) in code_lines(file) {
+            code.push_str(&line);
+            code.push('\n');
+        }
+    }
+    let named = |v: &str| {
+        let needle = format!("AudioCommand::{v}");
+        code.match_indices(&needle).any(|(i, _)| {
+            !code[i + needle.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    };
+    let mut violations = Vec::new();
+    for v in &variants {
+        if ENGINE_INTERNAL_AUDIO_COMMANDS.contains(&v.as_str()) {
+            continue;
+        }
+        let orphan = ORPHANED_AUDIO_COMMANDS.contains(&v.as_str());
+        match (named(v), orphan) {
+            (false, false) => violations.push(format!(
+                "AudioCommand::{v}: no app caller in resonance-app/src (outside test_support) — \
+                 wire it, or delete it from the engine"
+            )),
+            (true, true) => violations.push(format!(
+                "AudioCommand::{v} has an app caller now — drop it from `ORPHANED_AUDIO_COMMANDS`"
+            )),
+            _ => {}
+        }
+    }
+    for o in ORPHANED_AUDIO_COMMANDS.iter().chain(ENGINE_INTERNAL_AUDIO_COMMANDS) {
+        if !variants.iter().any(|v| v == o) {
+            violations.push(format!(
+                "{o}: in `ORPHANED_AUDIO_COMMANDS` but no longer an AudioCommand"
+            ));
+        }
+    }
+    report(
+        "ARCH2-01: every AudioCommand variant has an app caller (or a listed, deliberate orphan)",
+        &violations,
+    );
+}
