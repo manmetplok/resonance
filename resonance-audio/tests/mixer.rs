@@ -21,6 +21,8 @@ mod loop_seam_edges;
 mod mix_meter_reset;
 #[path = "mixer/offline_gate_in_flight.rs"]
 mod offline_gate_in_flight;
+#[path = "mixer/stopped_mix_stage.rs"]
+mod stopped_mix_stage;
 #[path = "mixer/held_note_release.rs"]
 mod held_note_release;
 #[path = "mixer/automation_block_size.rs"]

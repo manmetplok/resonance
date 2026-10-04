@@ -15,6 +15,8 @@
 //! - [`count_in`]: the playhead is pinned and the count-in metronome plays
 //!   over monitored input.
 //! - [`stopped`]: no transport, but armed tracks still monitor.
+//! - [`idle_mix`]: the stopped / count-in branches' bus and master stage,
+//!   and the tail hold after a stop.
 //! - [`play`]: the arrangement render from the published render graph
 //!   (a wait-free load: a playing block always renders).
 //! - [`master_pass`]: the whole-buffer tail of a playing block (master FX,
@@ -28,6 +30,7 @@
 
 pub(crate) mod context;
 mod count_in;
+mod idle_mix;
 mod master_pass;
 mod monitor_input;
 mod play;
@@ -128,7 +131,7 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
     } else if inputs.shared.count_in_active.load(Ordering::Relaxed) {
         count_in::render_count_in_block(&inputs, scratch, &timing, monitor, playhead_now, frames);
     } else if !inputs.shared.playing.load(Ordering::Relaxed) {
-        stopped::render_stopped_block(&inputs, scratch, &timing, monitor, frames);
+        stopped::render_stopped_block(&inputs, scratch, &timing, monitor, playhead_now, frames);
     } else {
         play::render_playing_block(&inputs, scratch, &timing, monitor, playhead_now, frames);
     }

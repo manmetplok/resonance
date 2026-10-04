@@ -22,9 +22,10 @@ use crate::engine::count_in_arm;
 use crate::mixer::click::render_count_in_clicks;
 use crate::mixer::common::commit_playhead;
 use crate::mixer::master::apply_master_volume_and_peaks;
-use crate::mixer::monitor::mix_monitor_passthrough;
+use crate::mixer::monitor::{mix_monitor_passthrough, MixTargets};
 
 use super::context::{BlockTiming, CallbackInputs, CallbackScratch, MonitorRead};
+use super::idle_mix::{self, IdleMixInputs};
 
 pub(super) fn render_count_in_block(
     inputs: &CallbackInputs<'_>,
@@ -41,14 +42,27 @@ pub(super) fn render_count_in_block(
     let click_frames = (frames as u64).min(count_in_remaining) as usize;
 
     // Monitor pass-through so the performer can hear themselves warm up
-    // during the count-in. Mirrors the playing=false monitor branch but is
-    // read entirely from the render graph (tracks and plugins, ARCH-02
-    // B-3/B-4), a load that cannot fail, so it never drops a buffer.
-    if monitor.frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
-        let graph = shared.graph.load();
-        mix_monitor_passthrough(
-            scratch.data,
-            inputs.channels,
+    // during the count-in. Mirrors the playing=false monitor branch —
+    // through the track's bus, aux sends and the master chain (code review
+    // RT-14) — and is read entirely from the render graph (tracks, busses
+    // and plugins, ARCH-02 B-3/B-4), a load that cannot fail, so it never
+    // drops a buffer.
+    let graph = shared.graph.load();
+    let aux_guard = shared.aux_sends.load();
+    let routes_guard = shared.sidechain_routes.load();
+    let take_comp_guard = shared.take_comp.load();
+    idle_mix::begin(scratch, &graph, &routes_guard, frames);
+    let active = idle_mix::active_busses(&graph, scratch);
+    let audible = monitor.frames > 0
+        && shared.monitoring.load(Ordering::Relaxed)
+        && mix_monitor_passthrough(
+            &mut MixTargets {
+                data: &mut *scratch.data,
+                channels: inputs.channels,
+                bus_bufs: &mut scratch.bus_bufs[..active],
+                busses: &graph.busses,
+                aux_sends: &aux_guard,
+            },
             &graph.tracks,
             &graph.plugins,
             scratch.monitor_temp,
@@ -60,7 +74,22 @@ pub(super) fn render_count_in_block(
             timing.transport,
             inputs.sample_rate,
         );
-    }
+    // Busses and master chain before the clicks, as the playing branch
+    // runs master FX before the metronome.
+    idle_mix::finish(
+        inputs,
+        scratch,
+        timing,
+        IdleMixInputs {
+            graph: &graph,
+            aux_sends: &aux_guard,
+            sidechain_routes: &routes_guard,
+            take_comp: &take_comp_guard,
+            playhead,
+            frames,
+        },
+        audible,
+    );
 
     // Metronome click synthesis using a count-in-local timeline. Beats are
     // indexed from the start of the count-in; with `count_in_total ==
