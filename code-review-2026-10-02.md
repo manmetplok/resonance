@@ -75,9 +75,9 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | merged | e3f1bd76 |
 | 3 | R4 RT correctness | RT-03, RT-05, RT-06, RT-09, RT-10, RT-11, RT-12, RT-14, RT-15, RT-16, RT-18 | opus | merged | 4e0b1a60 |
 | 3 | P3 editor runtime | PUX-04, -07, -09, -10, -12, PUX-01 (preset-bar recall), DEP-03, FU-P1a, FU-P2a, FU-P2b, FU-P2e, FU-P2f | sonnet | merged | 1f2eff0c |
-| 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | running |  |
+| 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | merged | ad402dbd |
 | 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | merged | ee3d8053 |
-| 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | after wave 3 | |
+| 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | running | |
 | 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | last, alone | |
 
 ### Follow-ups raised by batches
@@ -169,6 +169,18 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
   - Master-gain automation at loop seams is read post-wrap.
   - Loops shorter than a block render one pass, then silence.
   - The live integrated LUFS resets on Play and on seek.
+- **FU-X1a:** mastering's reference loader keeps its own symphonia decode loop. A shared native-rate, capped decode helper in resonance-common would let it use the common path.
+- **FU-X1b / DEP-04: decision needed from Jorrit.**
+  1. Choose a project license and set `workspace.package.license`.
+  2. Decide on LAME: link it dynamically, or keep the static link and document a relink path.
+  3. Then generate the notices file with `cargo about`.
+
+  See `THIRD_PARTY_LICENSES.md`.
+- *X1 notes:*
+  - DEP-06 was applied to `resonance-common/src/wav.rs`, the actual plugin decode path; `audio_probe.rs` is used only by the app.
+  - DEP-10's `strip = "debuginfo"` gave no size change, because release builds already had no DWARF.
+  - The printpdf upgrade needed no source changes.
+  - Cargo.lock lost ~74 packages.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
