@@ -70,13 +70,13 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 2 | R2 lock contention | HOST-02/RT-07, HOST-03, HOST-08, HOST-10 | opus | merged | 2991b9fc |
 | 2 | U1 project lifecycle UX | UX-01, UX-03/STATE2-04, UX-11, UX-12, UX-14, UX-15, UX-16 | opus | merged | c8c79366 |
 | 2 | U2 view correctness | UX-02, UX-06, UX-10, UX-22 | opus | merged | 72ab6819 |
-| 2 | H1 host spec | HOST-05, -06, -09, -11, -12, -13, -15, -16 | opus | running |  |
-| 2 | D2 DSP follow-ups | FU-D1b1 (rescale wavetable factory presets to the new envelope timing), FU-D1a1 (amp/IR `try_begin_swap`) | sonnet | running | |
-| 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | after R2, H1 | |
-| 3 | R4 RT correctness | RT-03, RT-05, RT-06, RT-09, RT-10, RT-11, RT-12, RT-14, RT-15, RT-16, RT-18 | opus | after R1, H1 | |
-| 3 | P3 editor runtime | PUX-04, -07, -09, -10, -12, PUX-01 (preset-bar recall), DEP-03, FU-P1a, FU-P2a, FU-P2b, FU-P2e, FU-P2f | sonnet | running | |
-| 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | after wave 2 | |
-| 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | running (deps met early) |  |
+| 2 | H1 host spec | HOST-05, -06, -09, -11, -12, -13, -15, -16 | opus | merged | 38e62ab9 |
+| 2 | D2 DSP follow-ups | FU-D1b1 (rescale wavetable factory presets to the new envelope timing), FU-D1a1 (amp/IR `try_begin_swap`) | sonnet | merged | 7d5f0a69 |
+| 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | running |  |
+| 3 | R4 RT correctness | RT-03, RT-05, RT-06, RT-09, RT-10, RT-11, RT-12, RT-14, RT-15, RT-16, RT-18 | opus | running |  |
+| 3 | P3 editor runtime | PUX-04, -07, -09, -10, -12, PUX-01 (preset-bar recall), DEP-03, FU-P1a, FU-P2a, FU-P2b, FU-P2e, FU-P2f | sonnet | merged | 1f2eff0c |
+| 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | running |  |
+| 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | merged | ee3d8053 |
 | 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | after wave 3 | |
 | 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | last, alone | |
 
@@ -131,6 +131,26 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 - **FU-P2e:** a gesture that never ends leaves a stale start value in the shared ledger (in P3).
 - **FU-P2f:** the classic `widgets::knob` is unused by plugins and can be deleted (in P3).
 - *UX change (P2):* the nine classic-knob editors now use the themed lavender knob (label below, sub-label row). The delay editor is rebuilt as wrapping cards with Sync/Freeze/Gate chips. The granular editor's minimum width is 1320 px.
+- **FU-H1a:** live controllers (CC, pitch bend, aftertouch) are not recorded into clips or sent MIDI-thru, and are dropped when the instrument lock is busy (notes are stashed).
+- **FU-H1b:** the host doesn't offer the `clap_host_note_ports` extension.
+- **FU-H1c:** port layouts are not re-read after a plugin restart or an audio-ports rescan.
+- **FU-H1d:** upstream clack-host bug: `InputChannel::constant` sets `constant_mask` bits by port instead of by channel.
+- **FU-H1e:** the bridge's `timed_params` buffer can grow once on the audio thread past 1024 events.
+- **FU-H1f:** the panic path doesn't reset pitch bend or the mod wheel.
+- *Behaviour changes (H1, approved):*
+  - The log smoother ramps about 3× faster, with no end snap.
+  - Plugin-param automation is sampled on a 64-frame absolute grid and delivered sample-accurately; live and bounce are bit-identical.
+  - An unrouted sidechain port is now passed as constant silence.
+- **FU-D2a:** in `EnvCoeffs`/`AdsrEnvelope` decay, the f32 step underflows for a long decay to a high sustain, so the stage sits about 0.0004 above sustain and never formally enters Sustain. Inaudible.
+- *D2:* 7 presets were clamped at the param ceilings after the rescale (fx_drone_texture, fx_risers, pad_evolving_choir, pad_glass_shimmer, pad_juno_chorus, pad_warm_analog, pluck_digital_bell). The script lives at `plugins/resonance-wavetable/tools/rescale_envelope_times_dsp2_12.py`.
+- **FU-U3a:** two dead `ui-work.md §11` references remain, in the color and EQ plugin crates and in `mixer-cleanup.md`.
+- **FU-U3b:** sub-track, bus and group strip mute/solo buttons have no `with_hint` tooltip, because of the lazy-fingerprint purity contract.
+- **FU-U3c:** the track-name ellipsis budget is 12 characters, and wide-glyph names can still hit the pixel clip with no ellipsis. Measuring the rendered text would fix it.
+- *UX change (U3):* `TEXT_3` is #8a909b, the font floor is 9 px, the error bar uses the status-line chip style, the fader resets with ctrl/cmd-click (iced has no double-click on sliders), and the monitor glyph is an ear.
+- **FU-P3a:** the 12 non-drum editors still repaint at their requested 16/33 ms while idle. Add drums-style LIT/LIVE/IDLE tiers.
+- **FU-P3b:** editors still rebuild `Vec<&dyn Param>` every frame for `preset_bar`.
+- **FU-P3c:** drums `live_value` covers 2 params only.
+- *DEP-03 (P3):* moving rfd from 0.15 to 0.17 removed zbus from every plugin bundle; gate.so went from 11.8 MB to 8.7 MB (−26 %).
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
