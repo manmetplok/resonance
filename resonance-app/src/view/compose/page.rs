@@ -218,7 +218,7 @@ impl crate::Resonance {
                     ),
                     None => {
                         let revision = self.ui.view_caches.compose_rail.revision(
-                            crate::view::ui_caches::ComposeRailInputs {
+                            crate::state::ui_caches::ComposeRailInputs {
                                 definition: definition.clone(),
                                 selected_lane: self.compose.selected_lane.clone(),
                                 tracks: self

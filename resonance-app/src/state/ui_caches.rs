@@ -18,12 +18,12 @@ use std::rc::Rc;
 use resonance_audio::MidiDeviceInfo;
 use resonance_audio::types::{InputDeviceInfo, ScannedPlugin};
 
-use crate::state::BusState;
-use crate::view::mixer::picks::{
+use crate::state::picks::{
     bank_choices, device_choices, input_channel_choices, midi_choices_base,
     output_channel_choices, output_choices_for, program_choices, BankChoice, DevicePresetChoice,
     MidiChannelChoice, MidiPickerChoice, OutputChoice, ProgramChoice,
 };
+use crate::state::BusState;
 
 #[derive(Debug, Clone)]
 pub(crate) struct UiViewCaches {
@@ -268,5 +268,5 @@ pub(crate) struct ComposeRailInputs {
     /// Set equality is order-independent, so iteration order can't fake
     /// a change.
     pub collapsed_panels: std::collections::HashSet<crate::compose::RailPanelKey>,
-    pub vocal_tempo_warning: Option<crate::update::compose::VocalTempoMismatch>,
+    pub vocal_tempo_warning: Option<crate::compose::VocalTempoMismatch>,
 }

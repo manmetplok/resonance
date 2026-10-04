@@ -182,14 +182,9 @@ pub(crate) fn section_meter(r: &crate::Resonance, definition_id: u64) -> Section
 }
 
 /// A section whose one vocal render does not fit every bar it plays at
-/// (code review FU-M11b): see [`vocal_tempo_mismatch`].
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct VocalTempoMismatch {
-    /// The tempo the vocal is rendered at ([`section_meter`]'s).
-    pub rendered_bpm: f32,
-    /// The placed tempo that differs most from it.
-    pub other_bpm: f32,
-}
+/// (code review FU-M11b): see [`vocal_tempo_mismatch`]. Defined in
+/// `crate::compose` (ARCH2-05: `state::ui_caches` holds one).
+pub use crate::compose::VocalTempoMismatch;
 
 /// A section's vocal is rendered once, at [`section_meter`]'s tempo (its
 /// earliest placement's), and that one WAV is installed at every

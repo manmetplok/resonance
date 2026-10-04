@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use resonance_app::compose::{
     ChordState, GenerateParams, SectionDefinitionState, SectionPlacementState,
 };
-use resonance_app::engine_events::performance::{chord_readout, ChordQuery, ChordReadout};
+use resonance_app::query::performance::{chord_readout, ChordQuery, ChordReadout};
 use resonance_app::view::performance::beat_cue::BeatCueState;
 use resonance_audio::types::TempoMap;
 use resonance_music_theory::{Chord, ChordQuality, MotifSource, PitchClass};

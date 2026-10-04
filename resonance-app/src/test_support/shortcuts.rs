@@ -1,7 +1,7 @@
 //! Keyboard-dispatch test hooks: the typing-gate answer and the active
 //! keymap (command-palette.md §10).
 
-use crate::update::shortcuts::TypingProbe;
+use crate::state::TypingProbe;
 use crate::Resonance;
 
 impl Resonance {

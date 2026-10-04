@@ -9,49 +9,10 @@ use crate::message::Message;
 use crate::settings::{KeymapOverride, KeymapSettings};
 use crate::Resonance;
 
-/// Which page the Settings overlay shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SettingsTab {
-    #[default]
-    General,
-    Keyboard,
-}
-
-/// A rebinding that would take a chord from another command, waiting for
-/// the user to confirm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct KeymapConflict {
-    pub command: CommandId,
-    pub chord: KeyChord,
-    pub owner: CommandId,
-}
-
-/// The Keyboard panel's transient state.
-#[derive(Debug, Clone, Default)]
-pub struct KeymapEditorState {
-    pub tab: SettingsTab,
-    pub filter: String,
-    /// The command whose next key press becomes its chord.
-    pub capturing: Option<CommandId>,
-    pub conflict: Option<KeymapConflict>,
-    /// The active preset's table, to tell edited rows from default ones
-    /// without rebuilding it per frame.
-    pub baseline: BindingMap,
-    /// What the active preset leaves unbound compared with the defaults.
-    pub unbound_by_preset: Vec<CommandId>,
-}
-
-impl KeymapEditorState {
-    /// Fresh editor state for `settings`' preset.
-    pub fn for_settings(settings: &KeymapSettings) -> Self {
-        let preset = preset_of(settings);
-        Self {
-            baseline: preset.bindings(),
-            unbound_by_preset: preset.unbound(),
-            ..Self::default()
-        }
-    }
-}
+/// The panel's state types and the preset lookup live in
+/// `state::keymap_editor` (`UiTransientState` holds the state — ARCH2-05);
+/// re-exported so this module stays their import path.
+pub use crate::state::keymap_editor::{preset_of, KeymapConflict, KeymapEditorState, SettingsTab};
 
 /// Keyboard-panel interaction, routed as `UiMessage::Keymap`.
 #[derive(Debug, Clone)]
@@ -71,16 +32,6 @@ pub enum KeymapMsg {
     /// Back to the preset's chord for this command.
     Reset(CommandId),
     ResetAll,
-}
-
-/// The preset a persisted name selects (the Resonance default for an
-/// unknown one).
-pub fn preset_of(settings: &KeymapSettings) -> KeymapPreset {
-    KeymapPreset::ALL
-        .iter()
-        .copied()
-        .find(|p| p.key() == settings.preset)
-        .unwrap_or(KeymapPreset::Resonance)
 }
 
 /// Build the active keymap: the preset, then every override in order.

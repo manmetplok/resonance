@@ -59,7 +59,7 @@ use crate::view::mixer::automation::AutoChan;
 // The cached-list-plus-stale-override combinator the io /
 // external-instrument pickers use lives in `ui_caches` now, shared with
 // the Settings overlay's MIDI-clock pickers.
-use crate::view::ui_caches::midi_choices_with_override;
+use crate::state::ui_caches::midi_choices_with_override;
 
 pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
     // A selected bus takes the pane, then the master, then a track. The

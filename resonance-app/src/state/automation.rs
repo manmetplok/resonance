@@ -13,6 +13,8 @@ use std::collections::HashMap;
 
 use resonance_common::{AutomationLane, AutomationTarget, LaneId, TrackId};
 
+use crate::state::TrackState;
+
 /// GUI-side automation state, mirrored one-way from engine events.
 #[derive(Debug, Clone, Default)]
 pub struct AutomationState {
@@ -91,4 +93,74 @@ impl AutomationState {
             self.next_lane_id = self.next_lane_id.max(max);
         }
     }
+}
+
+/// Display priority of an automation target on its track's arrange row:
+/// gain, pan, mute, then device params, then plugin params by param id.
+/// Bus/master targets never belong to an arrange track row.
+pub fn target_priority(target: AutomationTarget) -> u32 {
+    match target {
+        AutomationTarget::TrackGain(_) => 0,
+        AutomationTarget::TrackPan(_) => 1,
+        AutomationTarget::TrackMute(_) => 2,
+        // Device params are what the user automated deliberately on an
+        // external-instrument track, so they outrank generic plugin params.
+        // Ties between several device lanes are broken deterministically by
+        // `param_id` in `track_lanes_sorted`.
+        AutomationTarget::DeviceParam { .. } => 5,
+        AutomationTarget::PluginParam { param_id, .. } => 10u32.saturating_add(param_id),
+        _ => u32::MAX,
+    }
+}
+
+/// Whether `target` drives one of `track`'s parameters: its own gain/pan/
+/// mute, a CLAP param on a plugin instance hosted by the track, or a device
+/// param on the track's external instrument.
+pub fn target_belongs_to_track(target: &AutomationTarget, track: &TrackState) -> bool {
+    match target {
+        AutomationTarget::TrackGain(id)
+        | AutomationTarget::TrackPan(id)
+        | AutomationTarget::TrackMute(id) => *id == track.id,
+        AutomationTarget::PluginParam { instance, .. } => {
+            track.plugins.iter().any(|p| p.instance_id == *instance)
+        }
+        AutomationTarget::DeviceParam { track: id, .. } => *id == track.id,
+        _ => false,
+    }
+}
+
+/// Every lane that belongs to `track`, sorted by `(target_priority,
+/// device-param id)` — gain, pan, mute, device params (lexicographic by
+/// param id), then plugin params. This is both the order the default pick
+/// scans (the first entry is the "primary" lane) and the cycle order of the
+/// chip click (todo #1095), so the two can never disagree. Shared by the
+/// arrange-row layout (`state::arrange_layout`) and the timeline's
+/// automation overlay, which is why it lives here and not in the view
+/// (ARCH2-05).
+pub fn track_lanes_sorted<'l>(
+    automation: &'l AutomationState,
+    track: &TrackState,
+) -> Vec<&'l AutomationLane> {
+    let mut lanes: Vec<&'l AutomationLane> = automation
+        .lanes
+        .values()
+        .filter(|lane| target_belongs_to_track(&lane.target, track))
+        .collect();
+    lanes.sort_by_key(|lane| {
+        // Copy the inner `&'l` ref out so the tie-break `&str` borrows
+        // from the lane itself, not the closure-local double reference.
+        let lane: &'l AutomationLane = lane;
+        let tie = match &lane.target {
+            AutomationTarget::DeviceParam { param_id, .. } => param_id.as_str(),
+            _ => "",
+        };
+        // Final lane-id tie-break: two plugin-param lanes with the same
+        // param id on different instances would otherwise inherit the
+        // HashMap's nondeterministic iteration order — and the arrange
+        // lane-row stacking (`ArrangeAutomationRows::collect`) delegates
+        // here, so the cycle order, the default pick, and row 0 of an
+        // expanded stack all agree.
+        (target_priority(lane.target.clone()), tie, lane.id)
+    });
+    lanes
 }

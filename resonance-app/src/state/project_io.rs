@@ -2,6 +2,31 @@
 //! single sub-struct so the open/save/load/bounce code path doesn't pull
 //! in the rest of the GUI state.
 
+/// Which restore is running (`update::project_io::reconcile`). Held in
+/// [`ProjectIoState::reconcile_trace`], so defined here (ARCH2-05).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// A disk load or template instantiate, after `ClearAll`; `old` is
+    /// `None`.
+    DiskLoad,
+    /// An undo/redo: no `ClearAll`, the engine still holds everything, and
+    /// `old` is the live state's file. Every domain diffs against it.
+    Undo,
+}
+
+impl Origin {
+    /// An undo/redo.
+    pub fn is_undo(self) -> bool {
+        matches!(self, Origin::Undo)
+    }
+
+    /// The engine was emptied by `ClearAll` before this restore: a disk
+    /// load. Named for what the domains that read it care about.
+    pub fn after_clear_all(self) -> bool {
+        matches!(self, Origin::DiskLoad)
+    }
+}
+
 /// Whether an in-flight bounce is rendering offline (CLAP synth) or
 /// recording in real time from an audio input. Drives the progress
 /// modal's wording and gates which features the cancel button enables.
@@ -59,10 +84,7 @@ pub struct ProjectIoState {
     /// The `Reconcile` domains the last restore ran, in order, with the
     /// origin it ran them under (ARCH-01 A-13). Cleared at the start of
     /// each restore; read by the order guard test.
-    pub reconcile_trace: Vec<(
-        crate::update::project_io::reconcile::Origin,
-        &'static str,
-    )>,
+    pub reconcile_trace: Vec<(Origin, &'static str)>,
     /// Engine echoes of structural commands a diff restore sent and has
     /// already mirrored (ARCH-01 A-13h). See [`RestoreEchoes`].
     pub restore_echoes: RestoreEchoes,

@@ -219,7 +219,7 @@ impl Resonance {
     /// Song-structure line beneath the transport state: the arrangement
     /// section under the playhead and the one coming up (todo #372). Derived
     /// from the arrangement markers via the headless
-    /// [`section_readout`](crate::engine_events::performance::section_readout),
+    /// [`section_readout`](crate::query::performance::section_readout),
     /// honoring the active loop region the same way the chord look-ahead does.
     ///
     /// Renders `● Current → Next`: a colour dot tinted to the current marker,
@@ -227,7 +227,7 @@ impl Resonance {
     /// When the arrangement has no marker at or after the playhead — an empty
     /// project — it collapses to nothing so the transport state stays centred.
     fn performance_section_label(&self) -> Element<'_, Message> {
-        use crate::engine_events::performance::section_readout;
+        use crate::query::performance::section_readout;
 
         let loop_region = (self.transport.loop_enabled && self.transport.loop_range_set)
             .then_some((self.transport.loop_in, self.transport.loop_out));
@@ -373,7 +373,7 @@ impl Resonance {
     /// view-performance rules), so it sits outside the lazy region and manages
     /// its own per-beat redraw (view-performance rule #2).
     fn performance_center_stage(&self) -> Element<'_, Message> {
-        use crate::engine_events::performance::{chord_readout, ChordQuery};
+        use crate::query::performance::{chord_readout, ChordQuery};
         use resonance_music_theory::{ALL_TUNINGS, GUITAR_6};
 
         // Selected instrument/tuning + capo. The footer controls (#311) are
@@ -456,7 +456,7 @@ impl Resonance {
     }
 
     /// Derive the live [`beat_cue::BeatCueState`] from the transport and the
-    /// chord-derivation core ([`crate::engine_events::performance`]).
+    /// chord-derivation core ([`crate::query::performance`]).
     ///
     /// The pre-count is detected from the transport (rolling + record-armed
     /// with the primed first-chord sample still ahead of the playhead); the
@@ -465,7 +465,7 @@ impl Resonance {
     /// count-in — the core returns the primed chord and `priming = true`,
     /// and the cue shows a mint countdown over it.
     fn performance_cue_state(&self) -> beat_cue::BeatCueState {
-        use crate::engine_events::performance::{chord_readout, ChordQuery};
+        use crate::query::performance::{chord_readout, ChordQuery};
 
         let t = &self.transport;
         let rolling = t.playing;
@@ -510,7 +510,7 @@ impl Resonance {
     /// progression or in an empty project (the lane then shows its empty
     /// state).
     fn performance_next_cards(&self) -> Vec<next_lane::NextCard> {
-        use crate::engine_events::performance::{chord_readout, ChordQuery};
+        use crate::query::performance::{chord_readout, ChordQuery};
         use resonance_music_theory::GUITAR_6;
 
         // Selected instrument/tuning + capo (same live selection the footer +

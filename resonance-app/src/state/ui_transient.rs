@@ -13,6 +13,7 @@
 
 use crate::state::ClipInteractionState;
 use crate::state::MixerUiState;
+use crate::state::ShiftOutcome;
 use crate::state::ViewMode;
 
 /// Transient view-layer/session UI state — never persisted, never in the
@@ -27,21 +28,21 @@ pub struct UiTransientState {
     /// Cached pick-list option lists for the view layer. Rebuilt only
     /// when source data changes (devices, busses, plugin scan) so a
     /// continuous resize doesn't reallocate option vecs every frame.
-    /// See `view::ui_caches` for the cache and rebuild API.
+    /// See `state::ui_caches` for the cache and rebuild API.
     ///
     /// `pub(crate)`, not `pub` like this struct's other fields: `UiViewCaches`
     /// itself is `pub(crate)` (a view-layer-only cache type), so this field
     /// keeps that visibility rather than widening it.
-    pub(crate) view_caches: crate::view::ui_caches::UiViewCaches,
+    pub(crate) view_caches: crate::state::ui_caches::UiViewCaches,
     /// Lazy-memoised label strings for the transport bar's stat blocks
     /// (position, time, sig, key, loop). Re-formatted only when the
     /// underlying inputs change. Refreshed by `refresh_transport_labels`
     /// after every `update()` dispatch (plus at construction and after
     /// demo seeding) so `view()` only ever reads it — the view layer
-    /// never mutates state. See `view::transport_labels`.
+    /// never mutates state. See `state::transport_labels`.
     ///
     /// `pub(crate)` for the same reason as `view_caches` above.
-    pub(crate) transport_labels: crate::view::transport_labels::TransportLabels,
+    pub(crate) transport_labels: crate::state::transport_labels::TransportLabels,
     /// The active tab (Arrange / Mixer / Compose / Performance).
     pub view_mode: ViewMode,
     /// The view that was active when Performance mode was entered, so
@@ -56,7 +57,7 @@ pub struct UiTransientState {
     /// the edit through `update()` (which is what makes it one undo
     /// entry) and reads the tally back from here. Overwritten by each
     /// shift and never persisted.
-    pub last_arrangement_shift: Option<crate::update::arrangement::ShiftOutcome>,
+    pub last_arrangement_shift: Option<ShiftOutcome>,
     /// Timeline/clip selection and interaction state (drag, trim, MIDI
     /// editor, expanded-lane tracking, ...).
     pub interaction: ClipInteractionState,
@@ -69,7 +70,7 @@ pub struct UiTransientState {
     pub keymap: crate::commands::BindingMap,
     /// How the typing gate asks whether a text field holds focus; always
     /// `Live` outside tests.
-    pub typing_probe: crate::update::shortcuts::TypingProbe,
+    pub typing_probe: TypingProbe,
     /// The open command palette, if any (command-palette.md §7).
     pub palette: Option<crate::palette::PaletteState>,
     /// The query the palette closed with, restored (pre-selected) on the
@@ -79,13 +80,24 @@ pub struct UiTransientState {
     /// since; the tick writes it after a quiet spell.
     pub recent_dirty_since: Option<std::time::Instant>,
     /// The Settings overlay's tab and the Keyboard panel's state.
-    pub keymap_editor: crate::update::keymap::KeymapEditorState,
+    pub keymap_editor: crate::state::keymap_editor::KeymapEditorState,
     /// The app window's last-known inner size, from the window's
     /// `Opened` / `Resized` events. Starts at [`DEFAULT_WINDOW_SIZE`] (the
     /// window's own minimum, so never larger than the real window). The
     /// floating generic plugin window clamps its position to it so its
     /// title bar stays reachable.
     pub window_size: iced::Size,
+}
+
+/// How the typing gate learns whether a text field holds focus. `Live`
+/// probes the widget tree (`crate::focus`); the fixed answers exist so
+/// tests can drive a shortcut end to end without a widget tree. Read by
+/// `update::shortcuts`; held here (ARCH2-05).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TypingProbe {
+    #[default]
+    Live,
+    Assume { editing: bool },
 }
 
 /// The app window's opening size, which is also its minimum

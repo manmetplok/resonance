@@ -10,9 +10,14 @@
 // this module. Each one lives next to the data it touches instead of
 // piling onto the top-level `impl Resonance` block in `lib.rs`.
 pub mod arrange;
+pub mod arrange_layout;
+pub mod picks;
 pub mod plugin_index;
+pub mod transport_labels;
+pub mod ui_caches;
 
 // Data types, grouped by domain.
+pub mod arrangement_shift;
 pub mod automation;
 pub mod aux_sends;
 pub mod banners;
@@ -30,6 +35,8 @@ pub mod markers;
 pub mod import;
 pub mod input_devices;
 pub mod interaction;
+pub mod keymap_editor;
+pub mod library_cache;
 pub mod master;
 pub mod media;
 pub mod midi_devices;
@@ -57,6 +64,7 @@ pub mod transport;
 pub mod ui_transient;
 pub mod viewport;
 
+pub use arrangement_shift::*;
 pub use automation::*;
 pub use aux_sends::*;
 pub use banners::*;
@@ -73,6 +81,7 @@ pub use markers::*;
 pub use import::*;
 pub use input_devices::*;
 pub use interaction::*;
+pub use library_cache::*;
 pub use master::*;
 pub use media::*;
 pub use midi_devices::*;

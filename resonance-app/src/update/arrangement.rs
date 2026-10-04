@@ -101,24 +101,9 @@ impl ArrangementMessage {
     }
 }
 
-/// One structural shift's outcome, as the control layer reports it.
-#[derive(Debug, Clone, Default)]
-pub struct ShiftOutcome {
-    pub shift_samples: i64,
-    pub audio_clips_moved: u32,
-    pub midi_clips_moved: u32,
-    pub placements_moved: u32,
-    pub markers_moved: u32,
-    pub automation_points_moved: u32,
-    pub tempo_events_moved: u32,
-    pub signature_events_moved: u32,
-    /// Events superseded on the bar they were clamped onto — see the
-    /// last-wins rule in the module docs. Always 0 for `insert_bars`.
-    pub tempo_events_removed: u32,
-    pub signature_events_removed: u32,
-    pub clips_deleted: Vec<ClipId>,
-    pub placements_deleted: Vec<u64>,
-}
+/// One structural shift's outcome, as the control layer reports it. Held
+/// by `UiTransientState`, so defined in `state` (ARCH2-05).
+pub use crate::state::ShiftOutcome;
 
 /// What a shift would destroy, without doing it — the confirmation
 /// preview for `arrangement.remove_bars`.

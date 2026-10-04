@@ -7,7 +7,7 @@
 //! viewport scroll offset and the arrange header height — knowledge that
 //! belongs to the arrange view, not to the registry itself.
 //!
-//! Row resolution goes through the shared [`ArrangeRowLayout`](crate::view::arrange_layout)
+//! Row resolution goes through the shared [`ArrangeRowLayout`](crate::state::arrange_layout)
 //! (epic #36, doc #203) so it honours the heterogeneous 60/96 px row
 //! pitch: a clip dragged over a group-header lane (or a collapsed group's
 //! hidden member) resolves to *no* track, leaving the drag on its original
@@ -17,7 +17,7 @@
 use resonance_audio::types::TrackId;
 
 use crate::state::TrackState;
-use crate::view::arrange_layout::{
+use crate::state::arrange_layout::{
     ArrangeAutomationRows, ArrangeRowKind, ArrangeRowLayout, ArrangeTakeRows,
 };
 use crate::{theme, Resonance};

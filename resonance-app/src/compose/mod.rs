@@ -40,3 +40,13 @@ pub use section::{
     SectionPlacementState, SelectedLane,
 };
 pub use state::{ComposeState, RailPanelKey};
+
+/// A section whose one vocal render does not fit every bar it plays at
+/// (code review FU-M11b): see `update::compose::vocal_tempo_mismatch`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VocalTempoMismatch {
+    /// The tempo the vocal is rendered at (`section_meter`'s).
+    pub rendered_bpm: f32,
+    /// The placed tempo that differs most from it.
+    pub other_bpm: f32,
+}

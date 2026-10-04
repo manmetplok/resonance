@@ -40,8 +40,6 @@ pub mod timeline;
 pub(crate) mod timeline_panel;
 pub(crate) mod track_header;
 pub(crate) mod transport;
-pub(crate) mod transport_labels;
-pub(crate) mod ui_caches;
 
 // Surgical re-export of the pure tiling-ribbon span builder so integration
 // tests can drive it without widening the whole crate-private `compose`

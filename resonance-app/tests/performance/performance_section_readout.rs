@@ -3,7 +3,7 @@
 //! markers to report the current and next section name, loop-aware (the same
 //! windowing the chord look-ahead uses).
 
-use resonance_app::engine_events::performance::{section_readout, SectionReadout};
+use resonance_app::query::performance::{section_readout, SectionReadout};
 use resonance_app::state::ArrangementMarker;
 
 fn region(id: u64, name: &str, start: u64, end: u64) -> ArrangementMarker {

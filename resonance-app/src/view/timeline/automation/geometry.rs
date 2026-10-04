@@ -126,27 +126,11 @@ pub fn lane_segments_polyline(
     poly
 }
 
-/// Priority used to pick the single lane drawn for a track when several
-/// targets it (gain, then pan, then mute, then device params, then the lowest
-/// plugin-param id). The parameter picker (#383) will let the user override
-/// which lane shows; until then this gives a stable, predictable choice.
-/// Mirrors the mixer strip's `priority` (view/mixer/automation.rs) so the
-/// strip header and the timeline band agree on which lane is "primary".
-pub fn target_priority(target: AutomationTarget) -> u32 {
-    match target {
-        AutomationTarget::TrackGain(_) => 0,
-        AutomationTarget::TrackPan(_) => 1,
-        AutomationTarget::TrackMute(_) => 2,
-        // Device params are what the user automated deliberately on an
-        // external-instrument track, so they outrank generic plugin params.
-        // Ties between several device lanes are broken deterministically by
-        // `param_id` in [`primary_lane_for_track`].
-        AutomationTarget::DeviceParam { .. } => 5,
-        AutomationTarget::PluginParam { param_id, .. } => 10u32.saturating_add(param_id),
-        // Bus/master targets never belong to an arrange track row.
-        _ => u32::MAX,
-    }
-}
+/// The lane-ordering rules — [`target_priority`], [`target_belongs_to_track`]
+/// and [`track_lanes_sorted`] — live in `state::automation` (ARCH2-05), shared
+/// with the arrange-row layout; re-exported here so the overlay's callers
+/// keep their path.
+pub use crate::state::automation::{target_belongs_to_track, target_priority, track_lanes_sorted};
 
 /// Short human label for a lane's target, shown as a chip on the band.
 /// `DeviceParam` lanes resolve through `device_labels` (built once per view
@@ -194,55 +178,6 @@ pub fn device_param_labels(
             Some((target.clone(), name))
         })
         .collect()
-}
-
-/// Whether `target` drives one of `track`'s parameters: its own gain/pan/
-/// mute, a CLAP param on a plugin instance hosted by the track, or a device
-/// param on the track's external instrument.
-pub fn target_belongs_to_track(target: &AutomationTarget, track: &TrackState) -> bool {
-    match target {
-        AutomationTarget::TrackGain(id)
-        | AutomationTarget::TrackPan(id)
-        | AutomationTarget::TrackMute(id) => *id == track.id,
-        AutomationTarget::PluginParam { instance, .. } => {
-            track.plugins.iter().any(|p| p.instance_id == *instance)
-        }
-        AutomationTarget::DeviceParam { track: id, .. } => *id == track.id,
-        _ => false,
-    }
-}
-
-/// Every lane that belongs to `track`, sorted by `(target_priority,
-/// device-param id)` — gain, pan, mute, device params (lexicographic by
-/// param id), then plugin params. This is both the order the default pick
-/// scans (the first entry is the "primary" lane) and the cycle order of the
-/// chip click (todo #1095), so the two can never disagree.
-pub fn track_lanes_sorted<'l>(
-    automation: &'l crate::state::AutomationState,
-    track: &TrackState,
-) -> Vec<&'l AutomationLane> {
-    let mut lanes: Vec<&'l AutomationLane> = automation
-        .lanes
-        .values()
-        .filter(|lane| target_belongs_to_track(&lane.target, track))
-        .collect();
-    lanes.sort_by_key(|lane| {
-        // Copy the inner `&'l` ref out so the tie-break `&str` borrows
-        // from the lane itself, not the closure-local double reference.
-        let lane: &'l AutomationLane = lane;
-        let tie = match &lane.target {
-            AutomationTarget::DeviceParam { param_id, .. } => param_id.as_str(),
-            _ => "",
-        };
-        // Final lane-id tie-break: two plugin-param lanes with the same
-        // param id on different instances would otherwise inherit the
-        // HashMap's nondeterministic iteration order — and the arrange
-        // lane-row stacking (`ArrangeAutomationRows::collect`) delegates
-        // here, so the cycle order, the default pick, and row 0 of an
-        // expanded stack all agree.
-        (target_priority(lane.target.clone()), tie, lane.id)
-    });
-    lanes
 }
 
 /// The lane drawn for `track` by default, if any — the highest-priority

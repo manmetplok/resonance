@@ -7,7 +7,7 @@ use iced::{alignment, Element, Length};
 use crate::message::*;
 use crate::theme::{self, fa};
 use crate::view::mixer::picks::MidiPickerChoice;
-use crate::view::ui_caches::midi_choices_with_override;
+use crate::state::ui_caches::midi_choices_with_override;
 use crate::Resonance;
 
 pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {

@@ -2166,3 +2166,48 @@ fn plugin_chain_commands_and_events_take_a_chain_owner() {
         &violations,
     );
 }
+
+// ---------------------------------------------------------------------------
+// The state module is the bottom of the app (code review ARCH2-05)
+// ---------------------------------------------------------------------------
+
+/// ARCH2-05: inside `resonance-app` the direction is update → state ← view,
+/// with the socket on top of all three. `state/` held types defined in
+/// `view::` (`UiViewCaches`, `TransportLabels`, `arrange_layout`), `update::`
+/// (`ShiftOutcome`, `TypingProbe`, `KeymapEditorState`, `reconcile::Origin`,
+/// the library caches) and `control_socket::` (`ConnId`, `ControlServer`,
+/// `ReplySender`), so it could not be built or tested without the layers
+/// above it. Now state owns every type it holds (the socket handle behind
+/// `state::control::ControlListener`), and no code line under `state/`
+/// names those three modules. Doc comments may still link to them.
+///
+/// Exercised 2026-10-04: added `use crate::view::settings::view;` to
+/// `state/ui_transient.rs` (text only) → failed on that line; reverted.
+#[test]
+fn state_module_imports_nothing_from_view_update_or_the_socket() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-app/src/state"), &mut files);
+    files.push(root.join("resonance-app/src/state.rs"));
+    let mut violations = Vec::new();
+    for file in files {
+        let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+        for (n, code) in code_lines(&file) {
+            for module in ["crate::view", "crate::update", "crate::control_socket"] {
+                let prefixed = format!("{module}::");
+                let bare = format!("{module};");
+                if names_path(&code, &prefixed) || names_path(&code, &bare) {
+                    violations.push(format!(
+                        "{rel}:{n}: names `{module}` — state owns the types it holds; move the \
+                         type into `state/` and re-export it from its old home"
+                    ));
+                }
+            }
+        }
+    }
+    report(
+        "ARCH2-05: nothing under resonance-app/src/state names crate::view, crate::update or \
+         crate::control_socket",
+        &violations,
+    );
+}

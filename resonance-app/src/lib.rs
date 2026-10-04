@@ -32,6 +32,7 @@ pub mod plugin_preset_library;
 pub mod plugin_ui;
 pub mod presets;
 pub mod project;
+pub mod query;
 pub mod recent;
 pub mod reference;
 pub mod settings;
@@ -583,7 +584,7 @@ impl Resonance {
         // Seed the cached device-preset pick-list options from the registry so
         // the inspector clones a refcounted slice instead of rebuilding the
         // option Vec every frame (view-performance rules).
-        let mut view_caches = view::ui_caches::UiViewCaches::default();
+        let mut view_caches = state::ui_caches::UiViewCaches::default();
         view_caches.rebuild_device_choices(&device_registry.list());
 
         let mut app = Self {
@@ -600,7 +601,7 @@ impl Resonance {
             missing_plugins: crate::state::MissingPluginState::default(),
             ui: state::UiTransientState {
                 view_caches,
-                transport_labels: view::transport_labels::TransportLabels::default(),
+                transport_labels: state::transport_labels::TransportLabels::default(),
                 // `STARTUP_TAB` carries the binary's `--tab` flag, so it is a
                 // read of *this process's* invocation and belongs to
                 // `Host::Machine`. A hermetic app always starts on the
@@ -621,7 +622,7 @@ impl Resonance {
                 palette: None,
                 palette_memory: String::new(),
                 recent_dirty_since: None,
-                keymap_editor: crate::update::keymap::KeymapEditorState::for_settings(
+                keymap_editor: state::keymap_editor::KeymapEditorState::for_settings(
                     &settings.keymap,
                 ),
                 window_size: state::DEFAULT_WINDOW_SIZE,
@@ -702,10 +703,10 @@ impl Resonance {
                 undo: UndoHistory::new(),
             },
             control: crate::state::ControlEndpointState {
-                amp_library: crate::update::control::AmpLibraryCache::new(
+                amp_library: state::AmpLibraryCache::new(
                     crate::update::control::amp_library_roots(matches!(host, Host::None)),
                 ),
-                drum_kit_library: crate::update::control::DrumKitLibraryCache::new(
+                drum_kit_library: state::DrumKitLibraryCache::new(
                     crate::update::control::drum_kit_library_roots(matches!(host, Host::None)),
                 ),
                 ..Default::default()
@@ -768,7 +769,7 @@ impl Resonance {
         match control_socket::spawn(control_socket::socket_path(), tx, jobs) {
             Ok(server) => {
                 control_socket::install_bridge(rx);
-                self.control.server = Some(server);
+                self.control.server = Some(Box::new(server));
             }
             Err(e) => tracing::warn!("control endpoint disabled: {e}"),
         }
