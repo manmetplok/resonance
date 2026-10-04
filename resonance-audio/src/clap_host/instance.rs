@@ -9,11 +9,9 @@
 //! All struct fields are `pub(super)` so sibling impl blocks can reach
 //! them without forcing every method through this file.
 
-use std::ffi::CStr;
 use std::pin::Pin;
 
-use clap_sys::audio_buffer::clap_audio_buffer;
-use clap_sys::events::{clap_event_note, clap_event_param_value};
+use clap_sys::events::{clap_event_midi, clap_event_note, clap_event_param_value};
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports};
 use clap_sys::ext::gui::clap_plugin_gui;
 use clap_sys::ext::latency::clap_plugin_latency;
@@ -24,6 +22,11 @@ use clap_sys::plugin::clap_plugin;
 use crate::types::ParamInfo;
 
 use super::HostData;
+
+mod note_ports;
+mod ports;
+pub(crate) use note_ports::NoteDialect;
+pub(crate) use ports::{PortBuffers, MAX_PORTS, MAX_PORT_CHANNELS};
 
 /// The most bytes [`ClapInstance::poll_kit_info`] allocates for a
 /// plugin's `com.resonance.kit-info` answer; a longer claim is dropped.
@@ -82,9 +85,11 @@ pub struct ClapInstance {
     /// True when `gui_create` has been called and `gui_destroy` hasn't yet.
     pub(super) gui_open: bool,
     /// Number of output audio ports as reported by the plugin's audio-ports
-    /// extension at activation time. Cached so the mixer can size its
-    /// per-port scratch buffers without re-querying on every block.
-    /// Always >= 1 because resonance-plugin rejects empty output layouts.
+    /// extension at activation time, at least 1 (the mixer always has a
+    /// main pair to give). Cached so the mixer can size its per-port
+    /// scratch buffers without re-querying on every block. What the plugin
+    /// is actually handed is `ports`, which follows the declaration
+    /// exactly — zero ports included.
     pub(super) output_port_count: usize,
     /// Number of *input* audio ports the plugin declares. `1` is the
     /// ordinary effect; `2` means it also declares an external sidechain
@@ -93,6 +98,11 @@ pub struct ClapInstance {
     /// Cached at activation for the same reason as the output count — the
     /// audio thread must not re-query the extension per block.
     pub(super) input_port_count: usize,
+    /// Every declared audio port with its declared channel count, and the
+    /// pre-allocated backing for the channels a caller has no buffer for
+    /// (code review HOST-05). Re-pointed at the caller's buffers every
+    /// `process_multi` call, so the audio thread never allocates.
+    pub(super) ports: PortBuffers,
     /// Processing latency in samples, as reported by the plugin's
     /// `clap.latency` extension right after activation (0 if the
     /// extension is absent). Refreshed on every deactivate → reactivate
@@ -117,8 +127,27 @@ pub struct ClapInstance {
     pub(super) open_gestures: Vec<(u32, Option<f64>)>,
     /// Pending parameter changes to send during next process() call.
     pub(super) pending_params: Vec<(u32, f64)>,
+    /// Time-stamped parameter changes for the next process() call, as
+    /// `(sample_offset, param_id, value)`: plugin-param automation sampled
+    /// at [`crate::limits::PARAM_AUTOMATION_CADENCE`] (code review
+    /// HOST-06). Unlike `pending_params` (one value per param, at the
+    /// block start) these keep every point, each at its own sample.
+    pub(super) pending_auto: Vec<(u32, u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
     pub(super) param_event_buf: Vec<clap_event_param_value>,
+    /// Raw MIDI 1.0 messages (controllers, pitch bend, aftertouch) for the
+    /// next process() call, as `(sample_offset, bytes)` — sent only to a
+    /// plugin whose note port takes MIDI (code review HOST-13).
+    pub(super) pending_midi: Vec<(u32, [u8; 3])>,
+    /// Pre-allocated buffer for `CLAP_EVENT_MIDI` events: the queued
+    /// controllers, plus the notes for a plugin that takes them as MIDI.
+    pub(super) midi_event_buf: Vec<clap_event_midi>,
+    /// The order the plugin reads the block's events in: params, notes
+    /// and MIDI merged by time (see `process::MixedEventListCtx`).
+    pub(super) event_order: Vec<u32>,
+    /// How this plugin's note input is spoken to (`clap.note-ports`, read
+    /// at activation).
+    pub(super) note_dialect: NoteDialect,
     /// Pending note events to send during next process() call.
     /// Each entry: (is_note_on, key, velocity, sample_offset)
     pub(super) pending_notes: Vec<(bool, u8, f32, u32)>,
@@ -139,14 +168,6 @@ pub struct ClapInstance {
     /// plays out), counted down by `process()`. See
     /// [`ClapInstance::wants_idle_process`] (code review MIX-08).
     pub(super) idle_hold_frames: u32,
-    /// Pre-allocated scratch for the CLAP audio output buffer array,
-    /// one entry per output port. Reused across every `process_multi`
-    /// call so the audio thread never allocates.
-    pub(super) audio_out_buffers: Vec<clap_audio_buffer>,
-    /// Per-port channel pointer array (2 pointers per port). Each block's
-    /// `process_multi` call refreshes these to point at the caller's
-    /// supplied slices before handing them to CLAP.
-    pub(super) audio_out_ptrs: Vec<[*mut f32; 2]>,
     /// Latched transport state, set by the mixer before each process() call.
     pub(super) transport_bpm: f64,
     pub(super) transport_num: u16,
@@ -170,11 +191,9 @@ impl ClapInstance {
         audio_ports_ext: Option<*const clap_plugin_audio_ports>,
         gui_ext: Option<*const clap_plugin_gui>,
         latency_ext: Option<*const clap_plugin_latency>,
-        output_port_count: usize,
-        input_port_count: usize,
+        ports: PortBuffers,
+        note_dialect: NoteDialect,
         latency: u32,
-        audio_out_buffers: Vec<clap_audio_buffer>,
-        audio_out_ptrs: Vec<[*mut f32; 2]>,
     ) -> Self {
         Self {
             plugin,
@@ -194,8 +213,9 @@ impl ClapInstance {
             render_ext: None,
             render_offline: false,
             gui_open: false,
-            output_port_count,
-            input_port_count,
+            output_port_count: ports.output_count().max(1),
+            input_port_count: ports.input_count(),
+            ports,
             latency,
             // Pre-size every event buffer at activation so the first
             // process() call after a fresh plugin add doesn't allocate
@@ -204,13 +224,25 @@ impl ClapInstance {
             out_param_events: Vec::with_capacity(super::params::OUT_PARAM_EVENT_CAPACITY),
             open_gestures: Vec::new(),
             pending_params: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
-            param_event_buf: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
+            pending_auto: Vec::with_capacity(crate::limits::MAX_PENDING_AUTOMATION),
+            param_event_buf: Vec::with_capacity(
+                crate::limits::MAX_PENDING_PARAMS + crate::limits::MAX_PENDING_AUTOMATION,
+            ),
+            pending_midi: Vec::with_capacity(crate::limits::MAX_PENDING_MIDI),
+            midi_event_buf: Vec::with_capacity(
+                crate::limits::MAX_PENDING_MIDI + 2 * crate::limits::MAX_PENDING_NOTES,
+            ),
+            event_order: Vec::with_capacity(
+                crate::limits::MAX_PENDING_PARAMS
+                    + crate::limits::MAX_PENDING_AUTOMATION
+                    + crate::limits::MAX_PENDING_MIDI
+                    + 2 * crate::limits::MAX_PENDING_NOTES,
+            ),
+            note_dialect,
             pending_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
             carried_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
             note_event_buf: Vec::with_capacity(2 * crate::limits::MAX_PENDING_NOTES),
             idle_hold_frames: 0,
-            audio_out_buffers,
-            audio_out_ptrs,
             transport_bpm: 120.0,
             transport_num: 4,
             transport_den: 4,
@@ -324,8 +356,7 @@ impl ClapInstance {
                         return None;
                     }
                     let info = info.assume_init();
-                    let cstr = CStr::from_ptr(info.name.as_ptr());
-                    let s = cstr.to_string_lossy().into_owned();
+                    let s = fixed_c_str(&info.name);
                     if s.is_empty() {
                         None
                     } else {
@@ -375,12 +406,10 @@ impl ClapInstance {
         let count = unsafe { count_fn(self.plugin) };
         let get_info = unsafe { (*params).get_info }?;
         for i in 0..count {
-            let mut info =
-                std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
-            if !unsafe { get_info(self.plugin, i, info.as_mut_ptr()) } {
+            let mut info = zeroed_param_info();
+            if !unsafe { get_info(self.plugin, i, &mut info) } {
                 continue;
             }
-            let info = unsafe { info.assume_init() };
             if info.flags & clap_sys::ext::params::CLAP_PARAM_IS_BYPASS != 0 {
                 return Some(info.id);
             }
@@ -405,18 +434,16 @@ impl ClapInstance {
         let mut result = Vec::with_capacity(count as usize);
 
         for i in 0..count {
-            let mut info =
-                std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
+            let mut info = zeroed_param_info();
             let ok = unsafe {
                 match (*params).get_info {
-                    Some(f) => f(self.plugin, i, info.as_mut_ptr()),
+                    Some(f) => f(self.plugin, i, &mut info),
                     None => continue,
                 }
             };
             if !ok {
                 continue;
             }
-            let info = unsafe { info.assume_init() };
 
             // Get current value
             let mut current = info.default_value;
@@ -424,17 +451,11 @@ impl ClapInstance {
                 unsafe { get_value(self.plugin, info.id, &mut current) };
             }
 
-            // Convert name from c_char array
-            let name = unsafe {
-                CStr::from_ptr(info.name.as_ptr())
-                    .to_string_lossy()
-                    .to_string()
-            };
-            let module = unsafe {
-                CStr::from_ptr(info.module.as_ptr())
-                    .to_string_lossy()
-                    .to_string()
-            };
+            // The fixed-size name arrays, read no further than their
+            // length: a plugin that fills one without a NUL must not
+            // walk us into the next field (code review HOST-12).
+            let name = fixed_c_str(&info.name);
+            let module = fixed_c_str(&info.module);
 
             // A hidden parameter is still automatable and still saved —
             // CLAP only asks that it not be *shown* — so it stays in the
@@ -552,11 +573,9 @@ impl ClapInstance {
         let count = unsafe { count_fn(self.plugin) };
         (0..count)
             .filter_map(|i| {
-                let mut info =
-                    std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
+                let mut info = zeroed_param_info();
                 // SAFETY: as in `query_params`.
-                unsafe { get_info(self.plugin, i, info.as_mut_ptr()) }
-                    .then(|| unsafe { info.assume_init() }.id)
+                unsafe { get_info(self.plugin, i, &mut info) }.then_some(info.id)
             })
             .collect()
     }
@@ -696,13 +715,11 @@ impl ClapInstance {
         let count = unsafe { count_fn(self.plugin) };
 
         for i in 0..count {
-            let mut info =
-                std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
-            let ok = unsafe { get_info(self.plugin, i, info.as_mut_ptr()) };
+            let mut info = zeroed_param_info();
+            let ok = unsafe { get_info(self.plugin, i, &mut info) };
             if !ok {
                 continue;
             }
-            let info = unsafe { info.assume_init() };
             if info.id == param_id {
                 return Some((info.min_value, info.max_value));
             }
@@ -782,6 +799,37 @@ impl ClapInstance {
         } else if self.pending_params.len() < crate::limits::MAX_PENDING_PARAMS {
             self.pending_params.push((param_id, value));
         }
+    }
+
+    /// Queue a parameter change at `sample_offset` into the next
+    /// process() call — a point of a plugin-param automation lane (code
+    /// review HOST-06). Every point is kept, in the order queued; the
+    /// process call sorts them by time. Dropped when the queue is full
+    /// (the next block's start re-sends every lane's value).
+    /// Allocation-free.
+    pub fn queue_param_at(&mut self, param_id: u32, value: f64, sample_offset: u32) {
+        if self.pending_auto.len() < crate::limits::MAX_PENDING_AUTOMATION {
+            self.pending_auto.push((sample_offset, param_id, value));
+        }
+    }
+
+    /// Queue a raw MIDI 1.0 channel message (control change, pitch bend,
+    /// channel or poly aftertouch) at `sample_offset` into the next
+    /// process() call, as `CLAP_EVENT_MIDI` on note port 0 (code review
+    /// HOST-13). A no-op for a plugin whose note port does not take MIDI,
+    /// and when the queue is full. Allocation-free.
+    pub fn queue_midi(&mut self, data: [u8; 3], sample_offset: u32) {
+        if self.note_dialect.accepts_midi
+            && self.pending_midi.len() < crate::limits::MAX_PENDING_MIDI
+        {
+            self.pending_midi.push((sample_offset, data));
+        }
+    }
+
+    /// Whether [`Self::queue_midi`] reaches this plugin: its note input
+    /// takes MIDI 1.0.
+    pub fn accepts_midi(&self) -> bool {
+        self.note_dialect.accepts_midi
     }
 
     /// Queue a note-on event to be sent during the next process() call.
@@ -909,6 +957,7 @@ impl ClapInstance {
         }
         self.pending_notes.clear();
         self.carried_notes.clear();
+        self.pending_midi.clear();
         self.idle_hold_frames = 0;
         // SAFETY: `self.plugin` is the live plugin this instance owns;
         // `active` holds, and `&mut self` means no process() runs.
@@ -929,6 +978,29 @@ impl ClapInstance {
         self.transport_pos_beats = pos_beats;
         self.transport_valid = true;
     }
+}
+
+/// A `clap_param_info` for a plugin's `get_info` to fill: all zero, so a
+/// plugin that returns `true` without writing every field leaves defined
+/// zeros (and NUL-terminated names) rather than uninitialised memory —
+/// which `MaybeUninit::uninit` + `assume_init` made undefined behaviour
+/// (code review HOST-12).
+pub(super) fn zeroed_param_info() -> clap_sys::ext::params::clap_param_info {
+    // SAFETY: `clap_param_info` is plain C data — integers, floats, a
+    // nullable `cookie` pointer and `c_char` arrays — for which all-zero
+    // is a valid value.
+    unsafe { std::mem::zeroed() }
+}
+
+/// A fixed-size C string field (`name[CLAP_NAME_SIZE]`,
+/// `module[CLAP_PATH_SIZE]`) as a `String`: up to the first NUL, or the
+/// whole array when the plugin left none — never past its end (code
+/// review HOST-12). Lossy on invalid UTF-8.
+pub(super) fn fixed_c_str(field: &[std::ffi::c_char]) -> String {
+    // SAFETY: `c_char` and `u8` have the same size and alignment.
+    let bytes = unsafe { std::slice::from_raw_parts(field.as_ptr() as *const u8, field.len()) };
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 impl Drop for ClapInstance {

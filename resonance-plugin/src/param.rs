@@ -141,6 +141,11 @@ pub trait Param: Send + Sync {
         false
     }
     /// Compute a stable u32 CLAP param ID from the string ID.
+    ///
+    /// This is the plugin-side id. What a host sees can differ for a
+    /// renamed param: the bridge keeps the id the param had before a
+    /// [`crate::ParamRename`] ([`crate::state::wire_clap_id`]), so host
+    /// automation and MIDI maps survive the rename (code review HOST-11).
     fn clap_id(&self) -> u32 {
         crate::stable_hash(self.id())
     }

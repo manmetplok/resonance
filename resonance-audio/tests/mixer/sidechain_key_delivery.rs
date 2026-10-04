@@ -117,10 +117,16 @@ unsafe extern "C" fn m_process(plugin: *const clap_plugin, process: *const clap_
     let p = &*process;
     let frames = p.frames_count as usize;
 
+    // The host passes every declared port (HOST-05), so "no key" is the
+    // key port flagged all-constant silence — what the first-party bridge
+    // reads as unrouted.
     let mut value = NO_KEY;
     if p.audio_inputs_count >= 2 && !p.audio_inputs.is_null() {
         let key: &clap_audio_buffer = &*p.audio_inputs.add(1);
-        if !key.data32.is_null() {
+        let all_constant = key.channel_count > 0
+            && (0..key.channel_count).all(|c| key.constant_mask & (1 << c) != 0);
+        let silent = all_constant && !key.data32.is_null() && **key.data32 == 0.0;
+        if !key.data32.is_null() && !silent {
             let chan = *key.data32;
             if !chan.is_null() && frames > 0 {
                 value = *chan;

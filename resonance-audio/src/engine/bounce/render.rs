@@ -21,10 +21,12 @@ use super::super::{SharedState, MAX_BUSSES};
 
 pub const BOUNCE_CHUNK: usize = 1024;
 
-/// CLAP activation minimum block size: plugins are activated with
-/// `activate(…, min_frames = 32, max_frames = 8192)`
-/// (`clap_host::bundle`), so no offline `process()` call may run fewer
-/// frames — see [`chunk_span`].
+/// The shortest offline `process()` call the bounce makes — see
+/// [`chunk_span`]. Not a CLAP requirement: plugins are activated with
+/// `min_frames = 1` (`clap_host::ACTIVATE_MIN_FRAMES`, because the live
+/// callback splits loop seams into sub-blocks of any length). The floor
+/// keeps the offline renderer from handing plugins pathologically short
+/// blocks.
 pub const MIN_CLAP_FRAMES: usize = 32;
 
 /// How many `try_lock` spins before falling back to sleeping. A spin is
@@ -254,8 +256,8 @@ pub(super) fn master_fx_latency(shared: &Arc<SharedState>) -> u64 {
 
 /// Split the remaining render range into this iteration's chunk:
 /// `.0` is the frame count to *process* — padded up to
-/// [`MIN_CLAP_FRAMES`] so a short tail chunk still honours the CLAP
-/// activation contract (`activate(…, min_frames=32, …)`) — and `.1` is
+/// [`MIN_CLAP_FRAMES`] so a short tail chunk is not a pathologically
+/// short `process()` call — and `.1` is
 /// the frame count actually *consumed* from the front of the rendered
 /// chunk (the padding frames are rendered and discarded). Always
 /// `emit <= render <= BOUNCE_CHUNK`.
@@ -374,6 +376,10 @@ pub(super) fn render_chunk(
     respect_mute_solo: bool,
     freeze_raw: bool,
 ) {
+    // Same FTZ/DAZ as the live callback and the render-pool workers, so
+    // an offline render takes the same denormal path as playback (code
+    // review HOST-16). Idempotent, and it only touches this thread.
+    resonance_dsp::flush_denormals();
     scratch.mix_buf[..frames * 2].fill(0.0);
     // CLAP `thread-check`: this thread renders for the chunk (a bounce
     // thread makes main-thread calls between chunks, so only a scope).

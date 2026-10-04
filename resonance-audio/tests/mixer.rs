@@ -15,6 +15,8 @@ mod multi_out_harness;
 #[path = "mixer/note_recorder/mod.rs"]
 mod note_recorder;
 
+#[path = "mixer/automation_block_size.rs"]
+mod automation_block_size;
 #[path = "mixer/audition_preview.rs"]
 mod audition_preview;
 #[path = "mixer/automation_comp_delay.rs"]

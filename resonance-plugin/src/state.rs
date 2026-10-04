@@ -43,6 +43,13 @@ pub const VERSION_KEY: &str = "version";
 /// own version is lower than that, and is skipped for newer blobs (which
 /// already use the new id). Renames are applied oldest-first, so a
 /// parameter renamed twice migrates through both hops.
+///
+/// A rename also **pins the parameter's CLAP id** to the one its original
+/// string id hashed to ([`wire_clap_id`]): a host keys automation lanes
+/// and MIDI-learn bindings by that `u32`, and a rename that changed it
+/// would orphan every one of them silently (code review HOST-11). The old
+/// string id therefore stays reserved — a new parameter reusing it would
+/// collide on the CLAP id, which the bridge refuses at load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParamRename {
     /// State version in which the new id started being written.
@@ -51,6 +58,22 @@ pub struct ParamRename {
     pub from: &'static str,
     /// The id the plugin declares today.
     pub to: &'static str,
+}
+
+/// The CLAP param id a host sees for the parameter whose string id is
+/// `id`: the hash of the id it had before any [`ParamRename`] — followed
+/// back through every hop — so a rename keeps the id hosts already store.
+/// A parameter that was never renamed gets `stable_hash(id)`, as always.
+pub fn wire_clap_id(id: &str, renames: &[ParamRename]) -> u32 {
+    let mut origin = id;
+    // At most one hop per rename: a (malformed) cycle cannot spin.
+    for _ in 0..renames.len() {
+        match renames.iter().find(|r| r.to == origin) {
+            Some(r) => origin = r.from,
+            None => break,
+        }
+    }
+    crate::stable_hash(origin)
 }
 
 /// Serialize all parameters to a JSON value — every one that is not
@@ -97,8 +120,9 @@ pub fn migrate(state: &mut serde_json::Value, renames: &[ParamRename]) -> u32 {
     let from_version = version_of(state);
     if from_version >= STATE_VERSION || renames.is_empty() {
         // Nothing to do: either current/newer, or the plugin has never
-        // renamed a param id. Still stamp the version so a re-save from
-        // an untouched blob is not mistaken for pre-versioned state.
+        // renamed a param id. The blob is left as it is — its version
+        // included; the next save writes `STATE_VERSION` through
+        // `params_to_json`.
         return from_version;
     }
 

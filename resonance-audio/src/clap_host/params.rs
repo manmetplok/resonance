@@ -133,10 +133,17 @@ pub(super) unsafe extern "C" fn collect_output_event(
 /// changes in exactly the same shape.
 #[inline]
 pub(super) fn param_value_event(param_id: u32, value: f64) -> clap_event_param_value {
+    param_value_event_at(param_id, value, 0)
+}
+
+/// [`param_value_event`] at sample `time` of the block — an automation
+/// point (code review HOST-06).
+#[inline]
+pub(super) fn param_value_event_at(param_id: u32, value: f64, time: u32) -> clap_event_param_value {
     clap_event_param_value {
         header: clap_event_header {
             size: std::mem::size_of::<clap_event_param_value>() as u32,
-            time: 0,
+            time,
             space_id: CLAP_CORE_EVENT_SPACE_ID,
             type_: CLAP_EVENT_PARAM_VALUE,
             flags: 0,
@@ -281,7 +288,10 @@ impl ClapInstance {
         let mut event_ctx = MixedEventListCtx {
             param_events: std::mem::take(&mut self.param_event_buf),
             note_events: Vec::new(),
+            midi_events: Vec::new(),
+            order: std::mem::take(&mut self.event_order),
         };
+        event_ctx.merge_order();
 
         let in_events = clap_input_events {
             ctx: &mut event_ctx as *mut MixedEventListCtx as *mut c_void,
@@ -302,9 +312,11 @@ impl ClapInstance {
             unsafe { flush_fn(self.plugin, &in_events, &out_events) };
         }
 
-        // Reclaim the scratch buffer for reuse (keeps process() allocation-free).
+        // Reclaim the scratch buffers for reuse (keeps process() allocation-free).
         self.param_event_buf = event_ctx.param_events;
         self.param_event_buf.clear();
+        self.event_order = event_ctx.order;
+        self.event_order.clear();
         true
     }
 }

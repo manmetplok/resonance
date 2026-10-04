@@ -137,6 +137,9 @@ impl ResonancePlugin for AbiPlugin {
         tempo: Option<TempoInfo>,
     ) {
         let gain = self.gain.get_plain() as f32;
+        // What every first-party plugin does at the top of `process`
+        // (`resonance_dsp::flush_denormals`): set FTZ/DAZ, never restore.
+        set_ftz_daz();
 
         // The bridge pre-fills port 0 with the incoming audio (the effect
         // contract), so this is a genuine in-place read-modify-write.
@@ -193,6 +196,29 @@ impl ResonancePlugin for AbiPlugin {
             }
         }
     }
+}
+
+/// FTZ (bit 15) and DAZ (bit 6) of MXCSR.
+#[cfg(target_arch = "x86_64")]
+const FTZ_DAZ: u32 = 0x8040;
+
+#[cfg(target_arch = "x86_64")]
+#[allow(deprecated)]
+fn mxcsr() -> u32 {
+    // SAFETY: reads this thread's SSE control register.
+    unsafe { std::arch::x86_64::_mm_getcsr() }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[allow(deprecated)]
+fn set_mxcsr(csr: u32) {
+    // SAFETY: writes this thread's SSE control register.
+    unsafe { std::arch::x86_64::_mm_setcsr(csr) }
+}
+
+fn set_ftz_daz() {
+    #[cfg(target_arch = "x86_64")]
+    set_mxcsr(mxcsr() | FTZ_DAZ);
 }
 
 const BUNDLE: &std::ffi::CStr = c"resonance-test-abi-process.clap";
@@ -414,6 +440,72 @@ fn a_param_event_in_the_block_is_applied_to_that_blocks_audio() {
             .iter()
             .all(|s| *s == 3.0),
         "the param value must persist into the following block"
+    );
+}
+
+/// A param event timed inside the block takes effect at its sample, not
+/// at the block start (code review HOST-06): the plugin reads its params
+/// once per `process()` call, so the bridge splits the block there.
+#[test]
+fn a_param_event_timed_inside_the_block_lands_on_its_sample() {
+    let mut harness = AbiHarness::new();
+    harness.set_input(|_| (1.0, 1.0));
+
+    let mut events = EventBuffer::new();
+    events.push(&param_event(0, "gain", 2.0));
+    events.push(&note_on(10, 60, 1.0));
+    events.push(&param_event(24, "gain", 3.0));
+    events.push(&note_on(40, 67, 0.5));
+    events.push(&param_event(48, "gain", 5.0));
+    harness.run(&events, None);
+
+    let main = harness.port(PORT_MAIN, 0);
+    for (i, s) in main.iter().enumerate() {
+        let want = match i {
+            0..24 => 2.0,
+            24..48 => 3.0,
+            _ => 5.0,
+        };
+        assert_eq!(*s, want, "sample {i}");
+    }
+    // Notes keep their block-relative timing across the split.
+    let notes = harness.port(PORT_NOTES, 0);
+    assert_eq!(notes[10], 60.0, "note-on at frame 10");
+    assert_eq!(notes[40], 67.0, "note-on at frame 40");
+    for (i, s) in notes.iter().enumerate() {
+        if i != 10 && i != 40 {
+            assert_eq!(*s, 0.0, "frame {i} must carry no note");
+        }
+    }
+    // The transport advances with the stretch: the stretch starting at
+    // 48 reports its own song position, at its own sample 7.
+    let t = transport(120.0, true);
+    let mut events = EventBuffer::new();
+    events.push(&param_event(48, "gain", 1.0));
+    harness.run(&events, Some(&t));
+    let meta = harness.port(PORT_META, 0);
+    let beats_per_frame = 120.0 / 60.0 / SAMPLE_RATE;
+    assert_eq!(meta[META_SONG_POS], 8.0, "first stretch at the block's position");
+    assert!(
+        (f64::from(meta[48 + META_SONG_POS]) - (8.0 + 48.0 * beats_per_frame)).abs() < 1e-5,
+        "second stretch's song position {}",
+        meta[48 + META_SONG_POS]
+    );
+}
+
+/// The plugin sets FTZ/DAZ inside `process`; the host's thread must get
+/// its own FP mode back (code review HOST-16).
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn the_plugins_fp_mode_does_not_leak_into_the_host_thread() {
+    let mut harness = AbiHarness::new();
+    let before = mxcsr() & !FTZ_DAZ;
+    set_mxcsr(before);
+    harness.run(&EventBuffer::new(), None);
+    assert_eq!(
+        mxcsr(),
+        before,
+        "the bridge must restore the host thread's MXCSR after process()"
     );
 }
 

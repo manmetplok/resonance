@@ -44,6 +44,9 @@ struct FakeFx {
     reset_calls: u32,
     /// When set, every `start_processing` fails (FU-M8b).
     refuse_start: bool,
+    /// Whether every `process()` so far ran with FTZ and DAZ set
+    /// (HOST-16); `None` before the first.
+    saw_ftz: Option<bool>,
 }
 
 unsafe fn fx<'a>(plugin: *const clap_plugin) -> &'a mut FakeFx {
@@ -99,6 +102,8 @@ unsafe extern "C" fn fx_process(
 ) -> clap_process_status {
     unsafe {
         let s = fx(p);
+        let ftz = ftz_daz_set();
+        s.saw_ftz = Some(s.saw_ftz.unwrap_or(true) && ftz);
         apply_param_events(s, (*process).in_events);
         let frames = (*process).frames_count as usize;
         let out = &*(*process).audio_outputs;
@@ -130,6 +135,22 @@ unsafe extern "C" fn fx_process(
     CLAP_PROCESS_CONTINUE
 }
 
+/// Whether this thread runs with flush-to-zero and denormals-are-zero.
+/// `true` off x86-64, where the test has nothing to read.
+#[allow(deprecated)]
+fn ftz_daz_set() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: reads this thread's SSE control register.
+        let csr = unsafe { std::arch::x86_64::_mm_getcsr() };
+        csr & 0x8040 == 0x8040
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        true
+    }
+}
+
 /// A fake echo/gain effect. The state is leaked (the instance's `Drop`
 /// still dereferences it); the raw pointer lets a test inspect it.
 fn fake_fx(delay: usize) -> (PluginSlot, *mut FakeFx) {
@@ -143,6 +164,7 @@ fn fake_fx(delay: usize) -> (PluginSlot, *mut FakeFx) {
                 gain: 1.0,
                 reset_calls: 0,
                 refuse_start: false,
+                saw_ftz: None,
             }));
             state_ptr = state;
             Box::into_raw(Box::new(clap_plugin {
@@ -333,6 +355,25 @@ fn export_does_not_inherit_live_playback_tails() {
         .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
     assert!(leak < 1e-6, "live-playback echo leaked into the export (max diff {leak})");
     assert!(unsafe { (*state).reset_calls } >= 1, "export must CLAP-reset every plugin");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// HOST-16 — offline renders run with the live callback's FTZ/DAZ
+// ---------------------------------------------------------------------------
+
+#[test]
+fn export_renders_with_denormals_flushed_like_the_live_callback() {
+    let e = Engine::with_clip(tone(SR as usize / 4, 0.25));
+    let (slot, state) = fake_fx(0);
+    e.add_master_fx(slot);
+    let path = tmp("host16");
+    assert_completed(&e.export(&path, &ExportSettings::default_wav(), false));
+    assert_eq!(
+        unsafe { (*state).saw_ftz },
+        Some(true),
+        "every offline process() must run with FTZ/DAZ, as the live callback does"
+    );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 

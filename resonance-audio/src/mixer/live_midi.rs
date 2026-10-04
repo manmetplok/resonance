@@ -68,6 +68,15 @@ pub(super) fn pickup_live_midi(
                 note,
                 arrival,
             } => (*track_id, false, *note, 0.0, *arrival),
+            LiveMidiEvent::InboundMidi {
+                track_id,
+                data,
+                arrival,
+            } => {
+                deliver_controller(tracks_guard, plugins_guard, *track_id, *data, *arrival, now, sample_rate, frames);
+                let _ = live_midi_fwd.try_send(ev);
+                continue;
+            }
         };
         if let Some(inst_id) = live_instrument_for(tracks_guard, track_id) {
             if let Some(mutex) = plugins_guard.get(&inst_id) {
@@ -94,5 +103,36 @@ pub(super) fn pickup_live_midi(
         // thread; a full forward channel just drops the bookkeeping,
         // never the audible note.
         let _ = live_midi_fwd.try_send(ev);
+    }
+}
+
+/// A live controller (CC, pitch bend, aftertouch) into the track's
+/// instrument as raw MIDI, at its arrival offset (code review HOST-13).
+/// Reaches only an instrument whose note port takes MIDI
+/// (`ClapInstance::queue_midi`). A contended instrument lock drops it —
+/// unlike a note there is no stash for controllers yet, and the next
+/// message of a moving controller carries the value anyway.
+#[allow(clippy::too_many_arguments)]
+fn deliver_controller(
+    tracks: &TrackMap,
+    plugins: &crate::clap_host::PluginMap,
+    track_id: TrackId,
+    data: [u8; 3],
+    arrival: std::time::Instant,
+    now: std::time::Instant,
+    sample_rate: u32,
+    frames: usize,
+) {
+    let Some(inst_id) = live_instrument_for(tracks, track_id) else {
+        return;
+    };
+    let Some(mutex) = plugins.get(&inst_id) else {
+        return;
+    };
+    let offset = crate::engine::midi::live_arrival_sample_offset(arrival, now, sample_rate, frames);
+    if let Some(mut inst) = mutex.try_lock() {
+        inst.0.queue_midi(data, offset);
+        // A held controller moving while stopped is as live as a note.
+        inst.0.arm_idle_hold();
     }
 }

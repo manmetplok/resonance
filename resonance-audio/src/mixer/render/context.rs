@@ -324,6 +324,7 @@ pub(crate) fn run_fx_chain(
                 ctx.inputs.automation,
                 plugin_id,
                 ctx.evals.eval_start,
+                ctx.inputs.frames,
             );
             slot.sync_own_bypass(&mut inst.0);
             // An external key, when this instance is routed one and

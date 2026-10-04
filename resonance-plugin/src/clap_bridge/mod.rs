@@ -185,9 +185,17 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         let mut clap_id_to_slot: std::collections::HashMap<u32, usize> =
             std::collections::HashMap::with_capacity(count);
 
+        let renames = temp.param_renames();
         for i in 0..count {
             let p = temp.param(i);
-            let clap_id = p.clap_id();
+            // The id hosts see. A renamed param keeps the id its original
+            // string id hashed to, so host automation lanes and MIDI maps
+            // keyed by it survive the rename (code review HOST-11).
+            let clap_id = if p.clap_id() == crate::stable_hash(p.id()) {
+                crate::state::wire_clap_id(p.id(), renames)
+            } else {
+                p.clap_id()
+            };
 
             // Check for hash collisions. Panicking across the C FFI
             // boundary into a CLAP host is undefined behaviour
@@ -271,9 +279,16 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         // Hand the plugin its handle to the host, before it can be activated
         // and before anything else may query it. Plugins that never talk back
         // to the host use the default `set_host`, which drops it.
-        let clap_ids: Vec<u32> = shared.param_metas.iter().map(|m| m.clap_id).collect();
+        // `announce_param_change` names a param by its string id, so the
+        // handle maps that id's own hash — not the (possibly rename-pinned)
+        // wire id — to the slot.
+        let own_ids: Vec<u32> = shared
+            .param_metas
+            .iter()
+            .map(|m| crate::stable_hash(&m.str_id))
+            .collect();
         let host_handle =
-            crate::host::HostHandle::new(shared.host, plugin.latency_samples(), &clap_ids);
+            crate::host::HostHandle::new(shared.host, plugin.latency_samples(), &own_ids);
         plugin.set_host(host_handle.clone());
 
         // Harvest the editor factory and any extra-state saver before the

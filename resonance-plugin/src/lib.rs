@@ -45,7 +45,7 @@ pub use presets::{
     FactoryPreset, PresetBank, PresetEditor, PresetEvent, PresetLibrary, PresetRef, PresetSession,
     PresetSource,
 };
-pub use state::{ParamRename, StateUpgrade, STATE_VERSION};
+pub use state::{wire_clap_id, ParamRename, StateUpgrade, STATE_VERSION};
 pub use plugin::{
     ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, KitInfoSource, NoteEvent,
     OutputBuffer, OutputPortSpec, ParamTextSource, PluginEvent, ResonancePlugin, TempoInfo,

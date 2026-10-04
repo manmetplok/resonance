@@ -333,3 +333,150 @@ fn descriptor_missing_mandatory_field_is_rejected() {
     };
     assert_eq!(null_id, None, "a null id makes the descriptor unusable");
 }
+
+// ---------------------------------------------------------------------------
+// Plugin-filled structs (code review HOST-12)
+// ---------------------------------------------------------------------------
+//
+// A second fake whose `params.get_info` and `audio_ports.get` fill their
+// fixed-size name arrays to the last byte with no NUL. The host used to
+// read them with an unbounded `CStr::from_ptr`, running into the struct's
+// next field (and past the struct); it used `MaybeUninit::uninit()` +
+// `assume_init` for the param info too, so a plugin that answered `true`
+// without writing a field handed the host uninitialised memory.
+
+use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS};
+use clap_sys::ext::params::{clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS};
+use clap_sys::string_sizes::{CLAP_NAME_SIZE, CLAP_PATH_SIZE};
+
+unsafe extern "C" fn unterminated_param_count(_p: *const clap_plugin) -> u32 {
+    2
+}
+
+unsafe extern "C" fn unterminated_param_info(
+    _p: *const clap_plugin,
+    index: u32,
+    info: *mut clap_param_info,
+) -> bool {
+    let info = &mut *info;
+    if index == 1 {
+        // Says yes, writes nothing: the host must read defined zeros.
+        return true;
+    }
+    info.id = 7;
+    info.flags = 0;
+    info.min_value = 0.0;
+    info.max_value = 1.0;
+    info.default_value = 0.5;
+    info.name.fill(b'N' as std::os::raw::c_char);
+    info.module.fill(b'M' as std::os::raw::c_char);
+    true
+}
+
+static UNTERMINATED_PARAMS: clap_plugin_params = clap_plugin_params {
+    count: Some(unterminated_param_count),
+    get_info: Some(unterminated_param_info),
+    get_value: None,
+    value_to_text: None,
+    text_to_value: None,
+    flush: None,
+};
+
+unsafe extern "C" fn one_port(_p: *const clap_plugin, _is_input: bool) -> u32 {
+    1
+}
+
+unsafe extern "C" fn unterminated_port(
+    _p: *const clap_plugin,
+    _index: u32,
+    _is_input: bool,
+    info: *mut clap_audio_port_info,
+) -> bool {
+    let info = &mut *info;
+    info.id = 0;
+    info.channel_count = 2;
+    info.name.fill(b'P' as std::os::raw::c_char);
+    true
+}
+
+static UNTERMINATED_PORTS: clap_plugin_audio_ports = clap_plugin_audio_ports {
+    count: Some(one_port),
+    get: Some(unterminated_port),
+};
+
+unsafe extern "C" fn unterminated_get_extension(
+    _plugin: *const clap_plugin,
+    id: *const std::os::raw::c_char,
+) -> *const c_void {
+    let id = CStr::from_ptr(id);
+    if id == CLAP_EXT_PARAMS {
+        &UNTERMINATED_PARAMS as *const clap_plugin_params as *const c_void
+    } else if id == CLAP_EXT_AUDIO_PORTS {
+        &UNTERMINATED_PORTS as *const clap_plugin_audio_ports as *const c_void
+    } else {
+        ptr::null()
+    }
+}
+
+fn unterminated_instance() -> ClapInstance {
+    __instance_from_raw_for_test(
+        |_host| {
+            let state = Box::into_raw(Box::new(FakeState {
+                save_script: SaveScript::NullFlushThenPayload,
+                load_script: LoadScript::ChunkedReadAll,
+                stream_returns: Vec::new(),
+                loaded: Vec::new(),
+            }));
+            Box::into_raw(Box::new(clap_plugin {
+                desc: ptr::null(),
+                plugin_data: state as *mut c_void,
+                init: Some(fake_init),
+                destroy: Some(fake_destroy),
+                activate: Some(fake_activate),
+                deactivate: Some(fake_deactivate),
+                start_processing: Some(fake_start_processing),
+                stop_processing: Some(fake_stop_processing),
+                reset: None,
+                process: Some(fake_process),
+                get_extension: Some(unterminated_get_extension),
+                on_main_thread: None,
+            })) as *const clap_plugin
+        },
+        48_000,
+    )
+    .expect("fake plugin instance")
+}
+
+#[test]
+fn an_unterminated_param_name_is_read_no_further_than_its_array() {
+    let instance = unterminated_instance();
+    let params = instance.query_params();
+    assert_eq!(params.len(), 2);
+    let p = &params[0];
+    assert_eq!(p.id, 7);
+    assert_eq!(p.name, "N".repeat(CLAP_NAME_SIZE), "name read past its array");
+    assert_eq!(p.module, "M".repeat(CLAP_PATH_SIZE), "module read past its array");
+    // The info the plugin claimed but never wrote reads as zeros.
+    let blank = &params[1];
+    assert_eq!((blank.id, blank.name.as_str(), blank.max_value), (0, "", 0.0));
+}
+
+#[test]
+fn an_unterminated_port_name_is_read_no_further_than_its_array() {
+    let instance = unterminated_instance();
+    assert_eq!(instance.output_port_names(), vec!["P".repeat(CLAP_NAME_SIZE)]);
+}
+
+/// A caller handing `process()` buffers shorter than `frames` is a bug
+/// upstream; debug builds catch it, release builds cut the block short
+/// instead of letting the plugin run off the slice (HOST-12).
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "frames against buffers of")]
+fn process_with_frames_past_the_buffers_is_caught_in_debug() {
+    let (mut instance, _state) =
+        make_instance(SaveScript::NullFlushThenPayload, LoadScript::ChunkedReadAll);
+    let mut l = vec![0.0f32; 64];
+    let mut r = vec![0.0f32; 64];
+    instance.process(&mut l, &mut r, 128);
+}

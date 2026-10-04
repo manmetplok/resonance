@@ -11,9 +11,7 @@
 use std::ffi::{c_char, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::ptr;
 
-use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::ext::audio_ports::{clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS};
 use clap_sys::ext::gui::{clap_plugin_gui, CLAP_EXT_GUI};
@@ -383,23 +381,20 @@ pub(super) fn build_instance(
             None
         }
     };
-    let output_port_count = unsafe {
-        match audio_ports_ext.and_then(|ports| (*ports).count) {
-            Some(count_fn) => (count_fn(plugin, false) as usize).max(1),
-            None => 1,
-        }
-    };
-
-    // Input ports, same query with `is_input = true`. A second port is
-    // how a plugin declares an external sidechain key (resonance-plugin's
-    // `SIDECHAIN_INPUT`); the host connects it only when a routing has
-    // been configured for that instance. Effects default to 1 and
-    // instruments to 0, matching what the extension would report.
-    let input_port_count = unsafe {
-        match audio_ports_ext.and_then(|ports| (*ports).count) {
-            Some(count_fn) => count_fn(plugin, true) as usize,
-            None => 1,
-        }
+    // Every declared port and its channel count, inputs and outputs
+    // (code review HOST-05): `process()` hands the plugin exactly this
+    // layout. A plugin without the extension has, per audio-ports.h, no
+    // audio ports at all; this host gives it one stereo input and one
+    // stereo output instead, which is what every such plugin in practice
+    // (and every hand-rolled test plugin here) processes.
+    let (in_channels, out_channels) = match audio_ports_ext {
+        Some(ext) => unsafe {
+            (
+                declared_port_channels(plugin, ext, true),
+                declared_port_channels(plugin, ext, false),
+            )
+        },
+        None => (vec![2], vec![2]),
     };
 
     let latency_ext = unsafe {
@@ -468,19 +463,17 @@ pub(super) fn build_instance(
         }
     }
 
-    // Pre-allocate the audio-output buffer array once per plugin
-    // instance. process_multi refreshes the data32 pointers each block
-    // without ever allocating.
-    let audio_out_ptrs = vec![[ptr::null_mut(); 2]; output_port_count];
-    let audio_out_buffers = (0..output_port_count)
-        .map(|_| clap_audio_buffer {
-            data32: ptr::null_mut(),
-            data64: ptr::null_mut(),
-            channel_count: 2,
-            latency: 0,
-            constant_mask: 0,
-        })
-        .collect();
+    // Pre-allocate the port buffers once per plugin instance;
+    // process_multi re-points them each block without allocating.
+    let ports = super::instance::PortBuffers::new(
+        in_channels,
+        out_channels,
+        super::ACTIVATE_MAX_FRAMES as usize,
+    );
+
+    // `clap.note-ports`: how notes and MIDI controllers reach the plugin
+    // (code review HOST-13).
+    let note_dialect = unsafe { super::instance::NoteDialect::query(plugin) };
 
     let mut instance = ClapInstance::from_parts(
         plugin,
@@ -491,11 +484,9 @@ pub(super) fn build_instance(
         audio_ports_ext,
         gui_ext,
         latency_ext,
-        output_port_count,
-        input_port_count,
+        ports,
+        note_dialect,
         latency,
-        audio_out_buffers,
-        audio_out_ptrs,
     );
     // First-party: which params the plugin's state leaves out
     // (`com.resonance.param-flags`, drums-plugin-rework.md §5.1). Absent
@@ -522,6 +513,40 @@ pub(super) fn build_instance(
         )
     };
     Ok(instance)
+}
+
+/// The channel count of each audio port the plugin declares in one
+/// direction, from `audio_ports.count` / `get` — bounded by
+/// [`super::instance::MAX_PORTS`] ports of
+/// [`super::instance::MAX_PORT_CHANNELS`] channels, so a plugin's claim
+/// cannot make the host allocate without limit. A port whose `get` fails
+/// (or a plugin with no `get`) is taken as stereo.
+///
+/// # Safety
+/// `plugin` is a live, initialized plugin and `ext` its audio-ports
+/// vtable; main thread.
+unsafe fn declared_port_channels(
+    plugin: *const clap_plugin,
+    ext: *const clap_plugin_audio_ports,
+    is_input: bool,
+) -> Vec<u32> {
+    let Some(count_fn) = (*ext).count else {
+        // An extension with no `count` says nothing: the same stereo
+        // fallback as a plugin without it.
+        return vec![2];
+    };
+    let count = (count_fn(plugin, is_input) as usize).min(super::instance::MAX_PORTS);
+    (0..count)
+        .map(|i| {
+            let mut info: clap_sys::ext::audio_ports::clap_audio_port_info = std::mem::zeroed();
+            match (*ext).get {
+                Some(get) if get(plugin, i as u32, is_input, &mut info) => {
+                    info.channel_count.min(super::instance::MAX_PORT_CHANNELS)
+                }
+                _ => 2,
+            }
+        })
+        .collect()
 }
 
 /// The plugin's extension `id` as a `T` vtable, or `None` when it does not

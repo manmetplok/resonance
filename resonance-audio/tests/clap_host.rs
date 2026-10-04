@@ -20,6 +20,10 @@ mod plugin_preset_state;
 mod preset_discovery;
 #[path = "clap_host/clap_factory_presets.rs"]
 mod clap_factory_presets;
+#[path = "clap_host/clap_note_dialect.rs"]
+mod clap_note_dialect;
+#[path = "clap_host/clap_port_layout.rs"]
+mod clap_port_layout;
 #[path = "clap_host/clap_ffi_hardening.rs"]
 mod clap_ffi_hardening;
 #[path = "clap_host/clap_latency_tracking.rs"]

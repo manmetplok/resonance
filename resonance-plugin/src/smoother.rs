@@ -25,21 +25,44 @@ pub struct Smoother {
     ramp_samples: u32,
 }
 
+/// Sample rate a smoother assumes until its owner calls
+/// [`Smoother::set_sample_rate`].
+const DEFAULT_SAMPLE_RATE: f32 = 44_100.0;
+
+/// How close a logarithmic ramp gets to its target, as a fraction of the
+/// distance it started from, before the final sample lands on it: the
+/// snap at the end of the ramp is at most this big (−80 dB of the step).
+/// The old `1 − e^(−3/N)` coefficient left ~5 % of the distance for that
+/// snap — a −26 dB step on a 0 → 1 gain change (code review HOST-09).
+const LOG_RAMP_RESIDUAL: f32 = 1e-4;
+
 impl Smoother {
+    /// A smoother for `style`, already configured for
+    /// [`DEFAULT_SAMPLE_RATE`]: a plugin that never calls
+    /// [`Self::set_sample_rate`] still smooths (at a slightly wrong
+    /// length if it runs at another rate) rather than jumping on every
+    /// change (HOST-09). Owners should still call `set_sample_rate` from
+    /// `initialize`.
     pub fn new(style: SmoothingStyle) -> Self {
-        Self {
+        let mut s = Self {
             style,
-            sample_rate: 44100.0,
+            sample_rate: DEFAULT_SAMPLE_RATE,
             current: 0.0,
             target: 0.0,
             step: 0.0,
             remaining: 0,
             ramp_samples: 0,
-        }
+        };
+        s.set_sample_rate(DEFAULT_SAMPLE_RATE);
+        s
     }
 
     /// Update the sample rate and recompute ramp length.
     pub fn set_sample_rate(&mut self, sr: f32) {
+        debug_assert!(
+            sr.is_finite() && sr > 0.0,
+            "Smoother::set_sample_rate({sr}): not a sample rate"
+        );
         self.sample_rate = sr;
         self.ramp_samples = match self.style {
             SmoothingStyle::None => 0,
@@ -81,9 +104,12 @@ impl Smoother {
                     self.current = target;
                     self.remaining = 0;
                 } else {
-                    // Exponential decay coefficient: reaches ~95% in ramp_samples
-                    // coeff = 1 - e^(-3 / ramp_samples) gives ~95% convergence
-                    self.step = 1.0 - (-3.0 / self.ramp_samples as f32).exp();
+                    // Exponential decay coefficient chosen so that
+                    // (1 - coeff)^ramp_samples == LOG_RAMP_RESIDUAL: after
+                    // the nominal ramp only that fraction of the distance
+                    // is left for the final snap onto the target.
+                    self.step =
+                        1.0 - (LOG_RAMP_RESIDUAL.ln() / self.ramp_samples as f32).exp();
                     self.remaining = self.ramp_samples;
                 }
             }

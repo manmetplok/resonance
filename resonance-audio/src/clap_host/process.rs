@@ -7,11 +7,11 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::events::{
-    clap_event_header, clap_event_note, clap_event_param_value, clap_event_transport,
-    clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF,
-    CLAP_EVENT_NOTE_ON, CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
+    clap_event_header, clap_event_midi, clap_event_note, clap_event_param_value,
+    clap_event_transport, clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID,
+    CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_TRANSPORT,
+    CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
     CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
 };
 use clap_sys::fixedpoint::CLAP_BEATTIME_FACTOR;
@@ -23,20 +23,57 @@ use super::instance::{ClapInstance, StereoBufMut};
 // Event list for parameter changes + note events
 // ---------------------------------------------------------------------------
 
-/// Context for input events carrying both param value and note events.
-/// Param events (time=0) come first, then note events, which
-/// `process_multi_with_key` sorts by time and bounds to the block.
-///
-/// Also reused by [`super::params`] to build the param-only event list
-/// handed to `clap_plugin_params.flush` (with `note_events` empty).
+/// The input event list handed to `process()` (and, with no notes or
+/// MIDI, to `params.flush`): parameter changes, CLAP note events and
+/// `CLAP_EVENT_MIDI` messages, each list sorted by time on its own, read
+/// in the merged order `order` gives — CLAP requires the plugin see one
+/// list sorted by time (code review HOST-06: param events are no longer
+/// all at time 0). At equal times params come first, then notes, then
+/// MIDI, so a value lands before the note it shapes.
 pub(super) struct MixedEventListCtx {
     pub(super) param_events: Vec<clap_event_param_value>,
     pub(super) note_events: Vec<clap_event_note>,
+    pub(super) midi_events: Vec<clap_event_midi>,
+    /// Each entry is a list tag (top two bits) and an index into it.
+    pub(super) order: Vec<u32>,
+}
+
+const ORDER_PARAM: u32 = 0;
+const ORDER_NOTE: u32 = 1 << 30;
+const ORDER_MIDI: u32 = 2 << 30;
+const ORDER_INDEX: u32 = (1 << 30) - 1;
+
+impl MixedEventListCtx {
+    /// Fill `order` with a three-way merge of the (individually sorted)
+    /// lists. Allocation-free while `order` has room for all of them.
+    pub(super) fn merge_order(&mut self) {
+        self.order.clear();
+        let (mut p, mut n, mut m) = (0usize, 0usize, 0usize);
+        loop {
+            let tp = self.param_events.get(p).map(|e| e.header.time);
+            let tn = self.note_events.get(n).map(|e| e.header.time);
+            let tm = self.midi_events.get(m).map(|e| e.header.time);
+            let take_param = tp.is_some_and(|t| tn.is_none_or(|u| t <= u) && tm.is_none_or(|u| t <= u));
+            let take_note = !take_param && tn.is_some_and(|t| tm.is_none_or(|u| t <= u));
+            if take_param {
+                self.order.push(ORDER_PARAM | p as u32);
+                p += 1;
+            } else if take_note {
+                self.order.push(ORDER_NOTE | n as u32);
+                n += 1;
+            } else if tm.is_some() {
+                self.order.push(ORDER_MIDI | m as u32);
+                m += 1;
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 pub(super) unsafe extern "C" fn mixed_events_size(list: *const clap_input_events) -> u32 {
     let ctx = &*((*list).ctx as *const MixedEventListCtx);
-    (ctx.param_events.len() + ctx.note_events.len()) as u32
+    ctx.order.len() as u32
 }
 
 pub(super) unsafe extern "C" fn mixed_events_get(
@@ -44,17 +81,44 @@ pub(super) unsafe extern "C" fn mixed_events_get(
     index: u32,
 ) -> *const clap_event_header {
     let ctx = &*((*list).ctx as *const MixedEventListCtx);
-    let param_count = ctx.param_events.len();
-    let idx = index as usize;
-    if idx < param_count {
-        &ctx.param_events[idx].header as *const clap_event_header
-    } else {
-        let note_idx = idx - param_count;
-        if note_idx < ctx.note_events.len() {
-            &ctx.note_events[note_idx].header as *const clap_event_header
-        } else {
-            ptr::null()
+    let Some(&entry) = ctx.order.get(index as usize) else {
+        return ptr::null();
+    };
+    let idx = (entry & ORDER_INDEX) as usize;
+    let header = match entry & !ORDER_INDEX {
+        ORDER_PARAM => ctx.param_events.get(idx).map(|e| &e.header),
+        ORDER_NOTE => ctx.note_events.get(idx).map(|e| &e.header),
+        _ => ctx.midi_events.get(idx).map(|e| &e.header),
+    };
+    header.map_or(ptr::null(), |h| h as *const clap_event_header)
+}
+
+/// Stable in-place insertion sort of any event list by `header.time`
+/// (allocation-free; the lists are short and almost always sorted).
+#[inline]
+fn sort_by_time<T>(events: &mut [T], time: impl Fn(&T) -> u32) {
+    for i in 1..events.len() {
+        let mut j = i;
+        while j > 0 && time(&events[j - 1]) > time(&events[j]) {
+            events.swap(j - 1, j);
+            j -= 1;
         }
+    }
+}
+
+/// A `CLAP_EVENT_MIDI` on note port 0.
+#[inline]
+fn midi_event(time: u32, data: [u8; 3]) -> clap_event_midi {
+    clap_event_midi {
+        header: clap_event_header {
+            size: std::mem::size_of::<clap_event_midi>() as u32,
+            time,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            type_: CLAP_EVENT_MIDI,
+            flags: 0,
+        },
+        port_index: 0,
+        data,
     }
 }
 
@@ -100,13 +164,7 @@ fn keep_for_later(
 /// wants off-then-on, a zero-length note on-then-off.
 #[inline]
 fn sort_notes_by_time(events: &mut [clap_event_note]) {
-    for i in 1..events.len() {
-        let mut j = i;
-        while j > 0 && events[j - 1].header.time > events[j].header.time {
-            events.swap(j - 1, j);
-            j -= 1;
-        }
-    }
+    sort_by_time(events, |e| e.header.time);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +213,8 @@ fn scrub_non_finite(buf: &mut [f32]) -> bool {
 impl ClapInstance {
     /// Process audio through the plugin (single-output convenience wrapper).
     /// CLAP spec allows aliased input/output buffers so this is in-place.
-    /// Works with any plugin — non-main output ports are silently dropped.
+    /// Works with any plugin — non-main output ports are rendered into
+    /// host scratch and dropped.
     pub fn process(&mut self, buf_l: &mut [f32], buf_r: &mut [f32], frames: usize) {
         // SAFETY: we hand the single mutable borrow pair to process_multi
         // as a one-element slice; both references disappear before this
@@ -170,8 +229,10 @@ impl ClapInstance {
     /// Process audio through the plugin, delivering each declared output
     /// port into its own stereo buffer pair. `outputs[0]` is the main
     /// output (same role as [`ClapInstance::process`]). Extra entries
-    /// beyond the plugin's declared output-port count are ignored; extra
-    /// plugin ports beyond `outputs.len()` are silently dropped.
+    /// beyond the plugin's declared output-port count are left untouched;
+    /// plugin ports beyond `outputs.len()` still get buffers of their own
+    /// (host scratch, discarded), as CLAP requires every declared port be
+    /// passed.
     ///
     /// This is the multi-output fast path used by the mixer for the drum
     /// plugin's per-group outputs.
@@ -204,17 +265,17 @@ impl ClapInstance {
         frames: usize,
     ) {
         if !self.active || frames == 0 {
+            // Automation points are queued for this block only.
+            self.pending_auto.clear();
             return;
         }
 
-        // No destination buffers: nothing could be produced, and — worse
-        // — for an effect the in-place main *input* below would be built
-        // from the null pointer pair `outputs.first_mut()` falls back
-        // to, handed over as `audio_inputs_count = 1`. A conforming
-        // plugin dereferences a connected input port unconditionally.
-        // No call site passes an empty slice today; this guard keeps the
-        // function safe for any input rather than safe by coincidence.
+        // No destination buffers: nothing could be produced, and the
+        // in-place main *input* below has no pair to alias. No call site
+        // passes an empty slice today; this guard keeps the function safe
+        // for any input rather than safe by coincidence.
         if outputs.is_empty() {
+            self.pending_auto.clear();
             return;
         }
 
@@ -229,71 +290,63 @@ impl ClapInstance {
             .process_requested
             .swap(false, std::sync::atomic::Ordering::AcqRel);
 
-        let frames = frames.min(8192);
+        // Never run past a buffer the plugin is handed (code review
+        // HOST-12): the main pair, every caller output, the key, and the
+        // pre-allocated port backing. A caller passing a shorter slice
+        // than `frames` is a bug upstream; in release the block is cut
+        // short rather than read or written out of bounds.
+        // (`max_frames` is the activation's `max_frames_count`; a longer
+        // block is cut to it silently, as it always was.)
+        let frames = frames.min(self.ports.max_frames());
+        let mut max = frames;
+        for port in outputs.iter() {
+            max = max.min(port.left.len()).min(port.right.len());
+        }
+        let key = key.filter(|_| self.has_sidechain_input());
+        if let Some((l, r)) = key {
+            max = max.min(l.len()).min(r.len());
+        }
+        debug_assert!(
+            frames <= max,
+            "process_multi_with_key: {frames} frames against buffers of {max}"
+        );
+        let frames = frames.min(max);
+        if frames == 0 {
+            self.pending_auto.clear();
+            return;
+        }
         // The stopped-transport window counts down in rendered frames
         // (`ClapInstance::wants_idle_process`, code review MIX-08).
         self.idle_hold_frames = self.idle_hold_frames.saturating_sub(frames as u32);
 
-        // Point CLAP input buffers at the main output pair (in-place
-        // processing — CLAP allows aliased in/out pointers).
-        let (main_left_ptr, main_right_ptr) = outputs
-            .first_mut()
-            .map(|p| (p.left.as_mut_ptr(), p.right.as_mut_ptr()))
-            .unwrap_or((ptr::null_mut(), ptr::null_mut()));
-        let mut in_ptrs: [*mut f32; 2] = [main_left_ptr, main_right_ptr];
+        // Every port the plugin declared, each with its declared channel
+        // count (code review HOST-05): the caller's pairs where it has
+        // them — the main input in place on the main output, CLAP allows
+        // aliased in/out pointers — and pre-allocated silence / scratch
+        // for the rest. The key, when this plugin declares a key port
+        // and the caller routed one, is input port 1; unrouted, that port
+        // reads silence.
+        self.ports.bind(outputs, key, frames);
 
-        // Port 0 is the main input. Port 1, when present, is the external
-        // key — only connected for a plugin that declared one AND when the
-        // caller supplied a signal, so the count below stays 1 in every
-        // other case and the existing path is untouched.
-        let key = key.filter(|_| self.has_sidechain_input());
-        let mut key_ptrs: [*mut f32; 2] = match key {
-            // Cast away const: CLAP's buffer struct is shared between
-            // inputs and outputs so it has no const variant. The plugin
-            // contract for an input port is read-only, and the bridge in
-            // `resonance-plugin` hands the key out as `&[f32]`.
-            Some((l, r)) => [l.as_ptr() as *mut f32, r.as_ptr() as *mut f32],
-            None => [ptr::null_mut(), ptr::null_mut()],
-        };
+        let frames_u32 = frames as u32;
+        let last_frame = frames_u32 - 1;
 
-        let mut audio_in = [
-            clap_audio_buffer {
-                data32: in_ptrs.as_mut_ptr(),
-                data64: ptr::null_mut(),
-                channel_count: 2,
-                latency: 0,
-                constant_mask: 0,
-            },
-            clap_audio_buffer {
-                data32: key_ptrs.as_mut_ptr(),
-                data64: ptr::null_mut(),
-                channel_count: 2,
-                latency: 0,
-                constant_mask: 0,
-            },
-        ];
-        let audio_inputs_count: u32 = if key.is_some() { 2 } else { 1 };
-
-        // Refresh each output port's pointer array to point at the
-        // caller's buffer slices for this block. We iterate up to the
-        // smaller of the pre-allocated buffer array and the caller's
-        // output slice so callers can pass fewer buffers (in which case
-        // the plugin's extra ports are dropped) without crashing.
-        let active_out_count = outputs.len().min(self.output_port_count);
-        for (i, port) in outputs.iter_mut().enumerate().take(active_out_count) {
-            self.audio_out_ptrs[i][0] = port.left.as_mut_ptr();
-            self.audio_out_ptrs[i][1] = port.right.as_mut_ptr();
-            self.audio_out_buffers[i].data32 = self.audio_out_ptrs[i].as_mut_ptr();
-            self.audio_out_buffers[i].channel_count = 2;
-        }
-
-        // Build input events from pending parameter changes (reuse pre-allocated buffer)
+        // Parameter events (reuse pre-allocated buffer): changes queued
+        // through `set_param` at the block start, then the automation
+        // points at their own samples (code review HOST-06), sorted by
+        // time — stable, so a later-queued value at the same sample wins.
         self.param_event_buf.clear();
         self.param_event_buf.extend(
             self.pending_params
                 .drain(..)
                 .map(|(param_id, value)| super::params::param_value_event(param_id, value)),
         );
+        self.param_event_buf.extend(self.pending_auto.drain(..).map(|(time, param_id, value)| {
+            // Queued for this block, so inside it; clamped in case the
+            // block was cut short (`frames` above).
+            super::params::param_value_event_at(param_id, value, time.min(last_frame))
+        }));
+        sort_by_time(&mut self.param_event_buf, |e| e.header.time);
 
         // Build note events (reuse pre-allocated buffer). CLAP requires
         // input events inside the block and sorted by time. Events past
@@ -303,7 +356,6 @@ impl ClapInstance {
         // range (the plugin would never reach them, and the queue is
         // drained, so a lost note-off sticks). Allocation-free: both
         // queues are filtered in place and the carry is capacity-bounded.
-        let frames_u32 = frames as u32;
         self.note_event_buf.clear();
         let note_buf = &mut self.note_event_buf;
         // Carried events were queued earlier, so they go first; the
@@ -319,10 +371,41 @@ impl ClapInstance {
         }
         sort_notes_by_time(&mut self.note_event_buf);
 
+        // Raw MIDI (code review HOST-13): queued controllers, and — for a
+        // plugin whose note port prefers or only takes MIDI — the notes,
+        // re-spoken as MIDI 1.0 note on / off on channel 1.
+        self.midi_event_buf.clear();
+        self.midi_event_buf.extend(
+            self.pending_midi
+                .drain(..)
+                .map(|(time, data)| midi_event(time.min(last_frame), data)),
+        );
+        if self.note_dialect.notes_as_midi {
+            for n in self.note_event_buf.drain(..) {
+                let key = n.key.clamp(0, 127) as u8;
+                let data = if n.header.type_ == CLAP_EVENT_NOTE_ON {
+                    let velocity = (n.velocity * 127.0).round().clamp(1.0, 127.0) as u8;
+                    [0x90, key, velocity]
+                } else {
+                    [0x80, key, 0]
+                };
+                self.midi_event_buf.push(midi_event(n.header.time, data));
+            }
+        }
+        if !self.note_dialect.has_note_input {
+            // A plugin that declares no note input gets none.
+            self.note_event_buf.clear();
+            self.midi_event_buf.clear();
+        }
+        sort_by_time(&mut self.midi_event_buf, |e| e.header.time);
+
         let mut event_ctx = MixedEventListCtx {
             param_events: std::mem::take(&mut self.param_event_buf),
             note_events: std::mem::take(&mut self.note_event_buf),
+            midi_events: std::mem::take(&mut self.midi_event_buf),
+            order: std::mem::take(&mut self.event_order),
         };
+        event_ctx.merge_order();
 
         let in_events = clap_input_events {
             ctx: &mut event_ctx as *mut MixedEventListCtx as *mut c_void,
@@ -380,10 +463,10 @@ impl ClapInstance {
             steady_time: -1,
             frames_count: frames as u32,
             transport: transport_ptr,
-            audio_inputs: audio_in.as_mut_ptr() as *const clap_audio_buffer,
-            audio_outputs: self.audio_out_buffers.as_mut_ptr(),
-            audio_inputs_count,
-            audio_outputs_count: active_out_count as u32,
+            audio_inputs: self.ports.inputs_ptr(),
+            audio_outputs: self.ports.outputs_ptr(),
+            audio_inputs_count: self.ports.input_count() as u32,
+            audio_outputs_count: self.ports.output_count() as u32,
             in_events: &in_events,
             out_events: &out_events,
         };
@@ -406,7 +489,8 @@ impl ClapInstance {
             // chains, bus/master sums, sends, sidechain taps, sub-track
             // fan-out all read these buffers), so this is the one choke
             // point that guards every path. See `scrub_non_finite`.
-            for port in outputs.iter_mut().take(active_out_count) {
+            let produced = self.ports.finish(outputs, frames);
+            for port in outputs.iter_mut().take(produced) {
                 scrub_non_finite(&mut port.left[..frames]);
                 scrub_non_finite(&mut port.right[..frames]);
             }
@@ -418,5 +502,9 @@ impl ClapInstance {
         self.param_event_buf.clear();
         self.note_event_buf = event_ctx.note_events;
         self.note_event_buf.clear();
+        self.midi_event_buf = event_ctx.midi_events;
+        self.midi_event_buf.clear();
+        self.event_order = event_ctx.order;
+        self.event_order.clear();
     }
 }
