@@ -578,7 +578,7 @@ fn set_fx_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
 /// `track.plugin_params` reports a track's.
 ///
 /// Read-only but project-requiring, so it deliberately stays OUT of
-/// `is_read_only_method`: with no project open the honest answer is
+/// `bypasses_mutation_gate`: with no project open the honest answer is
 /// `busy`, not an empty chain.
 fn plugin_params(app: &Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: bus::PluginParamsParams = match request.params() {

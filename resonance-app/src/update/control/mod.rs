@@ -233,7 +233,7 @@ pub fn execute(
     // Restricted to *known* protocol methods so an unknown method still
     // falls through to `method_not_found` rather than being masked by a
     // `busy` — the gate answers "can't right now", not "no such method".
-    if is_protocol_method(method) && !is_read_only_method(method) {
+    if is_protocol_method(method) && !bypasses_mutation_gate(method) {
         if let Some(error) = mutation_gate_error(app, method) {
             return (failure(request, error), Task::none());
         }
@@ -283,7 +283,7 @@ fn execute_mutating(
     // and reports its BS.1770 numbers, as a job. Read-only in the sense
     // that it changes nothing — but it describes the OPEN project, so
     // like `master.summary` it sits below the gate and is absent from
-    // `is_read_only_method`: with nothing open the honest answer is
+    // `bypasses_mutation_gate`: with nothing open the honest answer is
     // `busy`, not a measurement of silence.
     if let Some(handled) = meter::try_handle(app, conn, request) {
         return handled;
@@ -450,6 +450,14 @@ fn hello(app: &mut Resonance, conn: ConnId, request: &Request) -> Response {
 /// project the gate otherwise requires. Every other method mutates the
 /// current project and is gated.
 ///
+/// This is NOT "read-only": `project.*` creates and opens projects, and
+/// `presets.*` / `drum_kits.*` / `amp_models.*` write the user's
+/// libraries (delete, import, save). What they share is that none of
+/// them edits the *open* project, so none needs the gate or an undo
+/// entry. (Was `is_read_only_method`; renamed by code review ARCH2-12.
+/// Its counterpart below the gate is [`reads_open_project_only`]: gated
+/// methods that read the open project and so stay answerable mid-drag.)
+///
 /// `plugins.*` is the one addition to that list: it is read-only AND
 /// project-independent (unlike `master.summary` / `edit.status`, which
 /// read but describe the open project and so stay gated).
@@ -460,7 +468,7 @@ fn hello(app: &mut Resonance, conn: ConnId, request: &Request) -> Response {
 /// `meter.*` (todo #1219), which mutates nothing but measures the open
 /// project — a stable `busy` with nothing open beats a measurement of a
 /// project that isn't there.
-pub(crate) fn is_read_only_method(method: &str) -> bool {
+pub(crate) fn bypasses_mutation_gate(method: &str) -> bool {
     use resonance_control::methods;
     method == HELLO
         || methods::song::METHODS.contains(&method)

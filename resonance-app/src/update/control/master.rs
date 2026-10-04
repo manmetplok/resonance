@@ -8,7 +8,7 @@
 //!
 //! `master.summary` is read-only but needs an open project, so it is
 //! deliberately NOT listed in
-//! [`is_read_only_method`](super::is_read_only_method): the mutation
+//! [`bypasses_mutation_gate`](super::bypasses_mutation_gate): the mutation
 //! gate then answers a stable `busy` instead of reporting a default
 //! master for a project that isn't there. For the same reason its result
 //! carries no `revision`.
@@ -468,7 +468,7 @@ fn move_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
 /// `track.plugin_params` reports a track's.
 ///
 /// Read-only but project-requiring, so like `master.summary` it stays
-/// OUT of `is_read_only_method`: with no project open the honest answer
+/// OUT of `bypasses_mutation_gate`: with no project open the honest answer
 /// is `busy`, not an empty chain.
 fn plugin_params(app: &Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: master::PluginParamsParams = match super::optional_params(request) {
