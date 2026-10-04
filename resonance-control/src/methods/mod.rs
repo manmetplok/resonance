@@ -24,6 +24,7 @@ pub mod global;
 pub mod harmony;
 pub mod master;
 pub mod meter;
+pub mod midi_map;
 pub mod mixer;
 pub mod notes;
 pub mod plugin_preset;
@@ -86,6 +87,7 @@ pub fn capabilities() -> Vec<&'static str> {
         render::METHODS,
         meter::METHODS,
         automation::METHODS,
+        midi_map::METHODS,
         amp_models::METHODS,
         drum_kits::METHODS,
         presets::METHODS,

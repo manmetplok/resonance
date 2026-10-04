@@ -112,6 +112,7 @@ impl ResonanceMcp {
             + Self::router_render()
             + Self::router_meter()
             + Self::router_automation()
+            + Self::router_midi_map()
             + Self::router_amp_models()
             + Self::router_drum_kits()
             + Self::router_presets()

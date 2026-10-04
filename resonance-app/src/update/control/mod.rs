@@ -57,6 +57,7 @@ mod job;
 mod master;
 mod meter;
 mod meter_compare;
+mod midi_map;
 mod notes;
 /// Per-slot and whole-chain bypass, shared by all three surfaces
 /// (ba todo #1305).
@@ -379,11 +380,10 @@ fn execute_mutating(
         return result;
     }
 
-    // Parameter automation (automation-control-api.md). Like
-    // `master.summary`, `automation.lanes` reads only but describes the
-    // OPEN project, so it sits below the gate. Writes compute the new
-    // point list and dispatch ONE `AutomationMessage::SetLane`.
-    if let Some(result) = automation::try_handle(app, request) {
+    // `automation.*` and `midi_map.*`: their reads describe the OPEN project (below the gate).
+    let result =
+        automation::try_handle(app, request).or_else(|| midi_map::try_handle(app, request));
+    if let Some(result) = result {
         return result;
     }
 
