@@ -69,6 +69,13 @@ impl Resonance {
         self.tempo_events.push(event);
     }
 
+    /// Test-only: replace the signature track. Caller must follow with
+    /// `test_rebuild_tempo_map`.
+    #[doc(hidden)]
+    pub fn test_set_signature_events(&mut self, events: Vec<state::SignatureEvent>) {
+        self.signature_events = events;
+    }
+
     /// Test-only: set a flat project tempo (single bar-0 event) and
     /// rebuild the tempo map / bar table off the current sample rate.
     /// Used by the compose bar↔sample tests (ba todo #1163) to establish
