@@ -78,7 +78,11 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | merged | ad402dbd |
 | 4 | U3 visual polish | UX-07, -08, -09, -17, -18, -19, -20, -21, -23 | sonnet | merged | ee3d8053 |
 | 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | merged | 7a1f4f97 |
-| 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | running | |
+| 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | merged | 2b41b974 |
+| 6 | W1 MIDI learn UI | FU-A1a1: EnterMidiLearn/CancelMidiLearn/ClearMidiBinding/ClearAllMidiBindings, SetControllerMap, SetControlSurfaceInput | opus | running | |
+| 6 | W2 clip warp UI | FU-A1a1: SetClipWarp, SetClipWarpMarkers, DetectClipTempo | opus | running | |
+| 6 | W3 loop-record mode + I/O latency | FU-A1a1: SetLoopRecordMode, QueryIoLatency | sonnet | running | |
+| 6 | W4 freeze auto-stale, pool remove/relink, delete dead helpers | FU-A1a3 | opus | running | |
 
 ### Follow-ups raised by batches
 
@@ -201,6 +205,18 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
   - `song.summary.tempo_bpm` still reports the tempo at the playhead, as documented on the wire.
   - The test-binary layout rule outside app/audio is a per-crate count ratchet.
   - First-party ids live in `resonance_plugin::first_party`.
+- **FU-A1b1:** decide whether the bounce/freeze gates should keep blocking the quit-dialog buttons and the autosave toggles mid-render.
+- **FU-A1b2:** a bus `FxBypassChanged` has no owed-removal guard (tracks have one since A-13i).
+- **FU-A1b3:** `AudioEngine::with_options` (now split up) has no automated coverage. **Launch the app manually**, with native PipeWire and with `RESONANCE_FORCE_CPAL_OUTPUT=1`.
+- **FU-A1b4:** bus and master `PluginAdded` carry output-port info that the app ignores. Multi-out effects on a bus need a design decision.
+- **FU-A1b5:** delete the `view::arrange_layout` and `view::mixer::picks` import shims after re-pointing about 20 view files.
+- **FU-A1b6:** `plugin_target::chain_name`/`params_method` could become `ChainOwner` methods.
+- *A1b behaviour change:* the engine now drops a removed plugin's sidechain route for every owner. The app's extra `ClearSidechainRoute` for bus/master removals is gone.
+- *Decisions (2026-10-04):*
+  - License: MIT OR Apache-2.0 (a2123cc0).
+  - LAME linking: decided together with distribution, still open.
+  - FU-A1a1: wire everything into the UI (W1–W3).
+  - FU-A1a3: wire freeze auto-stale and pool remove/relink, and delete the remaining test-only helpers (W4).
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
