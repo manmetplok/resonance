@@ -1,8 +1,16 @@
-//! The engine-event dispatch itself: one `match` routing every
-//! `AudioEvent` variant to its per-domain handler module. A free
-//! function (not an `impl Resonance` method) per ARCHITECTURE.md's
-//! update-handler pattern — `engine_events` was the last historical
-//! `impl Resonance` exception.
+//! The engine-event dispatch itself: one exhaustive `match` classifying
+//! every `AudioEvent` variant into a per-domain `route_*` function, each
+//! of which hands the event to its handler module. A free function (not an
+//! `impl Resonance` method) per ARCHITECTURE.md's update-handler pattern —
+//! `engine_events` was the last historical `impl Resonance` exception.
+//!
+//! Exhaustiveness lives in [`route_engine_event`]: a new variant does not
+//! compile until it is classified there. The per-domain routers close
+//! with an `unreachable!` arm for a variant the classifier did not send
+//! them, the same shape as the engine's own command dispatch
+//! (`resonance-audio/src/engine/thread/dispatch`); it is a wildcard only
+//! in the syntactic sense, since the classifier above it is exhaustive
+//! (code review ARCH2-12).
 
 use iced::Task;
 use resonance_audio::types::*;
@@ -23,7 +31,163 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
     task
 }
 
+/// Classify `event` by domain. Exhaustive on purpose — no `_` arm — so a
+/// new `AudioEvent` variant does not compile until it is routed.
 fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
+    use AudioEvent as E;
+    match event {
+        // Transport, clock and device events.
+        E::PlayheadMoved(..)
+        | E::SampleRateDetected { .. }
+        | E::Stopped
+        | E::TransportRefused
+        | E::Error(..)
+        | E::InputDevicesListed { .. }
+        | E::RecordingStarted { .. }
+        | E::RecordingOverflow { .. }
+        | E::IoLatencyReport { .. }
+        | E::RenderThreads { .. }
+        | E::MidiInputDevicesListed { .. }
+        | E::MidiOutputDevicesListed { .. }
+        | E::MidiClockStarted
+        | E::MidiClockContinued
+        | E::MidiClockStopped
+        | E::MidiClockTempoDetected { .. } => route_transport(r, event),
+        // Offline renders: WAV mixdown, stem export, the master export and track freezes.
+        E::BounceComplete { .. }
+        | E::BounceError { .. }
+        | E::TrackBounceError(..)
+        | E::TrackBounceCancelled { .. }
+        | E::BounceProgress { .. }
+        | E::StemExportError(..)
+        | E::StemExportProgress { .. }
+        | E::StemExportTargetDone { .. }
+        | E::StemExportTargetError { .. }
+        | E::StemExportComplete { .. }
+        | E::StemExportCancelled { .. }
+        | E::ExportProgress { .. }
+        | E::ExportComplete { .. }
+        | E::ExportError { .. }
+        | E::FreezeProgress { .. }
+        | E::FreezeCompleted { .. }
+        | E::FreezeError { .. }
+        | E::FreezeCancelled { .. } => route_render(r, event),
+        // Control-API replies: the measurements, probes and label
+        // resolutions only `update::control` asked for.
+        E::MixMeasured { .. }
+        | E::MixMeasureError { .. }
+        | E::ChainProbed { .. }
+        | E::ChainProbeError { .. }
+        | E::PluginParamTextResolved { .. } => route_control(r, event),
+        // Audio clips, the media pool, take lanes and the clip-id grant.
+        E::ClipImported { .. }
+        | E::ClipDeleted { .. }
+        | E::ClipMoved { .. }
+        | E::ClipTrimmed { .. }
+        | E::ClipFadeChanged { .. }
+        | E::ClipGainChanged { .. }
+        | E::ClipWarpChanged { .. }
+        | E::ClipWarpMarkersChanged { .. }
+        | E::ClipTempoDetected { .. }
+        | E::ImportProgress { .. }
+        | E::AssetImported { .. }
+        | E::ImportFailed { .. }
+        | E::ClipPitchDetected { .. }
+        | E::RecordingFinished { .. }
+        | E::TakeCaptured { .. }
+        | E::TakeCompChanged { .. }
+        | E::ActiveTakeChanged { .. }
+        | E::TakeRemoved { .. }
+        | E::TakeGroupRemoved { .. }
+        | E::IdGrantLow { .. } => route_clips(r, event),
+        // MIDI clips, notes, bulk edits and the hardware controller map.
+        E::MidiClipCreated { .. }
+        | E::MidiClipMoved { .. }
+        | E::MidiClipTrimmed { .. }
+        | E::MidiClipDeleted { .. }
+        | E::MidiNoteAdded { .. }
+        | E::MidiNoteRemoved { .. }
+        | E::MidiNoteMoved { .. }
+        | E::MidiNoteResized { .. }
+        | E::MidiNoteVelocitySet { .. }
+        | E::MidiNotesEdited { .. }
+        | E::GrooveExtracted { .. }
+        | E::MidiLearnCaptured { .. }
+        | E::MidiBindingChanged { .. }
+        | E::MidiBindingCleared { .. }
+        | E::ControlSurfaceParamChanged { .. }
+        | E::ControlSurfaceDevicesChanged { .. } => route_midi(r, event),
+        // Track and bus lifecycle, routing, external instruments and the peak snapshot.
+        E::TrackDeviceParamsApplied { .. }
+        | E::TrackAdded { .. }
+        | E::InstrumentTrackAdded { .. }
+        | E::VocalTrackAdded { .. }
+        | E::TrackRemoved { .. }
+        | E::TrackBounceCompleted { .. }
+        | E::TrackPlaybackSourceChanged { .. }
+        | E::BusAdded { .. }
+        | E::BusRemoved { .. }
+        | E::BusRoleChanged { .. }
+        | E::AuxSendChanged { .. }
+        | E::AuxSendRemoved { .. }
+        | E::AuxSendRejected { .. }
+        | E::PeakSnapshot { .. }
+        | E::ExternalInstrumentChanged { .. }
+        | E::ExternalInstrumentCleared { .. }
+        | E::ExternalInstrumentMidiOutOffline { .. }
+        | E::ExternalInstrumentReturnInputOffline { .. }
+        | E::ExternalInstrumentLatencyMeasured { .. }
+        | E::ExternalInstrumentLatencyDetectFailed { .. } => route_tracks(r, event),
+        // Plugin lifecycle on every chain owner, parameters, presets, editors and key routes.
+        E::SidechainRouteChanged { .. }
+        | E::PluginAdded { .. }
+        | E::PluginRemoved { .. }
+        | E::PluginMoved { .. }
+        | E::FxBypassChanged { .. }
+        | E::PluginsScanned { .. }
+        | E::PluginLoadFailed { .. }
+        | E::PluginParamText { .. }
+        | E::PluginScanFailed { .. }
+        | E::PluginPresetStateSaved { .. }
+        | E::PluginPresetLoaded { .. }
+        | E::PluginStateCaptured { .. }
+        | E::PluginPresetsDiscovered { .. }
+        | E::PluginParamsRefreshed { .. }
+        | E::PluginParamValuesChanged { .. }
+        | E::PluginParamEdited { .. }
+        | E::PluginPresetIdentity { .. }
+        | E::PluginKitInfo { .. }
+        | E::PluginStateSaved { .. }
+        | E::PluginEditorState { .. }
+        | E::PluginBypassChanged { .. } => route_plugins(r, event),
+        // Audition, project save / load echoes, automation lanes and the reference track.
+        E::AuditionPosition { .. }
+        | E::AuditionStopped
+        | E::ClipsSavedToProjectDir { .. }
+        | E::ClipsSaveFailed { .. }
+        | E::AllPluginStatesSaved { .. }
+        | E::AllCleared
+        | E::AutomationLaneChanged { .. }
+        | E::AutomationLaneCleared { .. }
+        | E::AutomatedValue { .. }
+        | E::ReferenceAnalysisProgress { .. }
+        | E::ReferenceLoaded { .. }
+        | E::ReferenceLoadFailed { .. }
+        | E::ReferenceRemoved { .. }
+        | E::ActiveReferenceChanged { .. }
+        | E::ABSourceChanged { .. }
+        | E::RefLoudnessMatchChanged { .. }
+        | E::RefTrimChanged { .. }
+        | E::RefMarkerAdded { .. }
+        | E::RefMarkerRemoved { .. }
+        | E::RefPositionChanged { .. }
+        | E::RefLoopToMixChanged { .. }
+        | E::ABMeterSnapshot { .. } => route_session(r, event),
+    }
+}
+
+/// Transport, clock and device events.
+fn route_transport(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
     use AudioEvent as E;
     match event {
         // Transport / clock / device events
@@ -37,17 +201,6 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         }
         E::Stopped => transport::stopped(r),
         E::TransportRefused => transport::refused(r),
-        // The engine echoes a key route change back. It is the authority
-        // on what is actually keyed, so reconcile the GUI mirror to the
-        // echo rather than trusting the optimistic write the dispatching
-        // handler made — and so a route the engine dropped on its own
-        // (plugin or source removed) leaves the mirror too, instead of
-        // surviving into the next save (ba todo #1311).
-        E::SidechainRouteChanged {
-            plugin,
-            source,
-            enabled,
-        } => plugins::sidechain_route_changed(r, plugin, source, enabled),
         E::Error(e) => transport::error(r, e),
         E::InputDevicesListed { devices, default_name } => {
             transport::input_devices_listed(r, devices, default_name)
@@ -81,6 +234,23 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         } => {
             tracing::debug!(workers, effective_threads, realtime, ?error, "audio: render pool");
         }
+        E::MidiInputDevicesListed { devices } => transport::midi_input_devices(r, devices),
+        E::MidiOutputDevicesListed { devices } => transport::midi_output_devices(r, devices),
+        E::MidiClockStarted => transport::midi_clock_started(r),
+        E::MidiClockContinued => transport::midi_clock_continued(r),
+        E::MidiClockStopped => transport::midi_clock_stopped(r),
+        E::MidiClockTempoDetected { bpm } => transport::midi_clock_tempo_detected(r, bpm),
+        other => {
+            unreachable!("route_transport: {other:?} is not a transport, clock or device event")
+        }
+    }
+    Task::none()
+}
+
+/// Offline renders: WAV mixdown, stem export, the master export and track freezes.
+fn route_render(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
+    use AudioEvent as E;
+    match event {
         E::BounceComplete { path } => transport::bounce_complete(r, path),
         E::BounceError { kind, message } => transport::bounce_error(r, kind, message),
         E::TrackBounceError(e) => transport::track_bounce_error(r, e),
@@ -100,6 +270,34 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::StemExportTargetError { index, message } => export::target_error(r, index, message),
         E::StemExportComplete { files } => export::complete(r, files),
         E::StemExportCancelled { files } => export::cancelled(r, files),
+        E::ExportProgress { phase, fraction } => transport::export_progress(r, phase, fraction),
+        E::ExportComplete {
+            path,
+            achieved_lufs,
+            achieved_dbtp,
+            bytes,
+        } => transport::export_complete(r, path, achieved_lufs, achieved_dbtp, bytes),
+        E::ExportError { kind, message } => transport::export_error(r, kind, message),
+        // Freeze progress / lifecycle (ba todo #575). The engine renders
+        // off-thread (todo #571/#572) and reports back through these
+        // events; the mirror folds them into per-track freeze status and
+        // advances the batch queue.
+        E::FreezeProgress { track_id, fraction } => freeze::progress(r, track_id, fraction),
+        E::FreezeCompleted { track_id, cache_ref } => {
+            freeze::completed(r, track_id, cache_ref)
+        }
+        E::FreezeError { track_id, message } => freeze::error(r, track_id, message),
+        E::FreezeCancelled { track_id } => freeze::cancelled(r, track_id),
+        other => unreachable!("route_render: {other:?} is not a render event"),
+    }
+    Task::none()
+}
+
+/// Control-API replies: the measurements, probes and label resolutions
+/// only `update::control` asked for.
+fn route_control(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
+    use AudioEvent as E;
+    match event {
         // Mix measurement (ba doc #273, todos #1218 / #1219). These are
         // the terminal events of `AudioCommand::MeasureMix`, which only
         // the control API's `meter.*` issues; the GUI has no measurement
@@ -124,28 +322,20 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::ChainProbeError { probe_id, message } => {
             crate::update::control::chain_probe_error(r, probe_id, message)
         }
-        E::ExportProgress { phase, fraction } => transport::export_progress(r, phase, fraction),
-        E::ExportComplete {
-            path,
-            achieved_lufs,
-            achieved_dbtp,
-            bytes,
-        } => transport::export_complete(r, path, achieved_lufs, achieved_dbtp, bytes),
-        E::ExportError { kind, message } => transport::export_error(r, kind, message),
-        E::MidiInputDevicesListed { devices } => transport::midi_input_devices(r, devices),
-        E::MidiOutputDevicesListed { devices } => transport::midi_output_devices(r, devices),
-        E::MidiClockStarted => transport::midi_clock_started(r),
-        E::MidiClockContinued => transport::midi_clock_continued(r),
-        E::MidiClockStopped => transport::midi_clock_stopped(r),
-        E::MidiClockTempoDetected { bpm } => transport::midi_clock_tempo_detected(r, bpm),
-        // Confirms the engine stored a track's device-param map
-        // (`SetTrackDeviceParams`, epic #40, doc #201 §4). Mirror the applied
-        // param ids onto the track's external-instrument state so the app can
-        // confirm the dispatch and reconstruct after a project-load replay.
-        E::TrackDeviceParamsApplied { track_id, param_ids } => {
-            super::external_instrument::device_params_applied(r, track_id, param_ids)
+        // The plugin's answer to a `*.set_plugin_param` label (§9.2): the
+        // deferred request finishes now, and its reply goes out.
+        E::PluginParamTextResolved { token, value } => {
+            return crate::update::control::label_resolved(r, token, value)
         }
+        other => unreachable!("route_control: {other:?} is not a control-API reply event"),
+    }
+    Task::none()
+}
 
+/// Audio clips, the media pool, take lanes and the clip-id grant.
+fn route_clips(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
+    use AudioEvent as E;
+    match event {
         // Audio clip events
         E::ClipImported {
             clip_id,
@@ -297,11 +487,18 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         // and the re-covered comp follows as a `TakeCompChanged`.
         E::TakeRemoved { group_id, take_id } => takes::take_removed(r, group_id, take_id),
         E::TakeGroupRemoved { group_id } => takes::take_group_removed(r, group_id),
-
         // The engine's clip-id grant ran low (ARCH-04 D-7d): top it up,
         // unless a load is in flight (its replay ends with a grant).
         E::IdGrantLow { .. } => r.refill_clip_id_grant(),
+        other => unreachable!("route_clips: {other:?} is not a clip event"),
+    }
+    Task::none()
+}
 
+/// MIDI clips, notes, bulk edits and the hardware controller map.
+fn route_midi(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
+    use AudioEvent as E;
+    match event {
         // MIDI clip + note events
         E::MidiClipCreated {
             clip_id,
@@ -362,14 +559,12 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             note_index,
             velocity,
         } => midi::note_velocity_set(r, clip_id, note_index, velocity),
-
         // Bulk MIDI edits from quantize/humanize/groove ops (doc #163, epic #25).
         // The engine emits one `MidiNotesEdited` carrying the full resulting note
         // array (replacing the clip's notes wholesale, no per-note churn), and
         // `GrooveExtracted` for groove extraction (added to the app groove library).
         E::MidiNotesEdited { clip_id, notes } => midi::notes_edited(r, clip_id, notes),
         E::GrooveExtracted { template } => midi::groove_extracted(r, template),
-
         // MIDI Learn & hardware control-surface mapping (doc #167 §3 A1).
         // App state is a pure projection of these events; the active
         // binding set is rebuilt from MidiBindingChanged / Cleared alone.
@@ -380,7 +575,22 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             midi_map::param_changed(r, target, value_norm)
         }
         E::ControlSurfaceDevicesChanged { inputs } => midi_map::devices_changed(r, inputs),
+        other => unreachable!("route_midi: {other:?} is not a MIDI event"),
+    }
+    Task::none()
+}
 
+/// Track and bus lifecycle, routing, external instruments and the peak snapshot.
+fn route_tracks(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
+    use AudioEvent as E;
+    match event {
+        // Confirms the engine stored a track's device-param map
+        // (`SetTrackDeviceParams`, epic #40, doc #201 §4). Mirror the applied
+        // param ids onto the track's external-instrument state so the app can
+        // confirm the dispatch and reconstruct after a project-load replay.
+        E::TrackDeviceParamsApplied { track_id, param_ids } => {
+            super::external_instrument::device_params_applied(r, track_id, param_ids)
+        }
         // Track / bus lifecycle
         E::TrackAdded { track_id } => tracks::added(r, track_id),
         E::InstrumentTrackAdded { track_id } => tracks::instrument_added(r, track_id),
@@ -399,7 +609,6 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         }
         E::BusAdded { bus_id, name } => tracks::bus_added(r, bus_id, name),
         E::BusRemoved { bus_id } => tracks::bus_removed_echo(r, bus_id),
-
         // Aux send / return-bus events. Mirrored into app state purely
         // from these events (todo #478) — the engine-side data model,
         // commands, and cyclic-route validation landed in todo #475. The
@@ -421,7 +630,63 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             dest,
             reason,
         } => aux_sends::send_rejected(r, source, dest, reason),
+        // Peak meter snapshot — drive the VU decay+update from the
+        // engine's view of the world. See `update::tick`.
+        E::PeakSnapshot {
+            track_peaks,
+            bus_peaks,
+            master_peak_l,
+            master_peak_r,
+        } => crate::update::tick::apply_peak_snapshot(
+            r,
+            track_peaks,
+            bus_peaks,
+            master_peak_l,
+            master_peak_r,
+        ),
+        // External-instrument config + device-offline events: mirror the
+        // engine's stored config and device status into the app's
+        // `external_instruments` map (doc #169, epic #39).
+        E::ExternalInstrumentChanged { config } => {
+            super::external_instrument::changed(r, config)
+        }
+        E::ExternalInstrumentCleared { track_id } => {
+            super::external_instrument::cleared(r, track_id)
+        }
+        E::ExternalInstrumentMidiOutOffline { track_id, .. } => {
+            super::external_instrument::midi_out_offline(r, track_id)
+        }
+        E::ExternalInstrumentReturnInputOffline { track_id, .. } => {
+            super::external_instrument::return_input_offline(r, track_id)
+        }
+        E::ExternalInstrumentLatencyMeasured {
+            track_id,
+            latency_samples,
+            ..
+        } => super::external_instrument::latency_measured(r, track_id, latency_samples),
+        E::ExternalInstrumentLatencyDetectFailed { track_id, reason } => {
+            super::external_instrument::latency_detect_failed(r, track_id, reason)
+        }
+        other => unreachable!("route_tracks: {other:?} is not a track or bus event"),
+    }
+    Task::none()
+}
 
+/// Plugin lifecycle on every chain owner, parameters, presets, editors and key routes.
+fn route_plugins(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
+    use AudioEvent as E;
+    match event {
+        // The engine echoes a key route change back. It is the authority
+        // on what is actually keyed, so reconcile the GUI mirror to the
+        // echo rather than trusting the optimistic write the dispatching
+        // handler made — and so a route the engine dropped on its own
+        // (plugin or source removed) leaves the mirror too, instead of
+        // surviving into the next save (ba todo #1311).
+        E::SidechainRouteChanged {
+            plugin,
+            source,
+            enabled,
+        } => plugins::sidechain_route_changed(r, plugin, source, enabled),
         // Plugin lifecycle, on every chain owner (ARCH2-02)
         E::PluginAdded {
             owner,
@@ -470,11 +735,6 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             value,
             text,
         } => plugins::param_text(r, instance_id, param_id, value, text),
-        // The plugin's answer to a `*.set_plugin_param` label (§9.2): the
-        // deferred request finishes now, and its reply goes out.
-        E::PluginParamTextResolved { token, value } => {
-            return crate::update::control::label_resolved(r, token, value)
-        }
         E::PluginScanFailed { failures } => plugins::scan_failed(r, failures),
         E::PluginPresetStateSaved {
             instance_id,
@@ -535,22 +795,15 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             bypassed,
             own_bypass_param,
         } => plugins::bypass_changed(r, instance_id, bypassed, own_bypass_param),
+        other => unreachable!("route_plugins: {other:?} is not a plugin event"),
+    }
+    Task::none()
+}
 
-        // Peak meter snapshot — drive the VU decay+update from the
-        // engine's view of the world. See `update::tick`.
-        E::PeakSnapshot {
-            track_peaks,
-            bus_peaks,
-            master_peak_l,
-            master_peak_r,
-        } => crate::update::tick::apply_peak_snapshot(
-            r,
-            track_peaks,
-            bus_peaks,
-            master_peak_l,
-            master_peak_r,
-        ),
-
+/// Audition, project save / load echoes, automation lanes and the reference track.
+fn route_session(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
+    use AudioEvent as E;
+    match event {
         // Audition preview events: mirror the engine's playhead position into
         // the browser's scrub bar, and clear the playing row when the engine
         // naturally stops (end of a non-looping file, or after StopAudition).
@@ -563,17 +816,6 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             r.media.browser.audition.playing = None;
             r.media.browser.audition.position_frame = 0;
         }
-        // Freeze progress / lifecycle (ba todo #575). The engine renders
-        // off-thread (todo #571/#572) and reports back through these
-        // events; the mirror folds them into per-track freeze status and
-        // advances the batch queue.
-        E::FreezeProgress { track_id, fraction } => freeze::progress(r, track_id, fraction),
-        E::FreezeCompleted { track_id, cache_ref } => {
-            freeze::completed(r, track_id, cache_ref)
-        }
-        E::FreezeError { track_id, message } => freeze::error(r, track_id, message),
-        E::FreezeCancelled { track_id } => freeze::cancelled(r, track_id),
-
         // Project save / load — these return a Task<Message>.
         E::ClipsSavedToProjectDir { clip_files } => {
             return project_io::clips_saved(r, clip_files)
@@ -583,7 +825,6 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             return project_io::all_plugin_states_saved(r, states)
         }
         E::AllCleared => return project_io::all_cleared(r),
-
         // Automation lanes (doc #162 §3, todo #378): one-way engine→app
         // mirror of lane state into `AutomationState`, plus the throttled
         // live automated value into the transient live-value map.
@@ -592,7 +833,6 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::AutomatedValue { target, value_norm } => {
             automation::automated_value(r, target, value_norm)
         }
-
         // Reference-track (A/B) events fold into `Resonance::reference`.
         E::ReferenceAnalysisProgress { id, stage } => reference::analysis_progress(r, id, stage),
         E::ReferenceLoaded {
@@ -628,30 +868,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::ABMeterSnapshot { mix, reference: ref_meter } => {
             reference::ab_meter_snapshot(r, mix, ref_meter)
         }
-
-        // External-instrument config + device-offline events: mirror the
-        // engine's stored config and device status into the app's
-        // `external_instruments` map (doc #169, epic #39).
-        E::ExternalInstrumentChanged { config } => {
-            super::external_instrument::changed(r, config)
-        }
-        E::ExternalInstrumentCleared { track_id } => {
-            super::external_instrument::cleared(r, track_id)
-        }
-        E::ExternalInstrumentMidiOutOffline { track_id, .. } => {
-            super::external_instrument::midi_out_offline(r, track_id)
-        }
-        E::ExternalInstrumentReturnInputOffline { track_id, .. } => {
-            super::external_instrument::return_input_offline(r, track_id)
-        }
-        E::ExternalInstrumentLatencyMeasured {
-            track_id,
-            latency_samples,
-            ..
-        } => super::external_instrument::latency_measured(r, track_id, latency_samples),
-        E::ExternalInstrumentLatencyDetectFailed { track_id, reason } => {
-            super::external_instrument::latency_detect_failed(r, track_id, reason)
-        }
+        other => unreachable!("route_session: {other:?} is not a session event"),
     }
     Task::none()
 }

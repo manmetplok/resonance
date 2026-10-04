@@ -68,7 +68,7 @@ fn echo_tracks(app: &mut Resonance, rx: &Receiver<AudioCommand>) {
 }
 
 fn new_untitled(app: &mut Resonance) {
-    let _ = app.update(Message::Ui(UiMessage::NewEmptyProject));
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::NewEmptyProject));
     app.test_apply_engine_event(AudioEvent::AllCleared);
     assert_eq!(app.test_project_path(), None);
 }
@@ -240,7 +240,7 @@ fn an_untitled_project_records_undo() {
 fn an_untitled_project_anchors_the_engine_to_its_scratch_dir() {
     let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
     app.test_set_active_project(true);
-    let _ = app.update(Message::Ui(UiMessage::NewEmptyProject));
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::NewEmptyProject));
     while rx.try_recv().is_ok() {}
     app.test_apply_engine_event(AudioEvent::AllCleared);
 

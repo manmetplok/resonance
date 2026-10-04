@@ -544,13 +544,6 @@ pub enum UiMessage {
     /// Show / hide the Reference & A/B right-rail in the Mix view.
     ToggleReferencePanel,
     DismissError,
-    /// User clicked "New Project" in the startup modal.
-    StartNewProject,
-    /// Replace the open project with a fresh, untitled empty one (the New
-    /// Project command). Over unsaved changes it asks first (the
-    /// Save / Don't save / Cancel dialog, code review UX-01); refused while
-    /// a load or save is running, or an offline render owns the engine.
-    NewEmptyProject,
     /// Arm (`Some(name)`) or disarm (`None`) the inline "Delete?" confirm
     /// on a user track preset's row in the add-track menu (code review
     /// UX-14). The confirm's own button sends
@@ -579,12 +572,6 @@ pub enum UiMessage {
     /// click can tell a plain select from an additive (Cmd/Shift) one
     /// without the mouse event carrying modifiers (todo #684).
     ModifiersChanged(iced::keyboard::Modifiers),
-    /// User confirmed "Save & Quit" in the unsaved-changes dialog.
-    ConfirmSaveAndQuit,
-    /// User confirmed "Discard & Quit" in the unsaved-changes dialog.
-    ConfirmDiscardAndQuit,
-    /// User cancelled the unsaved-changes quit dialog.
-    CancelQuit,
     /// Toggle the global tracks area (tempo, time signature) in the arrange view.
     ToggleGlobalTracks,
     /// Fold / unfold one of the mixer-inspector groups (CHAIN / SENDS /
@@ -598,19 +585,6 @@ pub enum UiMessage {
     /// Switch arrange-view playhead follow on/off (persisted in settings,
     /// code review FU-V3b).
     ToggleFollowPlayhead,
-    /// Switch periodic autosave on/off (persisted in settings, code review
-    /// FU-M12a / ba todo #471).
-    ToggleAutosave,
-    /// Set the autosave interval in seconds (persisted in settings).
-    SetAutosaveInterval(u32),
-    /// Toggle MIDI clock send (engine acts as clock master).
-    ToggleMidiClockSend,
-    /// Pick the hardware port for MIDI clock send. `None` clears.
-    SetMidiClockSendDevice(Option<String>),
-    /// Toggle MIDI clock receive (engine slaves to an external master).
-    ToggleMidiClockRecv,
-    /// Pick the hardware port for MIDI clock receive. `None` clears.
-    SetMidiClockRecvDevice(Option<String>),
     /// Select the Performance-mode instrument/tuning by its index into
     /// `resonance_music_theory::ALL_TUNINGS` (the footer's segmented pill
     /// selector). Out-of-range indices are ignored. The live fingering
@@ -747,8 +721,6 @@ impl UiMessage {
             | Self::CloseAddTrackMenu
             | Self::ToggleReferencePanel
             | Self::DismissError
-            | Self::StartNewProject
-            | Self::NewEmptyProject
             | Self::ArmPresetDelete(..)
             | Self::BpmFieldHovered(..)
             | Self::BpmFieldPointer
@@ -756,19 +728,10 @@ impl UiMessage {
             | Self::SelectBus(..)
             | Self::WindowResized(..)
             | Self::ModifiersChanged(..)
-            | Self::ConfirmSaveAndQuit
-            | Self::ConfirmDiscardAndQuit
-            | Self::CancelQuit
             | Self::ToggleGlobalTracks
             | Self::ToggleMixerInspectorGroup(..)
             | Self::ToggleTakeLane(..)
             | Self::ToggleFollowPlayhead
-            | Self::ToggleAutosave
-            | Self::SetAutosaveInterval(..)
-            | Self::ToggleMidiClockSend
-            | Self::SetMidiClockSendDevice(..)
-            | Self::ToggleMidiClockRecv
-            | Self::SetMidiClockRecvDevice(..)
             | Self::SetPerformanceTuning(..)
             | Self::SetPerformanceCapo(..)
             | Self::ToggleMarkersOverview

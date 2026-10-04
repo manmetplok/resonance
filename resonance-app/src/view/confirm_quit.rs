@@ -13,9 +13,9 @@ use crate::Resonance;
 pub(crate) fn view_confirm_quit_overlay<'a>(_r: &'a Resonance) -> Element<'a, Message> {
     unsaved_changes_dialog(
         "You have unsaved changes. What would you like to do?".to_string(),
-        Message::Ui(UiMessage::CancelQuit),
-        ("Discard & Quit", Message::Ui(UiMessage::ConfirmDiscardAndQuit)),
-        ("Save & Quit", Message::Ui(UiMessage::ConfirmSaveAndQuit)),
+        Message::ProjectIo(ProjectIoMessage::CancelQuit),
+        ("Discard & Quit", Message::ProjectIo(ProjectIoMessage::ConfirmDiscardAndQuit)),
+        ("Save & Quit", Message::ProjectIo(ProjectIoMessage::ConfirmSaveAndQuit)),
     )
 }
 

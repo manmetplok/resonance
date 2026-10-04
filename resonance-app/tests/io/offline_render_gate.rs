@@ -106,7 +106,7 @@ fn open_and_new_project_are_refused_while_a_measurement_renders() {
     assert!(response.error.is_none(), "sanity: the measurement job starts");
     while cmd_rx.try_recv().is_ok() {}
 
-    let _ = app.update(Message::Ui(UiMessage::StartNewProject));
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::StartNewProject));
     assert!(
         app.test_error_message()
             .is_some_and(|m| m.contains("render")),

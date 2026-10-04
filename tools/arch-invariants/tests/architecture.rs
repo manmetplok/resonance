@@ -2211,3 +2211,137 @@ fn state_module_imports_nothing_from_view_update_or_the_socket() {
         &violations,
     );
 }
+
+// ---------------------------------------------------------------------------
+// `mod.rs` size ratchet (code review ARCH2-12)
+// ---------------------------------------------------------------------------
+
+/// Every `src/**/mod.rs` over ARCHITECTURE.md's ~200-line guideline, with
+/// the line count it had when this list was written (2026-10-04, after the
+/// ARCH2-12 splits). A cap may only come down: lower it when you shrink
+/// the file, drop the entry when the file reaches 200 lines, and never add
+/// one for a new file — a new `mod.rs` that outgrows 200 lines wants to be
+/// a directory of real modules (ARCHITECTURE.md → Anti-Patterns).
+const MOD_RS_ALLOWANCE: &[(&str, usize)] = &[
+    ("resonance-app/src/view/timeline/mod.rs", 1442),
+    ("plugins/resonance-drums/src/kit_loader/mod.rs", 1087),
+    ("plugins/resonance-drums/src/stream/mod.rs", 932),
+    ("resonance-audio/src/render_pool/mod.rs", 926),
+    ("resonance-app/src/view/performance/mod.rs", 903),
+    ("resonance-app/src/update/project_io/mod.rs", 891),
+    ("resonance-app/src/update/compose/mod.rs", 877),
+    ("resonance-music-theory/src/derive/vocal/style/mod.rs", 854),
+    ("resonance-audio/src/engine/thread/mod.rs", 846),
+    ("plugins/resonance-color/src/dsp/mod.rs", 811),
+    ("resonance-audio/src/clap_host/mod.rs", 766),
+    ("plugins/resonance-drums/src/editor/mod.rs", 691),
+    ("plugins/resonance-mastering/src/stages/multiband/mod.rs", 683),
+    ("resonance-app/src/update/control/mod.rs", 673),
+    ("resonance-app/src/commands/mod.rs", 643),
+    ("resonance-audio/src/engine/bounce/mod.rs", 602),
+    ("resonance-app/src/view/track_header/mod.rs", 562),
+    ("resonance-app/src/view/compose/expanded_editor/mod.rs", 537),
+    ("resonance-app/src/view/mixer/inspector/mod.rs", 488),
+    ("plugins/resonance-granular-delay/src/dsp/mod.rs", 479),
+    ("resonance-plugin/src/presets/mod.rs", 459),
+    ("plugins/resonance-granular-delay/src/editor/controls/mod.rs", 410),
+    ("plugins/resonance-wavetable/src/dsp/render/mod.rs", 398),
+    ("resonance-plugin/src/clap_bridge/mod.rs", 383),
+    ("resonance-app/src/view/compose/vocal_lane/mod.rs", 375),
+    ("resonance-app/src/view/mod.rs", 369),
+    ("plugins/resonance-wavetable/src/user_wavetable/mod.rs", 358),
+    ("plugins/resonance-wavetable/src/params/mod.rs", 356),
+    ("resonance-dsp/src/timestretch/mod.rs", 354),
+    ("resonance-app/src/view/midi_editor/mod.rs", 332),
+    ("resonance-app/src/undo/mod.rs", 328),
+    ("resonance-app/src/update/compose/lane_inspector/mod.rs", 322),
+    ("resonance-app/src/view/compose/lane_inspector/instrument/mod.rs", 322),
+    ("resonance-music-theory/src/derive/vocal/mod.rs", 310),
+    ("resonance-music-theory/src/generator/markov/mod.rs", 306),
+    ("resonance-app/src/view/compose/lane_inspector/mod.rs", 302),
+    ("resonance-app/src/view/compose/tracks/mod.rs", 280),
+    ("plugins/resonance-mastering/src/stages/linear_phase_eq/mod.rs", 267),
+    ("resonance-app/src/view/compose/vocal_roll/mod.rs", 266),
+    ("resonance-audio/src/engine/thread/dispatch/mod.rs", 263),
+    ("plugins/resonance-mastering/src/editor/mod.rs", 256),
+    ("resonance-app/src/view/compose/chord_lane/mod.rs", 255),
+    ("plugins/resonance-amp/src/nam/mod.rs", 250),
+    ("resonance-svs/src/voicebank/mod.rs", 250),
+    ("resonance-app/src/view/compose/drum_groups_manager/mod.rs", 249),
+    ("resonance-app/src/view/compose/lane_inspector/chord/mod.rs", 240),
+    ("resonance-app/src/update/project_io/reconcile/mod.rs", 236),
+    ("resonance-app/src/view/compose/drumroll/mod.rs", 236),
+    ("resonance-app/src/view/mixer/mod.rs", 233),
+    ("plugins/resonance-stereo/src/editor/mod.rs", 227),
+    ("plugins/resonance-reverb/src/editor/mod.rs", 226),
+    ("resonance-app/src/update/control/track/mod.rs", 223),
+    ("resonance-audio/src/types/tempo/mod.rs", 219),
+    ("plugins/resonance-gate/src/editor/mod.rs", 212),
+    ("plugins/resonance-amp/src/nam/wavenet/model/mod.rs", 211),
+    ("resonance-app/src/compose/vocal_svs/mod.rs", 209),
+    ("resonance-music-theory/src/generator/mod.rs", 208),
+    ("resonance-app/src/view/compose/lane_inspector/drums/mod.rs", 204),
+];
+
+/// How many lines a `mod.rs` may have without an entry above.
+const MOD_RS_LINE_LIMIT: usize = 200;
+
+/// ARCHITECTURE.md → Anti-Patterns: "`mod.rs` should re-export and
+/// dispatch, not house types", with ~200 lines as the tell. 64 files broke
+/// it when ARCH2-12 was filed and nothing checked. This is a ratchet: the
+/// listed files may not grow past their cap, nothing unlisted may pass the
+/// limit, and an entry whose file has come back under the limit must go.
+///
+/// Exercised 2026-10-04: lowered `resonance-app/src/view/mod.rs`'s cap by
+/// one (text only) → failed naming it; reverted.
+#[test]
+fn mod_rs_files_only_shrink() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for pkg in packages() {
+        rust_files(&pkg.dir.join("src"), &mut files);
+    }
+    files.sort();
+    files.dedup();
+    let mut violations = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for file in files {
+        if file.file_name().is_none_or(|n| n != "mod.rs") {
+            continue;
+        }
+        let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+        let lines = fs::read_to_string(&file)
+            .map(|s| s.lines().count())
+            .unwrap_or(0);
+        let cap = MOD_RS_ALLOWANCE
+            .iter()
+            .find(|(p, _)| *p == rel)
+            .map(|(_, c)| *c);
+        if cap.is_some() {
+            seen.insert(rel.clone());
+        }
+        match cap {
+            Some(cap) if lines > cap => violations.push(format!(
+                "{rel}: {lines} lines, over its {cap}-line cap — move the growth into a \
+                 sibling module, not into mod.rs"
+            )),
+            Some(_) if lines <= MOD_RS_LINE_LIMIT => violations.push(format!(
+                "{rel}: {lines} lines — under the limit now; drop it from `MOD_RS_ALLOWANCE`"
+            )),
+            None if lines > MOD_RS_LINE_LIMIT => violations.push(format!(
+                "{rel}: {lines} lines — a mod.rs re-exports and dispatches; give the directory \
+                 real modules (ARCHITECTURE.md → Anti-Patterns)"
+            )),
+            _ => {}
+        }
+    }
+    for (p, _) in MOD_RS_ALLOWANCE {
+        if !seen.contains(*p) {
+            violations.push(format!("{p}: in `MOD_RS_ALLOWANCE` but no such file — drop it"));
+        }
+    }
+    report(
+        "ARCH2-12: `mod.rs` files stay under 200 lines, or under their listed, shrinking cap",
+        &violations,
+    );
+}

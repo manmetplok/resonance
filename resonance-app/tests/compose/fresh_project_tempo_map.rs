@@ -1,6 +1,6 @@
 //! A brand-new project must have a usable tempo-map bar table.
 //!
-//! File → New (`UiMessage::StartNewProject`) never runs the project-load
+//! File → New (`ProjectIoMessage::StartNewProject`) never runs the project-load
 //! replay, and construction used to leave `TempoMap::default()` in place:
 //! empty bar table, `table_sample_rate: 0`, under which `bar_to_sample`
 //! maps EVERY bar to sample 0. The Compose track canvas gates its drawing

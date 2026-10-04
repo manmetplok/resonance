@@ -52,6 +52,14 @@ pub enum TransportMessage {
     StartLoopDrag(LoopDragTarget),
     UpdateLoopDrag(f32),
     EndLoopDrag,
+    /// Toggle MIDI clock send (engine acts as clock master).
+    ToggleMidiClockSend,
+    /// Pick the hardware port for MIDI clock send. `None` clears.
+    SetMidiClockSendDevice(Option<String>),
+    /// Toggle MIDI clock receive (engine slaves to an external master).
+    ToggleMidiClockRecv,
+    /// Pick the hardware port for MIDI clock receive. `None` clears.
+    SetMidiClockRecvDevice(Option<String>),
 }
 
 impl TransportMessage {
@@ -75,7 +83,13 @@ impl TransportMessage {
             | Self::SkipBack
             | Self::SkipForward
             | Self::SeekToSample(_)
-            | Self::SetBpmText(_) => UndoAction::Skip,
+            | Self::SetBpmText(_)
+            // MIDI clock sync is a device setting (moved here from
+            // `UiMessage`, ARCH2-12), not a project edit.
+            | Self::ToggleMidiClockSend
+            | Self::SetMidiClockSendDevice(_)
+            | Self::ToggleMidiClockRecv
+            | Self::SetMidiClockRecvDevice(_) => UndoAction::Skip,
             Self::CommitBpm
             | Self::ToggleMetronome
             | Self::CycleTimeSignature
@@ -91,6 +105,34 @@ impl TransportMessage {
 
 pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
     match m {
+        TransportMessage::ToggleMidiClockSend => {
+            r.devices.midi.midi_clock_send_enabled = !r.devices.midi.midi_clock_send_enabled;
+            let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
+                device: r.devices.midi.midi_clock_send_device.clone(),
+                enabled: r.devices.midi.midi_clock_send_enabled,
+            });
+        }
+        TransportMessage::SetMidiClockSendDevice(device) => {
+            r.devices.midi.midi_clock_send_device = device.clone();
+            let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
+                device,
+                enabled: r.devices.midi.midi_clock_send_enabled,
+            });
+        }
+        TransportMessage::ToggleMidiClockRecv => {
+            r.devices.midi.midi_clock_recv_enabled = !r.devices.midi.midi_clock_recv_enabled;
+            let _ = r.engine.send(AudioCommand::SetMidiClockInput {
+                device: r.devices.midi.midi_clock_recv_device.clone(),
+                enabled: r.devices.midi.midi_clock_recv_enabled,
+            });
+        }
+        TransportMessage::SetMidiClockRecvDevice(device) => {
+            r.devices.midi.midi_clock_recv_device = device.clone();
+            let _ = r.engine.send(AudioCommand::SetMidiClockInput {
+                device,
+                enabled: r.devices.midi.midi_clock_recv_enabled,
+            });
+        }
         TransportMessage::TogglePlay => {
             if r.transport.playing {
                 // Stop (which also ends a recording pass) and return to

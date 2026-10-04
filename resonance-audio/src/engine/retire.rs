@@ -123,3 +123,16 @@ pub fn publish_opt<T: Any + Send + Sync>(
 ) {
     retired.retire_opt(slot.swap(new));
 }
+
+/// Copy-on-write helper for the `ArcSwap<TempoMap>` shared with the
+/// audio thread. The audio side does wait-free `load()`s; this helper
+/// is the single-writer mutation path used by every engine-thread
+/// site that previously held a `RwLock<TempoMap>::write()`.
+pub(crate) fn rcu_tempo<F: FnOnce(&mut crate::types::TempoMap)>(
+    ctx: &super::thread::HandlerCtx,
+    f: F,
+) {
+    let mut new = (**ctx.tempo_map.load()).clone();
+    f(&mut new);
+    publish(ctx.tempo_map, std::sync::Arc::new(new), &ctx.shared.retired);
+}

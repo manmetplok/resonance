@@ -15,6 +15,13 @@
 fn is_gated_message(message: &crate::message::Message) -> bool {
     use crate::message::*;
     match message {
+        // MIDI clock sync is a device setting reached from the Settings
+        // overlay (a `TransportMessage` since ARCH2-12, a `UiMessage`
+        // before): allowed, as every settings toggle is.
+        Message::Transport(TransportMessage::ToggleMidiClockSend)
+        | Message::Transport(TransportMessage::SetMidiClockSendDevice(_))
+        | Message::Transport(TransportMessage::ToggleMidiClockRecv)
+        | Message::Transport(TransportMessage::SetMidiClockRecvDevice(_)) => false,
         // Interactive user input: block.
         Message::Compose(_)
         | Message::Transport(_)
@@ -80,8 +87,6 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::CloseAddTrackMenu)
         | Message::Ui(UiMessage::CloseTrackMenu)
         | Message::Ui(UiMessage::DismissError)
-        | Message::Ui(UiMessage::StartNewProject)
-        | Message::Ui(UiMessage::NewEmptyProject)
         | Message::Ui(UiMessage::ArmPresetDelete(_))
         | Message::Ui(UiMessage::BpmFieldHovered(_))
         | Message::Ui(UiMessage::BpmFieldPointer)
@@ -99,21 +104,12 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::RenamePointer)
         | Message::Ui(UiMessage::RenameHovered(_))
         | Message::Ui(UiMessage::ModifiersChanged(_))
-        | Message::Ui(UiMessage::ConfirmSaveAndQuit)
-        | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
-        | Message::Ui(UiMessage::CancelQuit)
         | Message::Ui(UiMessage::ToggleGlobalTracks)
         | Message::Ui(UiMessage::ToggleReferencePanel)
         | Message::Ui(UiMessage::CloseMarkersOverview)
         | Message::Ui(UiMessage::ToggleMixerInspectorGroup(_))
         | Message::Ui(UiMessage::ToggleTakeLane(_))
         | Message::Ui(UiMessage::ToggleFollowPlayhead)
-        | Message::Ui(UiMessage::ToggleAutosave)
-        | Message::Ui(UiMessage::SetAutosaveInterval(_))
-        | Message::Ui(UiMessage::ToggleMidiClockSend)
-        | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
-        | Message::Ui(UiMessage::ToggleMidiClockRecv)
-        | Message::Ui(UiMessage::SetMidiClockRecvDevice(_))
         // Performance footer selections are pure view state and only
         // reachable from within Performance mode (which needs a project),
         // so they're harmless even if one slips through while the startup
@@ -171,6 +167,17 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         Message::Track(TrackMessage::Bounce(BounceMessage::CancelInProgress)) => false,
         // ... and on the Export modal's stem render.
         Message::Export(ExportMessage::CancelRender) => false,
+        // The project lifecycle, the quit dialog and the autosave settings
+        // were `UiMessage`s until ARCH2-12 and blocked mid-render with the
+        // rest of the UI; they keep that gating (whether they should is a
+        // product question, not this refactor's).
+        Message::ProjectIo(ProjectIoMessage::StartNewProject)
+        | Message::ProjectIo(ProjectIoMessage::NewEmptyProject)
+        | Message::ProjectIo(ProjectIoMessage::ConfirmSaveAndQuit)
+        | Message::ProjectIo(ProjectIoMessage::ConfirmDiscardAndQuit)
+        | Message::ProjectIo(ProjectIoMessage::CancelQuit)
+        | Message::ProjectIo(ProjectIoMessage::ToggleAutosave)
+        | Message::ProjectIo(ProjectIoMessage::SetAutosaveInterval(_)) => true,
         // Engine event traffic, project I/O, and the timer tick all
         // need to keep flowing — the bounce relies on `BounceProgress`
         // / `TrackBounceCompleted` events to clear the modal.
@@ -241,6 +248,17 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
     match message {
         // Whitelist: cancelling the in-flight freeze.
         Message::Freeze(FreezeMessage::CancelFreeze) => false,
+        // The project lifecycle, the quit dialog and the autosave settings
+        // were `UiMessage`s until ARCH2-12 and blocked mid-render with the
+        // rest of the UI; they keep that gating (whether they should is a
+        // product question, not this refactor's).
+        Message::ProjectIo(ProjectIoMessage::StartNewProject)
+        | Message::ProjectIo(ProjectIoMessage::NewEmptyProject)
+        | Message::ProjectIo(ProjectIoMessage::ConfirmSaveAndQuit)
+        | Message::ProjectIo(ProjectIoMessage::ConfirmDiscardAndQuit)
+        | Message::ProjectIo(ProjectIoMessage::CancelQuit)
+        | Message::ProjectIo(ProjectIoMessage::ToggleAutosave)
+        | Message::ProjectIo(ProjectIoMessage::SetAutosaveInterval(_)) => true,
         // Engine event traffic, project I/O, and the timer tick keep
         // flowing — the freeze relies on the tick to drain `FreezeProgress`
         // / `FreezeCompleted` events that advance the batch and clear state.

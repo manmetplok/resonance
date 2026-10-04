@@ -92,7 +92,7 @@ impl Overlay {
             | Overlay::FreezeProgress
             | Overlay::SelectionBar => return None,
             Overlay::Palette => Message::Ui(UiMessage::ClosePalette),
-            Overlay::ConfirmQuit => Message::Ui(UiMessage::CancelQuit),
+            Overlay::ConfirmQuit => Message::ProjectIo(ProjectIoMessage::CancelQuit),
             Overlay::ConfirmProjectSwitch => {
                 Message::ProjectIo(ProjectIoMessage::SwitchChoice(SwitchChoice::Cancel))
             }
