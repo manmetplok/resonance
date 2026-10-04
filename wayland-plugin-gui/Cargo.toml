@@ -27,7 +27,7 @@ wayland-egl = "0.32"
 
 # EGL + OpenGL for rendering.
 khronos-egl = { version = "6", features = ["dynamic"] }
-glow = "0.17"
+glow.workspace = true
 
 # egui's glow painter. egui_glow's default features pull in egui-winit which we
 # don't want, so we disable them and wire glow manually.

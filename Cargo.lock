@@ -4685,15 +4685,15 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 name = "resonance-amp"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "clack-extensions",
  "clack-host",
  "clack-plugin",
  "criterion",
  "dirs",
+ "getrandom 0.4.3",
  "parking_lot",
  "plugin-gui-core",
- "rand 0.10.3",
  "resonance-amp",
  "resonance-common",
  "resonance-dsp",
@@ -4714,7 +4714,7 @@ dependencies = [
 name = "resonance-app"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "crossbeam-channel",
  "dirs",
  "hound",
@@ -4745,7 +4745,7 @@ version = "0.1.0"
 dependencies = [
  "alsa-sys",
  "arc-swap",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytemuck",
  "clap-sys",
  "cpal",
@@ -5019,7 +5019,7 @@ dependencies = [
 name = "resonance-plugin"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "clack-extensions",
  "clack-host",
  "clack-plugin",
@@ -5090,7 +5090,7 @@ dependencies = [
 name = "resonance-wavetable"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "clack-extensions",
  "clack-host",
  "clack-plugin",

@@ -16,13 +16,13 @@ resonance-music-theory = { path = "../resonance-music-theory" }
 resonance-plugin = { path = "../resonance-plugin" }
 resonance-svs = { path = "../resonance-svs" }
 iced = { workspace = true, features = ["canvas", "wgpu", "tokio", "lazy", "advanced"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 rfd.workspace = true
 crossbeam-channel.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
-base64 = "0.22"
+base64.workspace = true
 printpdf = { version = "0.12", default-features = false }
 time = { workspace = true, features = ["formatting", "parsing"] }
 # Subscriber installed in `main.rs` only (ARCH-05 A5-1).

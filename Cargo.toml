@@ -39,6 +39,25 @@ schemars = "1"
 # the dependency tree small (no plotters/gnuplot HTML report generation).
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
+# DEP-09 (code-review-2026-10-02): versions pinned per crate instead of
+# here caused avoidable duplicate copies in the lock file (base64 0.22
+# vs. the 0.23 ureq/rmcp already pull in; two libc tables in
+# resonance-audio alone). Moved here so a crate that needs extra
+# features adds them with `features = [...]` on top of this entry
+# rather than repeating (and risking drifting) the base version.
+base64 = "0.23"
+glow = "0.17"
+# Must track clack's own clap-sys version (resonance-plugin's CLAP ABI
+# bridge and clack both talk to the same C headers).
+clap-sys = "0.5"
+tokio = "1"
+anyhow = "1"
+libc = "0.2"
+libloading = "0.8"
+sha2 = "0.10"
+ureq = { version = "3", features = ["json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [profile.release]
 lto = "thin"
 # CLAP plugins ship as cdylibs that the host loads via dlopen. Setting

@@ -62,14 +62,14 @@ ort = { version = "=2.0.0-rc.12", default-features = false, features = [
     "std", "ndarray", "tracing", "download-binaries", "copy-dylibs", "api-24", "tls-rustls",
 ] }
 ndarray = "0.17"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde.workspace = true
+serde_json.workspace = true
 serde_yaml_ng = "0.10"
 hound.workspace = true
 clap = { version = "4.5", features = ["derive"], optional = true }
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["fmt"], optional = true }
 regex = "1"
 resonance-music-theory = { path = "../resonance-music-theory" }
 
