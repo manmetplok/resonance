@@ -14,7 +14,6 @@ use resonance_drums::drum_map::{self, PAD_MAPPINGS};
 use resonance_drums::dsp::{DrumSampler, PortBuffers};
 use resonance_drums::kit::{LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, NUM_OUTPUT_PORTS};
 use resonance_drums::params::DrumParams;
-use resonance_plugin::Param;
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 256;

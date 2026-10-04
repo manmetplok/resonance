@@ -12,8 +12,11 @@ mod shared_state;
 
 pub use audio_engine::{AudioEngine, EngineOptions, EngineSendError};
 #[doc(hidden)]
+#[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
 pub use audio_engine::__reset_engine_disconnect_latch_for_test;
-pub use recording_ring::{recording_ring_len, RECORDING_RING_SECONDS};
+pub use recording_ring::recording_ring_len;
+#[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
+pub use recording_ring::RECORDING_RING_SECONDS;
 pub(crate) use retire::rcu_tempo;
 pub use shared_state::SharedState;
 

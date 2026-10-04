@@ -52,6 +52,7 @@ fn clip_on(asset_id: u64) -> ClipState {
         waveform_peaks: Vec::new(),
         vocal_tuning: None,
         asset_ref: Some(AssetRef::new(asset_id)),
+        warp: Default::default(),
     }
 }
 
