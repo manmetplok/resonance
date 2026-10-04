@@ -80,7 +80,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 4 | A1a architecture (small) | ARCH2-01, -03, -04, -07, -08, -09, -10, -11, ARCH2-12 (rename only) | opus | merged | 7a1f4f97 |
 | 5 | A1b architecture refactors | ARCH2-02, ARCH2-05, ARCH2-12 (splits) | fable | merged | 2b41b974 |
 | 6 | W1 MIDI learn UI | FU-A1a1: EnterMidiLearn/CancelMidiLearn/ClearMidiBinding/ClearAllMidiBindings, SetControllerMap, SetControlSurfaceInput | opus | running | |
-| 6 | W2 clip warp UI | FU-A1a1: SetClipWarp, SetClipWarpMarkers, DetectClipTempo | opus | running | |
+| 6 | W2 clip warp UI | FU-A1a1: SetClipWarp, SetClipWarpMarkers, DetectClipTempo | opus | merged | de2625d3 |
 | 6 | W3 loop-record mode + I/O latency | FU-A1a1: SetLoopRecordMode, QueryIoLatency | sonnet | running | |
 | 6 | W4 freeze auto-stale, pool remove/relink, delete dead helpers | FU-A1a3 | opus | running | |
 
@@ -217,6 +217,11 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
   - LAME linking: decided together with distribution, still open.
   - FU-A1a1: wire everything into the UI (W1–W3).
   - FU-A1a3: wire freeze auto-stale and pool remove/relink, and delete the remaining test-only helpers (W4).
+- **FU-W2a (important):** warp is stored, shown, saved, undoable and scriptable, but no render or bounce path reads it. `TimeStretch` (WSOLA/PV) is only called from unit tests. Build the warp render path live and in bounce, including clip-length consequences (fades, trim, split, bounce length). Then remove the "playback does not stretch yet" caption and the MCP caveats. Also reconcile how the no-marker mapping handles trim.
+- **FU-W2b:** `DetectClipTempo` runs on the engine control thread over the whole source. Move it to a worker.
+- **FU-W2c:** `song.tracks` doesn't report warp state.
+- **FU-W2d:** `hit_test.rs::clip_handles` assumes fades are 0, so a fade handle can only be grabbed at the clip's corners.
+- **FU-W2e:** the warp marker strip shadows the trim handle at the bottom corners.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
