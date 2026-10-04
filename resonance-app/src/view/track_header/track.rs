@@ -14,11 +14,13 @@ use iced::{alignment, Color, Element, Length};
 use crate::message::*;
 use crate::state::{self, TrackState};
 use crate::theme::{self, fa};
+use crate::commands::CommandId;
 use crate::view::controls::{
     delete_button, freeze_button, monitor_button, monitor_button_locked, mute_button,
     record_arm_button, record_arm_button_locked, solo_button,
 };
 use crate::view::freeze_banner::freeze_banner;
+use crate::view::shortcut_hint;
 use crate::util::short;
 use crate::Resonance;
 
@@ -65,11 +67,18 @@ pub(crate) fn view_track_header(
     });
 
     // ---- Name (top) + kind (bottom) ----
-    let name = text(track.name.clone())
+    // Ellipsised with `util::short` rather than hard-clipped mid-glyph,
+    // and tooltipped with the full name when it was actually truncated
+    // (code review UX-18 — the snapshots showed "Drums Bour" and
+    // "Resonance Wa" with no way to see the rest).
+    let name_shown = short(&track.name, theme::TRACK_HEADER_NAME_CHARS);
+    let name_text = text(name_shown.clone())
         .size(13)
         .font(theme::UI_FONT_MEDIUM)
         .color(theme::TEXT_1)
         .wrapping(iced::widget::text::Wrapping::None);
+    let name: Element<'static, Message> =
+        crate::view::controls::ellipsis_tooltip(name_text, &name_shown, &track.name);
     let kind_str = kind_label_for_track(track);
     let kind = text(kind_str)
         .size(10)
@@ -96,25 +105,51 @@ pub(crate) fn view_track_header(
     // use. Mute + solo stay live on a frozen track (you still mix it); arm +
     // monitor lock — a frozen track has no live input to arm or monitor,
     // so they dim to the read-only style with no `on_press`.
-    let (arm_btn, monitor_btn) = if frozen {
-        (record_arm_button_locked(12), monitor_button_locked(12))
+    // Every mini-button names its command + chord on hover
+    // (`shortcut_hint::with_hint`, code review UX-08) — none of them
+    // explained itself before. The hint names the registry's
+    // selection-scoped command even though the button itself always acts
+    // on *this* row's track; that's the same command the row's own
+    // selection would run, and it's still the one informative chord to
+    // show. Record-arm is unchanged (ARCH keeps no palette command for it
+    // yet — `ToggleArmSelected` exists but the arm button has carried no
+    // hint historically either; see FU-U3a).
+    let (arm_btn, monitor_btn): (Element<'static, Message>, Element<'static, Message>) = if frozen
+    {
+        (record_arm_button_locked(12).into(), monitor_button_locked(12).into())
     } else {
         (
-            record_arm_button(track.record_armed, track.id, 12),
-            monitor_button(track.monitor_enabled, track.id, 12),
+            record_arm_button(track.record_armed, track.id, 12).into(),
+            shortcut_hint::with_hint(
+                r,
+                monitor_button(track.monitor_enabled, track.id, 12),
+                CommandId::ToggleMonitorSelected,
+            ),
         )
     };
     let buttons = row![
-        freeze_button(frozen, track.id, 12),
-        mute_button(
-            track.muted,
-            Message::Track(TrackMessage::ToggleMute(track.id)),
-            12,
+        shortcut_hint::with_hint(
+            r,
+            freeze_button(frozen, track.id, 12),
+            CommandId::FreezeSelectedTracks,
         ),
-        solo_button(
-            track.soloed,
-            Message::Track(TrackMessage::ToggleSolo(track.id)),
-            12,
+        shortcut_hint::with_hint(
+            r,
+            mute_button(
+                track.muted,
+                Message::Track(TrackMessage::ToggleMute(track.id)),
+                12,
+            ),
+            CommandId::ToggleMuteSelected,
+        ),
+        shortcut_hint::with_hint(
+            r,
+            solo_button(
+                track.soloed,
+                Message::Track(TrackMessage::ToggleSolo(track.id)),
+                12,
+            ),
+            CommandId::ToggleSoloSelected,
         ),
         arm_btn,
         monitor_btn,
@@ -123,9 +158,13 @@ pub(crate) fn view_track_header(
     .align_y(alignment::Vertical::Center);
 
     // ---- Top-right delete (tiny, hugs the corner) ----
-    let del = delete_button(
-        Message::Track(TrackMessage::RequestRemoveTrack(track.id)),
-        11,
+    let del = shortcut_hint::with_hint(
+        r,
+        delete_button(
+            Message::Track(TrackMessage::RequestRemoveTrack(track.id)),
+            11,
+        ),
+        CommandId::DeleteSelectedTrack,
     );
 
     // Top of the cell: name + kind, with delete in the corner.
@@ -418,7 +457,7 @@ pub(crate) fn view_track_header(
 fn frozen_pill() -> Element<'static, Message> {
     container(
         text("FROZEN")
-            .size(8)
+            .size(9)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::FROST_ICON)
             .wrapping(iced::widget::text::Wrapping::None),

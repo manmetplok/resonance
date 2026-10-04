@@ -208,12 +208,15 @@ fn build_global_lane_label_with(
     let name_col = column![name_el, sub_el].spacing(1);
 
     // Mini M / Lock control cluster — placeholders for parity with the
-    // design. Wired to no-ops via a `small_button_style` ghost.
+    // design. Wired to no-ops via a `small_button_style` ghost. The
+    // letters themselves name a feature (Mute / Lock) rather than
+    // reflecting a disabled state, so they carry `TEXT_3`, not the
+    // disabled-only `TEXT_4` (code review UX-07).
     let m_btn = button(
         text("M")
             .size(9)
             .font(theme::MONO_FONT)
-            .color(theme::TEXT_4),
+            .color(theme::TEXT_3),
     )
     .style(|_theme, status| theme::small_button_style(status))
     .padding([0, 3])
@@ -223,7 +226,7 @@ fn build_global_lane_label_with(
         text("L")
             .size(9)
             .font(theme::MONO_FONT)
-            .color(theme::TEXT_4),
+            .color(theme::TEXT_3),
     )
     .style(|_theme, status| theme::small_button_style(status))
     .padding([0, 3])

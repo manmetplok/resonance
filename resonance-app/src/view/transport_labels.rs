@@ -13,7 +13,7 @@
 //! view layer (`view::transport`) only reads it — `refresh` is never
 //! called from `view()`.
 //!
-//! See `.claude/skills/ui-work.md` §11 for the broader view-perf rules.
+//! See `ux-guidelines.md` → "View Performance" for the broader view-perf rules.
 
 use crate::Resonance;
 use resonance_music_theory::{Mode, PitchClass};

@@ -13,7 +13,6 @@ use resonance_audio::types::TrackId;
 
 use crate::message::*;
 use crate::theme::{self, fa};
-use crate::util::format_db;
 
 /// Build a small icon button with the icon centered in a fixed-size
 /// square. `size` is the icon glyph size in px; the button is sized at
@@ -70,9 +69,11 @@ pub fn record_arm_button_locked<'a>(size: u16) -> iced::widget::Button<'a, Messa
 }
 
 /// Locked input-monitor button for a frozen track. Mirrors
-/// [`record_arm_button_locked`]: dimmed to `TEXT_4`, no `on_press`.
+/// [`record_arm_button_locked`]: dimmed to `TEXT_4`, no `on_press`. Same
+/// ear glyph as the live [`monitor_button`] (UX-08) so a frozen track's
+/// mini-button row still reads as "this is the monitor slot", just inert.
 pub fn monitor_button_locked<'a>(size: u16) -> iced::widget::Button<'a, Message> {
-    button(icon_button(fa::EYE, theme::TEXT_4, size))
+    button(icon_button(fa::EAR_LISTEN, theme::TEXT_4, size))
         .style(|_theme, status| theme::small_button_style(status))
         .padding(0)
 }
@@ -94,7 +95,12 @@ pub fn freeze_button<'a>(
     let color = if frozen { theme::FROST_ICON } else { theme::TEXT_3 };
     button(icon_button(fa::SNOWFLAKE, color, size))
         .on_press(freeze_toggle_message(frozen, track_id))
-        .style(|_theme, status| theme::small_button_style(status))
+        // Filled background + border when frozen — the frost treatment's
+        // own tint, not the glyph-color-only state the other mini-buttons
+        // used to rely on (code review UX-08).
+        .style(move |_theme, status| {
+            theme::toggle_button_style(frozen, theme::FROST_ICON, true, status)
+        })
         .padding(0)
 }
 
@@ -110,7 +116,9 @@ pub fn freeze_toggle_message(frozen: bool, track_id: TrackId) -> Message {
     }
 }
 
-/// Mute toggle button (speaker-with-X — accent when muted).
+/// Mute toggle button (speaker-with-X — filled `BAD` background + border
+/// when muted, not just a tinted glyph: state must never rely on color
+/// alone, code review UX-08).
 pub fn mute_button<'a>(
     muted: bool,
     on_press: Message,
@@ -119,11 +127,12 @@ pub fn mute_button<'a>(
     let color = if muted { theme::BAD } else { theme::TEXT_3 };
     button(icon_button(fa::VOLUME_XMARK, color, size))
         .on_press(on_press)
-        .style(|_theme, status| theme::small_button_style(status))
+        .style(move |_theme, status| theme::toggle_button_style(muted, theme::BAD, true, status))
         .padding(0)
 }
 
-/// Solo toggle button (headphones — yellow when soloed).
+/// Solo toggle button (headphones — filled `WARM` background + border
+/// when soloed, same reasoning as [`mute_button`], UX-08).
 pub fn solo_button<'a>(
     soloed: bool,
     on_press: Message,
@@ -132,7 +141,7 @@ pub fn solo_button<'a>(
     let color = if soloed { theme::WARM } else { theme::TEXT_3 };
     button(icon_button(fa::HEADPHONES, color, size))
         .on_press(on_press)
-        .style(|_theme, status| theme::small_button_style(status))
+        .style(move |_theme, status| theme::toggle_button_style(soloed, theme::WARM, true, status))
         .padding(0)
 }
 
@@ -143,7 +152,7 @@ pub fn solo_button<'a>(
 pub fn via_group_solo_chip<'a>() -> Element<'a, Message> {
     container(
         text("S·grp")
-            .size(8)
+            .size(9)
             .font(theme::MONO_FONT)
             .color(theme::WARM),
     )
@@ -171,7 +180,7 @@ pub fn via_group_solo_chip<'a>() -> Element<'a, Message> {
 pub fn via_group_mute_chip<'a>() -> Element<'a, Message> {
     container(
         text("M·grp")
-            .size(8)
+            .size(9)
             .font(theme::MONO_FONT)
             .color(theme::BAD),
     )
@@ -192,14 +201,16 @@ pub fn via_group_mute_chip<'a>() -> Element<'a, Message> {
     .into()
 }
 
-/// Input-monitor toggle button (eye — green when monitoring).
+/// Input-monitor toggle button (an actively-listening ear, not an eye —
+/// "show/hide" was never what this meant, code review UX-08 — filled
+/// `GOOD` background + border when monitoring).
 pub fn monitor_button<'a>(
     enabled: bool,
     track_id: TrackId,
     size: u16,
 ) -> iced::widget::Button<'a, Message> {
     let color = if enabled { theme::GOOD } else { theme::TEXT_3 };
-    button(icon_button(fa::EYE, color, size))
+    button(icon_button(fa::EAR_LISTEN, color, size))
         .on_press(Message::Track(TrackMessage::ToggleMonitor(track_id)))
         .style(move |_theme, status| {
             theme::toggle_button_style(enabled, theme::GOOD, true, status)
@@ -240,6 +251,38 @@ pub fn collapse_caret<'a>(expanded: bool) -> Element<'a, Message> {
     .align_x(alignment::Horizontal::Center)
     .align_y(alignment::Vertical::Center)
     .into()
+}
+
+/// Wrap `content` (an already-ellipsised label) in a tooltip naming
+/// `full_text`, but only when `shown` is actually a truncation of it —
+/// an untruncated name gets no pointless tooltip. Same plain-tooltip
+/// convention `remote_indicator::view` uses (a `BG_3`/`LINE_2` card,
+/// `TEXT_1` text) rather than `shortcut_hint::with_hint`'s command-chord
+/// styling, since there's no command here. Shared by the Arrange track
+/// header and the mixer strip head (code review UX-18).
+pub fn ellipsis_tooltip<'a>(
+    content: impl Into<Element<'a, Message>>,
+    shown: &str,
+    full_text: &str,
+) -> Element<'a, Message> {
+    let content = content.into();
+    if shown == full_text {
+        return content;
+    }
+    let tip = container(text(full_text.to_string()).size(11).color(theme::TEXT_1))
+        .padding(8)
+        .style(|_theme: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_3)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 1.0,
+                radius: theme::RADIUS_SM.into(),
+            },
+            ..Default::default()
+        });
+    iced::widget::tooltip(content, tip, iced::widget::tooltip::Position::Bottom)
+        .gap(4)
+        .into()
 }
 
 /// Convert linear amplitude to meter bar height (logarithmic/dB scale).
@@ -354,23 +397,25 @@ pub fn fader_section<'a, F>(
 where
     F: 'a + Fn(f32) -> Message,
 {
-    let mut fader = vertical_slider(-60.0..=6.0f32, volume_db, on_change)
+    // `.default(0.0)` resets to unity gain on a ctrl/cmd-click (iced 0.14's
+    // vertical_slider has no separate double-click-reset gesture — this is
+    // its reset binding); `.shift_step` gives a finer 0.01 dB step while
+    // shift is held, matching the knob's shift-for-fine pattern
+    // (ux-guidelines.md → Faders, code review UX-09).
+    let fader = vertical_slider(-60.0..=6.0f32, volume_db, on_change)
         .height(theme::FADER_HEIGHT)
-        .step(0.1);
-    if automated.is_some() {
-        fader = fader.style(|theme: &iced::Theme, status| {
-            let mut s = iced::widget::slider::default(theme, status);
-            s.rail.backgrounds.0 = theme::WARM.into();
-            s.handle.background = theme::WARM.into();
-            s
-        });
-    }
+        .step(0.1)
+        .shift_step(0.01)
+        .default(0.0)
+        .style(theme::fader_style(automated.is_some()));
     let meters = meter_v(level_l, level_r, theme::FADER_HEIGHT);
     let (label_db, label_color) = match automated {
         Some(a) => (a, theme::WARM),
         None => (volume_db, theme::TEXT_DIM),
     };
-    let label = text(format_db(label_db))
+    // Faders drop the " dB" unit (the fader rail already reads as a dB
+    // scale) but keep the sign (UX-17).
+    let label = text(crate::util::format_db_signed(label_db, false))
         .size(9)
         .font(Font::MONOSPACE)
         .color(label_color);

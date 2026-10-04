@@ -35,8 +35,8 @@ All colors are defined in `resonance-app/src/theme.rs` as canonical tokens. Do n
 | `LINE_2` | `#1f2229` | Subtle inner hairlines, beat lines, track-row separators |
 | `TEXT_1` | `#e8e7e3` | Primary text |
 | `TEXT_2` | `#9aa0ac` | Secondary text, summary chrome, lane labels |
-| `TEXT_3` | `#5d626d` | Tertiary / faint labels |
-| `TEXT_4` | `#3f434c` | Disabled |
+| `TEXT_3` | `#8a909b` | Tertiary / faint labels — informational, not disabled; ≥4.5:1 on `BG_2` (code review UX-07) |
+| `TEXT_4` | `#3f434c` | Disabled only — never for text that carries information (use `TEXT_3`) |
 
 ### Accent and semantic colors
 
@@ -50,6 +50,8 @@ All colors are defined in `resonance-app/src/theme.rs` as canonical tokens. Do n
 | `WARM_LINE` | `#e8c47b` @ 34% | Bus-strip outlines |
 | `GOOD` | `#6dd6a3` | Mint — meters, metronome on, success |
 | `BAD` | `#e87b8b` | Soft pink — mute, peaking, record arm, error |
+| `ON_ACCENT_TEXT` | `#0e0a1f` | Near-black text painted on a bright accent/semantic fill (primary button label, an active toggle's glyph) — pure black reads harsh on a saturated fill |
+| `INSTRUMENT_TINT` | `#4dbfcc` | Cyan/teal — marks a "software instrument" affordance (add-track menu) |
 
 ### Color Rules
 
@@ -68,7 +70,7 @@ Every track carries its own persisted identity colour (`TrackState::color`), sho
 
 - **UI text**: System default sans-serif via Iced's default font.
 - **Icons**: Font Awesome Solid via the bundled "Resonance Icons" font (`theme::ICON_FONT`). Custom glyphs exist for metronome, mono/stereo indicators.
-- **Sizing**: Use Iced's default text size as the baseline. Section headers may go 2-4px larger. Never go below 11px equivalent.
+- **Sizing**: Use Iced's default text size as the baseline. Section headers may go 2-4px larger. The real floor is **9px**, not 11px — compact chrome (strip chips, status badges, meter labels) legitimately runs at 9 or 10px, and an arch-invariants test (`view_text_never_shrinks_below_the_9px_floor`) enforces it by rejecting `.size(8)` outside a short glyph/dot allow-list (code review UX-07). Below 9px, legible text stops being legible; a dot or caret *glyph* (not text) may still run smaller since it's read as a shape, not read as words.
 - **Shaping**: Use `Shaping::Basic` for icon text.
 
 ## Layout Constants
@@ -183,7 +185,7 @@ Collapsible surfaces and their state homes:
 - The whole header row is the click target (not just the caret) and gets a hover state (`small_button_style` or equivalent).
 - Action rows (Generate buttons, group-selector tabs, the editing-context header) are navigation, not content — they don't collapse.
 - The collapsed branch should skip *building* the body, not merely hide it.
-- Performance: a live (audio-tick) readout must never sit inside an `iced::widget::lazy` region whose fingerprint omits it — every mixer strip builds its fader/meter block outside the strip's lazy body, and collapse flags are hashed into the lazy fingerprint.
+- Performance: see "View Performance" below — in particular, a live (audio-tick) readout must never sit inside an `iced::widget::lazy` region whose fingerprint omits it.
 
 ## Controls
 
@@ -260,6 +262,42 @@ Plugin UIs use egui via `wayland-plugin-gui`. They should feel consistent with t
 - Tab-based layout for multi-section editors (OSC, ENV, FLT, LFO, MOD, FX).
 - Parameter sliders should match the drag-to-adjust, shift-for-fine pattern.
 - Visualization panels (oscilloscope, filter response, envelope shapes) go in a `viz/` submodule.
+
+## View Performance
+
+Iced owns the diffing, but a view function that does real work on every
+call still costs real time — especially during playback, where the fast
+tick rebuilds the view every `TICK_INTERVAL_MS` (16ms). These rules used to
+live only in a plugin-development skill file (`.claude/skills/ui-work.md`
+§11) that no longer exists; the rules themselves are unchanged and still
+apply to every view in `resonance-app/src/view/` (code review UX-23).
+
+1. **Cache `pick_list` options.** Rebuilding a `Vec` of option labels from a
+   lookup on every call — even when nothing changed — is real, repeated
+   cost once it sits inside a lane header or a per-strip inspector. Build
+   the list once and cache it (`UiViewCaches` / `view_caches`), keyed on
+   whatever actually invalidates it (a plugin list revision, a preset
+   list, ...), not rebuilt from scratch in the view function.
+2. **`lazy`-wrap non-live regions.** Any region whose content doesn't
+   change on a live audio tick — the compose right rail, non-playhead
+   lane headers, a closed panel's body — belongs in `iced::widget::lazy`,
+   fingerprinted on the state that actually changes it (definition
+   revision, selection, the collapsed set, ...).
+3. **Canvas for live visuals.** A meter, waveform, or anything else that
+   redraws continuously belongs in a `Canvas` with its own `canvas::Cache`
+   (see `controls::meter_v`'s `StereoMeterCanvas`), not a stack of regular
+   widgets torn down and rebuilt every tick.
+4. **Keep the tree shape stable.** A region that comes and goes (an error
+   banner, an optional panel) shifts every later sibling's child index
+   when it appears or disappears, and iced treats that as a subtree
+   rebuild — scroll offsets, canvas key focus, and in-progress drags are
+   lost. Always render the slot, even at zero height, rather than
+   conditionally omitting it (`view_status_area`, code review UX-05).
+   The same rule run in reverse is why a **live (audio-tick) readout must
+   never sit inside a `lazy` region whose fingerprint omits it** — every
+   mixer strip builds its fader/meter block outside the strip's lazy
+   body, and collapse flags are hashed into the lazy fingerprint, so a
+   live value can't get stuck showing a stale cached frame.
 
 ## Accessibility
 

@@ -272,7 +272,7 @@ fn stepper_button<'a>(glyph: &'static str, on_press: Option<Message>) -> Element
 fn fill_badge<'a>() -> Element<'a, Message> {
     let caret = theme::icon(theme::fa::CARET_RIGHT).size(8).color(theme::WARM);
     let label = text("FILL")
-        .size(8)
+        .size(9)
         .font(theme::UI_FONT_SEMIBOLD)
         .color(theme::WARM);
     container(

@@ -166,7 +166,7 @@ fn section_chip<'a>(
     let editing_pill: Element<'a, Message> = if active {
         container(
             text("EDITING")
-                .size(8)
+                .size(9)
                 .font(theme::UI_FONT_SEMIBOLD)
                 .color(theme::ACCENT_SOFT),
         )

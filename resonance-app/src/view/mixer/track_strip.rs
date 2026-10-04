@@ -13,6 +13,7 @@ use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{alignment, Element, Length};
 use resonance_audio::types::*;
 
+use crate::commands::CommandId;
 use crate::message::*;
 use crate::state::*;
 use crate::theme::{self, fa};
@@ -20,6 +21,7 @@ use crate::view::controls::{
     fader_section, meter_v, monitor_button, mute_button, record_arm_button, solo_button,
 };
 use crate::view::knob::pan_knob;
+use crate::view::shortcut_hint;
 
 use super::strip_parts::InstrumentSlot;
 
@@ -273,18 +275,30 @@ impl crate::Resonance {
         // ---- One button row: M / S / ● / 🎧 ----
         let button_row: Element<'static, Message> = container(
             row![
-                mute_button(
-                    track.muted,
-                    Message::Track(TrackMessage::ToggleMute(track.id)),
-                    12
+                shortcut_hint::with_hint(
+                    self,
+                    mute_button(
+                        track.muted,
+                        Message::Track(TrackMessage::ToggleMute(track.id)),
+                        12
+                    ),
+                    CommandId::ToggleMuteSelected,
                 ),
-                solo_button(
-                    track.soloed,
-                    Message::Track(TrackMessage::ToggleSolo(track.id)),
-                    12
+                shortcut_hint::with_hint(
+                    self,
+                    solo_button(
+                        track.soloed,
+                        Message::Track(TrackMessage::ToggleSolo(track.id)),
+                        12
+                    ),
+                    CommandId::ToggleSoloSelected,
                 ),
                 record_arm_button(track.record_armed, track.id, 12),
-                monitor_button(track.monitor_enabled, track.id, 12),
+                shortcut_hint::with_hint(
+                    self,
+                    monitor_button(track.monitor_enabled, track.id, 12),
+                    CommandId::ToggleMonitorSelected,
+                ),
             ]
             .spacing(6)
             .align_y(alignment::Vertical::Center),
@@ -359,14 +373,19 @@ impl crate::Resonance {
         }
         // Truncate first, then clip in a width-Fill container:
         // `Wrapping::None` alone isn't enough when the parent has a
-        // finite width.
-        let name = container(
-            text(crate::util::short(&track.name, STRIP_NAME_CHARS))
-                .size(12)
-                .font(theme::UI_FONT_MEDIUM)
-                .color(theme::TEXT)
-                .wrapping(iced::widget::text::Wrapping::None),
-        )
+        // finite width. Tooltipped with the full name when truncated
+        // (code review UX-18).
+        let name_shown = crate::util::short(&track.name, STRIP_NAME_CHARS);
+        let name_text = text(name_shown.clone())
+            .size(12)
+            .font(theme::UI_FONT_MEDIUM)
+            .color(theme::TEXT)
+            .wrapping(iced::widget::text::Wrapping::None);
+        let name = container(crate::view::controls::ellipsis_tooltip(
+            name_text,
+            &name_shown,
+            &track.name,
+        ))
         .width(Length::Fill)
         .clip(true);
         // The name's own mouse area takes the press (it has to, to see a
@@ -672,7 +691,7 @@ fn sub_channel_strip_body(
 fn ext_pill() -> Element<'static, Message> {
     container(
         text("Ext")
-            .size(8)
+            .size(9)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::ACCENT_SOFT),
     )
@@ -695,7 +714,7 @@ fn ext_pill() -> Element<'static, Message> {
 fn offline_flag() -> Element<'static, Message> {
     container(
         text("offline")
-            .size(8)
+            .size(9)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::BAD),
     )
@@ -792,7 +811,7 @@ fn strip_chip(
     let mut inner = row![
         container(
             text(key)
-                .size(8)
+                .size(9)
                 .font(theme::UI_FONT_SEMIBOLD)
                 .color(theme::TEXT_3),
         )

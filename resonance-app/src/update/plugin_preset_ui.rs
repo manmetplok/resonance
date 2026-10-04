@@ -12,7 +12,7 @@
 //! plain recorded loads.
 //!
 //! Every list is recomputed here, on a query change or a star, never in
-//! `view` (ui-work.md §11).
+//! `view` (ux-guidelines.md → "View Performance").
 
 use iced::Task;
 use resonance_audio::types::{AudioCommand, PluginInstanceId};

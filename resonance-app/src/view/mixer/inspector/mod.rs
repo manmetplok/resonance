@@ -28,7 +28,7 @@
 //! Nothing the inspector draws is live per-tick state (the SIGNAL tiles
 //! that read the meters were dropped — the strip already shows them), so
 //! every body below its title sits in one `lazy` region keyed on a
-//! fingerprint of everything it reads (ui-work.md §11).
+//! fingerprint of everything it reads (ux-guidelines.md → "View Performance").
 
 mod automation;
 mod bus;

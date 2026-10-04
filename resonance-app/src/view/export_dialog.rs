@@ -49,7 +49,7 @@ pub(crate) fn view_export_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
             text(label)
                 .size(13)
                 .font(theme::UI_FONT_SEMIBOLD)
-                .color(if selected { iced::Color::WHITE } else { theme::TEXT_2 }),
+                .color(if selected { theme::TEXT_1 } else { theme::TEXT_2 }),
         )
         .padding([6, 16])
         .style(move |_t, status| {

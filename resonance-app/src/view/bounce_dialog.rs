@@ -101,7 +101,7 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
         // no disabled/selected variant.
         let toggle_btn = |label: &'static str, selected: bool, on_press: Option<Message>| {
             let mut b = button(text(label).size(12).color(if selected {
-                iced::Color::WHITE
+                theme::TEXT_1
             } else {
                 theme::TEXT
             }))
@@ -110,9 +110,7 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
                 let mut s = theme::transport_button_style(status);
                 if selected {
                     s.border.color = theme::ACCENT;
-                    s.background = Some(iced::Background::Color(iced::Color::from_rgb(
-                        0.2, 0.2, 0.2,
-                    )));
+                    s.background = Some(iced::Background::Color(theme::ACCENT_DIM));
                 }
                 s
             });

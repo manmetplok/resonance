@@ -279,7 +279,7 @@ fn filter_field<'a>(r: &'a Resonance) -> Element<'a, Message> {
 /// audition transport below the tab is live (its playhead moves every
 /// tick), and without the cache every tick rebuilt one row per file —
 /// display name, duration and lower-cased filter strings included
-/// (ui-work.md §11, review VIEW-27). The scrollable stays outside the lazy
+/// (ux-guidelines.md → "View Performance", review VIEW-27). The scrollable stays outside the lazy
 /// region so its scroll position is never tied to the cache.
 fn folder_listing<'a>(r: &'a Resonance) -> Element<'a, Message> {
     if r.media.browser.scanning {

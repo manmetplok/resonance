@@ -204,7 +204,7 @@ pub(super) fn field2(
     if offline {
         label_row = label_row
             .push(Space::new().width(6))
-            .push(text("offline").size(8).color(theme::BAD));
+            .push(text("offline").size(9).color(theme::BAD));
     }
     column![
         label_row,
@@ -345,7 +345,7 @@ pub(super) fn preset_hint_chip(selected_label: Option<String>) -> Element<'stati
     };
     container(
         text(label)
-            .size(8)
+            .size(9)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(text_color),
     )

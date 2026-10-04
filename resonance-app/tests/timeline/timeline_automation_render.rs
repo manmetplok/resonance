@@ -146,10 +146,15 @@ fn lane_pick_order_prefers_gain_then_pan_then_mute_then_params() {
 
 #[test]
 fn live_readout_formats_per_target_kind() {
-    // Gain → signed dB.
+    // Gain → signed dB (util::format_db_signed, UX-17).
     assert_eq!(
         format_real_value(AutomationTarget::TrackGain(1), -6.0),
         "-6.0 dB"
+    );
+    // Gain at the floor reads as the signed-infinity symbol, not "-60.0".
+    assert_eq!(
+        format_real_value(AutomationTarget::TrackGain(1), -60.0),
+        "\u{2212}\u{221e} dB"
     );
     // Pan → centre / left / right.
     assert_eq!(format_real_value(AutomationTarget::TrackPan(1), 0.0), "C");

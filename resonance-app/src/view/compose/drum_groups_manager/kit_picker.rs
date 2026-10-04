@@ -211,7 +211,7 @@ fn pad_row<'a>(
     let toggle = container(
         text(toggle_label.to_string())
             .size(11)
-            .color(if in_active { Color::BLACK } else { theme::TEXT_3 })
+            .color(if in_active { theme::ON_ACCENT_TEXT } else { theme::TEXT_3 })
             .align_x(alignment::Horizontal::Center),
     )
     .padding(0)

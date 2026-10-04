@@ -8,7 +8,7 @@
 //! the codebase keeps compiling while it migrates piece by piece.
 use iced::font::{Family, Weight};
 use iced::widget::text::{Shaping, Text};
-use iced::widget::{button, container, text, text_input, Container, Row};
+use iced::widget::{button, container, slider, text, text_input, Container, Row};
 use iced::{Color, Font, Theme};
 
 /// Raw bytes of the bundled Font Awesome Solid font, extended with a custom
@@ -147,8 +147,14 @@ pub mod fa {
     /// fa-solid-900.otf rather than assumed — a missing codepoint renders
     /// as tofu and no test would catch it.
     pub const POWER_OFF: char = '\u{f011}';
-    /// Eye — used for the input-monitor toggle.
+    /// Eye — view-navigation chrome and visibility toggles (e.g. the
+    /// reference panel's show/hide). No longer the input-monitor glyph;
+    /// see `EAR_LISTEN`.
     pub const EYE: char = '\u{f06e}';
+    /// Ear actively listening — the input-monitor toggle (code review
+    /// UX-08: the eye glyph read as show/hide rather than "listening to
+    /// the live input"). Verified present in the bundled fa-solid-900.otf.
+    pub const EAR_LISTEN: char = '\u{f2a2}';
     /// Trash can — used for the track delete button.
     pub const TRASH: char = '\u{f1f8}';
     /// Caret pointing right — collapsed indicator.
@@ -164,8 +170,21 @@ pub mod fa {
     /// Filled circle with an "i" — hover-tooltip info marker.
     pub const CIRCLE_INFO: char = '\u{f05a}';
     /// Counter-clockwise rotating arrow — used for "regenerate / reroll"
-    /// affordances next to a primary Generate button.
+    /// affordances next to a primary Generate button, and for Undo in the
+    /// command palette (pairs with `ARROW_ROTATE_RIGHT`'s Redo so the two
+    /// rows read as distinct, code review UX-20).
     pub const ARROW_ROTATE_LEFT: char = '\u{f0e2}';
+    /// Clockwise rotating arrow — Redo in the command palette. Verified
+    /// present in the bundled fa-solid-900.otf (code review UX-20).
+    pub const ARROW_ROTATE_RIGHT: char = '\u{f01e}';
+    /// Repeat/loop glyph — the command palette's generic "this is a loop
+    /// or cycle command" icon (loop toggle, loop-at-playhead, loop
+    /// selection), distinct from Undo/Redo's directional rotate arrows.
+    /// Verified present in the bundled fa-solid-900.otf at U+1F501 (code
+    /// review UX-20 — loop commands previously shared `ARROW_ROTATE_LEFT`
+    /// with Undo, and `LoopSelection` fell through to the Transport
+    /// category's clock glyph).
+    pub const REPEAT: char = '\u{1f501}';
     /// Snowflake — used for the track-header Freeze (bounce-in-place) toggle.
     pub const SNOWFLAKE: char = '\u{f2dc}';
     /// Warning triangle with an exclamation — missing-file / error marker
@@ -217,9 +236,15 @@ pub const LINE_2: Color = rgb(0x1f, 0x22, 0x29);
 pub const TEXT_1: Color = rgb(0xe8, 0xe7, 0xe3);
 /// Secondary text.
 pub const TEXT_2: Color = rgb(0x9a, 0xa0, 0xac);
-/// Tertiary / labels.
-pub const TEXT_3: Color = rgb(0x5d, 0x62, 0x6d);
-/// Disabled.
+/// Tertiary / labels. Raised from the original `#5d626d` (≈2.8:1 on
+/// `BG_2`) to `#8a909b` (≈5.2:1) so the information this carries
+/// (track kind, the dirty label, rail hints, drum-grid shares, ...)
+/// clears WCAG AA's 4.5:1 small-text floor while still sitting a clear
+/// step below `TEXT_2` (code review UX-07).
+pub const TEXT_3: Color = rgb(0x8a, 0x90, 0x9b);
+/// Disabled — the one text role exempt from the contrast floor above
+/// (an inert control reading as inert is the point). Never use this for
+/// text that carries information; see `TEXT_3`.
 pub const TEXT_4: Color = rgb(0x3f, 0x43, 0x4c);
 
 // ---------------------------------------------------------------------------
@@ -241,6 +266,20 @@ pub const WARM: Color = rgb(0xe8, 0xc4, 0x7b);
 pub const WARM_DIM: Color = rgba(0xe8, 0xc4, 0x7b, 0.12);
 /// Warm border — bus strip outlines.
 pub const WARM_LINE: Color = rgba(0xe8, 0xc4, 0x7b, 0.34);
+
+/// Near-black text for a label painted on top of a bright accent/semantic
+/// fill (the primary button, an active toggle chip's glyph, ...) — pure
+/// black reads harsh against a saturated fill, so this carries the same
+/// faint lavender cast as the rest of the dark palette. Pulled out as a
+/// token (UX-19) so call sites stop hand-rolling `Color::BLACK` or a
+/// one-off near-black triple.
+pub const ON_ACCENT_TEXT: Color = rgb(0x0e, 0x0a, 0x1f);
+
+/// Cyan/teal tint that marks a "software instrument" affordance (the
+/// add-track menu's instrument presets and the Instrument button) — pulled
+/// out of `view/menus.rs` (UX-19) where it was three copies of the same
+/// inline `Color::from_rgb`.
+pub const INSTRUMENT_TINT: Color = rgb(0x4d, 0xbf, 0xcc);
 
 /// Mint green — meters, success.
 pub const GOOD: Color = rgb(0x6d, 0xd6, 0xa3);
@@ -527,6 +566,23 @@ pub const MIXER_STRIP_WIDTH: f32 = 160.0;
 /// MAXXBASS M…" is 116 px); 18 clip it. The line never wraps: it is
 /// `Wrapping::None` in a clipped container as well.
 pub const MIXER_SLOT_LINE_CHARS: usize = 17;
+/// Characters of a track name the Arrange track-header column shows
+/// before it ellipsises (code review UX-18 — it used to hard-clip
+/// mid-glyph with no ellipsis and no way to see the rest, which is what
+/// the review's own snapshots of "Drums Bour" and "Resonance Wa" were:
+/// a ~10-12 char pixel clip with no "…"). Measured against the rendered
+/// golden rather than estimated from the kind line's (looser) budget —
+/// the size-13 name sits in a narrower effective column than that
+/// estimate assumed once the colour band, indent and delete button are
+/// in. 12 is `io::preset_tab_widgets`' own floor: it drives the UI by
+/// the exact visible text "Instrument 2" (12 chars, mostly narrow
+/// glyphs), so this can't drop below that without breaking a passing
+/// test. A wide-glyph name at exactly 12 chars (e.g. "Drums Bounce")
+/// can still hit the outer `.clip(true)` backstop with no ellipsis —
+/// true pixel-exact truncation would need to measure the rendered run,
+/// which char-counting can only approximate; see FU-U3c.
+pub const TRACK_HEADER_NAME_CHARS: usize = 12;
+
 /// Characters of a plugin name on a sub-track strip's slot line
 /// ([`MIXER_SUB_STRIP_WIDTH`] leaves ~62 px of text): ellipsised there
 /// rather than clipped mid-letter.
@@ -887,7 +943,7 @@ pub fn primary_button_style(status: button::Status) -> button::Style {
     };
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: rgb(0x0e, 0x0a, 0x1f),
+        text_color: ON_ACCENT_TEXT,
         border: iced::Border {
             color: ACCENT,
             width: 0.0,
@@ -965,6 +1021,35 @@ pub fn destructive_button_style(status: button::Status) -> button::Style {
             radius: RADIUS_MD.into(),
         },
         ..Default::default()
+    }
+}
+
+/// Vertical-fader style (UX-09): `ACCENT` rail + handle, replacing
+/// `vertical_slider`'s iced-default palette blue. `tinted` swaps the rail
+/// and handle to `WARM` — the same treatment `fader_section` already
+/// applied ad hoc when a gain-automation lane is driving the channel live,
+/// now centralised here instead of hand-building a `slider::Style` at the
+/// call site.
+pub fn fader_style(tinted: bool) -> impl Fn(&Theme, slider::Status) -> slider::Style {
+    move |_theme: &Theme, _status| {
+        let base = if tinted { WARM } else { ACCENT };
+        slider::Style {
+            rail: slider::Rail {
+                backgrounds: (base.into(), BG_1.into()),
+                width: 4.0,
+                border: iced::Border {
+                    radius: 2.0.into(),
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                },
+            },
+            handle: slider::Handle {
+                shape: slider::HandleShape::Circle { radius: 6.0 },
+                background: base.into(),
+                border_color: Color::TRANSPARENT,
+                border_width: 0.0,
+            },
+        }
     }
 }
 
