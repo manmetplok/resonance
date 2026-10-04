@@ -733,8 +733,8 @@ impl Library {
                 .cmp(&dir_rank(&root, &b.path))
                 .then_with(|| a.path.to_string_lossy().cmp(&b.path.to_string_lossy()))
         });
-        let placed =
-            slots_and_duplicates(records.iter().map(|r| (r.id.as_str(), r.path.as_path())), &doc.table);
+        let keys = records.iter().map(|r| (r.id.as_str(), r.path.as_path()));
+        let placed = slots_and_duplicates(keys, &doc.table);
         let entries = records
             .iter()
             .zip(placed)

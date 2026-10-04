@@ -1123,8 +1123,8 @@ impl Library {
         let doc = &self.index.doc;
         let mut records: Vec<&KitRecord> = doc.kits.iter().collect();
         records.sort_by(|a, b| a.dir.to_string_lossy().cmp(&b.dir.to_string_lossy()));
-        let placed =
-            slots_and_duplicates(records.iter().map(|r| (r.id.as_str(), r.dir.as_path())), &doc.table);
+        let keys = records.iter().map(|r| (r.id.as_str(), r.dir.as_path()));
+        let placed = slots_and_duplicates(keys, &doc.table);
         let entries = records
             .iter()
             .zip(placed)

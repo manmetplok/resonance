@@ -183,7 +183,9 @@ fn strip_line_comment(line: &str, state: &mut Lexer) -> String {
                 _ => i += 1,
             },
             Lexer::RawStr(hashes) => {
-                if chars[i] == '"' && chars[i + 1..].iter().take(hashes).filter(|c| **c == '#').count() == hashes {
+                let closes = chars[i] == '"'
+                    && chars[i + 1..].iter().take(hashes).filter(|c| **c == '#').count() == hashes;
+                if closes {
                     *state = Lexer::Code;
                     i += 1 + hashes;
                 } else {
@@ -198,7 +200,7 @@ fn strip_line_comment(line: &str, state: &mut Lexer) -> String {
                 } else if c == '"' {
                     *state = Lexer::Str;
                     i += 1;
-                } else if c == 'r' && !prev_ident || (c == 'b' && chars.get(i + 1) == Some(&'r') && !prev_ident) {
+                } else if !prev_ident && (c == 'r' || (c == 'b' && chars.get(i + 1) == Some(&'r'))) {
                     // Raw string: `r"`, `r#"`, `br##"` …; else an identifier.
                     let start = if c == 'b' { i + 2 } else { i + 1 };
                     let hashes = chars[start..].iter().take_while(|c| **c == '#').count();
@@ -478,7 +480,8 @@ fn every_crate_is_named_in_the_layering_section() {
         section.match_indices(name).any(|(i, _)| {
             let before = section[..i].chars().next_back();
             let after = section[i + name.len()..].chars().next();
-            let edge = |c: Option<char>| !c.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_');
+            let edge =
+                |c: Option<char>| !c.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_');
             edge(before) && edge(after)
         })
     };

@@ -676,7 +676,10 @@ impl ResonancePlugin for ResonanceDrums {
                 reload: Some(bridge.clone()),
             },
         ));
-        debug_assert_eq!(params.param_at(KIT_SELECT_INDEX).id(), resonance_plugin::first_party::drums::KIT_SELECT);
+        debug_assert_eq!(
+            params.param_at(KIT_SELECT_INDEX).id(),
+            resonance_plugin::first_party::drums::KIT_SELECT
+        );
         debug_assert_eq!(
             params.param_at(KIT_LOAD_PROGRESS_INDEX).id(),
             resonance_plugin::first_party::drums::KIT_LOAD_PROGRESS

@@ -342,7 +342,8 @@ pub(crate) fn load_request(
     params: &[PluginParamView],
     args: &LoadArgs<'_>,
 ) -> Result<Message, RpcError> {
-    let (bank, found) = find(app, clap_id, args.preset, args.preset_id, args.source.map(library_source))?;
+    let source = args.source.map(library_source);
+    let (bank, found) = find(app, clap_id, args.preset, args.preset_id, source)?;
     let mut message = load_message_for(app, &bank, &found, instance_id, params)?;
     if !args.extra {
         // An opaque (third-party) preset has no params to recall on their

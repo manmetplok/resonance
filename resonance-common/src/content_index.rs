@@ -11,13 +11,13 @@
 //! "file" is) and its own error type; this module owns everything whose
 //! semantics must not differ between them:
 //!
-//! * **Slots** ([`SlotTable`]): `slots[n] = id`. A new id takes the slot
+//! * **Slots** (`SlotTable`): `slots[n] = id`. A new id takes the slot
 //!   after the high-water mark; a freed slot is not reused while any slot
 //!   above the mark is free; an id that comes back gets its old slot while
 //!   it is still free.
 //! * **Canonical entries**: the first record of an id in the library's
 //!   sort order holds the slot; later ones are duplicates.
-//! * **Lookup** ([`find`]): exact folded name, then a ≥6-hex-digit id
+//! * **Lookup** (`Entries::find`): exact folded name, then a ≥6-hex-digit id
 //!   prefix, then a unique name prefix, then a unique substring — `None`
 //!   when ambiguous.
 //! * **Index I/O**: the stamp that makes `reload_if_changed` one `stat`,
@@ -276,7 +276,11 @@ pub(crate) fn lenient<T: serde::de::DeserializeOwned>(v: &serde_json::Value, k: 
 /// `quarantine` is set — which a rescan does under the lock, never a
 /// reader, so a reader can never rename away a file a writer has just
 /// installed. `what` names the library in the log.
-pub(crate) fn read_index_value(path: &Path, quarantine: bool, what: &str) -> Option<serde_json::Value> {
+pub(crate) fn read_index_value(
+    path: &Path,
+    quarantine: bool,
+    what: &str,
+) -> Option<serde_json::Value> {
     let bytes = std::fs::read(path).ok()?;
     match serde_json::from_slice(&bytes) {
         Ok(v) => Some(v),
