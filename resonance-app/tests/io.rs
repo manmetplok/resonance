@@ -97,6 +97,8 @@ mod reference_disk_round_trip;
 mod reference_echo_races;
 #[path = "io/relink.rs"]
 mod relink;
+#[path = "io/relink_clip.rs"]
+mod relink_clip;
 #[path = "io/relink_folder_scan.rs"]
 mod relink_folder_scan;
 #[path = "io/relink_modal.rs"]

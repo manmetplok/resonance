@@ -14,12 +14,12 @@
 //! clips) rides the normal project-snapshot / replay path, so *that* part
 //! is undoable; see `update::relink`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use resonance_audio::types::AssetId;
+use resonance_audio::types::{AssetId, ClipId};
 
 /// Shared between the UI and a background "Search a folder…" walk
 /// (review VIEW-29 / UPD-10): the walk bumps `dirs_scanned` as it goes
@@ -89,6 +89,17 @@ pub struct RelinkState {
     pub scan: Option<RelinkScan>,
     /// Token source for [`RelinkScan::token`].
     pub next_scan_token: u64,
+    /// Audio clips whose own WAV (`audio/clip_<id>.wav`) was not on disk
+    /// when a load or restore asked the engine for it (W4). Such a clip is
+    /// kept in the timeline but plays nothing; the relink modal offers a
+    /// per-clip `Locate…` for it. Re-derived on every load/restore, so it
+    /// is never persisted; an id whose clip is gone is simply ignored.
+    pub missing_clips: BTreeSet<ClipId>,
+    /// Missing clips whose replacement file is being imported.
+    pub clips_in_flight: HashSet<ClipId>,
+    /// The missing clips the open modal tracks, captured when it opened —
+    /// the clip counterpart of [`Self::modal_targets`].
+    pub modal_clip_targets: Vec<ClipId>,
 }
 
 impl RelinkState {
@@ -99,7 +110,12 @@ impl RelinkState {
 
     /// True when any relink import is currently running.
     pub fn any_in_flight(&self) -> bool {
-        !self.in_flight.is_empty()
+        !self.in_flight.is_empty() || !self.clips_in_flight.is_empty()
+    }
+
+    /// True when a relink import for the missing clip `clip_id` is running.
+    pub fn is_clip_in_flight(&self, clip_id: ClipId) -> bool {
+        self.clips_in_flight.contains(&clip_id)
     }
 
     /// Open the relink modal tracking `targets` (the currently-missing
@@ -115,6 +131,7 @@ impl RelinkState {
     pub fn close_modal(&mut self) {
         self.modal_open = false;
         self.modal_targets.clear();
+        self.modal_clip_targets.clear();
         self.cancel_scan();
     }
 
