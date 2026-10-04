@@ -461,12 +461,17 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         })
         .collect();
 
+    // The song's tempo and meter, never the playhead's (code review
+    // ARCH2-10): `transport.bpm` follows the playhead through a tempo
+    // change, so saving it made `bpm` depend on where playback stopped.
+    let (bpm, time_sig_num, time_sig_den) = r.project_tempo();
+
     ProjectFile {
         version: PROJECT_FORMAT_VERSION,
         sample_rate: r.sample_rate,
-        bpm: r.transport.bpm,
-        time_sig_num: r.transport.time_sig_num,
-        time_sig_den: r.transport.time_sig_den,
+        bpm,
+        time_sig_num,
+        time_sig_den,
         metronome_enabled: r.transport.metronome_enabled,
         master_volume: r.master.volume,
         master_plugins,

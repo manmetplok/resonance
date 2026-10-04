@@ -168,6 +168,7 @@ fn choices_for(
 /// rendered tree) — used by `tests/automation_device_params.rs` to assert the
 /// named device params appear, grouped, only when a preset is selected.
 #[doc(hidden)]
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 pub(crate) fn track_choice_labels(
     track_id: u64,
     plugins: &[PluginSlotState],
@@ -322,6 +323,7 @@ pub(super) fn add_lane_picker(
 /// test can't click an option; this resolves one exactly as the picker's
 /// `on_select` does.
 #[doc(hidden)]
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 pub(crate) fn add_lane_message_for_label(
     chan: AutoChan,
     plugins: &[PluginSlotState],

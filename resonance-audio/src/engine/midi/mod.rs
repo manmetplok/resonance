@@ -34,6 +34,7 @@ pub(crate) use clips::{
 /// missing-clip no-op, atomic apply, selection-respecting, and the bulk
 /// `MidiNotesEdited` / `GrooveExtracted` event emission — without bringing
 /// up the engine thread.
+#[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
 pub use clips::{
     apply_groove_to_clip_in_place, extract_groove_from_clip_in_place,
     humanize_midi_notes_in_place, quantize_midi_notes_in_place,
@@ -43,6 +44,7 @@ pub use clips::{
 /// `test_support` (via `lib.rs`) so the regression test in
 /// `tests/engine/midi_clip_handlers.rs` can drive both code paths — missing-clip
 /// no-op and happy-path — without bringing up the engine thread.
+#[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
 pub use clips::{move_midi_clip_in_place, trim_midi_clip_in_place};
 pub(crate) use clock::{
     clock_send_continue, clock_send_song_position, clock_send_start, clock_send_stop,
@@ -58,6 +60,7 @@ pub(crate) use hardware::{
 /// `tests/engine/device_params_handler.rs` can drive the mutation + event
 /// emission (including the missing-track no-op branch) without spinning up
 /// the engine thread.
+#[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
 pub use hardware::set_track_device_params_in_place;
 pub(crate) use live::{
     capture_loop_record_midi_pass, close_open_recordings, flush_live_note_stash,
@@ -75,6 +78,7 @@ pub use live::deliver_or_stash;
 /// test in `tests/midi_hw/live_arrival_offset.rs` can drive the pure function
 /// without the engine thread.
 pub use live::live_arrival_sample_offset;
+#[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
 pub use outbound::{
     emit_device_param_automation, emit_outbound_notes, outbound_step_start,
     outbound_track_snapshot, DeviceParamMidiSink, OutboundNoteSink, OutboundStep, OutboundTrack,

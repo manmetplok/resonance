@@ -46,6 +46,7 @@ impl std::fmt::Debug for Retired {
     }
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl Retired {
     pub const fn new() -> Self {
         Self {
@@ -88,11 +89,13 @@ impl Retired {
         self.queue.lock().len()
     }
 
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Whether the queue holds `arc`'s allocation (pointer identity).
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn holds<T: Any + Send + Sync>(&self, arc: &Arc<T>) -> bool {
         let ptr = Arc::as_ptr(arc) as *const ();
         self.queue

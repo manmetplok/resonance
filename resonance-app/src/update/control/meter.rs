@@ -31,7 +31,7 @@
 //! state is touched, and the reply carries no `revision`. It is
 //! nonetheless dispatched BELOW the mutation gate in
 //! [`super::execute`] and deliberately left out of
-//! [`super::is_read_only_method`], because a measurement describes the
+//! [`super::bypasses_mutation_gate`], because a measurement describes the
 //! OPEN project — with nothing open the honest answer is a stable
 //! `busy`, not an empty measurement that reads like a real one. That is
 //! the same call `master.summary` and `edit.status` make.

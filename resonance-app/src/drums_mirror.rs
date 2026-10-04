@@ -12,19 +12,15 @@ use resonance_audio::types::ParamInfo;
 
 use crate::state::{PluginSlotState, TrackState};
 
+// The drums' id and host-read keys are the plugin's own declarations
+// (`resonance_plugin::first_party`, code review ARCH2-03), which the
+// drums' tests pin to real params.
+pub use resonance_plugin::first_party::drums::{KIT_LOAD_PROGRESS, KIT_SELECT, OUTPUT_MODE};
 /// Resonance Drums' CLAP id.
-pub const DRUMS_PLUGIN_ID: &str = "com.resonance.drums";
-/// The kit selector: `-2` parked (external/missing kit), `-1` the built-in
-/// kit, `0..=999` a library slot. Its text is the kit's name.
-pub const KIT_SELECT: &str = "kit_select";
-/// The selected kit's load progress, 0..1 (read-only): 1.0 once the kit
-/// plays; 0 with text "empty slot" or "failed" when nothing loads.
-pub const KIT_LOAD_PROGRESS: &str = "kit_load_progress";
-/// `0` Stereo (everything sums to the main output), `1` Multi (per-pad
-/// ports plus the Overhead port, each a sub-track).
-pub const OUTPUT_MODE: &str = "output_mode";
-/// [`OUTPUT_MODE`]'s Multi step.
-pub const OUTPUT_MODE_MULTI: f64 = 1.0;
+pub use resonance_plugin::first_party::DRUMS as DRUMS_PLUGIN_ID;
+/// [`OUTPUT_MODE`]'s Multi step, as the mirrored param value.
+pub const OUTPUT_MODE_MULTI: f64 =
+    resonance_plugin::first_party::drums::OUTPUT_MODE_MULTI as f64;
 
 /// One of a slot's params by its stable key.
 pub fn param<'a>(slot: &'a PluginSlotState, key: &str) -> Option<&'a ParamInfo> {

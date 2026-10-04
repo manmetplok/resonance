@@ -1,27 +1,16 @@
-//! Golden-image snapshots for the **Export modal shared shell**
-//! (design doc #155, todo #324).
+//! Golden-image snapshots for the **Export modal** (design doc #155,
+//! todo #324; body wired by code review ARCH2-01).
 //!
-//! The Export modal is a single overlay with two mode tabs — Audio
-//! stems / MIDI — sharing one source selection and a footer (live count
-//! + primary action). This scaffold todo builds only the shell: the
-//! dimmed backdrop, the centered BG_2 container, the serif-italic title,
-//! the mode tabs, and the footer. The per-tab body widgets (#326/#327)
-//! and the render phases (#328) are follow-ups, so the body is a
-//! placeholder hint keyed off the active mode.
+//! Two states, both reached through the real `ExportMessage` reducer:
 //!
-//! Two states are locked in here — both reachable through the real
-//! `ExportMessage` reducer path:
+//! 1. **Audio stems tab (default)** — the source checklist (master,
+//!    busses, top-level tracks), the range toggle and the destination
+//!    row; "0 selected" and the primary action disabled.
+//! 2. **MIDI tab** — the accent moves to the MIDI tab, whose body notes
+//!    that MIDI export is not available yet.
 //!
-//! 1. **Audio stems tab (default)** — the modal as it opens: Audio-stems
-//!    tab active with the accent border, "0 selected" in the footer, and
-//!    the primary action disabled (no source ticked yet).
-//! 2. **MIDI tab** — after `ExportMessage::SetMode(Midi)` the accent moves
-//!    to the MIDI tab and the body hint + primary label switch to the
-//!    MIDI copy.
-//!
-//! Source selection (which would enable the primary action) lands with
-//! the per-tab bodies in #326/#327, so it isn't reachable yet — both
-//! snapshots show the empty-selection footer.
+//! The render itself (`ExportStems` and its events) is covered by
+//! `export_stems.rs`.
 
 use crate::common;
 

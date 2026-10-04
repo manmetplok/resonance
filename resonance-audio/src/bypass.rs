@@ -308,6 +308,7 @@ pub struct FxDryScratch {
     slot_r: Vec<f32>,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl FxDryScratch {
     /// Allocate for blocks of up to `frames` frames. Allocates — never
     /// call from the audio thread.
@@ -333,6 +334,7 @@ impl FxDryScratch {
 
     /// Frames this scratch can stage a crossfade over.
     #[inline]
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn capacity(&self) -> usize {
         self.chain_l.len()
     }

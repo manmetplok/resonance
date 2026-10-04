@@ -7,19 +7,27 @@ Patterns this codebase has gotten right. Imitate these when adding new code; res
 The workspace is a deliberate DAG. Every crate has a single responsibility, and the lower layers know nothing about the upper layers.
 
 ```
-resonance-dsp ──┬─► resonance-metering ──┬─► resonance-mastering plugin
-                │                       └─► resonance-mastering-assist ──┬─► resonance-mastering plugin
-                │                                                        └─► resonance-app
+resonance-dsp ──┬─► resonance-metering ──┬─► resonance-mastering-assist ──┬─► resonance-mastering plugin
+                │                        │                                └─► resonance-app (master.assist)
+                │                        ├─► resonance-audio, resonance-app
+                │                        └─► every plugin except drums and wavetable (meters)
+                ├─► resonance-mastering-assist
                 ├─► resonance-audio ─────► resonance-app
-                └─► (every FX plugin)
+                └─► every plugin
 resonance-music-theory ──┬─► resonance-app                   (pure theory, no audio/app deps)
                          ├─► resonance-audio                 (vocal-tuning scale-snap only — doc #160/todo #358)
                          ├─► resonance-svs ──► resonance-app  (vocal synthesis)
                          └─► resonance-granular-delay plugin (scale-quantized grain pitch)
-resonance-common ──► resonance-audio, resonance-plugin, amp/drums/ir plugins (utilities only)
-resonance-plugin ──┬─► every plugin, resonance-app (UI helpers)
+resonance-common ──► resonance-audio, resonance-app, resonance-plugin, amp/drums/ir plugins (utilities only)
+resonance-control ──┬─► resonance-mcp                        (the wire contract; zero internal deps)
+                    └─► resonance-app                        (the control layer only: update/control/, control_socket, control_jobs)
+resonance-plugin ──┬─► every plugin
+                   ├─► resonance-app  (headless SDK parts: preset library, BrowserModel, kit_rows/nam_rows,
+                   │                   stable_hash, first_party ids — and with them clack-plugin)
                    └─► wayland-plugin-gui / cocoa-plugin-gui  (cfg-selected runtime; no plugin names one)
 plugin-gui-core ──► wayland-plugin-gui, cocoa-plugin-gui, resonance-plugin, every plugin (editor contract + widgets)
+resonance-dsp-test-support ──► dev-dependency of the DSP-testing crates and plugins (golden/bless helpers; never a normal dep)
+arch-invariants                (reads `cargo metadata`; links nothing)
 ```
 
 Hard rules — these are load-bearing for build times, testability, and cognitive load:
@@ -35,7 +43,7 @@ Hard rules — these are load-bearing for build times, testability, and cognitiv
 - `cocoa-plugin-gui` is the macOS editor runtime — same public `Editor` surface, inverted mechanics: the window lives on the AppKit main thread (which AppKit requires) and the `Send` handle dispatches onto it; rendering is NSOpenGLView + the same egui_glow painter. Windowing body macOS-only, stub elsewhere. Plugins reach whichever runtime matches the platform through `resonance_plugin::editor_host` (migration tracked in `macos-editor-plan.md` item 3c).
 - `resonance-app` is allowed to depend on everything; it is the integration layer. The exception: it depends on no plugin crate. Plugins reach the app as CLAP bundles only; code both need goes into a library crate both depend on (as `resonance-mastering-assist` did for `master.assist`).
 
-These rules are tests, not only prose: `tools/arch-invariants/tests/architecture.rs` reads `cargo metadata` and fails the suite on an internal dependency that is not an edge of the diagram, a plugin manifest or source that names a platform runtime, a plugin naming a `resonance_common` item outside the utility allow-list (or gaining the dependency unlisted), a GUI toolkit or windowing stack outside its crate, `resonance-app` depending on a plugin crate, an inline `#[cfg(test)]` beyond the documented exception, or a new top-level file in `resonance-app/tests/` (ARCH-10). Adding a crate means deciding its layer here and adding its row there.
+These rules are tests, not only prose: `tools/arch-invariants/tests/architecture.rs` reads `cargo metadata` and fails the suite on an internal dependency that is not an edge of the diagram, a plugin manifest or source that names a platform runtime, a plugin naming a `resonance_common` item outside the utility allow-list (or gaining the dependency unlisted), a GUI toolkit or windowing stack (any crate of its family: `iced_*`, `egui_*`, …; `winit`/`wgpu`/`eframe` nowhere) outside its crate, `resonance-app` depending on a plugin crate, a test-support crate as a normal dependency, an inline `cfg(test)` beyond the documented exception, a new top-level test file (exact lists for `resonance-app/tests/` and `resonance-audio/tests/`, a per-crate count ratchet elsewhere), a first-party CLAP id spelled outside `resonance_plugin::first_party`, `resonance_control` named outside the app's control layer, an `AudioCommand` with no app caller that is not on the listed-orphan list, and a workspace crate this section does not name (ARCH-10, ARCH2-07). Adding a crate means deciding its layer here and adding its row there.
 
 When extending: add new building blocks to the lowest layer they fit, not the most convenient one. A new filter goes in `resonance-dsp`, not in the plugin that needs it first.
 
@@ -62,7 +70,7 @@ Discipline:
 - `dsp.rs` is the pure-DSP boundary. It must be testable without the plugin framework. Plugins ship integration tests in `tests/` that drive `dsp.rs` directly.
 - `params.rs` defines parameters as code, not as a serialized blob. Adding a parameter is a code change, not a config change.
 - The editor is **feature-gated** (`default = ["editor"]`). Headless builds for tests/CI use `--no-default-features` and skip the egui and platform-runtime deps.
-- `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 13 plugins re-exports the shared design system with `pub use plugin_gui_core::theme::lavender::*` (the canonical tokens — see above), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
+- `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 13 plugins re-exports the shared design system with `pub use plugin_gui_core::theme::lavender::*` (the canonical tokens: the `lavender` module of `plugin-gui-core/src/theme.rs`, which follows `ux-guidelines.md`), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
 
 ## Bumping the clack git pin (DEP-13)
 

@@ -27,6 +27,7 @@ use super::instance::ClapInstance;
 use super::state::{capture_ostream, feed_istream};
 use crate::types::PluginPresetLocation as PresetLocation;
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl ClapInstance {
     fn extension(&self, id: &CStr) -> Option<*const c_void> {
         // SAFETY: `plugin` is live for `self`; `get_extension` is
@@ -50,6 +51,7 @@ impl ClapInstance {
     }
 
     /// Whether the plugin can load a preset by location (preset-load).
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn has_preset_load(&self) -> bool {
         self.extension(CLAP_EXT_PRESET_LOAD)
             .or_else(|| self.extension(CLAP_EXT_PRESET_LOAD_COMPAT))
@@ -59,6 +61,7 @@ impl ClapInstance {
     /// The state to store as a preset: `save_ex(FOR_PRESET)` when the
     /// plugin has state-context, else the plain full state. The flag says
     /// which one it is.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn save_preset_state(&self) -> Option<(Vec<u8>, bool)> {
         // SAFETY: this instance is alive for the call, on its main thread.
         unsafe { self.preset_save_handle().save() }

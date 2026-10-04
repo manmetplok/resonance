@@ -151,14 +151,8 @@ impl StereoConvolver {
     }
 }
 
-/// Input/output peak magnitudes (linear) for one processed block.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct BlockPeaks {
-    pub in_l: f32,
-    pub in_r: f32,
-    pub out_l: f32,
-    pub out_r: f32,
-}
+/// In/out peak amplitudes captured across a block (shared: `resonance_dsp`).
+pub use resonance_dsp::BlockPeaks;
 
 /// Per-block wet/dry engine. Owns the active (and pending) convolver, the
 /// bypass delay lines that keep the dry signal time-aligned with the

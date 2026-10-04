@@ -160,9 +160,8 @@ pub(crate) fn resolve_param_value(
 /// engine both carry on — so this is only a bound on a lost answer.
 pub(crate) const LABEL_ANSWER_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Resonance Amp's CLAP id and its model selector's string key.
-const AMP_ID: &str = "com.resonance.amp";
-const AMP_MODEL_SELECT: &str = "file_select";
+// Resonance Amp's CLAP id and its model selector's string key.
+use resonance_plugin::first_party::{amp::FILE_SELECT as AMP_MODEL_SELECT, AMP as AMP_ID};
 
 /// What a `set_plugin_param` value came to.
 pub(crate) enum ParamValueOutcome {

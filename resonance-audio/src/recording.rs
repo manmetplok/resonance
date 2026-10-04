@@ -871,11 +871,13 @@ impl RecordingState {
 /// [`AudioClip`] into the shared clip map; this carries the metadata the
 /// engine control thread needs to emit `AudioEvent::TakeCaptured`.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub struct RolledAudioTake {
     pub track_id: TrackId,
     pub clip_id: ClipId,
     pub start_sample: SamplePos,
     pub duration_samples: u64,
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub waveform_peaks: Vec<(f32, f32)>,
 }
 

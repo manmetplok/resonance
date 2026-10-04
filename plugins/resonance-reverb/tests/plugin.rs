@@ -176,3 +176,13 @@ fn wet_onset_is_room_like_not_cathedral() {
         "wet onset landed at sample {first_nonzero} (> 50 ms @ 48k) — reverb is too late"
     );
 }
+
+/// The host treats the reverb's key port as secondary
+/// (`first_party::SECONDARY_KEY_PLUGINS`, code review ARCH2-03), which
+/// only means something while it has one.
+#[test]
+fn reverb_is_a_secondary_key_plugin_with_a_key_port() {
+    use resonance_plugin::first_party;
+    assert!(first_party::SECONDARY_KEY_PLUGINS.contains(&ResonanceReverb::CLAP_ID));
+    assert!(ResonanceReverb::SIDECHAIN_INPUT.is_some(), "the reverb declares a key port");
+}

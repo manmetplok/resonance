@@ -263,6 +263,7 @@ impl MediaPool {
     }
 }
 
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl crate::Resonance {
     /// Recompute the pool's per-asset usage counts from the current
     /// clip set. Called after any pool/clip mutation that could change
@@ -284,6 +285,7 @@ impl crate::Resonance {
 
     /// Remove an asset from the pool, returning it if present, and
     /// refresh usage counts.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn remove_pool_asset(&mut self, id: AssetId) -> Option<PoolAsset> {
         let removed = self.media.pool.remove(id);
         self.recompute_pool_usage();
@@ -292,6 +294,7 @@ impl crate::Resonance {
 
     /// Point a clip at a pool asset (or clear its link when `asset_id` is
     /// `None`) and refresh usage counts. No-op if the clip id is unknown.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn relink_clip(&mut self, clip_id: ClipId, asset_id: Option<AssetId>) {
         if let Some(clip) = self.clips.iter_mut().find(|c| c.id == clip_id) {
             clip.asset_ref = asset_id.map(AssetRef::new);

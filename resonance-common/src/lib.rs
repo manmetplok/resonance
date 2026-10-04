@@ -22,6 +22,7 @@ pub mod kit_info;
 pub mod param_flags;
 pub mod preset_session;
 pub mod drum_map;
+pub mod content_index;
 pub mod drumkit_library;
 #[cfg(feature = "model")]
 pub mod group_identity;

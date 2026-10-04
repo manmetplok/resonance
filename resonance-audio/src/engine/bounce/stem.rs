@@ -192,6 +192,7 @@ impl StemFilter {
 ///
 /// Sidechain-free shorthand for [`stem_filter_with_keys`]; a slice whose
 /// plugins are keyed from outside it needs that one instead.
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn stem_filter(source: StemSource, tracks: &TrackMap) -> StemFilter {
     stem_filter_with_keys(source, tracks, &IndexMap::new(), &[])
 }

@@ -148,7 +148,7 @@ fn undoing_a_preset_recall_restores_the_previous_values() {
         preset_name: "Bright".to_owned(),
         preset_state: None,
         preset_id: "bright".to_owned(),
-        preset_source: resonance_control::methods::plugin_preset::PluginPresetSource::User,
+        preset_source: resonance_plugin::presets::PresetSource::User,
     }));
     drain(&rx);
 

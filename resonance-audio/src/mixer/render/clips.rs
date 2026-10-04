@@ -54,6 +54,7 @@ pub fn recorded_monitor_gate<C: Borrow<AudioClip>>(
 /// reach it through `render_block`), so playback and bounced WAV render
 /// identically. Allocation-free and `O(1)` per output frame (the
 /// per-clip crossfade scan is `O(clips)`, run once per clip per block).
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn mix_track_clips<C: Borrow<AudioClip>>(
     clips: &[C],
     track_id: TrackId,

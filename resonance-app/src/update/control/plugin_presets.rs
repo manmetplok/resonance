@@ -175,11 +175,11 @@ pub(crate) fn view(
         let full = lib.query(&query_for(&PresetFilter::default(), vec![clap_id.to_string()]));
         full.hits
             .iter()
-            .find(|h| h.record.preset.id == i.id && wire_source(h.record.preset.source) == i.source)
+            .find(|h| h.record.preset.id == i.id && h.record.preset.source == i.source)
             .map(entry_from_hit)
             .unwrap_or_else(|| PluginPresetEntry {
                 name: i.name.clone(),
-                source: i.source,
+                source: wire_source(i.source),
                 id: i.id.clone(),
                 ..PluginPresetEntry::default()
             })
@@ -204,7 +204,7 @@ pub(crate) fn find(
     clap_id: &str,
     preset: &str,
     preset_id: Option<&str>,
-    source: Option<PluginPresetSource>,
+    source: Option<PresetSource>,
 ) -> Result<(PresetBank, PresetRef), RpcError> {
     let wanted = preset.trim();
     let bank = bank_for(app, clap_id);
@@ -212,7 +212,7 @@ pub(crate) fn find(
     if let Some(id) = preset_id.filter(|id| !id.trim().is_empty()) {
         let hit = all
             .iter()
-            .find(|p| p.id == id.trim() && source.is_none_or(|s| library_source(s) == p.source))
+            .find(|p| p.id == id.trim() && source.is_none_or(|s| s == p.source))
             .cloned();
         return match hit {
             Some(p) => Ok((bank, p)),
@@ -227,8 +227,7 @@ pub(crate) fn find(
             .cloned()
     };
     let found = match source {
-        Some(PluginPresetSource::User) => pick(PresetSource::User),
-        Some(PluginPresetSource::Factory) => pick(PresetSource::Factory),
+        Some(s) => pick(s),
         None => pick(PresetSource::User).or_else(|| pick(PresetSource::Factory)),
     };
     match found {
@@ -268,7 +267,7 @@ pub(crate) fn park_add_preset(
     }
     app.presets.pending_plugin_presets.insert(
         instance_id,
-        (clap_id.to_string(), found.id.clone(), wire_source(found.source)),
+        (clap_id.to_string(), found.id.clone(), found.source),
     );
 }
 
@@ -305,7 +304,7 @@ pub(crate) fn host_load_message(
     instance_id: PluginInstanceId,
     clap_id: &str,
     preset_id: &str,
-    source: PluginPresetSource,
+    source: PresetSource,
 ) -> Result<Message, RpcError> {
     let params = app
         .with_plugin_mut(instance_id, |slot| {
@@ -343,7 +342,8 @@ pub(crate) fn load_request(
     params: &[PluginParamView],
     args: &LoadArgs<'_>,
 ) -> Result<Message, RpcError> {
-    let (bank, found) = find(app, clap_id, args.preset, args.preset_id, args.source)?;
+    let source = args.source.map(library_source);
+    let (bank, found) = find(app, clap_id, args.preset, args.preset_id, source)?;
     let mut message = load_message_for(app, &bank, &found, instance_id, params)?;
     if !args.extra {
         // An opaque (third-party) preset has no params to recall on their
@@ -418,7 +418,7 @@ fn load_document_message(
             preset_name: found.name.clone(),
             preset_state: Some(blob),
             preset_id: found.id.clone(),
-            preset_source: wire_source(found.source),
+            preset_source: found.source,
         }));
     }
     let json = bank
@@ -480,7 +480,7 @@ fn load_document_message(
         preset_name: found.name.clone(),
         preset_state,
         preset_id: found.id.clone(),
-        preset_source: wire_source(found.source),
+        preset_source: found.source,
     }))
 }
 

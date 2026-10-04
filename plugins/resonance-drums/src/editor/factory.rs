@@ -80,7 +80,7 @@ impl EditorFactory for DrumsEditorFactory {
             app,
             EditorOptions {
                 title: "Resonance Drums".to_string(),
-                app_id: "com.resonance.drums".to_string(),
+                app_id: resonance_plugin::first_party::DRUMS.to_string(),
                 initial_size: INITIAL_SIZE,
                 min_size: MIN_SIZE,
                 resizable: true,

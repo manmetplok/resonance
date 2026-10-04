@@ -114,6 +114,7 @@ impl Default for ReferencePlayer {
     }
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl ReferencePlayer {
     pub fn new() -> Self {
         Self::default()
@@ -142,6 +143,7 @@ impl ReferencePlayer {
     /// fill path ([`handle_reference_analyzed`]); the value is otherwise
     /// only consumed internally (loudness matching).
     #[doc(hidden)]
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn entry_integrated_lufs(&self, id: ReferenceId) -> Option<f32> {
         self.entry(id).map(|e| e.integrated_lufs)
     }
@@ -149,6 +151,7 @@ impl ReferencePlayer {
     /// Whether a reference entry has had its decoded PCM filled in yet.
     /// Test accessor for the analysis fill path.
     #[doc(hidden)]
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn entry_has_pcm(&self, id: ReferenceId) -> Option<bool> {
         self.entry(id).map(|e| e.pcm.is_some())
     }
@@ -162,6 +165,7 @@ impl ReferencePlayer {
     /// Number of loaded entries. Test accessor for a refused-duplicate
     /// load's invariant: the count must not change (ARCH-04 D-5).
     #[doc(hidden)]
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn entry_count(&self) -> usize {
         self.entries.len()
     }
@@ -248,6 +252,7 @@ impl Default for ReferenceMonitor {
     }
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl ReferenceMonitor {
     /// Replace `data` (interleaved, `channels`-wide, `frames` long) with
     /// the active reference's PCM scaled by the monitor gain, advancing
@@ -301,6 +306,7 @@ impl ReferenceMonitor {
 
     /// Current free-run cursor (sample frames). Test accessor.
     #[doc(hidden)]
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn cursor_for_test(&self) -> u64 {
         self.cursor.load(Ordering::Relaxed)
     }
@@ -308,6 +314,7 @@ impl ReferenceMonitor {
     /// Whether the monitored source is currently the reference. Test
     /// accessor for the publish path.
     #[doc(hidden)]
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn is_reference_for_test(&self) -> bool {
         self.source_is_reference.load(Ordering::Relaxed)
     }

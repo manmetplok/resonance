@@ -8,7 +8,7 @@
 //! same scan.
 //!
 //! Deliberately NOT project-gated (it sits in `plugins::METHODS`, which
-//! `is_read_only_method` allowlists): the plugin catalog is a fact about
+//! `bypasses_mutation_gate` allowlists): the plugin catalog is a fact about
 //! the machine, not about the open project, and a client should be able
 //! to install a plugin and find it before it creates anything.
 //!

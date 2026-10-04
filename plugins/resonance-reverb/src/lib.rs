@@ -49,7 +49,7 @@ pub struct ResonanceReverb {
 }
 
 impl ResonancePlugin for ResonanceReverb {
-    const CLAP_ID: &'static str = "com.resonance.reverb";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::REVERB;
     const NAME: &'static str = "Resonance Reverb";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

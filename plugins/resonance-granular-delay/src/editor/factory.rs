@@ -79,7 +79,7 @@ impl EditorFactory for GranularEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Granular Delay".to_string(),
-                app_id: "com.resonance.granular-delay".to_string(),
+                app_id: resonance_plugin::first_party::GRANULAR_DELAY.to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
                 min_size: (MIN_W, MIN_H),
                 resizable: true,

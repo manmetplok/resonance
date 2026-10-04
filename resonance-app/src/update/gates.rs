@@ -169,6 +169,8 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
     match message {
         // Whitelist: cancel button on the in-progress modal.
         Message::Track(TrackMessage::Bounce(BounceMessage::CancelInProgress)) => false,
+        // ... and on the Export modal's stem render.
+        Message::Export(ExportMessage::CancelRender) => false,
         // Engine event traffic, project I/O, and the timer tick all
         // need to keep flowing — the bounce relies on `BounceProgress`
         // / `TrackBounceCompleted` events to clear the modal.
@@ -437,12 +439,20 @@ impl crate::Resonance {
         self.control.jobs.has_live_offline_measure()
     }
 
+    /// A stem export from the Export modal is rendering (code review
+    /// ARCH2-01). The modal can't close mid-render, so its phase is the
+    /// whole truth.
+    pub(crate) fn stem_export_in_progress(&self) -> bool {
+        self.modals.export_dialog.as_ref().is_some_and(|d| d.is_rendering())
+    }
+
     /// True while ANY offline render owns the engine's plugin instances:
     /// a WAV / FLAC mixdown (`io.bouncing`, GUI or `render.mixdown`), a
-    /// bounce in place, a freeze (single or batch) or an offline control
-    /// measurement.
+    /// stem export, a bounce in place, a freeze (single or batch) or an
+    /// offline control measurement.
     pub(crate) fn offline_render_in_progress(&self) -> bool {
         self.io.bouncing
+            || self.stem_export_in_progress()
             || self.modals.bounce_in_progress.is_some()
             || self.freeze.any_in_flight()
             || self.offline_measure_in_progress()
@@ -558,7 +568,10 @@ impl crate::Resonance {
         // instances as a bounce in place, so it gates the same traffic
         // (code review UPD-06; the engine refuses Play / Record on its
         // own — `resonance_audio` MIX-02 — this keeps the GUI honest).
-        if (self.modals.bounce_in_progress.is_some() || self.io.bouncing)
+        // A stem export renders through the same offline renderer.
+        if (self.modals.bounce_in_progress.is_some()
+            || self.io.bouncing
+            || self.stem_export_in_progress())
             && bounce_blocks_message(message)
         {
             return true;

@@ -69,7 +69,7 @@ impl ResonanceMastering {
 }
 
 impl ResonancePlugin for ResonanceMastering {
-    const CLAP_ID: &'static str = "com.resonance.mastering";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::MASTERING;
     const NAME: &'static str = "Resonance Mastering";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

@@ -553,6 +553,7 @@ pub struct LatencyComp {
     transition: usize,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl LatencyComp {
     /// A comp table with no delays — the startup / no-latency-plugins
     /// state. `apply` is a single failed HashMap lookup per track.
@@ -650,6 +651,7 @@ impl LatencyComp {
 
     /// The bus-stage latency (`max_bus_chain`) every routed signal picks
     /// up between the track stage and master.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn bus_stage(&self) -> u64 {
         self.bus_stage
     }
@@ -666,6 +668,7 @@ impl LatencyComp {
     /// True when this table delays nothing. (A table built by
     /// [`LatencyComp::following`] may still hold zero-delay pass-through
     /// lines that keep history.)
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn is_empty(&self) -> bool {
         self.tracks.values().all(|t| t.delay == 0)
             && self.busses.values().all(|t| t.delay == 0)
@@ -673,6 +676,7 @@ impl LatencyComp {
     }
 
     /// The delay this comp table applies to `track_id` (0 if none).
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn delay_for(&self, track_id: TrackId) -> u64 {
         self.tracks
             .get(&track_id)

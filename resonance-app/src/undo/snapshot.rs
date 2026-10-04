@@ -45,6 +45,7 @@ pub struct UndoSnapshot {
 /// A plugin state filled in after the snapshot that holds it.
 pub(crate) type LateBlob = Arc<std::sync::Mutex<Option<Arc<[u8]>>>>;
 
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl UndoSnapshot {
     /// A snapshot of `project` with no late plugin states.
     pub fn new(project: LoadedProject) -> Self {
@@ -62,6 +63,7 @@ impl UndoSnapshot {
     /// fields compare order-independently the same way the old
     /// `serde_json` compare did through its key-sorted objects), and notes
     /// field by field. Nothing else is captured.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn same_state(&self, other: &UndoSnapshot) -> bool {
         let notes_equal = self.project.midi_notes.len() == other.project.midi_notes.len()
             && self.project.midi_notes.iter().all(|(id, notes)| {
@@ -201,6 +203,7 @@ pub enum ChordParamKnob {
 // Resonance snapshot-building and restore methods
 // -------------------------------------------------------------------------
 
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl crate::Resonance {
     /// Build an undo snapshot of the current declarative project state.
     ///
@@ -398,6 +401,7 @@ impl crate::Resonance {
     /// `TakeCompChanged` / `ActiveTakeChanged` per group on every history
     /// step, and `RestoreTakeGroups` was deliberately made silent so a
     /// restore does not come up dirty.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
         let current = crate::update::build_project_file(self);
         self.restore_from_snapshot_against(&current, snapshot);

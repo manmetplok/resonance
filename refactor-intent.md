@@ -1,6 +1,17 @@
 # Refactor intent — architecture epics
 
-Status as of 2026-09-26, master `64ebb913`. The full-workspace suite is green (369/369 binaries).
+Written 2026-09-26 at master `64ebb913`; **status updated 2026-10-04**
+(code review 2026-10-02, ARCH2-09). Epics A, B, C and E are **done**;
+Epic D is down to D-7e/D-7f. The "Current state" blocks below are kept as
+the record of where each epic started — they are not today's numbers.
+
+| Epic | Status | Where it landed |
+|---|---|---|
+| A — one declarative project model | **Done** (A-13j @ 423ed8c1): no `UndoExtras`, one `Reconcile` driver, no catch-all undo arms, `Resonance` at 40 fields. A-14 (delta snapshots) judged not worth it. | `arch-migration-plan.md` → "A-13j landed" |
+| B — render-graph publishing | **Done** (B-6): no `RwLock` in `engine/`/`mixer/`, enforced by `engine_and_mixer_take_no_state_lock` | `engine/render_graph.rs` |
+| C — engine error taxonomy | **Done** (C-5): `EngineError`, no `Result<_, String>` in audio/common pub fns, enforced by arch-invariants | `types/error.rs` |
+| D — app-owned entity ids | **In progress**: D-1…D-5, D-6 (design), D-7a–d landed. **Open:** D-7e (take-group ids in the `GrantIds` grant) and D-7f (delete the engine's `next_clip_id` / `next_take_group_id`, `reserve_clip_id`, the `SetProjectDir` scan) | `docs/design/D-6-engine-created-ids.md`, `arch-migration-plan.md` → "D-7d landed" |
+| E — feature-gate `resonance-common`'s model | **Done**: `model`/`decode` features, `plugins_disable_default_features_on_resonance_common` | `resonance-common/Cargo.toml` |
 
 This is the hand-off for the remaining architecture work from the 2026-09-26
 review (`code-review-todo.md`, ARCH-01…ARCH-10). Every bug-level finding is
@@ -71,7 +82,7 @@ Line numbers in both files drift, so re-locate by symbol.
 
 The epics are ordered by value ÷ risk. Section 3 shows which can run in parallel.
 
-### Epic A — "State tax": one declarative project model  (ARCH-01, ARCH-06, ARCH-09)
+### Epic A — "State tax": one declarative project model  (ARCH-01, ARCH-06, ARCH-09) — DONE
 
 **Why.** Adding one persisted, undoable field means touching 8+ files:
 `Resonance`, `ProjectFile`, `serialize.rs`, two replay paths (`replay/` slow,
@@ -80,7 +91,7 @@ The epics are ordered by value ÷ risk. Section 3 shows which can run in paralle
 fix campaign found about ten asymmetries between them. `message.rs` and `lib.rs`
 are the merge-conflict hubs for parallel agents.
 
-**Current state.**
+**Current state (2026-09-26 — historical; see the status table).**
 - `UndoExtras` still has 8 fields: `compose_derived_clips`,
   `compose_next_derived_clip_id`, `vocal_clip_lyrics`, `automation_lanes`,
   `reference`, `track_freeze`, `external_instruments`,
@@ -195,7 +206,7 @@ are the merge-conflict hubs for parallel agents.
 - ba #1059 (a July `message/` directory split, 124 files diverged) is
   unsalvageable; close it or re-scope it to A-11.
 
-### Epic B — Engine render-graph publishing  (ARCH-02 remainder)
+### Epic B — Engine render-graph publishing  (ARCH-02 remainder) — DONE
 
 **Why.** The audio callback `try_read`s five
 `Arc<parking_lot::RwLock<…>>` maps: `tracks`, `busses`, `master`, `clips`,
@@ -254,7 +265,7 @@ thread.
 **Conflicts.** The engine handlers are hot, so run this epic's todos
 sequentially. They don't touch `resonance-app` beyond harness accessors.
 
-### Epic C — Engine error taxonomy  (ARCH-05 remainder)
+### Epic C — Engine error taxonomy  (ARCH-05 remainder) — DONE
 
 **Why.** `AudioEvent::Error(String)` has 41 emit sites, and the app can only show
 a banner for them. There are 48 `Result<_, String>` in resonance-audio and 20
@@ -297,7 +308,7 @@ failed control jobs.
 **Conflicts.** `engine/clips.rs` and `plugins.rs` are shared with epic B. Run C-1
 and C-2 either before B starts or between B todos, not concurrently.
 
-### Epic D — App-owned entity ids  (ARCH-04 remainder)
+### Epic D — App-owned entity ids  (ARCH-04 remainder) — IN PROGRESS (D-7e, D-7f open)
 
 **Why.** Ids are allocated in two places:
 - The engine has counters `next_clip_id` / `track` / `plugin` / `group` /
@@ -334,7 +345,7 @@ are gone. `tests/io/id_allocation.rs` stays green and gains a case per space.
 entity: after B-3 (tracks), D-4 is easier because the engine thread owns the
 model.
 
-### Single todo E — Feature-gate the model inside `resonance-common`  (ARCH-07 A7-3)
+### Single todo E — Feature-gate the model inside `resonance-common`  (ARCH-07 A7-3) — DONE
 
 **Why.** Plugins can still name DAW model types through `resonance-common`,
 reached via the SDK. A7-1's allow-list is a source-level guard; this makes it a

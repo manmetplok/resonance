@@ -90,7 +90,7 @@ impl EditorFactory for IrEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance IR".to_string(),
-                app_id: "com.resonance.ir".to_string(),
+                app_id: resonance_plugin::first_party::IR.to_string(),
                 initial_size: INITIAL_SIZE,
                 min_size: MIN_SIZE,
                 resizable: true,

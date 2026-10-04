@@ -18,14 +18,8 @@ pub struct BlockParams {
     pub gate_duck: GateDuckParams,
 }
 
-/// In/out peak amplitudes captured across a block, in linear units.
-#[derive(Default)]
-pub struct BlockPeaks {
-    pub in_l: f32,
-    pub in_r: f32,
-    pub out_l: f32,
-    pub out_r: f32,
-}
+/// In/out peak amplitudes captured across a block (shared: `resonance_dsp`).
+pub use resonance_dsp::BlockPeaks;
 
 pub struct DelayDsp {
     sample_rate: f32,

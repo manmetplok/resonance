@@ -80,7 +80,7 @@ impl ResonanceGate {
 }
 
 impl ResonancePlugin for ResonanceGate {
-    const CLAP_ID: &'static str = "com.resonance.gate";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::GATE;
     const NAME: &'static str = "Resonance Gate";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

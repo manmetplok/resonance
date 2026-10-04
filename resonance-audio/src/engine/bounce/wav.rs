@@ -131,6 +131,7 @@ fn output_sample_rate(format: &ExportFormat, engine_sr: u32) -> u32 {
 /// further `EngineError` conversion is needed here).
 #[derive(Debug, Error)]
 #[error("{0}")]
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub struct TestEncodeError(String);
 
 impl From<&EncoderError> for TestEncodeError {
@@ -145,6 +146,7 @@ impl From<&EncoderError> for TestEncodeError {
 /// format through real encoders without booting the engine thread. Returns
 /// the encoded byte size, or a user-facing error.
 #[doc(hidden)]
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn encode_buffer_for_test(
     format: &ExportFormat,
     metadata: &ExportMetadata,
@@ -180,6 +182,7 @@ pub fn encode_buffer_for_test(
 /// it through the gain + limiter. Returns `(bytes, achieved_lufs,
 /// achieved_dbtp)` or a user-facing error.
 #[doc(hidden)]
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 pub fn normalize_buffer_for_test(
     format: &ExportFormat,
     normalize: &NormalizeSpec,

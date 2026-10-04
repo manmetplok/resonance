@@ -1,11 +1,16 @@
 use super::{ChordState, SectionDefinitionState, SectionPlacementState};
 
 /// Largest bar extent a section may reach: a section's length, and the
-/// bar a placement ends on, never pass the control API's
-/// [`resonance_control::MAX_BARS`]. Bar arithmetic is plain `u32` and the
-/// views loop over every bar each frame, so an unbounded length hung the
-/// UI and overflowed the invariants below (code review VIEW-17).
-pub const MAX_SECTION_BARS: u32 = resonance_control::MAX_BARS;
+/// bar a placement ends on. Bar arithmetic is plain `u32` and the views
+/// loop over every bar each frame, so an unbounded length hung the UI and
+/// overflowed the invariants below (code review VIEW-17).
+///
+/// A domain limit, owned here: the control API's
+/// `resonance_control::MAX_BARS` promises clients the same number, and
+/// `tests/compose/section_bounds.rs` keeps the two equal — a wire change
+/// no longer silently moves how far a section can grow in the GUI (code
+/// review ARCH2-11).
+pub const MAX_SECTION_BARS: u32 = 100_000;
 
 /// Whether a section of `length_bars` placed at 0-based `start_bar` stays
 /// inside [`MAX_SECTION_BARS`] (and is at least one bar long).

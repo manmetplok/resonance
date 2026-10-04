@@ -72,12 +72,30 @@ impl Resonance {
     /// Rebuild only the GUI-side tempo map (no engine send). Used when
     /// only UI display needs updating, e.g. during tempo drags.
     pub(crate) fn rebuild_tempo_map(&mut self) {
+        let (bpm, numerator, denominator) = self.project_tempo();
         self.tempo_map.tempo_points = self.tempo_events.clone();
         self.tempo_map.signature_points = self.signature_events.clone();
-        self.tempo_map.bpm = self.transport.bpm;
-        self.tempo_map.numerator = self.transport.time_sig_num;
-        self.tempo_map.denominator = self.transport.time_sig_den;
+        self.tempo_map.bpm = bpm;
+        self.tempo_map.numerator = numerator;
+        self.tempo_map.denominator = denominator;
         self.tempo_map.rebuild_bar_table(self.sample_rate);
+    }
+
+    /// The song's own tempo and meter: the bar-1 tempo and signature
+    /// events (code review ARCH2-10). `transport.bpm` / `time_sig_*` are
+    /// the *display* values — they follow the playhead through a tempo
+    /// or meter change (`sync_tempo_display`, the playback tick, MIDI
+    /// clock) — so anything that describes the project (the saved
+    /// `bpm` / `time_sig_*`, the tempo map's fallback) reads this
+    /// instead. Falls back to the transport only before the event lists
+    /// are seeded.
+    pub(crate) fn project_tempo(&self) -> (f32, u8, u8) {
+        let bpm = self.tempo_events.first().map_or(self.transport.bpm, |e| e.bpm);
+        let (num, den) = self.signature_events.first().map_or(
+            (self.transport.time_sig_num, self.transport.time_sig_den),
+            |e| (e.numerator, e.denominator),
+        );
+        (bpm, num, den)
     }
 
     /// Update the transport BPM display from the current tempo map.

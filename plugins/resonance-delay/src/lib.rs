@@ -40,7 +40,7 @@ impl ResonanceDelay {
 }
 
 impl ResonancePlugin for ResonanceDelay {
-    const CLAP_ID: &'static str = "com.resonance.delay";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::DELAY;
     const NAME: &'static str = "Resonance Delay";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

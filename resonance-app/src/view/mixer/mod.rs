@@ -24,7 +24,9 @@ use crate::message::*;
 use crate::state::*;
 use crate::theme;
 
+#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
 pub(crate) use group_strip::MixerTopItem;
+#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
 pub(crate) use strip_parts::slot_line_label;
 
 impl crate::Resonance {

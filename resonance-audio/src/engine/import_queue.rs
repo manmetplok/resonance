@@ -77,6 +77,7 @@ pub struct ImportQueue {
     held: Option<Vec<ImportJob>>,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl ImportQueue {
     /// Create a queue that will run at most `max_workers` jobs at once.
     /// A zero is clamped to one so a job can always make progress.
@@ -116,6 +117,7 @@ impl ImportQueue {
     }
 
     /// Number of worker threads spawned so far (never above the cap).
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn worker_count(&self) -> usize {
         self.workers
     }

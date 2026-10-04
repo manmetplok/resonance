@@ -117,6 +117,9 @@ pub enum ExportPhase {
     /// A target failed. Already-written stems stay valid; `remaining` is
     /// how many targets still need rendering for the Retry action.
     Error { written: Vec<PathBuf>, message: String, remaining: usize },
+    /// The user cancelled between targets; the stems written before the
+    /// cancel stay on disk and are listed here.
+    Cancelled(Vec<PathBuf>),
 }
 
 /// Transient state for the Export modal. Held on `Resonance::export_dialog`
@@ -130,9 +133,17 @@ pub struct ExportDialogState {
     pub selected_sources: BTreeSet<ExportSource>,
     pub range: ExportRange,
     pub format: ExportFormat,
-    /// Output folder. `None` until the user picks one.
+    /// Output folder. Defaults to `<project>/stems` for a saved project;
+    /// `None` for an untitled one until the user picks a folder.
     pub destination: Option<PathBuf>,
     pub overwrite: ExportOverwrite,
+    /// Per-target failures of the running export
+    /// (`StemExportTargetError`): the queue keeps going past them, so they
+    /// are collected and shown once it finishes.
+    pub target_errors: Vec<String>,
+    /// A `CancelStemExport` was sent for the running export; the footer's
+    /// cancel button is spent until the engine answers.
+    pub cancel_requested: bool,
 }
 
 impl ExportDialogState {
@@ -147,6 +158,8 @@ impl ExportDialogState {
             format: ExportFormat::default(),
             destination: None,
             overwrite: ExportOverwrite::Suffix,
+            target_errors: Vec::new(),
+            cancel_requested: false,
         }
     }
 
@@ -156,10 +169,21 @@ impl ExportDialogState {
         self.selected_sources.len()
     }
 
-    /// Whether the primary action is enabled: at least one source selected
-    /// and we're in the editable `Setup` phase.
+    /// Whether the primary action is enabled: the Audio-stems tab, at
+    /// least one source selected, a destination folder, and the editable
+    /// `Setup` phase. The MIDI tab has no exporter yet (its engine side
+    /// does not exist), so it never enables the action.
     pub fn can_export(&self) -> bool {
-        matches!(self.phase, ExportPhase::Setup) && !self.selected_sources.is_empty()
+        matches!(self.phase, ExportPhase::Setup)
+            && self.mode == ExportMode::AudioStems
+            && !self.selected_sources.is_empty()
+            && self.destination.is_some()
+    }
+
+    /// A stem render is in flight: the offline renderer owns the plugin
+    /// instances, so the app gates edits exactly as for a mixdown.
+    pub fn is_rendering(&self) -> bool {
+        matches!(self.phase, ExportPhase::Rendering { .. })
     }
 }
 

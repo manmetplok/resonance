@@ -61,6 +61,7 @@ pub struct UnderrunReport {
     pub lifetime_total: u64,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl UnderrunRateLimiter {
     /// Build a fresh rate-limiter. `pending` starts at 0; the first
     /// `record()` call will produce a summary immediately.
@@ -77,12 +78,14 @@ impl UnderrunRateLimiter {
     /// Register one underrun and decide whether to emit a summary now.
     /// Returns `Some(report)` if the caller should log a line; `None`
     /// if the event was coalesced into the running counter.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn record(&self, now: Instant) -> Option<UnderrunReport> {
         self.record_with_interval(now, UNDERRUN_REPORT_INTERVAL)
     }
 
     /// Same as [`record`] but with a caller-supplied interval. Only
     /// used by the tests so they don't have to sleep for real seconds.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn record_with_interval(
         &self,
         now: Instant,

@@ -47,7 +47,7 @@ pub struct ResonanceColor {
 }
 
 impl ResonancePlugin for ResonanceColor {
-    const CLAP_ID: &'static str = "com.resonance.color";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::COLOR;
     const NAME: &'static str = "Resonance Color";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

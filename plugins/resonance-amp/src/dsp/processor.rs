@@ -15,14 +15,8 @@ use crate::nam::NamInference;
 /// mid-audio, even after the loader thread has primed it.
 pub(crate) const SWAP_FADE_SAMPLES: u32 = 1024;
 
-/// In/out peak amplitudes captured across a block, in linear units.
-#[derive(Default, Clone, Copy)]
-pub struct BlockPeaks {
-    pub in_l: f32,
-    pub in_r: f32,
-    pub out_l: f32,
-    pub out_r: f32,
-}
+/// In/out peak amplitudes captured across a block (shared: `resonance_dsp`).
+pub use resonance_dsp::BlockPeaks;
 
 /// Audio-thread NAM model runner: fades between models, smooths gain
 /// parameters, applies DC blocking, and reports input/output peaks.

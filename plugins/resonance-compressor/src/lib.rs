@@ -52,7 +52,7 @@ pub struct ResonanceCompressor {
 }
 
 impl ResonancePlugin for ResonanceCompressor {
-    const CLAP_ID: &'static str = "com.resonance.compressor";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::COMPRESSOR;
     const NAME: &'static str = "Resonance Compressor";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

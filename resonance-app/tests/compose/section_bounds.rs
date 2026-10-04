@@ -17,6 +17,13 @@ use resonance_control::{Request, Response, MAX_BARS};
 
 use crate::common::roundtrip;
 
+/// The GUI's section limit and the control API's promise are one number,
+/// defined twice on purpose (domain vs wire, code review ARCH2-11).
+#[test]
+fn domain_section_limit_matches_the_wire_limit() {
+    assert_eq!(resonance_app::compose::invariants::MAX_SECTION_BARS, MAX_BARS);
+}
+
 fn app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Compose);
     app.test_set_active_project(true);

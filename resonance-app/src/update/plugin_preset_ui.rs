@@ -16,7 +16,7 @@
 
 use iced::Task;
 use resonance_audio::types::{AudioCommand, PluginInstanceId};
-use resonance_control::methods::plugin_preset::PluginPresetSource;
+use resonance_plugin::presets::PresetSource;
 
 use crate::message::{
     BusMessage, MasterMessage, Message, PluginMessage, PresetAddOwner, PresetUiMessage,
@@ -290,7 +290,7 @@ fn rows(r: &Resonance, list: &HostPresetList) -> Vec<HostPresetRow> {
             plugin_id: hit.plugin_id.clone(),
             id: hit.record.preset.id.clone(),
             name: hit.record.meta.name.clone(),
-            source: pp::wire_source(hit.record.preset.source),
+            source: hit.record.preset.source,
             category: hit.record.meta.category.clone(),
             favorite: hit.favorite,
         })
@@ -327,10 +327,7 @@ pub(crate) fn library_changed(r: &mut Resonance) {
             continue;
         }
         let preset = resonance_plugin::presets::PresetRef {
-            source: match identity.source {
-                PluginPresetSource::Factory => resonance_plugin::presets::PresetSource::Factory,
-                PluginPresetSource::User => resonance_plugin::presets::PresetSource::User,
-            },
+            source: identity.source,
             id: identity.id.clone(),
             name: identity.name.clone(),
         };
@@ -340,7 +337,7 @@ pub(crate) fn library_changed(r: &mut Resonance) {
                     i.name = record.meta.name.clone();
                 }
             }
-            None if identity.source == PluginPresetSource::User => {
+            None if identity.source == PresetSource::User => {
                 r.presets.plugin_preset_identity.remove(&instance_id);
             }
             None => {}
@@ -482,7 +479,7 @@ fn recorded_load(
     instance_id: PluginInstanceId,
     clap_id: &str,
     preset_id: &str,
-    source: PluginPresetSource,
+    source: PresetSource,
 ) -> Task<Message> {
     match pp::host_load_message(r, instance_id, clap_id, preset_id, source) {
         Ok(message) => {
@@ -508,7 +505,7 @@ fn step(r: &mut Resonance, instance_id: PluginInstanceId, delta: i32) -> Task<Me
     let at = identity.and_then(|i| {
         order
             .iter()
-            .position(|p| p.id == i.id && pp::wire_source(p.source) == i.source)
+            .position(|p| p.id == i.id && p.source == i.source)
     });
     let next = match at {
         Some(i) => (i as i64 + delta as i64).rem_euclid(n) as usize,
@@ -516,7 +513,7 @@ fn step(r: &mut Resonance, instance_id: PluginInstanceId, delta: i32) -> Task<Me
         None => 0,
     };
     let target = order[next].clone();
-    let source = pp::wire_source(target.source);
+    let source = target.source;
     match pp::host_load_message(r, instance_id, &clap_id, &target.id, source) {
         Ok(Message::Plugin(load)) => {
             record_use(r, &clap_id, &target.id);

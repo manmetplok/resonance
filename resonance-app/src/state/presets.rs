@@ -14,7 +14,7 @@ use resonance_audio::types::{PluginInstanceId, TrackId};
 /// (slice P5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlotPresetIdentity {
-    pub source: resonance_control::methods::plugin_preset::PluginPresetSource,
+    pub source: resonance_plugin::presets::PresetSource,
     pub id: String,
     pub name: String,
     pub modified: bool,
@@ -31,7 +31,7 @@ pub struct HostPresetRow {
     pub plugin_name: String,
     pub id: String,
     pub name: String,
-    pub source: resonance_control::methods::plugin_preset::PluginPresetSource,
+    pub source: resonance_plugin::presets::PresetSource,
     pub category: Option<String>,
     pub favorite: bool,
 }
@@ -114,7 +114,7 @@ pub struct PresetAddPick {
     pub plugin: resonance_audio::types::ScannedPlugin,
     pub preset_id: String,
     pub preset_name: String,
-    pub source: resonance_control::methods::plugin_preset::PluginPresetSource,
+    pub source: resonance_plugin::presets::PresetSource,
 }
 
 impl std::fmt::Display for PresetAddPick {
@@ -209,7 +209,7 @@ pub struct PresetState {
     /// in the add pickers — slice P6).
     pub pending_plugin_presets: std::collections::HashMap<
         PluginInstanceId,
-        (String, String, resonance_control::methods::plugin_preset::PluginPresetSource),
+        (String, String, resonance_plugin::presets::PresetSource),
     >,
     /// Root the plugin-preset directories are read from and written to,
     /// when it is not the user's real data directory. A test seam.

@@ -809,23 +809,33 @@ fn key_block_ids(text: &str) -> Result<Vec<String>, String> {
 }
 
 /// First-party plugins as `(CLAP id, crate dir)`, read from each
-/// `plugins/*/src/lib.rs`.
+/// `plugins/*/src/lib.rs`. Each declares `CLAP_ID` as a
+/// `resonance_plugin::first_party` constant (code review ARCH2-03), whose
+/// value is read from `resonance-plugin/src/first_party.rs` (this crate
+/// links no plugin code, so it reads the source).
 fn first_party_plugins() -> Vec<(String, PathBuf)> {
-    const MARK: &str = "const CLAP_ID: &'static str = \"";
-    let plugins = plugin_dir()
-        .parent()
-        .expect("workspace root")
-        .join("plugins");
+    const MARK: &str = "const CLAP_ID: &'static str = resonance_plugin::first_party::";
+    let root = plugin_dir().parent().expect("workspace root").to_path_buf();
+    let ids = std::fs::read_to_string(root.join("resonance-plugin/src/first_party.rs"))
+        .expect("read resonance-plugin/src/first_party.rs");
+    let value_of = |name: &str| -> Option<String> {
+        let decl = format!("pub const {name}: &str = \"");
+        let at = ids.find(&decl)?;
+        let rest = &ids[at + decl.len()..];
+        Some(rest[..rest.find('"')?].to_owned())
+    };
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(&plugins).expect("read plugins dir") {
+    for entry in std::fs::read_dir(root.join("plugins")).expect("read plugins dir") {
         let dir = entry.expect("read dir entry").path();
         let Ok(lib) = std::fs::read_to_string(dir.join("src/lib.rs")) else {
             continue;
         };
         if let Some(at) = lib.find(MARK) {
             let rest = &lib[at + MARK.len()..];
-            let id = &rest[..rest.find('"').expect("CLAP_ID literal closes")];
-            out.push((id.to_owned(), dir));
+            let name = &rest[..rest.find(';').expect("CLAP_ID declaration ends")];
+            let id = value_of(name)
+                .unwrap_or_else(|| panic!("first_party::{name} is not declared in first_party.rs"));
+            out.push((id, dir));
         }
     }
     out

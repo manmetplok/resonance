@@ -209,3 +209,39 @@ fn vocal_songwriting_contents() {
     // Notes stay within the clip's tick span.
     assert!(notes.iter().all(|n| n.start_tick < clip.duration_ticks));
 }
+
+/// Every plugin a built-in template names is a first-party plugin, by the
+/// id the plugin itself declares (`resonance_plugin::first_party`, code
+/// review ARCH2-03): a renamed CLAP id would otherwise turn every
+/// template track into a missing-plugin slot with all tests green.
+#[test]
+fn builtin_template_plugins_are_first_party_ids() {
+    use resonance_plugin::first_party;
+    for id in BuiltinTemplateId::ALL {
+        let file = id.build().file;
+        let named = file
+            .tracks
+            .iter()
+            .flat_map(|t| &t.plugins)
+            .chain(file.busses.iter().flat_map(|b| &b.plugins))
+            .chain(&file.master_plugins);
+        for plugin in named {
+            assert!(
+                first_party::ALL.contains(&plugin.clap_plugin_id.as_str()),
+                "{}: {:?} is not a first-party CLAP id",
+                id.slug(),
+                plugin.clap_plugin_id
+            );
+        }
+    }
+}
+
+/// The wire's `MASTERING_PLUGIN_ID` (resonance-control links no plugin
+/// code, so it spells the id itself) is the mastering plugin's own.
+#[test]
+fn wire_mastering_id_is_the_plugins() {
+    assert_eq!(
+        resonance_control::methods::master::MASTERING_PLUGIN_ID,
+        resonance_plugin::first_party::MASTERING
+    );
+}

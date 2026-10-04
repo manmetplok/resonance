@@ -9,6 +9,7 @@ mod automation;
 mod aux_sends;
 pub(crate) mod clips;
 mod dispatch;
+mod export;
 mod external_instrument;
 mod freeze;
 pub(crate) mod midi;

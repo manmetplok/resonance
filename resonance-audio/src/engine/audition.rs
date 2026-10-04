@@ -120,6 +120,7 @@ pub(crate) fn audition_gen(ctl: u64) -> u64 {
     ctl >> 1
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl SharedState {
     /// Whether a preview is playing.
     pub fn audition_playing(&self) -> bool {
@@ -128,6 +129,7 @@ impl SharedState {
 
     /// Whether the audio callback latched a natural finish the engine loop
     /// has not consumed yet.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn audition_finish_pending(&self) -> bool {
         self.audition_finished.load(Ordering::Acquire) != 0
     }

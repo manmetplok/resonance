@@ -75,7 +75,7 @@ impl EditorFactory for ReverbEditorFactory {
             resonance_plugin::editor_host::with_announcer(app, self.announcer.clone()),
             EditorOptions {
                 title: "Resonance Reverb".to_string(),
-                app_id: "com.resonance.reverb".to_string(),
+                app_id: resonance_plugin::first_party::REVERB.to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
                 min_size: (720, 680),
                 resizable: true,

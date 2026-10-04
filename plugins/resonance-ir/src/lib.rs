@@ -105,7 +105,7 @@ impl ResonanceIr {
 }
 
 impl ResonancePlugin for ResonanceIr {
-    const CLAP_ID: &'static str = "com.resonance.ir";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::IR;
     const NAME: &'static str = "Resonance IR";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

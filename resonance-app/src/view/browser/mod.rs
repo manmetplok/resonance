@@ -54,7 +54,9 @@ mod files_tab;
 mod pool_tab;
 mod style;
 
+#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
 pub(crate) use files_tab::listing_fingerprint;
+#[cfg_attr(not(feature = "test-support"), allow(unused_imports))]
 pub(crate) use style::WaveThumbnail;
 
 use iced::widget::text::LineHeight;

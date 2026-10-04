@@ -295,6 +295,7 @@ pub(crate) fn restore_quantize(r: &mut Resonance, project: &ProjectFile) {
 /// Favourites and recent folders are *not* touched here: they are
 /// project-independent user state persisted in `settings.json`, loaded
 /// into the pool once at startup.
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 pub(crate) fn restore_pool(
     r: &mut Resonance,
     project: &ProjectFile,

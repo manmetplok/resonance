@@ -37,6 +37,7 @@ pub(crate) mod thread_check;
 mod thread_pool;
 
 pub use bundle::ClapBundle;
+#[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
 pub use bundle::bundle_binary_path;
 pub use bundle::ClapBundleError;
 pub use instance::{ClapInstance, StereoBufMut};
@@ -58,6 +59,7 @@ pub enum ParamsRefresh {
     /// second look): the full [`ClapInstance::query_params`].
     Full,
 }
+#[cfg_attr(not(feature = "test-internals"), allow(unused_imports))]
 pub use param_meta::{choice_labels, label_round_trips, unit_from_text, MAX_CHOICE_STEPS};
 
 use std::ffi::{c_char, c_void, CStr};
@@ -588,6 +590,7 @@ pub(crate) fn any_serial_only_plugin() -> bool {
     SERIAL_ONLY_SLOTS.load(Ordering::Relaxed) != 0
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl PluginSlot {
     /// Wrap a freshly created instance. Reads the plugin's bypass
     /// parameter id and descriptor id once — engine-thread queries, never
@@ -602,6 +605,7 @@ impl PluginSlot {
 
     /// [`Self::new`] with the serial-only flag given (tests).
     #[doc(hidden)]
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn new_serial_only(instance: ClapInstance) -> Self {
         let bypass_param = instance.bypass_param_id();
         Self::with_serial_only(instance, bypass_param, true)
@@ -639,6 +643,7 @@ impl PluginSlot {
 
     /// Whether the host-request poll has work for this slot. One load.
     #[inline]
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn poll_pending(&self) -> bool {
         self.poll_pending.load(Ordering::Acquire)
     }
@@ -664,6 +669,7 @@ impl PluginSlot {
     }
 
     /// Live blocks that skipped this slot on a busy lock, ever.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn lock_misses(&self) -> u64 {
         self.lock_misses.load(Ordering::Relaxed)
     }

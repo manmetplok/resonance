@@ -316,7 +316,7 @@ fn add_plugin(
                             id,
                             &params.plugin_id,
                             &found.id,
-                            crate::update::control::plugin_presets::wire_source(found.source),
+                            found.source,
                         );
                         match message {
                             Ok(message) => {

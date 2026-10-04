@@ -47,8 +47,13 @@
 //! **Concurrency**: every write of `library.json` runs under an exclusive
 //! `File::lock` on `library.lock`, re-reading the index under the lock
 //! first. Nothing here may run on an audio thread.
+//!
+//! The slot table, index I/O, lock and lookup are
+//! [`crate::content_index`], shared with the NAM library; this module is
+//! what a kit is (code review ARCH2-04).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(feature = "drumkit-zip")]
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -56,7 +61,12 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::atomic_file::{atomic_write, quarantine_corrupt, AtomicWriteError};
+use crate::atomic_file::AtomicWriteError;
+use crate::content_index::{
+    self, canonical_ids, hash_bytes, mtime_ns, slots_and_duplicates, stat_stamp, Entries,
+    IndexFile, IndexedEntry, SlotTable,
+};
+pub use crate::content_index::{LIBRARY_FILE, LOCK_FILE, MAX_SLOT, SLOT_COUNT};
 
 mod install;
 mod manifest;
@@ -89,17 +99,8 @@ pub const STAGING_DIR: &str = ".staging";
 /// that made it still runs (its pid may have been reused).
 pub const STAGING_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
-pub const LIBRARY_FILE: &str = "library.json";
-pub const LOCK_FILE: &str = "library.lock";
-
-/// How many slots `kit_select` can address (`0..=MAX_SLOT`).
-pub const SLOT_COUNT: u32 = 1000;
-pub const MAX_SLOT: u32 = SLOT_COUNT - 1;
-
 /// Import needs this much free space per byte copied.
 pub const IMPORT_SPACE_FACTOR: f64 = 1.1;
-
-const INDEX_VERSION: u32 = 1;
 
 /// The library root: [`DRUMKIT_DIR_ENV`] if set and non-empty, else
 /// `<data dir>/resonance/drumkits`.
@@ -165,7 +166,7 @@ pub fn mark_key(id: &str) -> String {
 
 /// sha256 of a manifest's bytes, lowercase hex: the kit id.
 pub fn hash_manifest(path: &Path) -> std::io::Result<String> {
-    crate::nam_library::hash_file(path)
+    content_index::hash_file(path)
 }
 
 /// The manifest of the kit in `kit_dir`: `kit_dir/drum_samples.json`, else
@@ -353,6 +354,24 @@ impl Entry {
     }
 }
 
+impl IndexedEntry for Entry {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn slot(&self) -> Option<u32> {
+        self.slot
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn is_duplicate(&self) -> bool {
+        matches!(self.status, EntryStatus::DuplicateOf(_))
+    }
+    fn key_path(&self) -> &Path {
+        &self.dir
+    }
+}
+
 /// One kit as the index remembers it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct KitRecord {
@@ -374,35 +393,15 @@ struct KitRecord {
     measured_size: Option<u64>,
 }
 
-/// `library.json`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `library.json`: the shared slot table, the migration flag, then the
+/// kit records.
+#[derive(Debug, Clone, Default, Serialize)]
 struct IndexDoc {
-    version: u32,
-    generation: u64,
-    next_slot: u32,
-    /// slot → id.
-    slots: BTreeMap<u32, String>,
-    /// id → the slot it held before it disappeared.
-    #[serde(default)]
-    retired: BTreeMap<String, u32>,
+    #[serde(flatten)]
+    table: SlotTable,
     /// Whether the one-time `installed.json` migration has run.
-    #[serde(default)]
     installed_json_migrated: bool,
     kits: Vec<KitRecord>,
-}
-
-impl Default for IndexDoc {
-    fn default() -> Self {
-        Self {
-            version: INDEX_VERSION,
-            generation: 0,
-            next_slot: 0,
-            slots: BTreeMap::new(),
-            retired: BTreeMap::new(),
-            installed_json_migrated: false,
-            kits: Vec::new(),
-        }
-    }
 }
 
 /// Failure reading, scanning or changing the library.
@@ -475,23 +474,9 @@ pub struct ScanReport {
     pub changed: bool,
 }
 
-/// What an import did.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ImportOutcome {
-    /// Copied (or extracted) into the root.
-    Added(Entry),
-    /// A kit with the same manifest is already in the library; nothing was
-    /// left behind.
-    AlreadyPresent(Entry),
-}
-
-impl ImportOutcome {
-    pub fn entry(&self) -> &Entry {
-        match self {
-            ImportOutcome::Added(e) | ImportOutcome::AlreadyPresent(e) => e,
-        }
-    }
-}
+/// What an import did. `AlreadyPresent`: a kit with the same manifest is
+/// already in the library; nothing was left behind.
+pub type ImportOutcome = content_index::ImportOutcome<Entry>;
 
 /// What the plok.org index says about a kit name, for the `installed.json`
 /// migration: a hit makes the kit `source = plok` and carries the entry's
@@ -527,28 +512,6 @@ impl std::fmt::Debug for Migration {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Stamp {
-    len: u64,
-    mtime: Option<std::time::SystemTime>,
-}
-
-fn stat_stamp(path: &Path) -> Option<Stamp> {
-    let m = std::fs::metadata(path).ok()?;
-    Some(Stamp {
-        len: m.len(),
-        mtime: m.modified().ok(),
-    })
-}
-
-fn mtime_ns(meta: &std::fs::Metadata) -> u64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0)
-}
-
 /// The kits under `root`: (top directory, manifest), by directory name.
 fn scan_kits(root: &Path) -> Vec<(PathBuf, PathBuf)> {
     let Ok(rd) = std::fs::read_dir(root) else {
@@ -568,13 +531,8 @@ fn scan_kits(root: &Path) -> Vec<(PathBuf, PathBuf)> {
 /// The kit library: the index plus its derived entries.
 #[derive(Debug, Clone)]
 pub struct Library {
-    root: Option<PathBuf>,
-    doc: IndexDoc,
-    stamp: Option<Stamp>,
-    entries: Vec<Entry>,
-    by_id: HashMap<String, usize>,
-    by_slot: HashMap<u32, usize>,
-    by_dir: HashMap<PathBuf, usize>,
+    index: IndexFile<IndexDoc>,
+    entries: Entries<Entry>,
     /// Missing-sample counts by id, from [`Library::check_missing_files`].
     /// In memory only: a scan never stats samples.
     missing: HashMap<String, usize>,
@@ -586,13 +544,12 @@ impl Library {
     /// [`LibraryError::NoRoot`].
     pub fn empty() -> Self {
         Self {
-            root: None,
-            doc: IndexDoc::default(),
-            stamp: None,
-            entries: Vec::new(),
-            by_id: HashMap::new(),
-            by_slot: HashMap::new(),
-            by_dir: HashMap::new(),
+            index: IndexFile {
+                root: None,
+                stamp: None,
+                doc: IndexDoc::default(),
+            },
+            entries: Entries::default(),
             missing: HashMap::new(),
             migration: None,
         }
@@ -604,12 +561,12 @@ impl Library {
     pub fn open(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         let path = root.join(LIBRARY_FILE);
-        let stamp = stat_stamp(&path);
-        let doc = read_index(&path, false);
         let mut lib = Self {
-            root: Some(root),
-            doc,
-            stamp,
+            index: IndexFile {
+                stamp: stat_stamp(&path),
+                doc: read_index(&path, false),
+                root: Some(root),
+            },
             ..Self::empty()
         };
         lib.rebuild_entries();
@@ -641,17 +598,17 @@ impl Library {
     }
 
     pub fn root(&self) -> Option<&Path> {
-        self.root.as_deref()
+        self.index.root.as_deref()
     }
 
     pub fn staging_dir(&self) -> Option<PathBuf> {
-        self.root.as_ref().map(|r| r.join(STAGING_DIR))
+        self.index.root.as_ref().map(|r| r.join(STAGING_DIR))
     }
 
     /// The paths a [`crate::library_marks::FreshnessPoll`] should watch:
     /// the root (a kit added or removed) and the index.
     pub fn watch_paths(&self) -> Vec<PathBuf> {
-        match &self.root {
+        match &self.index.root {
             Some(r) => vec![r.clone(), r.join(LIBRARY_FILE)],
             None => Vec::new(),
         }
@@ -659,31 +616,31 @@ impl Library {
 
     /// The index's write counter.
     pub fn generation(&self) -> u64 {
-        self.doc.generation
+        self.index.doc.table.generation
     }
 
     /// Every entry, slotted ones first in slot order, then the rest
     /// (duplicates, the overflow past 1000) by directory.
     pub fn entries(&self) -> &[Entry] {
-        &self.entries
+        &self.entries.list
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.list.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.list.is_empty()
     }
 
     /// Total known bytes on disk (kits not yet measured count 0).
     pub fn total_bytes(&self) -> u64 {
-        self.entries.iter().filter_map(|e| e.size_bytes).sum()
+        self.entries.list.iter().filter_map(|e| e.size_bytes).sum()
     }
 
     /// The canonical entry of a kit id.
     pub fn entry(&self, id: &str) -> Option<&Entry> {
-        self.by_id.get(id).map(|&i| &self.entries[i])
+        self.entries.by_id(id)
     }
 
     /// [`entry`](Self::entry) (the spec's name).
@@ -693,17 +650,17 @@ impl Library {
 
     /// The entry that holds `slot`.
     pub fn by_slot(&self, slot: u32) -> Option<&Entry> {
-        self.by_slot.get(&slot).map(|&i| &self.entries[i])
+        self.entries.by_slot(slot)
     }
 
     /// The entry whose top directory is `dir` (exact path match).
     pub fn by_dir(&self, dir: &Path) -> Option<&Entry> {
-        self.by_dir.get(dir).map(|&i| &self.entries[i])
+        self.entries.by_key(dir)
     }
 
     /// The entry whose manifest is `rel` relative to the root.
     pub fn by_rel_path(&self, rel: &Path) -> Option<&Entry> {
-        self.entries.iter().find(|e| e.rel_path == rel)
+        self.entries.list.iter().find(|e| e.rel_path == rel)
     }
 
     /// The slot of `id`, if it holds one.
@@ -715,68 +672,30 @@ impl Library {
     /// [`measure_size`] → [`record_size`](Self::record_size) pass.
     pub fn unsized_dirs(&self) -> Vec<PathBuf> {
         self.entries
+            .list
             .iter()
             .filter(|e| e.size_bytes.is_none())
             .map(|e| e.dir.clone())
             .collect()
     }
 
-    /// Resolve free text to a slotted entry: an exact name (folded: case
-    /// and diacritics), then an id prefix of at least 6 hex digits, then a
-    /// unique name prefix, then a unique name substring. `None` when
-    /// nothing or several match.
+    /// Resolve free text to a slotted entry ([`content_index`]'s lookup):
+    /// an exact name (folded: case and diacritics), then an id prefix of
+    /// at least 6 hex digits, then a unique name prefix, then a unique
+    /// name substring. `None` when nothing or several match.
     pub fn find(&self, text: &str) -> Option<&Entry> {
-        let t = text.trim();
-        if t.is_empty() {
-            return None;
-        }
-        use crate::library_marks::vocab::fold;
-        let lower = fold(t);
-        let slotted = || self.entries.iter().filter(|e| e.slot.is_some());
-        let mut exact = slotted().filter(|e| fold(&e.name) == lower);
-        match (exact.next(), exact.next()) {
-            (Some(e), None) => return Some(e),
-            (Some(_), Some(_)) => return None,
-            _ => {}
-        }
-        if t.len() >= 6 && t.chars().all(|c| c.is_ascii_hexdigit()) {
-            let hex = t.to_ascii_lowercase();
-            let mut hits = slotted().filter(|e| e.id.starts_with(&hex));
-            if let (Some(e), None) = (hits.next(), hits.next()) {
-                return Some(e);
-            }
-        }
-        let unique = |pred: &dyn Fn(&Entry) -> bool| {
-            let mut hits = slotted().filter(|e| pred(e));
-            match (hits.next(), hits.next()) {
-                (Some(e), None) => Some(e),
-                _ => None,
-            }
-        };
-        unique(&|e: &Entry| fold(&e.name).starts_with(&lower))
-            .or_else(|| unique(&|e: &Entry| fold(&e.name).contains(&lower)))
+        self.entries.find(text)
     }
 
     /// Re-read `library.json` if its stamp (size, mtime) moved, and rebuild
     /// the entries from it. Returns whether it was re-read. One `stat` when
     /// nothing moved.
-    ///
-    /// The generation is not a reliable "unchanged" signal: an index that
-    /// was deleted and rebuilt, or rewritten by another tool, can carry the
-    /// generation this reader already has with different contents.
     pub fn reload_if_changed(&mut self) -> bool {
-        let Some(root) = &self.root else {
-            return false;
-        };
-        let path = root.join(LIBRARY_FILE);
-        let now = stat_stamp(&path);
-        if now == self.stamp {
-            return false;
+        let reread = self.index.reload_if_changed(|p| read_index(p, false));
+        if reread {
+            self.rebuild_entries();
         }
-        self.doc = read_index(&path, false);
-        self.stamp = now;
-        self.rebuild_entries();
-        true
+        reread
     }
 
     /// Run `f` on the index re-read under the `library.lock` file lock;
@@ -791,13 +710,11 @@ impl Library {
             let mut doc = read_index(&index_path, true);
             let (out, changed) = f(&mut doc)?;
             if changed {
-                doc.generation = doc.generation.wrapping_add(1);
-                doc.version = INDEX_VERSION;
-                let bytes = serde_json::to_vec_pretty(&doc)?;
-                atomic_write(&index_path, &bytes)?;
+                doc.table.bump();
+                content_index::write_index::<LibraryError>(&index_path, &doc)?;
             }
-            self.doc = doc;
-            self.stamp = stat_stamp(&index_path);
+            self.index.doc = doc;
+            self.index.stamp = stat_stamp(&index_path);
             self.rebuild_entries();
             Ok(out)
         })
@@ -807,12 +724,12 @@ impl Library {
     /// `installed.json` migration if it is due, assign and free slots,
     /// and write `library.json` if anything changed. Under the lock.
     pub fn rescan(&mut self) -> Result<ScanReport, LibraryError> {
-        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let root = self.index.root.clone().ok_or(LibraryError::NoRoot)?;
         if !root.is_dir() {
             // Nothing installed yet: an empty library, and nothing is
             // created until the first import or download.
-            self.doc = IndexDoc::default();
-            self.stamp = None;
+            self.index.doc = IndexDoc::default();
+            self.index.stamp = None;
             self.rebuild_entries();
             return Ok(ScanReport::default());
         }
@@ -835,13 +752,13 @@ impl Library {
     }
 
     fn migration_due(&self) -> bool {
-        self.migration.is_some() && !self.doc.installed_json_migrated
+        self.migration.is_some() && !self.index.doc.installed_json_migrated
     }
 
     /// Store a size measured by [`measure_size`] for the kit in `dir`.
     /// Ignored when the index no longer knows the kit.
     pub fn record_size(&mut self, dir: &Path, bytes: u64) -> Result<(), LibraryError> {
-        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let root = self.index.root.clone().ok_or(LibraryError::NoRoot)?;
         if !root.is_dir() {
             return Ok(());
         }
@@ -898,7 +815,7 @@ impl Library {
         {
             return self.import_zip(src, job);
         }
-        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let root = self.index.root.clone().ok_or(LibraryError::NoRoot)?;
         let not_a_kit = |reason: &str| LibraryError::NotAKit {
             path: src.to_path_buf(),
             reason: reason.to_string(),
@@ -919,7 +836,7 @@ impl Library {
             find_manifest(src).ok_or_else(|| not_a_kit("no drum_samples.json at depth 0 or 1"))?;
         let bytes = std::fs::read(&manifest).map_err(io_err("read", &manifest))?;
         summarize(&bytes).map_err(|e| not_a_kit(&e.0))?;
-        let id = crate::nam_library::hash_bytes(&bytes);
+        let id = hash_bytes(&bytes);
         self.rescan()?;
         if let Some(e) = self.entry(&id) {
             return Ok(ImportOutcome::AlreadyPresent(e.clone()));
@@ -1010,7 +927,7 @@ impl Library {
         sidecar: Sidecar,
         mut job: ImportJob<'_>,
     ) -> Result<ImportOutcome, LibraryError> {
-        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let root = self.index.root.clone().ok_or(LibraryError::NoRoot)?;
         let mut opened = OpenedZip::open(zip)?;
         self.rescan()?;
         if let Some(e) = self.entry(&opened.id) {
@@ -1069,7 +986,7 @@ impl Library {
         sidecar: Sidecar,
         mut job: ImportJob<'_>,
     ) -> Result<Entry, LibraryError> {
-        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let root = self.index.root.clone().ok_or(LibraryError::NoRoot)?;
         let (old, canon) = self.kit_dir_in_root(&root, existing_dir)?;
         let mut opened = OpenedZip::open(zip)?;
         job.check_space(&root, space_needed(opened.plan.total()))?;
@@ -1164,7 +1081,7 @@ impl Library {
     /// directory of a kit the index knows, a real directory directly
     /// inside the root after resolving symlinks and `..`.
     pub fn delete(&mut self, dir: &Path) -> Result<Entry, LibraryError> {
-        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let root = self.index.root.clone().ok_or(LibraryError::NoRoot)?;
         let (entry, canon) = self.kit_dir_in_root(&root, dir)?;
         std::fs::remove_dir_all(&canon).map_err(io_err("delete", dir))?;
         self.missing.remove(&entry.id);
@@ -1176,12 +1093,13 @@ impl Library {
     /// kits with the same manifest size, mtime and sidecar, and every
     /// distinct id slotted (while slots remain).
     fn scan_is_current(&self, root: &Path) -> bool {
+        let doc = &self.index.doc;
         let kits = scan_kits(root);
-        if kits.len() != self.doc.kits.len() {
+        if kits.len() != doc.kits.len() {
             return false;
         }
         let by_dir: HashMap<&Path, &KitRecord> =
-            self.doc.kits.iter().map(|r| (r.dir.as_path(), r)).collect();
+            doc.kits.iter().map(|r| (r.dir.as_path(), r)).collect();
         for (dir, manifest) in &kits {
             let Some(r) = by_dir.get(dir.as_path()) else {
                 return false;
@@ -1197,62 +1115,24 @@ impl Library {
                 return false;
             }
         }
-        let slotted: HashSet<&str> = self.doc.slots.values().map(String::as_str).collect();
-        let full = self.doc.slots.len() >= SLOT_COUNT as usize;
-        full || self
-            .doc
-            .kits
-            .iter()
-            .all(|r| slotted.contains(r.id.as_str()))
+        doc.table.covers(doc.kits.iter().map(|r| r.id.as_str()))
     }
 
     fn rebuild_entries(&mut self) {
-        let root = self.root.clone().unwrap_or_default();
-        let slot_of: HashMap<&str, u32> = self
-            .doc
-            .slots
-            .iter()
-            .map(|(s, id)| (id.as_str(), *s))
-            .collect();
-        let mut first_dir: HashMap<&str, &Path> = HashMap::new();
-        let mut records: Vec<&KitRecord> = self.doc.kits.iter().collect();
+        let root = self.index.root.clone().unwrap_or_default();
+        let doc = &self.index.doc;
+        let mut records: Vec<&KitRecord> = doc.kits.iter().collect();
         records.sort_by(|a, b| a.dir.to_string_lossy().cmp(&b.dir.to_string_lossy()));
-        let mut entries = Vec::with_capacity(records.len());
-        for r in records {
-            let duplicate_of = match first_dir.get(r.id.as_str()) {
-                Some(p) => Some(p.to_path_buf()),
-                None => {
-                    first_dir.insert(r.id.as_str(), r.dir.as_path());
-                    None
-                }
-            };
-            let slot = if duplicate_of.is_none() {
-                slot_of.get(r.id.as_str()).copied()
-            } else {
-                None
-            };
-            let missing = self.missing.get(&r.id).copied();
-            entries.push(make_entry(&root, r, slot, duplicate_of, missing));
-        }
-        entries.sort_by(|a, b| match (a.slot, b.slot) {
-            (Some(x), Some(y)) => x.cmp(&y),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.dir.cmp(&b.dir),
-        });
-        self.by_id.clear();
-        self.by_slot.clear();
-        self.by_dir.clear();
-        for (i, e) in entries.iter().enumerate() {
-            if !matches!(e.status, EntryStatus::DuplicateOf(_)) {
-                self.by_id.insert(e.id.clone(), i);
-            }
-            if let Some(s) = e.slot {
-                self.by_slot.insert(s, i);
-            }
-            self.by_dir.insert(e.dir.clone(), i);
-        }
-        self.entries = entries;
+        let keys = records.iter().map(|r| (r.id.as_str(), r.dir.as_path()));
+        let placed = slots_and_duplicates(keys, &doc.table);
+        let entries = records
+            .iter()
+            .zip(placed)
+            .map(|(r, (slot, duplicate_of))| {
+                make_entry(&root, r, slot, duplicate_of, self.missing.get(&r.id).copied())
+            })
+            .collect();
+        self.entries = Entries::new(entries);
     }
 }
 
@@ -1395,20 +1275,7 @@ fn with_lock<R>(
     root: &Path,
     f: impl FnOnce() -> Result<R, LibraryError>,
 ) -> Result<R, LibraryError> {
-    let lock_path = root.join(LOCK_FILE);
-    let lock = File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .map_err(io_err("open", &lock_path))?;
-    let locked = crate::library_marks::lock_or_best_effort(&lock, &lock_path)
-        .map_err(io_err("lock", &lock_path))?;
-    let result = f();
-    if locked {
-        let _ = lock.unlock();
-    }
-    result
+    content_index::with_lock(root, |op, path, e| io_err(op, path)(e), f)
 }
 
 /// Whether process `pid` is running (unix: `kill(pid, 0)`; `EPERM` means
@@ -1517,7 +1384,7 @@ impl OpenedZip {
         })?;
         Ok(Self {
             path: zip.to_path_buf(),
-            id: crate::nam_library::hash_bytes(&bytes),
+            id: hash_bytes(&bytes),
             archive,
             plan,
         })
@@ -1593,7 +1460,7 @@ fn rescan_doc(
                 };
                 report.hashed += 1;
                 files_changed = true;
-                let id = crate::nam_library::hash_bytes(&bytes);
+                let id = hash_bytes(&bytes);
                 let (summary, error) = match summarize(&bytes) {
                     Ok(s) => (Some(s), None),
                     Err(e) => (None, Some(e.0)),
@@ -1615,57 +1482,14 @@ fn rescan_doc(
     }
 
     // Canonical kit per id: the first in scan order.
-    let mut canonical: Vec<&str> = Vec::new();
-    let mut seen_ids: HashSet<&str> = HashSet::new();
-    for r in &records {
-        if seen_ids.insert(r.id.as_str()) {
-            canonical.push(r.id.as_str());
-        }
-    }
-    let live: HashSet<&str> = canonical.iter().copied().collect();
-    let gone: Vec<(u32, String)> = doc
-        .slots
-        .iter()
-        .filter(|(_, id)| !live.contains(id.as_str()))
-        .map(|(s, id)| (*s, id.clone()))
-        .collect();
-    for (slot, id) in gone {
-        doc.slots.remove(&slot);
-        doc.retired.insert(id.clone(), slot);
-        report.removed.push(id);
-    }
-    let slotted: HashSet<String> = doc.slots.values().cloned().collect();
-    for id in canonical {
-        if slotted.contains(id) {
-            continue;
-        }
-        let reclaim = doc
-            .retired
-            .get(id)
-            .copied()
-            .filter(|s| !doc.slots.contains_key(s));
-        if let Some(slot) = reclaim.or_else(|| allocate_slot(doc)) {
-            doc.slots.insert(slot, id.to_string());
-            doc.next_slot = doc.next_slot.max(slot + 1);
-            doc.retired.remove(id);
-            report.added.push(id.to_string());
-        }
-    }
-    let held: HashSet<u32> = doc.slots.keys().copied().collect();
-    doc.retired.retain(|_, s| !held.contains(s));
+    let canonical = canonical_ids(records.iter().map(|r| r.id.as_str()));
+    let changes = doc.table.reconcile(&canonical);
+    report.added = changes.added;
+    report.removed = changes.removed;
 
     doc.kits = records;
     report.changed = files_changed || !report.added.is_empty() || !report.removed.is_empty();
     Ok(report)
-}
-
-/// Next slot under the no-reuse rule: past the high-water mark while there
-/// is room, else the lowest free one; `None` when all are taken.
-fn allocate_slot(doc: &IndexDoc) -> Option<u32> {
-    if doc.next_slot <= MAX_SLOT && !doc.slots.contains_key(&doc.next_slot) {
-        return Some(doc.next_slot);
-    }
-    (0..SLOT_COUNT).find(|s| !doc.slots.contains_key(s))
 }
 
 /// `YYYY-MM-DD` (the registry's `installed_at`) → midnight UTC, RFC 3339.
@@ -1749,50 +1573,19 @@ fn migrate_installed(root: &Path, m: &Migration) -> usize {
     written
 }
 
-/// Read `library.json`, tolerant by record (see `nam_library`'s reader):
-/// a bad kit record is dropped and re-hashed; only a document that is not
+/// Read `library.json`, tolerant by record (`content_index`'s reader): a
+/// bad kit record is dropped and re-hashed; only a document that is not
 /// JSON at all reads as empty, and it is quarantined only under the lock.
 fn read_index(path: &Path, quarantine: bool) -> IndexDoc {
-    let Ok(bytes) = std::fs::read(path) else {
+    const WHAT: &str = "drum kit library";
+    let Some(value) = content_index::read_index_value(path, quarantine, WHAT) else {
         return IndexDoc::default();
     };
-    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(e) => {
-            if quarantine {
-                tracing::error!(
-                    "drum kit library index {} unreadable ({e}); rebuilding",
-                    path.display()
-                );
-                quarantine_corrupt(path);
-            }
-            return IndexDoc::default();
-        }
-    };
-    fn lenient<T: serde::de::DeserializeOwned>(v: &serde_json::Value, k: &str) -> Option<T> {
-        serde_json::from_value(v.get(k)?.clone()).ok()
-    }
-    let kits = match value.get("kits") {
-        Some(serde_json::Value::Array(items)) => items
-            .iter()
-            .filter_map(|r| match serde_json::from_value::<KitRecord>(r.clone()) {
-                Ok(rec) => Some(rec),
-                Err(e) => {
-                    tracing::warn!("drum kit library index: dropping a bad kit record ({e})");
-                    None
-                }
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
     IndexDoc {
-        version: lenient(&value, "version").unwrap_or(INDEX_VERSION),
-        generation: lenient(&value, "generation").unwrap_or(0),
-        next_slot: lenient(&value, "next_slot").unwrap_or(0),
-        slots: lenient(&value, "slots").unwrap_or_default(),
-        retired: lenient(&value, "retired").unwrap_or_default(),
-        installed_json_migrated: lenient(&value, "installed_json_migrated").unwrap_or(false),
-        kits,
+        table: SlotTable::from_value(&value),
+        installed_json_migrated: content_index::lenient(&value, "installed_json_migrated")
+            .unwrap_or(false),
+        kits: content_index::lenient_records(&value, "kits", WHAT),
     }
 }
 

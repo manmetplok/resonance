@@ -358,7 +358,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
 ///
 /// Reads `app.plugin_catalog.available_plugins`, which the scanner fills at startup, so
 /// it needs NO open project and is listed in
-/// [`is_read_only_method`](super::is_read_only_method).
+/// [`bypasses_mutation_gate`](super::bypasses_mutation_gate).
 fn plugin_catalog(app: &Resonance, request: &Request) -> Response {
     let plugins = app
         .plugin_catalog

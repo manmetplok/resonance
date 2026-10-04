@@ -74,6 +74,7 @@ pub(crate) struct CompRibbonHit {
     pub band_height: f32,
 }
 
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 impl TimelineCanvas<'_> {
     /// The take sub-row under a canvas-space `y`, as
     /// `(track, group, take, row_y, row_height)` in screen space.
@@ -184,6 +185,7 @@ impl TimelineCanvas<'_> {
     }
 
     /// The comp ribbon under `pos`.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub(crate) fn comp_ribbon_at(&self, pos: Point) -> Option<CompRibbonHit> {
         if self.take_groups.groups.is_empty() {
             return None;

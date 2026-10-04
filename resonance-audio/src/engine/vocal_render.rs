@@ -202,13 +202,16 @@ pub struct TuningOverlay {
     caches: TuningCaches,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl TuningOverlay {
     /// Nothing to patch: every render reads the graph's clips as they are.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn is_empty(&self) -> bool {
         self.caches.is_empty()
     }
 
     /// How many caches the pass (re)built.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub fn rebuilt(&self) -> usize {
         self.caches.iter().filter(|(_, c)| c.is_some()).count()
     }

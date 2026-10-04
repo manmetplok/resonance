@@ -21,6 +21,7 @@ pub mod chord_track;
 pub mod compose;
 pub mod control_jobs;
 pub mod control_socket;
+#[cfg(feature = "test-support")]
 pub mod demo;
 pub mod drums_mirror;
 pub mod engine_events;
@@ -35,9 +36,12 @@ pub mod recent;
 pub mod reference;
 pub mod settings;
 pub mod state;
+#[cfg(feature = "test-support")]
 mod test_support;
+#[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub use test_support::TestChain;
+#[cfg(feature = "test-support")]
 pub use test_support::SendSlotAffordances;
 pub mod theme;
 pub mod undo;
@@ -273,6 +277,7 @@ pub fn parse_startup_tab() -> Option<ViewMode> {
 /// This is the *only* difference between [`Resonance::new`] and
 /// [`Resonance::new_for_test`]; both build the same struct the same way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 enum Host {
     /// The real app: read the user's recents, settings, saved track presets
     /// and user-authored device definitions from disk.
@@ -280,6 +285,7 @@ enum Host {
     /// Tests: touch nothing outside the process. Every one of those starts
     /// empty, so a test's result cannot depend on what is in `~/.config` —
     /// and cannot be changed by a test that writes there.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     None,
 }
 
@@ -483,6 +489,7 @@ impl Resonance {
     /// [`Resonance::new_for_test_with_capture`], or install a fresh channel
     /// mid-test with [`Resonance::test_capture_engine`].
     #[doc(hidden)]
+    #[cfg(feature = "test-support")]
     pub fn new_for_test() -> (Self, iced::Task<Message>) {
         let (app, task, cmd_rx) = Self::new_for_test_with_capture();
         std::thread::spawn(move || while cmd_rx.recv().is_ok() {});
@@ -498,6 +505,7 @@ impl Resonance {
     /// is its own process, and becomes a silent wrong-tab bug the moment two
     /// test files that want different tabs share one binary (ba doc #285 §4).
     #[doc(hidden)]
+    #[cfg(feature = "test-support")]
     pub fn new_for_test_on(tab: ViewMode) -> (Self, iced::Task<Message>) {
         let (mut app, task) = Self::new_for_test();
         app.ui.view_mode = tab;
@@ -508,6 +516,7 @@ impl Resonance {
     /// commands queue onto so a test can assert on them from construction
     /// onwards — including asserting that construction emitted nothing.
     #[doc(hidden)]
+    #[cfg(feature = "test-support")]
     pub fn new_for_test_with_capture() -> (
         Self,
         iced::Task<Message>,
@@ -524,6 +533,7 @@ impl Resonance {
     /// responding" banner — without needing to actually kill a real
     /// engine thread mid-test.
     #[doc(hidden)]
+    #[cfg(feature = "test-support")]
     pub fn new_for_test_disconnected() -> (Self, iced::Task<Message>) {
         let engine = AudioEngine::for_test_disconnected();
         (Self::assemble(engine, Host::None), iced::Task::none())

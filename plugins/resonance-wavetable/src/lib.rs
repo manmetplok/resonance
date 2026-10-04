@@ -57,7 +57,7 @@ impl ResonanceWavetable {
 }
 
 impl ResonancePlugin for ResonanceWavetable {
-    const CLAP_ID: &'static str = "com.resonance.wavetable";
+    const CLAP_ID: &'static str = resonance_plugin::first_party::WAVETABLE;
     const NAME: &'static str = "Resonance Wavetable";
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

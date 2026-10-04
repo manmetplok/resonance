@@ -18,6 +18,7 @@ mod interp;
 mod lfo;
 mod oversample;
 mod pan;
+mod peaks;
 pub mod pitch;
 pub mod pitch_rt;
 mod rng;
@@ -54,6 +55,7 @@ pub use interp::{
 pub use lfo::Lfo;
 pub use oversample::{halfband_coefs, Halfband, OversampleFactor, Oversampler};
 pub use pan::{constant_power_pan, stereo_balance};
+pub use peaks::BlockPeaks;
 pub use pitch::{detect_f0, F0Config, F0Frame, YinDetector};
 pub use pitch_rt::{PitchEstimate, PitchTracker};
 pub use rng::SimpleRng;

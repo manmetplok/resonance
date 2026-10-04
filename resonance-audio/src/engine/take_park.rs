@@ -84,6 +84,7 @@ pub(crate) struct TakeClipPark {
     entries: HashMap<ClipId, Parked>,
 }
 
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
 impl TakeClipPark {
     /// Park a recording the clip list *did* hold.
     ///
@@ -170,6 +171,7 @@ impl TakeClipPark {
     /// A standing claim is *not* listed: it names a recording that is not
     /// here (yet, or ever), and a test asking "what did the removal park"
     /// wants the audio, not the reservation.
+    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
     pub(crate) fn held_ids(&self) -> Vec<ClipId> {
         let mut ids: Vec<ClipId> = self
             .entries
