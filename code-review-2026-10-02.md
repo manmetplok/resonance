@@ -72,7 +72,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 2 | U2 view correctness | UX-02, UX-06, UX-10, UX-22 | opus | merged | 72ab6819 |
 | 2 | H1 host spec | HOST-05, -06, -09, -11, -12, -13, -15, -16 | opus | merged | 38e62ab9 |
 | 2 | D2 DSP follow-ups | FU-D1b1 (rescale wavetable factory presets to the new envelope timing), FU-D1a1 (amp/IR `try_begin_swap`) | sonnet | merged | 7d5f0a69 |
-| 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | running |  |
+| 3 | R3 latency changes | RT-04, HOST-04, HOST-07, HOST-14 | opus | merged | e3f1bd76 |
 | 3 | R4 RT correctness | RT-03, RT-05, RT-06, RT-09, RT-10, RT-11, RT-12, RT-14, RT-15, RT-16, RT-18 | opus | running |  |
 | 3 | P3 editor runtime | PUX-04, -07, -09, -10, -12, PUX-01 (preset-bar recall), DEP-03, FU-P1a, FU-P2a, FU-P2b, FU-P2e, FU-P2f | sonnet | merged | 1f2eff0c |
 | 3 | X1 dependencies | DEP-01, -02, -04 (license decision → report only), -05..-14 except -03 | sonnet | running |  |
@@ -151,6 +151,14 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 - **FU-P3b:** editors still rebuild `Vec<&dyn Param>` every frame for `preset_bar`.
 - **FU-P3c:** drums `live_value` covers 2 params only.
 - *DEP-03 (P3):* moving rfd from 0.15 to 0.17 removed zbus from every plugin bundle; gate.so went from 11.8 MB to 8.7 MB (−26 %).
+- **FU-R3a:** a track with no delay line yet still starts from silence when a latent plugin first appears during playback.
+- **FU-R3b:** a whole-chain bypass on a latent chain still blends latent wet against undelayed dry inside that chain for 5 ms.
+- **FU-R3c:** `sync_own_bypass` sends engaged on the first block, so a Mastering state saved bypassed from its own header is un-bypassed on load. Mirror Mastering's `bypass` param into the host slot's bypass state.
+- **FU-R3d:** the SetPluginParam handler should report a dropped `set_param`.
+- *Behaviour change (R3):*
+  - A latency change during playback is now a 5 ms crossfade to the new alignment, not silence.
+  - Own-bypass plugins switch without a host crossfade.
+  - Mastering bypasses through its own param, so its latency stays compensated.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
