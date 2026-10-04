@@ -245,6 +245,7 @@ fn the_table_is_the_agreed_order() {
             (Stage::Content, "take_groups"),
             (Stage::Tail, "external_instruments"),
             (Stage::Tail, "automation_lanes"),
+            (Stage::Tail, "midi_bindings"),
             (Stage::Tail, "missing_plugins"),
             (Stage::Tail, "freeze"),
             (Stage::Tail, "clip_id_grant"),

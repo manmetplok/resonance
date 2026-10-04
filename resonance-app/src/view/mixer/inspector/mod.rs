@@ -36,6 +36,7 @@ pub(crate) mod chain;
 mod external_instrument;
 mod io;
 mod master;
+pub(crate) mod midi;
 mod onboarding;
 mod routing;
 pub(crate) mod sends;
@@ -447,8 +448,7 @@ pub(crate) fn inspector_fingerprint(r: &crate::Resonance, t: &TrackState) -> u64
         rejection.dest.hash(&mut h);
         rejection.reason.hash(&mut h);
     }
-    // Cache pointers — when these Rcs are replaced, the inspector
-    // needs to redraw with the new options.
+    // Cache pointers: a replaced Rc means new options to redraw.
     Rc::as_ptr(&r.ui.view_caches.midi_input_choices).hash(&mut h);
     Rc::as_ptr(&r.ui.view_caches.midi_output_choices).hash(&mut h);
     Rc::as_ptr(&r.ui.view_caches.output_choices).hash(&mut h);
@@ -464,9 +464,9 @@ pub(crate) fn inspector_fingerprint(r: &crate::Resonance, t: &TrackState) -> u64
         d.name.hash(&mut h);
         d.channels.hash(&mut h);
     }
-    // Live MIDI device list too — the audio block isn't a strict
-    // function of the cached lists since the stale-override branch
-    // peeks at `midi_input_devices` directly.
+    // TRACK › MIDI CONTROL: the track's MIDI Learn bindings and picker.
+    midi::hash_into(&mut h, r, t);
+    // Live MIDI device lists: the stale-override branch peeks at them.
     r.devices.midi.midi_input_devices.len().hash(&mut h);
     r.devices.midi.midi_output_devices.len().hash(&mut h);
     h.finish()

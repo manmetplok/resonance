@@ -52,6 +52,7 @@ fn make_minimal_project() -> ProjectFile {
         groove_library: Vec::new(),
         quantize_settings: Default::default(),
         automation_lanes: Vec::new(),
+        midi_bindings: Vec::new(),
         performance: Default::default(),
         take_groups: Vec::new(),
         chord_track: Default::default(),

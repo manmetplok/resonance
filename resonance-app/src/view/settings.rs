@@ -10,6 +10,8 @@ use crate::view::mixer::picks::MidiPickerChoice;
 use crate::state::ui_caches::midi_choices_with_override;
 use crate::Resonance;
 
+mod midi;
+
 pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let backdrop = mouse_area(
         container(Space::new().width(Length::Fill).height(Length::Fill))
@@ -259,6 +261,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let rail = column![
         rail_item("General", fa::SLIDERS, SettingsTab::General),
         rail_item("Keyboard", fa::BARS, SettingsTab::Keyboard),
+        rail_item("MIDI", fa::MUSIC, SettingsTab::Midi),
     ]
     .spacing(4)
     .width(150);
@@ -267,6 +270,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let page: Element<'_, Message> = match tab {
         SettingsTab::General => dialog_content.into(),
         SettingsTab::Keyboard => crate::view::settings_keyboard::view_keyboard_page(r),
+        SettingsTab::Midi => midi::view_midi_page(r, page_width),
     };
     let dialog_content = column![
         row![rail, page].spacing(20),

@@ -39,6 +39,8 @@ mod group_macro_solo;
 mod group_member_track_header;
 #[path = "mixer/group_membership_drag.rs"]
 mod group_membership_drag;
+#[path = "mixer/midi_learn_ui.rs"]
+mod midi_learn_ui;
 #[path = "mixer/mixer_automation_controls.rs"]
 mod mixer_automation_controls;
 #[path = "mixer/mixer_chain_reorder.rs"]

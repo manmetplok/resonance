@@ -54,11 +54,20 @@ impl crate::Resonance {
                 // built widgets instead of cloning each parameter's name and
                 // text and rebuilding a row per parameter every frame
                 // (ux-guidelines.md → "View Performance", review VIEW-26).
-                let fp = plugin_params_fingerprint(plugin);
+                let fp = {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    plugin_params_fingerprint(plugin).hash(&mut h);
+                    // The MIDI Learn badge / outline on each row.
+                    for p in &plugin.params {
+                        crate::view::midi_learn::hash_target(&mut h, self, param_target(inst_id, p.id));
+                    }
+                    h.finish()
+                };
                 iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
                     let plugin_element = match &plugin.custom {
                         PluginCustomState::Generic => {
-                            crate::plugin_ui::view_generic_params(&ui_params(plugin))
+                            crate::plugin_ui::view_generic_params(&ui_params(self, plugin))
                         }
                     };
                     plugin_element.map(move |event| {
@@ -67,6 +76,13 @@ impl crate::Resonance {
                             PluginUiEvent::SetParam(param_id, value) => Message::Plugin(
                                 PluginMessage::SetPluginParam(inst_id, param_id, value),
                             ),
+                            PluginUiEvent::ParamMenu(param_id, p) => {
+                                Message::MidiMap(MidiMapMessage::OpenMenu {
+                                    target: param_target(inst_id, param_id),
+                                    x: p.x,
+                                    y: p.y,
+                                })
+                            }
                         }
                     })
                 })
@@ -214,12 +230,30 @@ impl crate::Resonance {
 /// than drawn: CLAP's IS_HIDDEN is the plugin asking that a parameter not
 /// be presented as a control (it stays in the app's mirror because it is
 /// still automatable and still saved — ba todo #1290).
-fn ui_params(plugin: &PluginSlotState) -> Vec<crate::plugin_ui::UiParam> {
+/// The MIDI Learn target of one of a plugin's parameters.
+fn param_target(instance: resonance_audio::types::PluginInstanceId, param_id: u32) -> resonance_common::MidiTarget {
+    resonance_common::MidiTarget::PluginParam { instance, param_id }
+}
+
+fn ui_params(r: &crate::Resonance, plugin: &PluginSlotState) -> Vec<crate::plugin_ui::UiParam> {
+    let map = &r.devices.midi_map;
     plugin
         .params
         .iter()
         .filter(|p| !p.hidden)
-        .map(|p| crate::plugin_ui::UiParam {
+        .map(|p| {
+            let target = param_target(plugin.instance_id, p.id);
+            let learning = map.learn_target == Some(target);
+            let midi = if learning {
+                Some("LEARN".to_string())
+            } else {
+                map.for_target(target)
+                    .first()
+                    .map(|b| crate::state::source_badge(b.source))
+            };
+            (p, midi, learning)
+        })
+        .map(|(p, midi, learning)| crate::plugin_ui::UiParam {
             id: p.id,
             name: p.name.clone(),
             min_value: p.min_value,
@@ -232,6 +266,8 @@ fn ui_params(plugin: &PluginSlotState) -> Vec<crate::plugin_ui::UiParam> {
             text: p.text.clone(),
             stepped: p.stepped,
             read_only: p.read_only,
+            midi,
+            learning,
         })
         .collect()
 }

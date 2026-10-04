@@ -22,6 +22,8 @@ fn param(current: f64, text: &str) -> UiParam {
         text: text.to_owned(),
         stepped: false,
         read_only: false,
+        midi: None,
+        learning: false,
     }
 }
 

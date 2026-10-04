@@ -85,6 +85,14 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
     track.record_armed.hash(&mut h);
     track.monitor_enabled.hash(&mut h);
     track.fx_bypassed.hash(&mut h);
+    // MIDI Learn: the learning outline on M, S and the pan block.
+    for target in [
+        resonance_common::MidiTarget::TrackMute(track.id),
+        resonance_common::MidiTarget::TrackSolo(track.id),
+        resonance_common::MidiTarget::TrackPan(track.id),
+    ] {
+        crate::view::midi_learn::hash_target(&mut h, r, target);
+    }
     // Slot lines, and where the instrument line sits — a function of
     // the plugin catalog (which plugins are instruments), not only of
     // the track, so it is hashed as resolved.

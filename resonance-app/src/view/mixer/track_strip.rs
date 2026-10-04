@@ -21,7 +21,9 @@ use crate::view::controls::{
     fader_section, meter_v, monitor_button, mute_button, record_arm_button, solo_button,
 };
 use crate::view::knob::pan_knob;
+use crate::view::midi_learn::{learnable, with_badge};
 use crate::view::shortcut_hint;
+use resonance_common::MidiTarget;
 
 use super::strip_parts::InstrumentSlot;
 
@@ -63,10 +65,13 @@ impl crate::Resonance {
             &resonance_common::AutomationTarget::TrackGain(track.id),
             v,
         ));
-        let fader_block =
+        let fader_block = learnable_fader(
+            self,
+            track.id,
             fader_section(track.level_l, track.level_r, track.volume, gain_live, move |v| {
                 Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
-            });
+            }),
+        );
 
         // Everything above the fader only changes on user edits and
         // engine echoes, never per audio tick — lazy-cache it so the
@@ -275,23 +280,31 @@ impl crate::Resonance {
         // ---- One button row: M / S / ● / 🎧 ----
         let button_row: Element<'static, Message> = container(
             row![
-                shortcut_hint::with_hint(
+                learnable(
                     self,
-                    mute_button(
-                        track.muted,
-                        Message::Track(TrackMessage::ToggleMute(track.id)),
-                        12
+                    MidiTarget::TrackMute(track.id),
+                    shortcut_hint::with_hint(
+                        self,
+                        mute_button(
+                            track.muted,
+                            Message::Track(TrackMessage::ToggleMute(track.id)),
+                            12
+                        ),
+                        CommandId::ToggleMuteSelected,
                     ),
-                    CommandId::ToggleMuteSelected,
                 ),
-                shortcut_hint::with_hint(
+                learnable(
                     self,
-                    solo_button(
-                        track.soloed,
-                        Message::Track(TrackMessage::ToggleSolo(track.id)),
-                        12
+                    MidiTarget::TrackSolo(track.id),
+                    shortcut_hint::with_hint(
+                        self,
+                        solo_button(
+                            track.soloed,
+                            Message::Track(TrackMessage::ToggleSolo(track.id)),
+                            12
+                        ),
+                        CommandId::ToggleSoloSelected,
                     ),
-                    CommandId::ToggleSoloSelected,
                 ),
                 record_arm_button(track.record_armed, track.id, 12),
                 shortcut_hint::with_hint(
@@ -345,7 +358,11 @@ impl crate::Resonance {
         let pan_ctrl = crate::view::knob::pan_knob_automated(track.pan, pan_live, move |v| {
             Message::Track(TrackMessage::SetTrackPan(id, v))
         });
-        let pan = super::strip_parts::pan_block(pan_ctrl, track.pan);
+        let pan = learnable(
+            self,
+            MidiTarget::TrackPan(track.id),
+            super::strip_parts::pan_block(pan_ctrl, track.pan),
+        );
 
         let mut body_col = column![head]
             .spacing(6)
@@ -437,10 +454,13 @@ impl crate::Resonance {
             &resonance_common::AutomationTarget::TrackGain(track.id),
             v,
         ));
-        let fader_block =
+        let fader_block = learnable_fader(
+            self,
+            track.id,
             fader_section(track.level_l, track.level_r, track.volume, gain_live, move |v| {
                 Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
-            });
+            }),
+        );
 
         // The head / M-S / FX switch / pan block are non-live — cache
         // them behind `lazy` keyed on the slim sub-strip fingerprint.
@@ -852,4 +872,17 @@ fn strip_chip(
             ..Default::default()
         })
         .into()
+}
+
+/// A strip's fader block as the learnable control for the track's volume
+/// (MIDI Learn): right-click for its MIDI menu, and its bound control or
+/// `LEARN` badged on its top-right corner. Built per frame with the live
+/// block it wraps, so it needs no fingerprint.
+fn learnable_fader(
+    r: &crate::Resonance,
+    track_id: TrackId,
+    fader: Element<'static, Message>,
+) -> Element<'static, Message> {
+    let target = MidiTarget::TrackVolume(track_id);
+    learnable(r, target, with_badge(r, target, fader))
 }

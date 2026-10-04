@@ -219,6 +219,23 @@ impl Resonance {
         &self.devices.midi_map
     }
 
+    /// Test-only: the inspector's TRACK › "Learn MIDI for…" options for a
+    /// track, as `(target, label)` — a closed `pick_list` renders only its
+    /// placeholder, so a test resolves an option through this list.
+    #[doc(hidden)]
+    pub fn test_learn_choices(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<(resonance_common::MidiTarget, String)> {
+        let Some(track) = self.registry.tracks.iter().find(|t| t.id == track_id) else {
+            return Vec::new();
+        };
+        crate::view::mixer::inspector::midi::learn_choices(self, track)
+            .into_iter()
+            .map(|c| (c.target, c.label))
+            .collect()
+    }
+
     /// Test-only: arm MIDI Learn for `target` (the UI-side step that
     /// normally precedes a `MidiLearnCaptured` event), so a test can then
     /// verify the capture handler clears learn mode.

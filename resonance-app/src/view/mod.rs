@@ -11,6 +11,7 @@ pub(crate) mod bounce_progress;
 pub mod compose;
 pub(crate) mod confirm_delete_track;
 pub(crate) mod confirm_quit;
+pub(crate) mod context_area;
 pub mod controls;
 pub(crate) mod editor_panel;
 pub mod freeze_banner;
@@ -20,6 +21,7 @@ pub mod knob;
 pub(crate) mod markers_overview;
 pub(crate) mod menus;
 pub mod midi_editor;
+pub(crate) mod midi_learn;
 pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
 pub(crate) mod missing_plugins_dialog;
@@ -193,8 +195,7 @@ impl crate::Resonance {
             // (`gates_message`), so it gets the same blocking modal at the
             // same priority (code review FU-F1c).
             Overlay::MixdownProgress => bounce_progress::view_mixdown_progress_overlay(self),
-            // The freeze progress modal (design doc #181, todo #582) is the
-            // same blocking overlay — a freeze IS a bounce-in-place run.
+            // The freeze progress modal (doc #181, todo #582): a freeze IS a bounce in place.
             Overlay::FreezeProgress => bounce_progress::view_freeze_progress_overlay(self),
             Overlay::Palette => palette::view_palette_overlay(self),
             Overlay::ConfirmQuit => confirm_quit::view_confirm_quit_overlay(self),
@@ -222,13 +223,12 @@ impl crate::Resonance {
             Overlay::AddTrackMenu => menus::view_add_track_menu(self),
             Overlay::MarkersOverview => markers_overview::view_markers_overview_overlay(self),
             Overlay::DrumGroupsManager => compose::drum_groups_manager::view(self),
-            // Arrangement-marker context menu / inline rename float above
-            // the arrange timeline (todo #369).
+            // Marker context menu / inline rename, over the timeline (todo #369).
             Overlay::MarkerMenu => menus::view_marker_overlay(self),
+            Overlay::MidiMenu => midi_learn::view_midi_menu_overlay(self),
             // Drawn by `view_main_area` in arrange-area space.
             Overlay::TrackMenu => return None,
-            // Floating "Group selected" bar — non-modal, so it layers over
-            // the arrange view without blocking it (todo #684).
+            // Floating "Group selected" bar: non-modal, over the arrange view (todo #684).
             Overlay::SelectionBar => selection_bar::view_selection_bar(self),
         };
         Some(overlay)

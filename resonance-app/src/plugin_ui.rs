@@ -36,12 +36,20 @@ pub struct UiParam {
     /// CLAP `IS_READONLY`: an output only the plugin writes (a load
     /// progress, a meter). Drawn as its value alone, with no slider.
     pub read_only: bool,
+    /// The MIDI Learn badge for this parameter: the control it is bound
+    /// to (`CC74`), `LEARN` while learn is armed on it, else `None`.
+    pub midi: Option<String>,
+    /// Learn is armed on this parameter: the row is outlined.
+    pub learning: bool,
 }
 
 /// Events emitted by plugin UIs, mapped to host messages by the app.
 #[derive(Debug, Clone)]
 pub enum PluginUiEvent {
     SetParam(u32, f64),
+    /// Right-click on a parameter's row, at a window position: the host
+    /// opens its MIDI menu there.
+    ParamMenu(u32, iced::Point),
 }
 
 // -- Theme constants ----------------------------------------------------------
@@ -117,20 +125,40 @@ pub fn view_generic_params<'a>(params: &[UiParam]) -> Element<'a, PluginUiEvent>
             .font(Font::MONOSPACE)
             .color(TEXT_DIM);
 
-        let header = row![
+        let mut header = row![
             param_label,
             iced::widget::Space::new().width(Length::Fill),
             param_value_text
         ]
         .spacing(2);
+        if let Some(badge) = &param.midi {
+            let color = if param.learning { crate::theme::ACCENT_SOFT } else { TEXT_DIM };
+            header = header.push(text(badge.clone()).size(9).font(Font::MONOSPACE).color(color));
+        }
         // An output has nothing to drag: a slider would only send writes
-        // the plugin ignores.
-        let param_row = if param.read_only {
-            column![header].spacing(1)
-        } else {
-            column![header, param_slider].spacing(1)
-        };
-        controls = controls.push(param_row);
+        // the plugin ignores — nor anything to learn.
+        if param.read_only {
+            controls = controls.push(column![header].spacing(1));
+            continue;
+        }
+        let learning = param.learning;
+        let param_row = iced::widget::container(column![header, param_slider].spacing(1)).style(
+            move |_theme| iced::widget::container::Style {
+                border: iced::Border {
+                    color: if learning {
+                        crate::theme::ACCENT
+                    } else {
+                        iced::Color::TRANSPARENT
+                    },
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..Default::default()
+            },
+        );
+        controls = controls.push(crate::view::context_area::context_area(param_row, move |p| {
+            PluginUiEvent::ParamMenu(param_id, p)
+        }));
     }
     controls.into()
 }

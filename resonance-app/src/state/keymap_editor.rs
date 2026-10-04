@@ -12,6 +12,8 @@ pub enum SettingsTab {
     #[default]
     General,
     Keyboard,
+    /// The control surface, the MIDI Learn bindings, controller maps.
+    Midi,
 }
 
 /// A rebinding that would take a chord from another command, waiting for
