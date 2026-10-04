@@ -16,7 +16,14 @@ thiserror = "2"
 # subscriber is installed by the binaries (the app, and each CLAP bundle via
 # `resonance-plugin`, whose cdylib carries its own copy of the dispatcher).
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# DEP-12 (code-review-2026-10-02): default features bring in `tracing-log`
+# (a `log` -> `tracing` bridge), which every plugin bundle compiled in even
+# though `resonance-plugin/src/logging.rs` deliberately installs no log
+# bridge and nothing in the workspace imports the `log` crate. Named the
+# features actually used instead of inheriting the default set.
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "std", "fmt", "ansi", "env-filter", "smallvec",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 parking_lot = "0.12"
