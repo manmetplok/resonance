@@ -43,6 +43,8 @@ pub(crate) struct ParamMeta {
     pub is_automatable: bool,
     /// [`crate::param::Param::is_read_only`]: CLAP `IS_READONLY`.
     pub is_read_only: bool,
+    /// [`crate::param::Param::is_bypass`]: CLAP `IS_BYPASS`.
+    pub is_bypass: bool,
     /// [`crate::param::Param::state_excluded`], for the state written and
     /// read while the plugin is in the audio processor.
     pub state_excluded: bool,

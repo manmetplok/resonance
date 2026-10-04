@@ -40,6 +40,9 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
         if meta.is_stepped {
             flags |= ParamInfoFlags::IS_STEPPED;
         }
+        if meta.is_bypass {
+            flags |= ParamInfoFlags::IS_BYPASS;
+        }
 
         info.set(&ParamInfo {
             id: ClapId::new(meta.clap_id),

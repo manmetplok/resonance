@@ -47,7 +47,16 @@
 //! slot whose plugin declares its own bypass parameter is *not* skipped —
 //! the plugin keeps running and keeps reporting its latency — so
 //! bypassing it leaves the comp table completely untouched, which is the
-//! alignment-preserving path for latency-carrying plugins.
+//! alignment-preserving path for latency-carrying plugins. Such a slot is
+//! never host-crossfaded either (`PluginSlot::stage`, code review
+//! HOST-04): [`run_faded`]'s dry copy is the slot's *undelayed* input,
+//! while the plugin's bypassed output is that input delayed by its
+//! latency, so the plugin makes its own transition.
+//!
+//! A whole *chain* bypass on a latent chain still crossfades latent wet
+//! against undelayed dry for [`BYPASS_FADE_MS`]; the comp table it moves
+//! crossfades every other track to its new alignment over the same
+//! length (`LatencyComp::following`, RT-04).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -70,3 +70,5 @@ mod depth_reverb;
 mod drums_kit_info;
 #[path = "clap_host/sub_track_plugin_removal.rs"]
 mod sub_track_plugin_removal;
+#[path = "clap_host/own_bypass_latency.rs"]
+mod own_bypass_latency;

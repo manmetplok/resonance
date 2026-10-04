@@ -889,6 +889,19 @@ impl EngineHandlerHarness {
         self.with_ctx(|ctx, state| super::dispatch::dispatch(ctx, state, cmd));
     }
 
+    /// Republish the plugin-delay-compensation table, as the engine loop
+    /// does after every command [`affects_latency`](plugins::affects_latency)
+    /// flags ([`Self::dispatch`] runs only the handler).
+    pub fn refresh_latency_comp(&mut self) {
+        self.with_ctx(|ctx, state| plugins::refresh_latency_comp(ctx, &state.external_instruments));
+    }
+
+    /// The published compensation table — hand it to
+    /// `MixAudioHarness::adopt_latency_comp` to render through it.
+    pub fn published_latency_comp(&self) -> Arc<crate::latency::LatencyComp> {
+        self.latency_comp.load_full()
+    }
+
     /// The engine loop's plugin host-request poll (`on_main_thread`, preset
     /// reports, param refreshes, restart requests), once.
     pub fn poll_plugin_host_requests(&mut self) {

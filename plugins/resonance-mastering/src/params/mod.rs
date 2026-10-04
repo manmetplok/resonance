@@ -142,7 +142,7 @@ fn format_lufs() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
 impl Default for MasteringParams {
     fn default() -> Self {
         Self {
-            bypass: BoolParam::new("bypass", "Bypass", false),
+            bypass: BoolParam::new("bypass", "Bypass", false).as_bypass(),
             target_lufs: FloatParam::new(
                 "target_lufs",
                 "Target LUFS",
