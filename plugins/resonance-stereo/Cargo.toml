@@ -2,6 +2,7 @@
 name = "resonance-stereo"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "A mono-safe stereo width tool CLAP plugin: M/S width, mono-maker, decorrelation widening, balance and rotation"
 
 [lib]

@@ -2,6 +2,7 @@
 name = "resonance-compressor"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "A stereo feed-forward compressor CLAP plugin with soft knee, sidechain HPF and parallel mix"
 
 [lib]

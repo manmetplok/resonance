@@ -2,6 +2,7 @@
 name = "resonance-granular-delay"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "A granular delay: circular-buffer granulation with per-grain pitch, texture and jitter"
 
 [lib]

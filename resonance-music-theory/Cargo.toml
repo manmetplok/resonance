@@ -2,6 +2,7 @@
 name = "resonance-music-theory"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Music theory primitives (pitch, chord, scale) for Resonance"
 
 [dependencies]

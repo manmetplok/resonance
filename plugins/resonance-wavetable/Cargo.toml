@@ -2,6 +2,7 @@
 name = "resonance-wavetable"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "A wavetable synthesizer instrument CLAP plugin for the Resonance DAW"
 
 [lib]

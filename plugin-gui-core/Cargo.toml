@@ -2,6 +2,7 @@
 name = "plugin-gui-core"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Platform-neutral core of the plugin editor GUI: the EditorApp contract, options, errors, size feedback, theme, and the pure egui widget set shared by every runtime (wayland-plugin-gui today, cocoa-plugin-gui per macos-editor-plan.md)."
 
 [dependencies]

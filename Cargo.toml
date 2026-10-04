@@ -2,6 +2,9 @@
 members = ["resonance-audio", "resonance-app", "resonance-common", "resonance-control", "resonance-dsp", "resonance-dsp-test-support", "resonance-mcp", "resonance-mastering-assist", "resonance-metering", "resonance-music-theory", "resonance-plugin", "resonance-svs", "plugin-gui-core", "wayland-plugin-gui", "cocoa-plugin-gui", "plugins/resonance-delay", "plugins/resonance-granular-delay", "plugins/resonance-drums", "plugins/resonance-amp", "plugins/resonance-color", "plugins/resonance-compressor", "plugins/resonance-eq", "plugins/resonance-gate", "plugins/resonance-ir", "plugins/resonance-mastering", "plugins/resonance-reverb", "plugins/resonance-stereo", "plugins/resonance-wavetable", "tools/arch-invariants"]
 resolver = "2"
 
+[workspace.package]
+license = "MIT OR Apache-2.0"
+
 [workspace.dependencies]
 clack-plugin = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18" }
 clack-extensions = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18", features = [

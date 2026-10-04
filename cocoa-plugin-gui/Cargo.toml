@@ -2,6 +2,7 @@
 name = "cocoa-plugin-gui"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Cocoa-native plugin GUI runtime: hosts an egui UI in a floating NSWindow on the AppKit main thread, designed to be spawned from inside a CLAP/VST plugin dylib."
 
 [dependencies]

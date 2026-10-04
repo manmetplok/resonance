@@ -2,6 +2,7 @@
 name = "resonance-svs"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 default-run = "resonance-svs"
 description = "Singing-voice-synthesis crate: renders a DiffSinger .ds file to WAV via ONNX. Consumed by the Resonance app's Compose vocal generator."

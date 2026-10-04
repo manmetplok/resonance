@@ -1,10 +1,10 @@
 # Third-party licenses (DEP-04)
 
-This workspace has no `license` field in any member manifest and ships no
-`LICENSE` file. That is a decision Jorrit still needs to make, not an
-oversight this change fixes — see "Open decision" below. This document
-exists so the obligations below are visible before that decision is made,
-and before the app is ever distributed to anyone but Jorrit.
+Resonance is licensed under **MIT OR Apache-2.0** (`LICENSE-MIT`,
+`LICENSE-APACHE`). Every member manifest inherits it with
+`license.workspace = true`. This document lists the obligations that
+third-party dependencies add on top of that. Read it before the app is
+distributed to anyone but Jorrit.
 
 ## Copyleft and notice obligations found in the dependency tree
 
@@ -34,10 +34,6 @@ and before the app is ever distributed to anyone but Jorrit.
 
 ## What's NOT done here
 
-- **No project license has been chosen.** `workspace.package.license` is
-  still unset. This blocks distribution regardless of the LAME/symphonia
-  items above — an unlicensed work carries no grant of rights to anyone
-  else, in either direction.
 - **No LGPL relink story for LAME.** Static linking stays as-is; this is
   fine only because Jorrit is the sole user today (`project_no_real_users_yet`).
 - **No generated third-party notices file.** `cargo about` or `cargo deny
@@ -46,10 +42,8 @@ and before the app is ever distributed to anyone but Jorrit.
 
 ## Decision needed from Jorrit before any distribution
 
-1. **Pick a project license** (MIT, Apache-2.0, dual MIT/Apache-2.0,
-   something else) and set it as `license` under `[workspace.package]`,
-   inherited by each member via `license.workspace = true`.
-2. **Decide the LAME story**: dynamic link (simplest LGPL compliance, but
+1. ~~Pick a project license~~: done, MIT OR Apache-2.0 (2026-10-04).
+2. **Decide the LAME story**, which is still open: dynamic link (simplest LGPL compliance, but
    requires the system or bundle to ship `libmp3lame.so`/`.dylib` and the
    app to `dlopen`/link against it instead of the static build), or static
    link with a documented relink process (ship object files or a
@@ -58,6 +52,5 @@ and before the app is ever distributed to anyone but Jorrit.
    this document) with `cargo about generate` or `cargo deny list
    --format json`, and wire a CI/pre-release check that it stays current.
 
-Nothing in this change alters linking behavior (LAME stays statically
-linked, as today) or any license metadata — it only documents the
-obligations so the decision above isn't made blind.
+LAME is still statically linked. MIT/Apache-2.0 for our own code does not
+change the LGPL obligations on LAME.

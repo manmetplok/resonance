@@ -2,6 +2,7 @@
 name = "resonance-mastering-assist"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "The mastering assistant's analysis and decision engine: genre target bands, reference comparison, suggestions"
 
 [dependencies]

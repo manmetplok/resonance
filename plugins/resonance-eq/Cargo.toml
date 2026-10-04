@@ -2,6 +2,7 @@
 name = "resonance-eq"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "An 8-band parametric EQ CLAP plugin in the spirit of FabFilter Pro-Q 3"
 
 [lib]

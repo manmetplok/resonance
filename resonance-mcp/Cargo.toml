@@ -2,6 +2,7 @@
 name = "resonance-mcp"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "MCP stdio server exposing a running resonance app's control surface (unix-socket JSON-RPC, see resonance-control) as typed MCP tools for AI clients like Claude Code"
 
 [dependencies]

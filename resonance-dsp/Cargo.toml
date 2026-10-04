@@ -2,6 +2,7 @@
 name = "resonance-dsp"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Reusable DSP primitives for Resonance plugins"
 
 [dependencies]

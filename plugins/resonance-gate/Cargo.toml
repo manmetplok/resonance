@@ -2,6 +2,7 @@
 name = "resonance-gate"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "A stereo noise gate / downward expander CLAP plugin with an external sidechain key"
 
 [lib]

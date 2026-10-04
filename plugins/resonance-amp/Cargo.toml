@@ -2,6 +2,7 @@
 name = "resonance-amp"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "A guitar amp simulator CLAP plugin using Neural Amp Modeler models"
 
 [lib]

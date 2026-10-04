@@ -2,6 +2,7 @@
 name = "resonance-color"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "A character/saturation CLAP plugin for tracks and busses: tube, tape, transformer, console and warm voicings with auto-gain"
 
 [lib]
