@@ -65,11 +65,13 @@
 //! so tapping the onset before the long stages changes nothing for the
 //! tank). `er_level` scales the onset (0 = the bare tank, which builds
 //! over ~30 ms); `er_time` stretches the cascade 0.5×–1.5×, a shorter or
-//! longer attack.
+//! longer attack, its stages gliding to their new lengths ([`Onset`]).
 //!
-//! **Freeze**: every absorption lossless and the input muted. The
-//! allpasses and the allpass-interpolated reads are lossless, so the
-//! figure of eight holds its energy.
+//! **Freeze**: every absorption lossless and the input (onset and tank)
+//! muted, both ramped over 100 ms ([`FreezeRamp`]: the loss falls to none
+//! while the input and the tank's injection fade, so neither engaging nor
+//! releasing clicks). The allpasses and the allpass-interpolated reads
+//! are lossless, so the figure of eight holds its energy.
 //!
 //! Allocation happens only in [`PlateEngine::new`]; `clear` returns the
 //! engine to its constructed state for the parameters last set
@@ -80,6 +82,7 @@ use resonance_dsp::DelayLine;
 
 use super::super::er::ER_TAPS;
 use super::super::{CHANNELS, TAP_SLEW_PER_SAMPLE};
+use super::room::{stretch, FreezeRamp, FreezeTick};
 use super::Wet;
 
 /// The sample rate Dattorro's lengths are given at.
@@ -164,8 +167,98 @@ const ONSET_GAIN: f32 = 0.2;
 const MIN_SCALE: f32 = 0.5;
 const MAX_SCALE: f32 = 1.5;
 
+/// Onset glide on an `er_time` move: the longest stage's length slew,
+/// samples per sample (the others move in proportion). A 2 % bend at
+/// most; a full-range throw (121 samples on that stage at 48 kHz) takes
+/// 0.13 s, and a block-rate automation is followed smoothly instead of
+/// in per-block bursts.
+const ONSET_SLEW: f32 = 0.02;
+
 /// One-pole coefficient of the tank-view energy follower (Classic's).
 const ENERGY_SMOOTH: f32 = 0.995;
+
+/// One side's onset cascade. Each stage's integer length is the target
+/// for the current `er_time`; on a move, its read glides there through
+/// a fractional (allpass-interpolated) length, every stage at a slew in
+/// proportion to its length, so the cascade stretches as one and lands
+/// exactly on the integer lengths (a re-rounded length jumping under
+/// running audio would zipper). Settled, every stage is an integer tap.
+struct Onset {
+    stages: [Allpass; 8],
+    ms: [f32; 8],
+    /// Current length of each stage, samples.
+    len: [f32; 8],
+    slew: [f32; 8],
+    gliding: bool,
+}
+
+impl Onset {
+    fn new(ms: [f32; 8], sample_rate: f32) -> Self {
+        let longest = ms.iter().cloned().fold(0.0, f32::max);
+        let stages = ms.map(|ms| {
+            let n = ms * 1e-3 * sample_rate;
+            Allpass::new(
+                (n * MAX_SCALE).ceil() as usize + 2,
+                n.round().max(1.0) as usize,
+                ONSET_G,
+            )
+        });
+        Self {
+            len: stages.each_ref().map(|ap| ap.delay() as f32),
+            stages,
+            ms,
+            slew: ms.map(|m| ONSET_SLEW * m / longest),
+            gliding: false,
+        }
+    }
+
+    /// New lengths at `k` samples per ms: glide there, or land at once
+    /// (`snap`, nothing sounding).
+    fn retarget(&mut self, k: f32, snap: bool) {
+        self.gliding = false;
+        for i in 0..8 {
+            let ap = &mut self.stages[i];
+            ap.set_delay((self.ms[i] * k).round().max(1.0) as usize);
+            if snap {
+                self.len[i] = ap.delay() as f32;
+            }
+            self.gliding |= self.len[i] != ap.delay() as f32;
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, mut x: f32) -> f32 {
+        if !self.gliding {
+            // An integer tap, but through the modulated read so the
+            // interpolator's state follows it: a glide that starts later
+            // must not start from a stale one.
+            for ap in &mut self.stages {
+                x = ap.process_modulated(x, 0.0);
+            }
+            return x;
+        }
+        let mut moving = false;
+        for (i, ap) in self.stages.iter_mut().enumerate() {
+            let target = ap.delay() as f32;
+            let len = &mut self.len[i];
+            if *len != target {
+                *len += (target - *len).clamp(-self.slew[i], self.slew[i]);
+                moving |= *len != target;
+            }
+            x = ap.process_modulated(x, *len - target);
+        }
+        self.gliding = moving;
+        x
+    }
+
+    fn clear(&mut self) {
+        for (ap, len) in self.stages.iter_mut().zip(&mut self.len) {
+            ap.clear();
+            *len = ap.delay() as f32;
+        }
+        self.gliding = false;
+    }
+}
 
 /// A plain tank delay, read before the write. Integer length when
 /// settled, an allpass-interpolated fractional one while `size` glides.
@@ -295,8 +388,8 @@ pub struct PlateEngine {
     /// `sample_rate / PAPER_RATE`.
     base: f32,
 
-    onset_l: [Allpass; 8],
-    onset_r: [Allpass; 8],
+    onset_l: Onset,
+    onset_r: Onset,
     input_l: [Allpass; 4],
     input_r: [Allpass; 4],
     a: Branch,
@@ -309,7 +402,7 @@ pub struct PlateEngine {
     low_mult: f32,
     low_xover: f32,
     high_mult: f32,
-    frozen: bool,
+    freeze: FreezeRamp,
     er_level: f32,
     diffusion: f32,
 
@@ -340,19 +433,11 @@ impl PlateEngine {
             let max = (p * base * MAX_SCALE).ceil() as usize + 2;
             Allpass::new(max, (p * base).round().max(1.0) as usize, g)
         };
-        let onset = |ms: f32| {
-            let n = ms * 1e-3 * sample_rate;
-            Allpass::new(
-                (n * MAX_SCALE).ceil() as usize + 2,
-                n.round().max(1.0) as usize,
-                ONSET_G,
-            )
-        };
         let mut e = Self {
             sample_rate,
             base,
-            onset_l: ONSET_MS_L.map(onset),
-            onset_r: ONSET_MS_R.map(onset),
+            onset_l: Onset::new(ONSET_MS_L, sample_rate),
+            onset_r: Onset::new(ONSET_MS_R, sample_rate),
             input_l: std::array::from_fn(|i| input(INPUT_AP_L[i], INPUT_G[i])),
             input_r: std::array::from_fn(|i| input(INPUT_AP_R[i], INPUT_G[i])),
             a: Branch::new(TANK_A, SEED_A, base, sample_rate),
@@ -363,7 +448,7 @@ impl PlateEngine {
             low_mult: 1.0,
             low_xover: 250.0,
             high_mult: 0.5,
-            frozen: false,
+            freeze: FreezeRamp::new(sample_rate),
             er_level: 0.4,
             diffusion: 1.0,
             // Not a valid scale, so the first retarget always places.
@@ -399,9 +484,14 @@ impl PlateEngine {
         }
     }
 
+    /// Freeze ramps in and out ([`FreezeRamp`]); before the first sample
+    /// it lands at once.
     pub fn set_freeze(&mut self, v: bool) {
-        if v != self.frozen {
-            self.frozen = v;
+        if v != self.freeze.on() {
+            self.freeze.set(v);
+            if !self.primed {
+                self.freeze.snap();
+            }
             self.dirty = true;
         }
     }
@@ -420,15 +510,13 @@ impl PlateEngine {
         self.er_level = v.clamp(0.0, 1.0);
     }
 
-    /// Onset length: the onset cascade at 0.5×–1.5×.
+    /// Onset length: the onset cascade at 0.5×–1.5×, gliding there
+    /// ([`Onset`]).
     pub fn set_er_time(&mut self, v: f32) {
         let k = 1e-3 * self.sample_rate * (MIN_SCALE + (MAX_SCALE - MIN_SCALE) * v.clamp(0.0, 1.0));
-        for (ap, ms) in self.onset_l.iter_mut().zip(ONSET_MS_L) {
-            ap.set_delay((ms * k).round().max(1.0) as usize);
-        }
-        for (ap, ms) in self.onset_r.iter_mut().zip(ONSET_MS_R) {
-            ap.set_delay((ms * k).round().max(1.0) as usize);
-        }
+        let snap = !self.primed;
+        self.onset_l.retarget(k, snap);
+        self.onset_r.retarget(k, snap);
     }
 
     pub fn set_mod_rate(&mut self, v: f32) {
@@ -498,9 +586,11 @@ impl PlateEngine {
         self.taps_r = place(&OUT_TAPS_R);
     }
 
+    /// Design every absorption for the parameters, at the loss the
+    /// Freeze ramp leaves (lossless once it is fully frozen).
     fn update_absorption(&mut self) {
         self.dirty = false;
-        if self.frozen {
+        if self.freeze.held() {
             self.a.design(None, self.sample_rate);
             self.b.design(None, self.sample_rate);
             return;
@@ -512,6 +602,7 @@ impl PlateEngine {
             self.low_xover,
             self.damping,
         );
+        let bands = stretch(bands, self.freeze.loss());
         self.a.design(Some(&bands), self.sample_rate);
         self.b.design(Some(&bands), self.sample_rate);
     }
@@ -531,6 +622,10 @@ impl PlateEngine {
     #[inline]
     pub fn process(&mut self, l: f32, r: f32, diffusion: f32) -> Wet {
         self.primed = true;
+        match self.freeze.tick() {
+            FreezeTick::Redesign | FreezeTick::Engage => self.dirty = true,
+            FreezeTick::Still | FreezeTick::Moving => {}
+        }
         if self.dirty {
             self.update_absorption();
         }
@@ -557,14 +652,13 @@ impl PlateEngine {
             None
         };
 
+        // Freeze fades the input out (onset and tank alike), and the
+        // tank's injection again, so it is silent when the loop closes.
+        let g = self.freeze.gain();
+
         // Onset: the input through the short dense cascade, per side.
-        let (mut ol, mut or) = (l, r);
-        for ap in &mut self.onset_l {
-            ol = ap.process(ol);
-        }
-        for ap in &mut self.onset_r {
-            or = ap.process(or);
-        }
+        let ol = self.onset_l.process(l * g);
+        let or = self.onset_r.process(r * g);
 
         // Then the paper's input diffusers, into the tank.
         let (mut xl, mut xr) = (ol, or);
@@ -577,7 +671,7 @@ impl PlateEngine {
 
         // The figure of eight: each branch's end feeds the other's start.
         // L enters B (read first by the left taps), R enters A.
-        let (in_a, in_b) = if self.frozen { (0.0, 0.0) } else { (xr, xl) };
+        let (in_a, in_b) = (xr * g, xl * g);
         let end_a = self.a.end(glide);
         let end_b = self.b.end(glide);
         let sa = self.a.process(in_a + end_b, glide);
@@ -607,15 +701,13 @@ impl PlateEngine {
     }
 
     pub fn clear(&mut self) {
-        for ap in self
-            .onset_l
-            .iter_mut()
-            .chain(&mut self.onset_r)
-            .chain(&mut self.input_l)
-            .chain(&mut self.input_r)
-        {
+        self.onset_l.clear();
+        self.onset_r.clear();
+        for ap in self.input_l.iter_mut().chain(&mut self.input_r) {
             ap.clear();
         }
+        self.freeze.snap();
+        self.dirty = true;
         self.a.clear();
         self.b.clear();
         self.scale_cur = self.scale_target;

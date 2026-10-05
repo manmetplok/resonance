@@ -10,40 +10,9 @@
 //!
 //! (`RESONANCE_BLESS_ROOM=1` blesses only these three files.)
 
-use std::path::PathBuf;
+use resonance_reverb::dsp::Algorithm;
 
-use resonance_dsp_test_support as golden;
-use resonance_reverb::dsp::{Algorithm, ReverbDsp};
-
-use super::common::*;
-
-type Edit = (usize, fn(&mut ReverbDsp));
-
-struct Scenario {
-    name: &'static str,
-    setup: Setup,
-    predelay_ms: f32,
-    frames: usize,
-    input: fn(usize) -> (f32, f32),
-    edit: Option<Edit>,
-}
-
-fn impulse_lr(n: usize) -> (f32, f32) {
-    (
-        if n == 0 { 1.0 } else { 0.0 },
-        if n == 37 { 1.0 } else { 0.0 },
-    )
-}
-
-/// A 15 ms Hann-windowed noise burst, decorrelated L/R.
-fn burst(n: usize) -> (f32, f32) {
-    if n < 720 {
-        let w = 0.5 - 0.5 * (std::f32::consts::TAU * n as f32 / 720.0).cos();
-        (0.8 * w * noise(n), 0.8 * w * noise(n + 9_973))
-    } else {
-        (0.0, 0.0)
-    }
-}
+use crate::common::*;
 
 fn room_scenarios() -> Vec<Scenario> {
     vec![
@@ -212,89 +181,20 @@ fn ambience_scenarios() -> Vec<Scenario> {
     ]
 }
 
-/// The scenario's output and its input energy.
-fn render(s: &Scenario) -> (Vec<f32>, Vec<f32>, f64) {
-    let v = s.setup;
-    let mut d = v.dsp();
-    d.set_predelay(s.predelay_ms);
-    let (mut l, mut r) = (Vec::with_capacity(s.frames), Vec::with_capacity(s.frames));
-    let mut e_in = 0.0f64;
-    for n in 0..s.frames {
-        if let Some((at, edit)) = s.edit {
-            if n == at {
-                edit(&mut d);
-            }
-        }
-        let (x, y) = (s.input)(n);
-        e_in += 0.5 * ((x as f64).powi(2) + (y as f64).powi(2));
-        let (a, b) = d.process(x, y, v.diffusion, v.width);
-        l.push(a);
-        r.push(b);
-    }
-    (l, r, e_in)
-}
-
-fn check(file: &str, scenarios: Vec<Scenario>) {
-    let mut rendered = Vec::new();
-    for s in &scenarios {
-        let (l, r, e_in) = render(s);
-        assert!(
-            l.iter().chain(&r).all(|x| x.is_finite()),
-            "{}: non-finite",
-            s.name
-        );
-        // Silence guard, re the scenario's own input energy.
-        let e = energy_db(&l, &r) - 10.0 * e_in.log10();
-        assert!(
-            e > -40.0,
-            "{}: {e:.1} dB re its input (silence guard)",
-            s.name
-        );
-        let tail = s.frames * 3 / 4;
-        let tail_db = energy_db(&l[tail..], &r[tail..]) - 10.0 * e_in.log10();
-        assert!(
-            tail_db > -60.0,
-            "{}: no tail in the last quarter ({tail_db:.1} dB)",
-            s.name
-        );
-        println!(
-            "{}: {e:.1} dB, last quarter {tail_db:.1} dB re input",
-            s.name
-        );
-        rendered.extend(l);
-        rendered.extend(r);
-    }
-
-    let path: PathBuf = golden::golden_path(env!("CARGO_MANIFEST_DIR"), file);
-    if golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_ROOM"]) {
-        golden::bless_f32(&path, &rendered);
-        return;
-    }
-    let want = golden::load_golden_f32(&path, rendered.len(), "RESONANCE_BLESS=1");
-    let diff = golden::compare_f32(&rendered, &want);
-    if let Some((i, got, want)) = diff.first_diff {
-        panic!(
-            "{file}: output changed: {}/{} samples differ, peak delta {:.3e}; first at \
-             sample {i} (got {got:?}, want {want:?}). Re-bless with RESONANCE_BLESS=1 \
-             only for an intended change.",
-            diff.diff_count,
-            rendered.len(),
-            diff.max_abs,
-        );
-    }
-}
+/// `RESONANCE_BLESS_ROOM=1` blesses only the room-family files.
+const BLESS: [&str; 2] = ["RESONANCE_BLESS", "RESONANCE_BLESS_ROOM"];
 
 #[test]
 fn room_golden_is_bit_exact() {
-    check("room_golden.f32", room_scenarios());
+    check_golden("room_golden.f32", &BLESS, &room_scenarios());
 }
 
 #[test]
 fn chamber_golden_is_bit_exact() {
-    check("chamber_golden.f32", chamber_scenarios());
+    check_golden("chamber_golden.f32", &BLESS, &chamber_scenarios());
 }
 
 #[test]
 fn ambience_golden_is_bit_exact() {
-    check("ambience_golden.f32", ambience_scenarios());
+    check_golden("ambience_golden.f32", &BLESS, &ambience_scenarios());
 }
