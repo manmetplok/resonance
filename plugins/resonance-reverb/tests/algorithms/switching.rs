@@ -69,8 +69,8 @@ fn max_step(interleaved: &[f32]) -> f32 {
 #[test]
 fn the_algorithm_param_offers_exactly_the_built_algorithms() {
     let plugin = ResonanceReverb::new();
-    assert_eq!(PARAM_COUNT, 28);
-    assert_eq!(plugin.param_count(), 28);
+    assert_eq!(PARAM_COUNT, 29);
+    assert_eq!(plugin.param_count(), 29);
     let p = &plugin.params.algorithm;
     assert_eq!(p.id(), "algorithm");
     assert_eq!(p.choices(), Some(ALGORITHM_LABELS));
@@ -85,8 +85,8 @@ fn the_algorithm_param_offers_exactly_the_built_algorithms() {
     p.set_plain(4.0);
     assert_eq!(plugin.params.algorithm(), Algorithm::Classic);
 
-    // Params 22..=27, appended in the spec's order.
-    let ids: Vec<&str> = (22..28).map(|i| plugin.param(i).id()).collect();
+    // Params 22..=28, appended in the spec's order.
+    let ids: Vec<&str> = (22..29).map(|i| plugin.param(i).id()).collect();
     assert_eq!(
         ids,
         [
@@ -95,7 +95,8 @@ fn the_algorithm_param_offers_exactly_the_built_algorithms() {
             "low_xover",
             "high_decay_mult",
             "predelay_sync",
-            "decay_sync"
+            "decay_sync",
+            "tail_build"
         ]
     );
     // Bass Decay sits at 1.0x in the middle of its dial.
@@ -240,6 +241,7 @@ fn new_params_moved(plugin: &ResonanceReverb) {
     p.high_decay_mult.set_value(0.3);
     p.predelay_sync.set_value(2);
     p.decay_sync.set_value(3);
+    p.build.set_value(0.8);
     p.mod_depth.set_value(0.8);
     p.mix.set_value(1.0);
 }
@@ -304,6 +306,7 @@ fn legacy_state_loads_as_classic_with_sync_off() {
     assert_eq!(p.low_decay_mult.value(), 1.0);
     assert_eq!(p.low_xover.value(), 250.0);
     assert_eq!(p.high_decay_mult.value(), 0.5);
+    assert_eq!(p.build.value(), 0.5);
     assert_eq!(p.predelay.value(), 22.0);
 
     // A state naming an algorithm this build does not have yet loads as
@@ -331,6 +334,7 @@ fn the_editor_offers_the_algorithm_and_greys_what_classic_ignores() {
         "low_decay_mult",
         "low_xover",
         "high_decay_mult",
+        "tail_build",
     ] {
         assert!(frame.widget(id).is_some(), "`{id}` is not drawn");
     }

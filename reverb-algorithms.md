@@ -134,7 +134,7 @@ them out.
 | 25 | `high_decay_mult` | Treble Decay | 0.05–1.0 × | 0.5 | same. The crossover is the existing `damping` (re-read as "the frequency above which decay is ×Treble Decay") |
 | 26 | `predelay_sync` | Pre-delay Sync | `Off`, `1/128`, `1/64`, `1/32`, `1/16`, `1/8` | `Off` | all, Classic too. Overrides `predelay` while the host supplies tempo. |
 | 27 | `decay_sync` | Decay Sync | `Off`, `1/4`, `1/2`, `1 bar`, `2 bars`, `4 bars` | `Off` | all but Nonlinear. Sets T60 to that length at the host tempo. |
-| 28 | `build` | Build | 0–1 | 0.5 | Hall, Shimmer: ER-to-late crossfade time (attack of the tail) |
+| 28 | `tail_build` | Build | 0–1 | 0.5 | Hall, Shimmer: ER-to-late crossfade time (attack of the tail) |
 | 29 | `shimmer_pitch` | Shimmer Pitch | `+12`, `+7`, `+5`, `-12`, `+19`, `+24` | `+12` | Shimmer |
 | 30 | `shimmer_amount` | Shimmer | 0–1 | 0.3 | Shimmer: share of the loop that is pitch-shifted |
 | 31 | `nl_shape` | Nonlin Shape | `Gated`, `Reverse`, `Flat` | `Gated` | Nonlinear |
@@ -228,7 +228,7 @@ lines (10–90 ms).
 
 **Hall (R5).** Sparse ER spread over 30–120 ms (taps from `ShoeboxEr` with
 large dimensions, thinned), 16-line `Fdn` with lines of 40–200 ms,
-`SmoothRandom` modulation, and a `build` envelope that crossfades ER into late
+`SmoothRandom` modulation, and a `tail_build` envelope that crossfades ER into late
 energy over 20–300 ms. Defaults: `low_decay_mult` 1.3, `high_decay_mult` 0.5.
 
 **Ambience (R6).** A dense ER cluster (0–40 ms) plus an 8-line `Fdn`, decay
@@ -396,7 +396,7 @@ together. Nothing is half-wired between phases.
 | **R2** | `resonance_dsp::reverb` primitives: `Fdn<N>`, `Absorption`, `Allpass`, `SmoothRandom`, `ShoeboxEr` | Each primitive tested in `resonance-dsp/tests/`: `Fdn` T30 per band ±5 % of the design, lossless matrix check, `Absorption` matches the target T60 at three frequencies |
 | **R3** | Plate + `low_decay_mult` / `low_xover` / `high_decay_mult` | §5.2 row; goldens; Vocal Plate and Snare Plate re-voiced (if D1); Bright Plate |
 | **R4** | Room, Chamber | §5.2 rows; Drum Room, Vocal Chamber, Tight Room re-voiced |
-| **R5** | Hall + `build` | §5.2 row; String Hall; Warm Hall, Cathedral, Ambient Bloom re-voiced |
+| **R5** | Hall + `tail_build` | §5.2 row; String Hall; Warm Hall, Cathedral, Ambient Bloom re-voiced |
 | **R6** | Ambience | §5.2 row; Mix Glue, Short Ambience |
 | **R7** | Skills (§9) land; `resonance-studio` reference updated | `agent_plugin_lockstep` and `skill_keys` green; one live agent session that mixes a project end to end using the type table, with its moves reported |
 | **R8** | Spring, Nonlinear, Shimmer + their params and presets | §5.2 rows; Snare Gated and Shimmer Drone re-voiced; skills' creative rows land |

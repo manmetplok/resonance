@@ -254,6 +254,7 @@ impl ResonanceReverb {
         self.smoothers.low_decay_mult.skip(n);
         self.smoothers.low_xover.skip(n);
         self.smoothers.high_decay_mult.skip(n);
+        self.smoothers.build.skip(n);
 
         reverb.set_algorithm(self.params.algorithm());
         reverb.set_size(self.smoothers.size.current());
@@ -278,6 +279,7 @@ impl ResonanceReverb {
             self.smoothers.low_xover.current(),
             self.smoothers.high_decay_mult.current(),
         );
+        reverb.set_build(self.smoothers.build.current());
 
         let duck_amount = self.params.duck_amount.value();
         let duck_threshold = self.params.duck_threshold.value();

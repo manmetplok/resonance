@@ -28,6 +28,7 @@ impl HallEngine {
     pub fn set_mod_rate(&mut self, _v: f32) {}
     pub fn set_mod_depth(&mut self, _v: f32) {}
     pub fn set_decay_shape(&mut self, _low_mult: f32, _low_xover_hz: f32, _high_mult: f32) {}
+    pub fn set_build(&mut self, _v: f32) {}
 
     #[inline]
     pub fn process(&mut self, _l: f32, _r: f32, _diffusion: f32) -> Wet {

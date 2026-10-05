@@ -43,6 +43,7 @@ pub(crate) struct EngineConfig {
     pub mod_depth: Option<f32>,
     /// `(low_decay_mult, low_xover_hz, high_decay_mult)`.
     pub decay_shape: Option<(f32, f32, f32)>,
+    pub build: Option<f32>,
 }
 
 impl EngineConfig {
@@ -76,6 +77,9 @@ impl EngineConfig {
         }
         if let Some((lo, xover, hi)) = self.decay_shape {
             e.set_decay_shape(lo, xover, hi);
+        }
+        if let Some(v) = self.build {
+            e.set_build(v);
         }
     }
 }

@@ -111,6 +111,10 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams, viz: &ReverbViz) {
                 );
             });
             ui.add_space(4.0);
+            ui.add_enabled_ui(params.algorithm().uses_build(), |ui| {
+                editor_widgets::float_knob(ui, &params.build, "Build", "tail attack");
+            });
+            ui.add_space(4.0);
 
             // Freeze is a toggle, not a knob — render as a checkbox.
             ui.vertical(|ui| {

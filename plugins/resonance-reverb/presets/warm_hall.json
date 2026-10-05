@@ -44,7 +44,8 @@
         "low_xover": 250.0,
         "high_decay_mult": 0.5,
         "predelay_sync": 0,
-        "decay_sync": 0
+        "decay_sync": 0,
+        "tail_build": 0.5
       }
     }
   }

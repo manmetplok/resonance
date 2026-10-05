@@ -163,6 +163,12 @@ impl ReverbDsp {
             .for_live(|e| e.set_decay_shape(low_mult, low_xover_hz, high_mult));
     }
 
+    /// The tail's build-up time, `0..=1` (Hall; ignored elsewhere).
+    pub fn set_build(&mut self, build: f32) {
+        self.engines.cfg.build = Some(build);
+        self.engines.for_live(|e| e.set_build(build));
+    }
+
     /// Configure the return EQ (the wet HPF/LPF before the tank). `steep`
     /// selects 18 dB/oct over 12 dB/oct for both filters.
     pub fn set_wet_filters(

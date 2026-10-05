@@ -9,7 +9,7 @@ use resonance_plugin::*;
 use crate::dsp::Algorithm;
 use crate::sync::{DECAY_SYNC_LABELS, PREDELAY_SYNC_LABELS};
 
-pub const PARAM_COUNT: usize = 28;
+pub const PARAM_COUNT: usize = 29;
 
 /// Every `algorithm` label the spec fixes (reverb-algorithms.md §4.1), in
 /// parameter order. Only the first [`Algorithm::BUILT`]`.len()` exist in
@@ -84,6 +84,9 @@ pub struct ReverbParams {
     /// Decay (T60) as a note/bar length at the host tempo; `Off` uses
     /// `decay`.
     pub decay_sync: IntParam,
+    /// How slowly the tail builds after the early reflections, `0..=1`.
+    /// Hall only (and Shimmer, later); greyed elsewhere.
+    pub build: FloatParam,
 }
 
 /// Labels of [`ReverbParams::wet_filter_slope`].
@@ -120,6 +123,7 @@ impl ReverbParams {
             25 => &self.high_decay_mult,
             26 => &self.predelay_sync,
             27 => &self.decay_sync,
+            28 => &self.build,
             _ => &self.predelay,
         }
     }
@@ -422,6 +426,11 @@ impl Default for ReverbParams {
                 },
             )
             .with_choices(DECAY_SYNC_LABELS),
+
+            build: FloatParam::new("tail_build", "Build", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_unit("%")
+                .with_value_to_string(formatters::v2s_f32_percentage(0))
+                .with_string_to_value(formatters::s2v_f32_percentage()),
         }
     }
 }
@@ -461,6 +470,7 @@ pub struct ReverbSmoothers {
     pub low_decay_mult: Smoother,
     pub low_xover: Smoother,
     pub high_decay_mult: Smoother,
+    pub build: Smoother,
 }
 
 impl Default for ReverbSmoothers {
@@ -489,6 +499,7 @@ impl ReverbSmoothers {
             low_decay_mult: Smoother::new(SmoothingStyle::Logarithmic(100.0)),
             low_xover: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
             high_decay_mult: Smoother::new(SmoothingStyle::Linear(100.0)),
+            build: Smoother::new(SmoothingStyle::Linear(50.0)),
         }
     }
 
@@ -513,6 +524,7 @@ impl ReverbSmoothers {
         self.low_decay_mult.set_sample_rate(sample_rate);
         self.low_xover.set_sample_rate(sample_rate);
         self.high_decay_mult.set_sample_rate(sample_rate);
+        self.build.set_sample_rate(sample_rate);
 
         self.predelay.reset(params.predelay.value());
         self.er_level.reset(params.er_level.value());
@@ -531,6 +543,7 @@ impl ReverbSmoothers {
         self.low_decay_mult.reset(params.low_decay_mult.value());
         self.low_xover.reset(params.low_xover.value());
         self.high_decay_mult.reset(params.high_decay_mult.value());
+        self.build.reset(params.build.value());
     }
 
     /// Push the current atomic param values as smoother targets at
@@ -556,5 +569,6 @@ impl ReverbSmoothers {
         self.low_decay_mult.set_target(params.low_decay_mult.value());
         self.low_xover.set_target(params.low_xover.value());
         self.high_decay_mult.set_target(params.high_decay_mult.value());
+        self.build.set_target(params.build.value());
     }
 }
