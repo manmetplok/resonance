@@ -31,6 +31,8 @@ const ALGORITHMS: &[Algorithm] = &[
     ("chamber", |p| p.algorithm.set_value(3)),
     ("hall", |p| p.algorithm.set_value(4)),
     ("ambience", |p| p.algorithm.set_value(5)),
+    ("spring", |p| p.algorithm.set_value(6)),
+    ("nonlinear", |p| p.algorithm.set_value(7)),
 ];
 
 fn test_signal(frames: usize) -> Vec<f32> {

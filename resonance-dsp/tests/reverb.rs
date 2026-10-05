@@ -575,3 +575,146 @@ fn shoebox_preallocated_matches_and_first_order_only_has_six() {
         assert!((b.delay_samples - 2.0 * a.delay_samples).abs() < 0.05);
     }
 }
+
+// ------------------------------------------------- DispersiveAllpass (R8)
+
+use resonance_dsp::reverb::{stage_group_delay, DispersiveAllpass};
+
+/// Steady-state gain of `ap` for a sine at `hz` (RMS out / RMS in over a
+/// window after the transient).
+fn dispersive_sine_gain(ap: &mut DispersiveAllpass, hz: f32) -> f64 {
+    ap.clear();
+    let settle = 20_000;
+    let n = settle + 48_000;
+    let (mut e_in, mut e_out) = (0.0f64, 0.0f64);
+    for i in 0..n {
+        let x = (std::f64::consts::TAU * hz as f64 * i as f64 / FS as f64).sin() as f32;
+        let y = ap.process(x);
+        if i >= settle {
+            e_in += (x as f64).powi(2);
+            e_out += (y as f64).powi(2);
+        }
+    }
+    (e_out / e_in).sqrt()
+}
+
+/// Delay of a Gaussian tone burst's energy centroid through `ap`, samples
+/// (≈ the group delay at `hz` for a narrow-band burst).
+fn dispersive_burst_delay(ap: &mut DispersiveAllpass, hz: f32) -> f64 {
+    ap.clear();
+    let sigma = 0.012 * FS as f64;
+    let centre = 5.0 * sigma;
+    let n = (10.0 * sigma) as usize + 4_000;
+    let (mut m_in, mut w_in, mut m_out, mut w_out) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for i in 0..n {
+        let t = i as f64;
+        let env = (-0.5 * ((t - centre) / sigma).powi(2)).exp();
+        let x = (env * (std::f64::consts::TAU * hz as f64 * t / FS as f64).sin()) as f32;
+        let y = ap.process(x) as f64;
+        let x = x as f64;
+        m_in += t * x * x;
+        w_in += x * x;
+        m_out += t * y * y;
+        w_out += y * y;
+    }
+    m_out / w_out - m_in / w_in
+}
+
+#[test]
+fn dispersive_allpass_is_flat_in_magnitude() {
+    for a in [0.3f32, 0.75, 0.92, -0.6] {
+        let mut ap = DispersiveAllpass::new(64, 40, a);
+        for hz in [60.0f32, 250.0, 1_000.0, 4_000.0, 12_000.0, 19_000.0] {
+            let g = dispersive_sine_gain(&mut ap, hz);
+            assert!(
+                (20.0 * g.log10()).abs() < 0.01,
+                "a {a}: {hz} Hz gain {:.4} dB",
+                20.0 * g.log10()
+            );
+        }
+        // Lossless: an impulse's energy comes out whole.
+        ap.clear();
+        let e: f64 = (0..48_000)
+            .map(|i| (ap.process(if i == 0 { 1.0 } else { 0.0 }) as f64).powi(2))
+            .sum();
+        assert!((e - 1.0).abs() < 1e-3, "a {a}: impulse energy {e}");
+    }
+}
+
+/// The documented direction: with a positive coefficient the group delay
+/// rises toward low frequencies (the bass trails, a falling chirp), it
+/// matches the closed form, and a negative coefficient mirrors it.
+#[test]
+fn dispersive_allpass_delays_low_frequencies_for_positive_coefficients() {
+    let mut ap = DispersiveAllpass::new(64, 40, 0.8);
+    let freqs = [200.0f32, 1_000.0, 3_000.0, 8_000.0];
+    let mut last = f64::INFINITY;
+    for hz in freqs {
+        let measured = dispersive_burst_delay(&mut ap, hz);
+        let analytic = ap.group_delay(hz, FS) as f64;
+        println!("a 0.8 x 40: {hz:>6} Hz  tau {measured:7.1} (closed form {analytic:7.1})");
+        assert!(
+            (measured - analytic).abs() <= 0.05 * analytic + 1.0,
+            "{hz} Hz: measured {measured:.1}, closed form {analytic:.1}"
+        );
+        assert!(measured < last, "group delay did not fall at {hz} Hz");
+        last = measured;
+    }
+    assert!(ap.group_delay(0.0, FS) > 40.0 * 8.9);
+    assert!((stage_group_delay(0.8, 0.0, FS) - 9.0).abs() < 1e-4);
+    assert!((stage_group_delay(0.8, FS / 2.0, FS) - 1.0 / 9.0).abs() < 1e-4);
+    // Negative: the treble trails instead.
+    let mut neg = DispersiveAllpass::new(64, 40, -0.8);
+    let lo = dispersive_burst_delay(&mut neg, 1_000.0);
+    let hi = dispersive_burst_delay(&mut neg, 12_000.0);
+    assert!(hi > lo, "negative coefficient: 1 kHz {lo:.1}, 12 kHz {hi:.1}");
+    // A larger coefficient piles more delay into the bass.
+    let gentle = DispersiveAllpass::new(64, 40, 0.5);
+    let steep = DispersiveAllpass::new(64, 40, 0.9);
+    let spread = |ap: &DispersiveAllpass| ap.group_delay(200.0, FS) - ap.group_delay(4_000.0, FS);
+    assert!(spread(&steep) > 3.0 * spread(&gentle));
+}
+
+#[test]
+fn dispersive_allpass_clear_equals_fresh_and_stages_are_bounded() {
+    let mut used = DispersiveAllpass::new(32, 24, 0.85);
+    let mut rng = SimpleRng::new(3);
+    for _ in 0..5_000 {
+        used.process(rng.next_u32() as f32 / u32::MAX as f32 * 2.0 - 1.0);
+    }
+    used.set_coefficient(0.7);
+    used.clear();
+    let mut fresh = DispersiveAllpass::new(32, 24, 0.7);
+    for i in 0..2_000 {
+        let x = if i == 0 { 1.0 } else { 0.0 };
+        assert_eq!(used.process(x).to_bits(), fresh.process(x).to_bits(), "sample {i}");
+    }
+    used.set_stages(100);
+    assert_eq!(used.stages(), 32);
+    used.set_coefficient(1.5);
+    assert!(used.coefficient() < 1.0);
+    used.set_coefficient(f32::NAN);
+    assert_eq!(used.coefficient(), 0.0);
+    // Zero stages: a wire.
+    used.set_stages(0);
+    assert_eq!(used.process(0.25), 0.25);
+}
+
+#[test]
+fn dispersive_allpass_pair_matches_two_single_cascades() {
+    let mut a = DispersiveAllpass::new(40, 40, 0.8);
+    let mut b = DispersiveAllpass::new(40, 33, 0.6);
+    let (mut c, mut d) = (a.clone(), b.clone());
+    let mut rng = SimpleRng::new(11);
+    for i in 0..4_000 {
+        let x = rng.next_u32() as f32 / u32::MAX as f32 - 0.5;
+        let y = if i % 7 == 0 { 1.0 } else { 0.0 };
+        let (u, v) = a.process_pair(&mut b, x, y);
+        assert_eq!(u.to_bits(), c.process(x).to_bits(), "sample {i}");
+        assert_eq!(v.to_bits(), d.process(y).to_bits(), "sample {i}");
+    }
+    // The longer one second, too.
+    let (u, v) = b.process_pair(&mut a, 0.3, -0.2);
+    let want = (d.process(0.3).to_bits(), c.process(-0.2).to_bits());
+    assert_eq!((u.to_bits(), v.to_bits()), want);
+}

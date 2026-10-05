@@ -89,4 +89,14 @@ pub const PRESETS: &[PresetEntry] = &[
         name: "Short Ambience",
         json: include_str!("../presets/short_ambience.json"),
     },
+    PresetEntry {
+        id: "surf-spring",
+        name: "Surf Spring",
+        json: include_str!("../presets/surf_spring.json"),
+    },
+    PresetEntry {
+        id: "eighties-gate",
+        name: "80s Gate",
+        json: include_str!("../presets/eighties_gate.json"),
+    },
 ];
