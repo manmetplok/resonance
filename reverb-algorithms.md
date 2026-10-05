@@ -93,7 +93,7 @@ Mix conventions the algorithms have to support:
 - **Mastering adds no reverb.** Space is a mix decision. The only master-bus
   uses are (a) a very short Ambience at a few percent wet when the user asks
   for "glue" and the stems cannot be revisited, and (b) a tail held over an
-  abrupt last chord, automated in. Both are measured (§9.3).
+  abrupt last chord, automated in. Both are measured (the `mastering` skill, §3c).
 
 ## 3. Scope
 
