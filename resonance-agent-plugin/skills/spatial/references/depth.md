@@ -24,28 +24,33 @@ then trust the ordering.
 
 A return bus with the reverb at full wet, fed by post-fader sends:
 
-1. `bus_create`, then `bus_add_effect` with `com.resonance.reverb`.
-2. Start from a preset with `bus_load_plugin_preset`, then set it for a return:
+1. `bus_create`, then `bus_add_effect` with `com.resonance.reverb` and, as
+   `preset`, the starting preset §1b gives for the job. The add and the load
+   are one undo step, and the preset sets the algorithm with the rest of its
+   voicing.
 
 <!-- keys: com.resonance.reverb -->
-| Start from | Suits |
-|---|---|
-| `Tight Room` | dense, close material; a short shared room |
-| `Vocal Plate` | a vocal-led song |
-| `Warm Hall` | a slower, sparser song |
-| `Cathedral` or `Ambient Bloom` | the back/wash return of §4, not the shared room |
-| `Snare Plate` | a snare-only return when the snare needs more sheen than the shared room gives |
-| `Snare Gated` | an 80s snare, on its own return |
+   Never leave `algorithm` at its default: a new reverb starts on a type
+   nobody chose for this job. Start from a preset, or set `algorithm` first,
+   before any other key, because each type reads the knobs its own way.
+<!-- /keys -->
 
+   Read the plugin back with `bus_plugin_params` to confirm the type and the
+   values you are about to change.
+2. Set it for a return:
+
+<!-- keys: com.resonance.reverb -->
 | Key | On the return | Why |
 |---|---|---|
-| `mix` | 1.0 (100 % wet) | a return carries only the wet signal; the dry is the track itself |
-| `predelay` | from tempo, 20-40 ms (table below) | lets the front layer land before its room |
-| `wet_hpf_freq` | about 600 Hz, with `wet_hpf_on` `On` | return EQ before the tank: no low-end wash |
+| `mix` | 1.0 (100 % wet) | a return carries only the wet signal; the dry is the track itself. Presets store an insert mix (6-50 %), so set this after loading one |
+| `predelay` | from tempo, 20-40 ms (§2), or `predelay_sync` | lets the front layer land before its room |
+| `decay` | from tempo (§2), or `decay_sync`, inside the job's range in §1b | a tail still loud on the next downbeat smears the groove |
+| `wet_hpf_freq` | the preset's (150-400 Hz) where it has `wet_hpf_on` `On`; otherwise about 600 Hz for a vocal room, 150-250 Hz for a back/wash return | return EQ before the tank: no low-end wash |
 | `wet_lpf_freq` | about 10 kHz (6-8 kHz for a darker room), with `wet_lpf_on` `On` | no sizzle; darker reads further away |
 | `wet_filter_slope` | `12 dB/oct` or `18 dB/oct` | 12-18 dB/oct is the norm |
 | `er_tail_balance` | 0; toward -1 more early reflections (closer), toward +1 more tail (further) | the room's depth crossfade |
-| `decay`, `size`, `damping` | leave the preset's unless the user asks for a bigger or smaller space | |
+| `low_decay_mult`, `high_decay_mult`, `tail_build` | the preset's, then §1b | the shape of the tail |
+| `size`, `damping` | leave the preset's unless the user asks for a bigger or smaller space | |
 <!-- /keys -->
 
 3. `track_add_send` from each track that needs space, `pre_fader` false (the
@@ -53,6 +58,71 @@ A return bus with the reverb at full wet, fed by post-fader sends:
    Start from roles.md's first-guess `level_db` per role (kick and bass
    usually get none), then set each send from its layer's DRR target once the
    first depth pass has measured the return (§4).
+
+## 1b. Pick the room by job
+
+One shared room is still the default: choose its type by what leads the song
+(the first rows below). Add a second return of another type only when one room
+cannot place both the front and the back, or when one part needs a special
+effect the shared room should not carry (§4). Every number is a start, checked
+by measurement (§7).
+
+<!-- keys: com.resonance.reverb -->
+| The return is for | Type (`algorithm`) | Start from | `decay` | `predelay` |
+|---|---|---|---|---|
+| shared room, a vocal-led song | `Plate` | `Vocal Plate` | 1.2-2.5 s, or `decay_sync` `1/2` to `1 bar` | 20-40 ms, or `predelay_sync` `1/64` or `1/128`, whichever lands there (§2) |
+| shared room, a warm or intimate vocal | `Chamber` | `Vocal Chamber` | 1.0-1.8 s | 10-30 ms |
+| shared room, a band with the drums leading | `Room` | `Drum Room`, or `Tight Room` for a smaller space | 0.3-0.9 s, or `decay_sync` `1/4` to `1/2` | 0-10 ms |
+| shared room for a dry-sounding mix, or a front that must stay dry-sounding | `Ambience` | `Short Ambience` | 0.3-0.8 s (held at 1 s at most) | 0-10 ms |
+| the back layer: pads, strings, orchestral parts | `Hall` | `String Hall`, `Warm Hall`; `Cathedral` for a ballad's wash | 2-4 s (a ballad up to 6) | 0-20 ms |
+| ambient beds, drones, swelled guitar | `Shimmer` | `Octave Halo`; `Fifth Bloom` for an open fifth; `Shimmer Drone` for an endless halo | 6-20 s | 0-80 ms |
+| the same, without the pitched halo | `Hall` | `Ambient Bloom`, with `freeze` to hold a chord | 6-20 s | 0-80 ms |
+| snare sheen, its own return | `Plate` | `Snare Plate`, or `Bright Plate` for percussion | 0.8-1.8 s | 0-15 ms |
+| a natural snare room, its own return | `Room` | `Snare Tight`; `Snare Ambient` for a bigger bloom | 0.4-0.9 s | 0-15 ms |
+| an 80s gated snare, its own return | `Nonlinear` | `80s Gate`, or `Snare Gated` for a tighter one | ignored: set `nl_length` 250-500 ms | 0 ms |
+| clean electric guitar, its own return | `Spring`, or `Plate` for a hi-fi version | `Surf Spring` | 1.5-3 s | 0 ms |
+<!-- /keys -->
+
+Kick, bass and sub get no reverb on any type: the low end stays dry and mono.
+
+What each type reads, so a move is never made on a knob the type ignores:
+
+<!-- keys: com.resonance.reverb -->
+- **Bass and treble decay.** `low_decay_mult` multiplies the decay below
+  `low_xover`: above 1 thickens and warms the room (Chamber and Hall presets sit
+  at 1.3-1.5), below 1 clears the low end (0.7-0.9 for drum rooms and glue).
+  `high_decay_mult` multiplies it above `damping`: lower is darker and reads
+  further back (Hall 0.4-0.6), high is a plate's sheen (Plate 0.8-0.9). The
+  `algorithm` choices `Plate`, `Room`, `Chamber`, `Hall`, `Ambience` and
+  `Shimmer` read all three; `Classic`, `Spring` and `Nonlinear` ignore them, so
+  darken those with `damping`.
+- **Build.** Only `algorithm` `Hall` and `Shimmer` read `tail_build`, how
+  slowly the tail swells in after the reflections: 0 arrives with them, 1
+  blooms over about 300 ms. Higher reads further back and softens the attack; the level and the
+  decay do not change. 0.4-0.6 for a back layer, 0.8-1 for a bloom.
+- **Ambience** holds `decay` at 1 s at most: its space is in the early
+  cluster, not in a tail. That is why it can sit on a front part, or at a few
+  percent on a whole mix, without reading as reverb.
+- **Nonlinear** ignores `decay`, `decay_sync` and `freeze`: `nl_length` is the
+  gate (50-1000 ms) and `nl_shape` its envelope (`Gated` flat then cut,
+  `Reverse` rising then cut, `Flat` flat then a natural fall). It restarts on
+  every transient of its input, so feed it from the snare (and toms) only: a
+  sustained part sent to it triggers once and is then gated away.
+- **Spring** is mono-in and has no early reflections; it ignores the ER keys,
+  the modulation, the decay multipliers, `tail_build` and `freeze`.
+  `spring_tension` is the chirp (higher, a longer boing), `spring_drip` the
+  extra chirp on each pick attack.
+- **Shimmer** pitch-shifts part of its loop: `shimmer_pitch` (`+12` an octave
+  halo, `+7` a fifth, `-12` a darker sub-octave) and `shimmer_amount` (how much
+  of the loop, 0.3-0.5 in the presets). Keep it on a back return with
+  `wet_hpf_freq` 150-250 Hz. With `freeze` on it holds what it has and stops
+  climbing.
+- **Freeze.** `freeze` holds the tail on every `algorithm` but `Spring` and
+  `Nonlinear`, which ignore it.
+<!-- /keys -->
+
+Changing the type on a running return crossfades over 50 ms (no click), but
+it changes how every other knob is read: re-read the plugin and re-check §7.
 
 ## 2. Pre-delay from tempo
 
@@ -73,6 +143,12 @@ The general form is 60000 / BPM / k with k = 8 (a 1/32 note), 16 or 32. A
 1/32 note only fits the front's 20-40 ms at about 188 BPM or faster; below
 that it is too long (80 ms at 94 BPM).
 
+<!-- keys: com.resonance.reverb -->
+Or let the reverb do the arithmetic: `predelay_sync` `1/64` is the 1/64 column
+above and `1/128` the 1/128 column (`1/32`, `1/16` and `1/8` are longer, for a
+slap or an effect). While it is not `Off` it overrides `predelay`.
+<!-- /keys -->
+
 ### Decay from tempo
 
 A room whose tail is still loud on the next strong beat smears the groove.
@@ -91,9 +167,20 @@ than the shared room: that is what it is for.
 | 170 | 0.35 s | 0.71 s | 1.4 s | 2.8 s |
 
 <!-- keys: com.resonance.reverb -->
-Set the result as `decay` on the return. It is the knob's nominal time, so
-treat it as a start. Keep `damping` lower (darker) as `decay` grows: a long,
-bright tail reads as harsh rather than deep.
+Set the result as `decay` on the return, inside the job's range in §1b. On
+every type but `algorithm` `Classic` it is the mid-band T60 and measures within
+a few percent of the knob (`Shimmer` within about 15 %). Keep the treble
+shorter as `decay` grows (`high_decay_mult` down, or `damping` lower on the
+types that ignore it): a long, bright tail reads as harsh rather than deep.
+
+Or sync it: `decay_sync` sets the T60 to a length at the song's tempo, `1/4`
+one beat, `1/2` two beats, `1 bar`, `2 bars` or `4 bars` (a bar in the song's
+meter); any choice but `Off` overrides the decay knob. The synced values follow
+the tempo the song is playing at, so they track a tempo map by themselves;
+with no tempo from the host they fall back to the knobs. They are still
+subject to each type's limits: `algorithm` `Ambience` holds 1 s at most, and
+`Nonlinear` ignores `decay_sync` (its length is `nl_length`). Confirm a synced
+decay by measuring it (§7).
 <!-- /keys -->
 
 ## 3. Duck the room from the lead
@@ -132,17 +219,21 @@ single post-fader send, so read the return's `return_gain_db` from the track's
 `drr_db_estimate` by 3 dB. Then check the ordering holds.
 
 If one room cannot place both the front and the back, add a second return
-rather than pushing sends to extremes:
+rather than pushing sends to extremes. The same goes for a part that needs a
+room of its own type (§1b):
 
 <!-- keys: com.resonance.reverb -->
-| Return | Fed by | Settings |
-|---|---|---|
-| Room (shared) | everything that needs space | as above |
-| Back / wash | pads, FX, textures | longer `decay`, `er_tail_balance` +0.3 to +0.6, `wet_lpf_freq` 6-8 kHz, `predelay` 0-10 ms |
+| Return | Type (`algorithm`) | Fed by | Settings |
+|---|---|---|---|
+| Room (shared) | by what leads the song (§1b) | everything that needs space | as above |
+| Back / wash | `Hall`, or `Shimmer` for ambient beds | pads, strings, FX, textures | longer `decay`, `tail_build` 0.5-1, `er_tail_balance` +0.3 to +0.6, `wet_lpf_freq` 6-8 kHz, `wet_hpf_freq` 150-250 Hz, `predelay` 0-10 ms |
+| Front | `Ambience` | a front part that needs air but must not sound wet | `decay` 0.3-0.8 s, `predelay` 0-10 ms |
+| Snare | `Plate`, `Room` or `Nonlinear` (§1b) | the snare (and toms) only | the preset's; `wet_hpf_freq` 200-350 Hz keeps the kick out |
+| Guitar | `Spring` | the clean electric guitar only | the preset's |
 <!-- /keys -->
 
 The back parts then send to both, or only to the wash. Keep the front on the
-shared room only.
+shared room only. Each extra return is one more space: stop at two or three.
 
 Delay throws on phrase ends keep a lead upfront better than more reverb: a
 synced delay return (`com.resonance.delay`), fed by a send from the lead.
@@ -174,6 +265,44 @@ for character anyway). Front parts keep their top. Check the ordering of
 Caveats: only a track's own sends count (a track feeding a bus that sends to
 the room reads as dry); automated send rides are not in the estimate; it costs
 one extra render per return and per sending track.
+
+## 7. Verify the tail
+
+Decay from tempo is arithmetic on a knob; the decay detail measures what the
+room actually does. Do it once per return, after its settings are final.
+
+1. **Pick a sender and a stop.** Measure a **track that sends** to the
+   return, never the return bus: a track's stem carries its sends' returns
+   back, while a `{bus_id}` target hears only tracks routed into the bus and
+   reads a send-fed return as silent. Choose a range that ends in silence
+   after the track stops: from a held note through the gap before its next
+   entry, or its last note with the default range (an explicit range is
+   clamped to the song's end and cuts the tail). Sustained material (a pad, a
+   held vocal note) reads cleanest; a pluck adds its own decay.
+2. **Measure.** `meter_measure {target: {track_id}, range, detail: ["decay"]}`,
+   or `meter_stems` with `detail: ["decay"]` for every sender at once.
+3. **Read** (fields in reading-meters.md, "Decay"):
+   - `found` and `clean` true, and `stop` the stop you meant. Otherwise `note`
+     says why: extend the range (`ends` is `range_end`), or pick a stop that
+     other notes do not cover.
+   - `t30_seconds` within about 10 % of the decay you intended: the knob, or
+     for a synced decay its beats × 60 / BPM. Further off, read the plugin
+     back with `bus_plugin_params`: the type, a sync you forgot, or Ambience's
+     1 s ceiling. On a gated Nonlinear return T30 means little; read
+     `tail_20db_seconds` against the gate length instead.
+   - `stop_seconds` plus `tail_20db_seconds` falls before the next downbeat
+     (song seconds from the tempo) on rhythmic material: the tail has cleared
+     20 dB before the groove needs the space. Later than that, shorten the
+     decay a step (a sync one choice down) or duck the return (§3). A
+     ballad's room and the back/wash return may ring past it by design.
+   - `bands`: the 125 Hz and 250 Hz `t30_seconds` against the 1 kHz one
+     follow the bass multiplier you set. Bass much longer than intended is a
+     muddy room: lower the bass decay or raise the return's high-pass.
+   - `edt_seconds` shorter than T30 is normal on a track (its dry signal
+     stops at once).
+
+Tails longer than about 15 s (a frozen or drone return) cannot be measured
+this way: check those by the depth ordering only.
 
 ## Stop rules
 

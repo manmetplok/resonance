@@ -74,6 +74,30 @@ depth.md is for.
 | Pads | back | -13 | centre (stereo source) | wide | -10 to -6 | 0-10 ms | music bus, darker |
 | FX / texture | back | -11 to -18 | anywhere, moving | wide | -8 to -4 | 0 ms | — |
 
+**Room type** is the reverb type a role wants from the return it sends to
+(spatial's depth.md §1b has the decays and the full job table). One shared room
+serves most roles, so its type follows what *leads* the song: the lead
+vocal's type in a vocal-led song, the drums' in a band mix. A role whose row
+differs from the shared room's type gets a second return only when the
+difference is the point (a gated snare, a spring guitar, a hall behind pads),
+never just because the row says so.
+
+<!-- keys: com.resonance.reverb -->
+| Role | Room type (`algorithm`) | Start from |
+|---|---|---|
+| Kick, bass | none | |
+| Snare | the shared room; on its own return `Plate` (sheen), `Room` (natural) or `Nonlinear` (80s gate) | `Snare Plate`, `Snare Tight`, `80s Gate` |
+| Drum overheads / room | `Room` | `Drum Room` |
+| Lead vocal | `Plate`, or `Chamber` for a warm, intimate vocal | `Vocal Plate`, `Vocal Chamber` |
+| Backing vocals | the lead's room | |
+| Rhythm guitars / doubled parts | `Room` | `Tight Room` |
+| Clean electric guitar | `Spring` on its own return (`Plate` for a hi-fi version) | `Surf Spring` |
+| Keys, piano, acoustic guitar | `Room` or `Chamber` | |
+| Lead synth / lead instrument | `Plate` | `Vocal Plate` |
+| Pads, strings | `Hall` (the back return) | `String Hall` |
+| FX / texture, drones | `Hall` or `Shimmer` (the back return) | `Ambient Bloom`, `Octave Halo` |
+<!-- /keys -->
+
 Rules that hold for every role:
 
 - **Low end is mono.** Everything below about 150 Hz sits in the centre:
