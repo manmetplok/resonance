@@ -15,6 +15,8 @@
 //! - [`offline`] — pure whole-buffer primitives for mix analysis
 //!   ([`band_shares`], [`mono_penalty_db`], [`sample_peak_db`],
 //!   [`clipped_samples`])
+//! - [`decay`] — offline impulse-response analysis for reverbs (EDC,
+//!   T20/T30/EDT per octave band, echo density, modal peakiness, IACC)
 //! - [`detail`] — the opt-in `meter.*` detail proxies (spectrum: tilt,
 //!   1/3-octave LTAS, centroid, resonances; stereo: per-band correlation,
 //!   S/M, mono loss, windows, balance, one-sidedness, Haas lag)
@@ -22,6 +24,7 @@
 pub mod atomic_snapshot;
 pub mod correlation;
 pub mod crest;
+pub mod decay;
 pub mod detail;
 pub mod k_weighting;
 pub mod lra;
