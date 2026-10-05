@@ -1,0 +1,52 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "drum-room",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Drum Room",
+    "author": "Resonance",
+    "description": "Kit ambience: a mid-sized Room (0.35 size, 0.7 s) with loud early reflections and the ER/tail balance leaning to the reflections, so the kit sits in a real room without a wash. 180 Hz return HPF keeps the kick out; 20% mix on a drum bus or a send.",
+    "category": "Bus",
+    "instrument": ["drums", "drum-bus", "room"],
+    "genres": ["rock", "indie", "pop"],
+    "character": ["punchy", "wide", "dry"],
+    "tags": ["room", "drums", "early-reflections", "short-decay", "kit"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 0.0,
+        "er_level": 0.7,
+        "er_time": 0.45,
+        "size": 0.35,
+        "decay": 0.7,
+        "damping": 7000.0,
+        "diffusion": 0.75,
+        "mod_rate": 0.8,
+        "mod_depth": 0.15,
+        "width": 1.0,
+        "mix": 0.2,
+        "freeze": 0,
+        "wet_hpf_on": 1,
+        "wet_hpf_freq": 180.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": -0.35,
+        "algorithm": 2,
+        "low_decay_mult": 1.0,
+        "low_xover": 250.0,
+        "high_decay_mult": 0.5,
+        "predelay_sync": 0,
+        "decay_sync": 0,
+        "tail_build": 0.5
+      }
+    }
+  }
+}

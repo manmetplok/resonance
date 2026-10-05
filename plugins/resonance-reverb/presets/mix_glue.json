@@ -1,0 +1,52 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "mix-glue",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Mix Glue",
+    "author": "Resonance",
+    "description": "Space without a tail for a whole mix: Ambience at 0.5 s, a dense early cluster whose EDT carries the room, at 6% mix with a 400 Hz return HPF so the low end stays dry and mono. Felt, not heard; keep the mix between 3 and 10%.",
+    "category": "Master",
+    "instrument": ["mix-bus", "master", "full-mix"],
+    "genres": [],
+    "character": ["subtle", "clean"],
+    "tags": ["ambience", "glue", "mix-bus", "short-decay", "depth"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 0.0,
+        "er_level": 0.6,
+        "er_time": 0.4,
+        "size": 0.35,
+        "decay": 0.5,
+        "damping": 9000.0,
+        "diffusion": 0.8,
+        "mod_rate": 0.5,
+        "mod_depth": 0.0,
+        "width": 1.0,
+        "mix": 0.06,
+        "freeze": 0,
+        "wet_hpf_on": 1,
+        "wet_hpf_freq": 400.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0,
+        "algorithm": 5,
+        "low_decay_mult": 0.8,
+        "low_xover": 250.0,
+        "high_decay_mult": 0.6,
+        "predelay_sync": 0,
+        "decay_sync": 0,
+        "tail_build": 0.5
+      }
+    }
+  }
+}
