@@ -63,6 +63,8 @@ pub fn draw(ui: &mut egui::Ui, params: &SaturatorParams) {
                 widgets::float_knob(ui, &params.curve, "Curve", "inflator");
             });
             widgets::float_knob(ui, &params.mix, "Mix", "");
+            ui.add_space(8.0);
+            widgets::bool_checkbox(ui, &params.auto_gain, "Auto Gain");
         });
     });
 }

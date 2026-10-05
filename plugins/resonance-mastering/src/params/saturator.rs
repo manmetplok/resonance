@@ -4,6 +4,12 @@
 //! stage's original five params, so they are listed separately
 //! ([`SaturatorParams::mode_param_at`]) and appended after every older
 //! param. `sat_mode`'s default, Blend, is the original stage.
+//! `sat_auto_gain` came later still and is listed after the limiter's
+//! gain ([`SaturatorParams::auto_gain_param_at`]).
+//!
+//! `sat_character` and `sat_shaper` only act in the Blend mode and
+//! `sat_curve` only in the Inflator; their display names say so, since
+//! a host's generic param list shows them in every mode.
 
 use std::sync::Arc;
 
@@ -16,6 +22,8 @@ use crate::stages::saturator::{SatMode, SaturatorConfig, Shaper};
 pub const PARAM_COUNT: usize = 5;
 /// `sat_mode` and `sat_curve`, appended after every pre-W9 param.
 pub const MODE_PARAM_COUNT: usize = 2;
+/// `sat_auto_gain`, appended after the limiter's gain.
+pub const AUTO_GAIN_PARAM_COUNT: usize = 1;
 
 pub struct SaturatorParams {
     pub on: BoolParam,
@@ -28,6 +36,9 @@ pub struct SaturatorParams {
     pub mode: IntParam,
     /// The Inflator mode's Curve control, −50 %..+50 %.
     pub curve: FloatParam,
+    /// Level-match the wet path to unity small-signal gain in every
+    /// mode. Off by default, so existing mixes render unchanged.
+    pub auto_gain: BoolParam,
 }
 
 impl SaturatorParams {
@@ -50,6 +61,11 @@ impl SaturatorParams {
         }
     }
 
+    /// `sat_auto_gain` (0).
+    pub fn auto_gain_param_at(&self, _index: usize) -> &dyn Param {
+        &self.auto_gain
+    }
+
     pub fn snapshot(&self) -> SaturatorConfig {
         SaturatorConfig {
             enabled: self.on.value(),
@@ -59,6 +75,7 @@ impl SaturatorParams {
             shaper: Shaper::from_index(self.shaper.value()),
             mode: SatMode::from_index(self.mode.value()),
             curve: self.curve.value(),
+            auto_gain: self.auto_gain.value(),
         }
     }
 }
@@ -102,7 +119,7 @@ impl Default for SaturatorParams {
             .with_value_to_string(v2s_f32_db(1)),
             character: FloatParam::new(
                 "sat_character",
-                "Sat Character",
+                "Sat Character (Blend)",
                 0.3,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
@@ -122,7 +139,7 @@ impl Default for SaturatorParams {
             .with_value_to_string(v2s_f32_percent(0)),
             shaper: IntParam::new(
                 "sat_shaper",
-                "Sat Shaper",
+                "Sat Shaper (Blend)",
                 Shaper::Smooth.to_index(),
                 IntRange::Linear { min: 0, max: 1 },
             ),
@@ -138,7 +155,7 @@ impl Default for SaturatorParams {
             .with_choices(SatMode::LABELS),
             curve: FloatParam::new(
                 "sat_curve",
-                "Sat Curve",
+                "Sat Curve (Inflator)",
                 0.0,
                 FloatRange::Linear {
                     min: -0.5,
@@ -148,6 +165,7 @@ impl Default for SaturatorParams {
             .with_unit("%")
             .with_string_to_value(s2v_f32_percentage())
             .with_value_to_string(format_curve()),
+            auto_gain: BoolParam::new("sat_auto_gain", "Sat Auto Gain", false),
         }
     }
 }

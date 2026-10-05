@@ -54,13 +54,25 @@
 //! so a DC blocker runs right after the shaper — always, not just at
 //! character > 0, so the wet path stays continuous as the knob sweeps —
 //! before the low shelf can amplify the offset.
+//!
+//! # Auto gain
+//!
+//! `sat_auto_gain` (default off) divides the wet path by its
+//! small-signal gain, so every mode and drive setting comes out at the
+//! input's level for quiet material and switching modes compares
+//! voicings, not levels. For the Blend mode that gain is
+//! `drive · inv_drive · ((1 − character) + character · f′(offset))`,
+//! the two shelves being unity in the midrange; the other modes' is
+//! [`super::sat_modes::small_signal_gain`]. The toggle ramps like the
+//! other params. Off, the wet gain is multiplied by exactly 1, so the
+//! stage renders bit-identically to before the param existed.
 
 use resonance_dsp::{db_to_linear, Biquad, Curve, DcBlocker};
 use resonance_plugin::{Smoother, SmoothingStyle};
 
 use super::retarget;
 pub use super::sat_modes::SatMode;
-use super::sat_modes::{peak_gain, ModeChannel};
+use super::sat_modes::{peak_gain, small_signal_gain, ModeChannel};
 
 /// Ramp length for drive/character/mix and the enable crossfade, in
 /// milliseconds. Long enough to spread a full-scale parameter step
@@ -106,6 +118,9 @@ pub struct SaturatorConfig {
     pub mode: SatMode,
     /// The Inflator's Curve control, −0.5..0.5 (the JSFX's ±50 %).
     pub curve: f32,
+    /// Level-match the wet path to unity small-signal gain (module docs,
+    /// Auto gain).
+    pub auto_gain: bool,
 }
 
 impl Default for SaturatorConfig {
@@ -118,6 +133,7 @@ impl Default for SaturatorConfig {
             shaper: Shaper::Smooth,
             mode: SatMode::Blend,
             curve: 0.0,
+            auto_gain: false,
         }
     }
 }
@@ -185,6 +201,12 @@ pub struct Saturator {
     mode_drive_lin: f32,
     mode_gain: f32,
     mode_curve: Curve,
+    /// One over the mode's small-signal gain, cached with `mode_gain`.
+    mode_comp: f32,
+    /// `sat_auto_gain`, ramped 0 ↔ 1: the share of the level
+    /// compensation applied to the wet path.
+    auto_sm: Smoother,
+    auto_tgt: f32,
 }
 
 impl Saturator {
@@ -224,6 +246,9 @@ impl Saturator {
             mode_drive_lin: 1.0,
             mode_gain: 1.0,
             mode_curve: Curve::Tanh,
+            mode_comp: 1.0,
+            auto_sm: Smoother::new(SmoothingStyle::Linear(RAMP_MS)),
+            auto_tgt: f32::NAN,
         };
         s.switch_sm.reset(1.0);
         s.set_sample_rate(sample_rate);
@@ -254,6 +279,7 @@ impl Saturator {
         self.enable_sm.set_sample_rate(sample_rate);
         self.curve_sm.set_sample_rate(sample_rate);
         self.switch_sm.set_sample_rate(sample_rate);
+        self.auto_sm.set_sample_rate(sample_rate);
         self.mode_l = ModeChannel::new(sample_rate);
         self.mode_r = ModeChannel::new(sample_rate);
     }
@@ -285,6 +311,8 @@ impl Saturator {
         self.mode_key = (f32::NAN, f32::NAN);
         self.switch_sm.reset(1.0);
         self.switch_tgt = 1.0;
+        self.auto_sm.reset(0.0);
+        self.auto_tgt = f32::NAN;
     }
 
     /// Restart the filter and ADAA state of both paths: on (re)engage,
@@ -307,6 +335,7 @@ impl Saturator {
         let character = cfg.character.clamp(0.0, 1.0);
         let mix = cfg.mix.clamp(0.0, 1.0);
         let curve = cfg.curve.clamp(-0.5, 0.5);
+        let auto = if cfg.auto_gain { 1.0 } else { 0.0 };
 
         // Re-enabled while the fade-out still runs: the wet path is live,
         // so the fade just turns around. Restarting its state under a
@@ -346,6 +375,8 @@ impl Saturator {
             self.mode_r.reset();
             self.curve_sm.reset(curve);
             self.curve_tgt = curve;
+            self.auto_sm.reset(auto);
+            self.auto_tgt = auto;
             if !self.primed {
                 // Very first block: engage instantly, there is no
                 // running audio to click against.
@@ -357,6 +388,7 @@ impl Saturator {
             retarget(&mut self.character_sm, &mut self.character_tgt, character);
             retarget(&mut self.mix_sm, &mut self.mix_tgt, mix);
             retarget(&mut self.curve_sm, &mut self.curve_tgt, curve);
+            retarget(&mut self.auto_sm, &mut self.auto_tgt, auto);
         }
         if cfg.mode != self.active_mode {
             // Silent (never ran, or fully faded out): swap at once.
@@ -415,8 +447,14 @@ impl Saturator {
                     (1.0 / base_shape(self.drive_lin as f64, shaper).max(1e-6)) as f32;
             }
             let drive = self.drive_lin;
-            let inv_drive = self.inv_drive;
             let character = self.character_sm.next() as f64;
+            let auto = self.auto_sm.next();
+            let inv_drive = if auto == 0.0 {
+                self.inv_drive
+            } else {
+                let g = drive * self.inv_drive * blend_slope(character, shaper) as f32;
+                self.inv_drive * (1.0 + (1.0 / g.max(1e-6) - 1.0) * auto)
+            };
             let mix = self.mix_sm.next() * self.enable_sm.next() * self.switch_sm.next();
 
             let l1 = self.hf_shelf_l.process(dry_l);
@@ -458,6 +496,8 @@ impl Saturator {
                 self.mode_drive_lin = db_to_linear(drive_db);
                 self.mode_gain = peak_gain(mode, self.mode_drive_lin, curve);
                 self.mode_curve = mode.curve(self.mode_drive_lin, curve).unwrap_or(Curve::Tanh);
+                self.mode_comp =
+                    1.0 / small_signal_gain(mode, self.mode_drive_lin, curve).max(1e-6);
             }
             // Kept moving so it has converged if the mode goes back to
             // Blend.
@@ -465,7 +505,13 @@ impl Saturator {
             let mix = self.mix_sm.next();
             let e = self.enable_sm.next() * self.switch_sm.next();
             let (dl, dr) = (left[i], right[i]);
-            let (drive, gain, c) = (self.mode_drive_lin, self.mode_gain, self.mode_curve);
+            let auto = self.auto_sm.next();
+            let gain = if auto == 0.0 {
+                self.mode_gain
+            } else {
+                self.mode_gain * (1.0 + (self.mode_comp - 1.0) * auto)
+            };
+            let (drive, c) = (self.mode_drive_lin, self.mode_curve);
             let wl = self.mode_l.process(mode, &c, dl, drive, gain, mix);
             let wr = self.mode_r.process(mode, &c, dr, drive, gain, mix);
             left[i] = dl + (wl - dl) * e;
@@ -492,6 +538,22 @@ fn base_shape(x: f64, shaper: Shaper) -> f64 {
         }
     }
 }
+
+/// Small-signal slope of the Blend waveshaper, `(1 − character) +
+/// character · f′(offset)`: the symmetric branch has unit slope at 0,
+/// the asymmetric one the shaper's slope at its offset (module docs,
+/// Auto gain).
+fn blend_slope(character: f64, shaper: Shaper) -> f64 {
+    let x = ASYM_OFFSET;
+    let slope = match shaper {
+        Shaper::Smooth => 1.0 - x.tanh().powi(2),
+        Shaper::Gritty => 1.0 - 4.0 / 9.0 * x * x,
+    };
+    (1.0 - character) + character * slope
+}
+
+/// The asymmetric branch's DC offset before the shaper.
+const ASYM_OFFSET: f64 = 0.35;
 
 /// Closed-form antiderivative `F` of [`base_shape`], `F′ = f`. The
 /// integration constant is irrelevant (ADAA only ever takes
@@ -567,7 +629,7 @@ fn waveshape_adaa(u0: f64, u1: f64, character: f64, shaper: Shaper) -> f64 {
     // Offsetting both endpoints leaves du unchanged, so the branch
     // shares the symmetric branch's denominator; the subtracted
     // `f(offset)` is a constant and needs no antialiasing.
-    let offset = 0.35_f64;
+    let offset = ASYM_OFFSET;
     let asymmetric = adaa1(u0 + offset, u1 + offset, du, shaper) - base_shape(offset, shaper);
     symmetric * (1.0 - character) + asymmetric * character
 }

@@ -477,6 +477,7 @@ fn mode_switch_mid_signal_does_not_click() {
         shaper: Shaper::Smooth,
         mode: SatMode::Blend,
         curve: 0.0,
+        auto_gain: false,
     };
     let seq = [
         (0, SatMode::Blend),

@@ -14,7 +14,7 @@
 //! | `Tape` | A lightly biased soft curve, then a 15 ips head bump and level-dependent HF loss ([`HeadBump`], [`HfLoss`]) |
 //! | `Transformer` | LF-weighted drive: a +6 dB low-shelf [`EmphasisPair`] around a slightly biased soft curve, then a sub-sonic high-pass with a small resonance and a gentle HF bell |
 //! | `Console` | [`Curve::Console`], the Airwindows-style `sin` curve; its drive is part of the curve (0 dB = identity, +6 dB = the Airwindows channel) |
-//! | `Warm` | [`Curve::Warm`] at full amount: even harmonics only. DC blocker after |
+//! | `Warm` | [`Curve::Warm`], its amount rising with the drive (0 dB = identity, full amount from +6 dB): even harmonics only. DC blocker after |
 //! | `Inflator` | [`Curve::Inflator`], the odd density polynomial, with `sat_curve` as its Curve control: loudness without more limiting |
 //!
 //! # Level
@@ -23,6 +23,26 @@
 //! divided by the curve's larger magnitude at `±drive`, so a full-scale
 //! input comes out near full scale at any drive and quieter material
 //! gains density as the drive rises (`sat_mix` is the parallel blend).
+//!
+//! Warm is the exception, because it cannot be done for it. An
+//! even-only curve is `u + e(u)` with `e` even, so its odd part is
+//! exactly linear: it never compresses, one polarity's peak always
+//! grows past `drive`, and dividing by the larger peak attenuates small
+//! signals more the harder it is driven (it measured −1.6 dB at 0 dB
+//! drive, −2.9 dB at +12). Warm divides by the *mean* of its two peak
+//! magnitudes instead, which is exactly `drive`, so its small-signal
+//! gain is unity at every drive; a full-scale input's peaks then sit
+//! either side of full scale by the even term.
+//!
+//! # Auto gain
+//!
+//! `sat_auto_gain` (off by default, so existing mixes are unchanged)
+//! divides the wet path by its small-signal gain ([`small_signal_gain`]
+//! for these modes; the Blend mode computes its own), so a quiet input
+//! comes out at its own level in every mode and at every drive: A/B
+//! between modes compares voicings, not levels. At −18 dBFS and +6 dB
+//! drive every mode then lands within 1 dB of unity
+//! (`tests/sat_modes.rs`).
 //!
 //! # Antialiasing
 //!
@@ -50,6 +70,14 @@
 //! the old mode's wet share out over 10 ms, swaps, and fades the new one
 //! in (DSP2-11). Switching the Blend mode's shaper is not crossfaded.
 //!
+//! # Transformer's sub-sonic high-pass
+//!
+//! It runs in f64. The biased curve hands it a DC offset, and an f32
+//! biquad with an 18 Hz corner at 48 kHz turns round-off on that state
+//! into a stationary noise floor around 2-20 Hz: about −80 dBc against a
+//! −18 dBFS tone at any frequency, where the f64 filter measures below
+//! −110 dBc. Same design, same response.
+//!
 //! # `sat_mix` in the sub band
 //!
 //! The linear filters of a voicing (the 5 Hz DC blocker of Tube, Tape and
@@ -66,8 +94,8 @@
 
 use resonance_dsp::tape::hf_loss_corner_hz;
 use resonance_dsp::{
-    Adaa1, Biquad, Curve, DcBlocker, EmphasisPair, HeadBump, HfLoss, OversampleFactor,
-    Oversampler,
+    Adaa1, Biquad, BiquadCoeffs, Curve, DcBlocker, EmphasisPair, HeadBump, HfLoss,
+    OversampleFactor, Oversampler,
 };
 
 /// Which voicing the saturator runs.
@@ -133,7 +161,9 @@ impl SatMode {
             SatMode::Console => Curve::Console {
                 drive: console_drive(drive),
             },
-            SatMode::Warm => Curve::Warm { amount: 1.0 },
+            SatMode::Warm => Curve::Warm {
+                amount: warm_amount(drive),
+            },
             SatMode::Inflator => Curve::Inflator { curve },
         })
     }
@@ -169,16 +199,75 @@ fn console_drive(drive: f32) -> f32 {
     (drive - 1.0).clamp(0.0, 4.0)
 }
 
+/// Warm curve amount for a linear stage drive: 0 dB is the identity
+/// (the stage is transparent there, like Console), full amount from
+/// +6 dB on, linear in the drive in between.
+fn warm_amount(drive: f32) -> f32 {
+    (drive - 1.0).clamp(0.0, 1.0)
+}
+
 /// Output gain that pins a full-scale input near full scale: one over
 /// the curve's larger magnitude at `±u`, `u` the driven full-scale
-/// input (the drive, or 1 for Console).
+/// input (the drive, or 1 for Console). For Warm, one over the mean of
+/// the two magnitudes (module docs, Level), which is `1/drive`.
 pub fn peak_gain(mode: SatMode, drive: f32, curve: f32) -> f32 {
     let Some(c) = mode.curve(drive, curve) else {
         return 1.0;
     };
     let u = if mode.external_drive() { drive as f64 } else { 1.0 };
-    let peak = c.eval(u).abs().max(c.eval(-u).abs());
+    let (pos, neg) = (c.eval(u).abs(), c.eval(-u).abs());
+    let peak = if mode == SatMode::Warm {
+        0.5 * (pos + neg)
+    } else {
+        pos.max(neg)
+    };
     (1.0 / peak.max(1e-6)) as f32
+}
+
+/// The wet path's small-signal gain: input drive × [`peak_gain`] ×
+/// the curve's slope at 0. The voicings' linear filters are unity in
+/// the midrange (Transformer's emphasis pair cancels), so this is the
+/// level a quiet midrange tone comes out at. `sat_auto_gain` divides
+/// by it. 1 for [`SatMode::Blend`], which has its own.
+pub fn small_signal_gain(mode: SatMode, drive: f32, curve: f32) -> f32 {
+    let Some(c) = mode.curve(drive, curve) else {
+        return 1.0;
+    };
+    let pre = if mode.external_drive() { drive } else { 1.0 };
+    pre * peak_gain(mode, drive, curve) * c.slope_at_zero() as f32
+}
+
+/// Second-order high-pass with f64 coefficients and state (module
+/// docs, Transformer's sub-sonic high-pass). Transposed direct form II,
+/// like [`Biquad`].
+struct HighPass64 {
+    c: BiquadCoeffs,
+    z1: f64,
+    z2: f64,
+}
+
+impl HighPass64 {
+    fn new(sample_rate: f32, freq: f32, q: f32) -> Self {
+        Self {
+            c: BiquadCoeffs::high_pass(sample_rate as f64, freq as f64, q as f64),
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.z1 = 0.0;
+        self.z2 = 0.0;
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        let (c, x) = (&self.c, x as f64);
+        let y = c.b0 * x + self.z1;
+        self.z1 = c.b1 * x - c.a1 * y + self.z2;
+        self.z2 = c.b2 * x - c.a2 * y;
+        y as f32
+    }
 }
 
 /// One channel of a non-Blend mode.
@@ -191,7 +280,7 @@ pub struct ModeChannel {
     bump: HeadBump,
     hf_loss: HfLoss,
     emphasis: EmphasisPair,
-    subsonic: Biquad,
+    subsonic: HighPass64,
     hf_bell: Biquad,
 }
 
@@ -212,8 +301,8 @@ impl ModeChannel {
         hf_loss.set_amounts(TAPE_HF_STATIC_DB, TAPE_HF_DYNAMIC_DB, TAPE_HF_REFERENCE);
         let mut emphasis = EmphasisPair::new();
         emphasis.set(sample_rate, TRANSFORMER_EMPHASIS_HZ, TRANSFORMER_EMPHASIS_DB);
-        let mut subsonic = Biquad::identity();
-        subsonic.set_high_pass(sample_rate, TRANSFORMER_SUBSONIC_HZ, TRANSFORMER_SUBSONIC_Q);
+        let subsonic =
+            HighPass64::new(sample_rate, TRANSFORMER_SUBSONIC_HZ, TRANSFORMER_SUBSONIC_Q);
         let mut hf_bell = Biquad::identity();
         hf_bell.set_bell(sample_rate, TRANSFORMER_HF_HZ, 0.8, TRANSFORMER_HF_DB);
         Self {

@@ -5,6 +5,9 @@
 use resonance_mastering::params::MasteringParams;
 use resonance_mastering::stages::saturator::{SatMode, Saturator, SaturatorConfig};
 use resonance_mastering::ResonanceMastering;
+use resonance_metering::probe::{
+    analyze_harmonics, bin_exact_hz, probe_sine, HarmonicReport, PROBE_LEN,
+};
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
@@ -14,6 +17,16 @@ const BLOCK: usize = 480;
 const TAU: f64 = std::f64::consts::TAU;
 
 const MODES: [SatMode; 6] = [
+    SatMode::Tube,
+    SatMode::Tape,
+    SatMode::Transformer,
+    SatMode::Console,
+    SatMode::Warm,
+    SatMode::Inflator,
+];
+
+const ALL_MODES: [SatMode; 7] = [
+    SatMode::Blend,
     SatMode::Tube,
     SatMode::Tape,
     SatMode::Transformer,
@@ -313,5 +326,188 @@ fn mode_enable_fades_do_not_step() {
             max_step <= tone_step.max(wet_step) * 1.05,
             "{mode:?}: step {max_step} vs the tone's {tone_step} (wet {wet_step})"
         );
+    }
+}
+
+/// The isolated-stage measurement the saturation audit used (and
+/// `meter.probe` makes): a bin-exact sine at `level_dbfs`, one settled
+/// second, then one probe frame. Returns the report and the gain of the
+/// fundamental, dB.
+fn probe(cfg: &SaturatorConfig, freq: f64, level_dbfs: f64) -> (HarmonicReport, f64) {
+    let freq = bin_exact_hz(SR as f64, freq);
+    let warmup = SR as usize;
+    let input = probe_sine(SR as f64, freq, level_dbfs, warmup + PROBE_LEN);
+    let out = run(cfg, &input);
+    let r = analyze_harmonics(SR as f64, freq, &out[warmup..]);
+    let gain = r.fundamental_dbfs - level_dbfs;
+    (r, gain)
+}
+
+/// H2 against H3 at the audit's reference point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Parity {
+    /// Both present, H2 the louder.
+    H2Over,
+    /// No odd harmonics at all.
+    EvenOnly,
+    /// No even harmonics at all.
+    OddOnly,
+}
+
+/// Per mode at −18 dBFS, 1 kHz, +6 dB drive, mix 1: THD (%), gain of
+/// the fundamental (dB) and the H2/H3 parity. Measured on the canonical
+/// machine after the Warm level fix (Warm was −2.3 dB before).
+fn reference(mode: SatMode) -> (f64, f64, Parity) {
+    match mode {
+        SatMode::Blend => (1.228, 5.88, Parity::H2Over),
+        SatMode::Tube => (5.676, 1.15, Parity::H2Over),
+        SatMode::Tape => (1.884, 4.84, Parity::H2Over),
+        SatMode::Transformer => (1.323, 5.31, Parity::H2Over),
+        SatMode::Console => (0.065, 1.47, Parity::OddOnly),
+        SatMode::Warm => (3.076, 0.0, Parity::EvenOnly),
+        SatMode::Inflator => (0.604, 9.33, Parity::OddOnly),
+    }
+}
+
+#[test]
+fn per_mode_thd_gain_and_parity_at_the_reference_level() {
+    let mut failures = Vec::new();
+    for mode in ALL_MODES {
+        let (r, gain) = probe(&cfg(mode, 6.0), 1000.0, -18.0);
+        let (thd, want_gain, parity) = reference(mode);
+        let (h2, h3) = (r.h[0].unwrap(), r.h[1].unwrap());
+        let got = match () {
+            _ if h3 < -140.0 => Parity::EvenOnly,
+            _ if h2 < -140.0 => Parity::OddOnly,
+            _ if h2 > h3 => Parity::H2Over,
+            _ => {
+                failures.push(format!("{mode:?}: H3 {h3:.1} over H2 {h2:.1}"));
+                continue;
+            }
+        };
+        if got != parity {
+            failures.push(format!("{mode:?}: {got:?}, want {parity:?} (H2 {h2:.1}, H3 {h3:.1})"));
+        }
+        if (r.thd_pct / thd - 1.0).abs() > 0.05 {
+            failures.push(format!("{mode:?}: THD {:.3} %, want {thd} %", r.thd_pct));
+        }
+        if (gain - want_gain).abs() > 0.1 {
+            failures.push(format!("{mode:?}: gain {gain:+.2} dB, want {want_gain:+.2} dB"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Every mode gains density as the drive rises: THD and small-signal
+/// gain never fall (Warm's gain is flat at unity, see below).
+#[test]
+fn thd_and_gain_rise_with_drive() {
+    for mode in ALL_MODES {
+        let mut last: Option<(f64, f64)> = None;
+        for drive in [0.0, 3.0, 6.0, 12.0, 18.0] {
+            let (r, gain) = probe(&cfg(mode, drive), 1000.0, -18.0);
+            if let Some((thd, g)) = last {
+                assert!(
+                    r.thd_pct >= thd,
+                    "{mode:?} THD fell at {drive} dB: {thd} -> {}",
+                    r.thd_pct
+                );
+                assert!(
+                    gain >= g - 0.02,
+                    "{mode:?} gain fell at {drive} dB: {g:+.2} -> {gain:+.2}"
+                );
+            }
+            last = Some((r.thd_pct, gain));
+        }
+    }
+}
+
+/// Warm: transparent at 0 dB drive, unity small-signal gain at every
+/// drive (it used to lose level as the drive rose: −1.6 dB at 0 dB,
+/// −2.9 dB at +12), and more H2 the harder it is driven.
+#[test]
+fn warm_is_clean_at_zero_drive_and_holds_its_level() {
+    let (r, gain) = probe(&cfg(SatMode::Warm, 0.0), 1000.0, -18.0);
+    assert!(r.thd_pct < 0.01, "Warm at 0 dB drive: THD {} %", r.thd_pct);
+    assert!(gain.abs() < 0.02, "Warm at 0 dB drive: gain {gain:+.3} dB");
+    for drive in [3.0, 6.0, 12.0, 18.0] {
+        let (r, gain) = probe(&cfg(SatMode::Warm, drive), 1000.0, -18.0);
+        assert!(gain.abs() < 0.05, "Warm at {drive} dB: gain {gain:+.3} dB");
+        assert!(r.thd_pct > 0.5, "Warm at {drive} dB: THD {} %", r.thd_pct);
+    }
+}
+
+/// Transformer's inharmonic floor was ≈ −80 dBc at every probe
+/// frequency: round-off noise (2-20 Hz) from its sub-sonic high-pass,
+/// an f32 biquad holding the curve's DC. In f64 it measures ≈ −112 dBc.
+#[test]
+fn transformer_floor_is_below_minus_100_dbc() {
+    for freq in [100.0, 1000.0, 5000.0] {
+        let (r, _) = probe(&cfg(SatMode::Transformer, 6.0), freq, -18.0);
+        assert!(
+            r.aliasing_floor_dbc <= -100.0,
+            "Transformer at {freq} Hz: floor {:.1} dBc",
+            r.aliasing_floor_dbc
+        );
+    }
+}
+
+/// With `sat_auto_gain` on, every mode lands within 1 dB of unity at the
+/// reference level (they spread from −2.3 to +9.3 dB without it), and
+/// the voicing itself (THD) is unchanged.
+#[test]
+fn auto_gain_matches_the_modes_to_unity() {
+    for mode in ALL_MODES {
+        for drive in [0.0, 6.0, 12.0] {
+            let plain = cfg(mode, drive);
+            let auto = SaturatorConfig {
+                auto_gain: true,
+                ..plain
+            };
+            let (r, gain) = probe(&auto, 1000.0, -18.0);
+            let (r0, _) = probe(&plain, 1000.0, -18.0);
+            assert!(gain.abs() <= 1.0, "{mode:?} at {drive} dB: auto gain {gain:+.2} dB");
+            assert!(
+                (r.thd_pct - r0.thd_pct).abs() <= 0.01 * r0.thd_pct.max(0.01),
+                "{mode:?} at {drive} dB: THD {} % vs {} % without auto gain",
+                r.thd_pct,
+                r0.thd_pct
+            );
+        }
+    }
+}
+
+#[test]
+fn auto_gain_is_off_by_default() {
+    assert!(!SaturatorConfig::default().auto_gain);
+    assert!(!MasteringParams::default().saturator.auto_gain.value());
+}
+
+/// Which modes each mode-specific control acts in, so the editor's
+/// greying-out (Character and Shaper: Blend; Curve: Inflator) stays
+/// true: in every other mode a change renders bit-identically.
+#[test]
+fn mode_specific_controls_act_only_in_their_mode() {
+    let input = sine(1000.0, 0.5, SR as usize);
+    let render = |c: SaturatorConfig| run(&c, &input);
+    let same = |a: &[f32], b: &[f32]| a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
+    for mode in ALL_MODES {
+        let base = cfg(mode, 6.0);
+        let a = render(base);
+        let character = render(SaturatorConfig {
+            character: 1.0,
+            ..base
+        });
+        let shaper = render(SaturatorConfig {
+            shaper: resonance_mastering::stages::saturator::Shaper::Gritty,
+            ..base
+        });
+        let curve = render(SaturatorConfig {
+            curve: 0.5,
+            ..base
+        });
+        assert_eq!(!same(&a, &character), mode == SatMode::Blend, "{mode:?}: Character");
+        assert_eq!(!same(&a, &shaper), mode == SatMode::Blend, "{mode:?}: Shaper");
+        assert_eq!(!same(&a, &curve), mode == SatMode::Inflator, "{mode:?}: Curve");
     }
 }

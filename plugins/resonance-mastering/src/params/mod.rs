@@ -83,10 +83,11 @@ pub const W9_PARAM_COUNT: usize = DH_BASE;
 pub const W12_PARAM_COUNT: usize = DH_BASE + deharsh::PARAM_COUNT;
 
 const LIM_GAIN_BASE: usize = W12_PARAM_COUNT;
+const SAT_AUTO_GAIN_BASE: usize = LIM_GAIN_BASE + limiter::GAIN_PARAM_COUNT;
 
 /// Total plugin param count: [`W12_PARAM_COUNT`] plus the limiter's
-/// input gain (`lim_gain`).
-pub const PARAM_COUNT: usize = LIM_GAIN_BASE + limiter::GAIN_PARAM_COUNT;
+/// input gain (`lim_gain`) and the saturator's `sat_auto_gain`.
+pub const PARAM_COUNT: usize = SAT_AUTO_GAIN_BASE + saturator::AUTO_GAIN_PARAM_COUNT;
 
 pub struct MasteringParams {
     pub bypass: BoolParam,
@@ -129,7 +130,8 @@ impl MasteringParams {
             i if i < SAT_MODE_BASE => self.clipper.param_at(i - CLIP_BASE),
             i if i < DH_BASE => self.saturator.mode_param_at(i - SAT_MODE_BASE),
             i if i < LIM_GAIN_BASE => self.deharsh.param_at(i - DH_BASE),
-            i if i < PARAM_COUNT => self.limiter.gain_param_at(i - LIM_GAIN_BASE),
+            i if i < SAT_AUTO_GAIN_BASE => self.limiter.gain_param_at(i - LIM_GAIN_BASE),
+            i if i < PARAM_COUNT => self.saturator.auto_gain_param_at(i - SAT_AUTO_GAIN_BASE),
             _ => &self.bypass,
         }
     }
