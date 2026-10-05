@@ -9,43 +9,74 @@
 //!
 //! ```text
 //!   y   = absorption(line reads)                       (returned)
-//!   m_k = ⟨u_k, y⟩                                      k = 0..3
+//!   m_k = ⟨d_k, y⟩                                      k = 0..3
 //!   z_k = cap · HP(LP(shift_k(m_k)))
-//!   y'  = y + a · Σ_k (z_k − m_k)·u_k
+//!   y'  = y + Σ_k u_k·(z_k − m_k)·d_k
 //!   line ← H·y' + input                                 (H: Hadamard)
 //! ```
 //!
-//! The `u_k` are four orthonormal sign vectors over the 16 lines, each a
+//! The `d_k` are four orthonormal sign vectors over the 16 lines, each a
 //! bent function of the line index plus a different linear term
 //! (`(−1)^(b0·b1 ⊕ b2·b3 ⊕ ⟨α_k, i⟩)/4`): orthogonal because their linear
 //! terms differ, and each spread evenly over every line by the Hadamard,
 //! so no shifted component returns into a single line (a comb at its
-//! length). `a` is `shimmer_amount`: the share of those four components
-//! that goes through the shifters, a quarter of the loop at `a = 1`.
+//! length).
 //!
-//! **Why the energy stays bounded.** Write `y = Σ m_k·u_k + y_⊥`. Then
-//! `‖y'‖² = ‖y_⊥‖² + Σ_k ((1 − a)·m_k + a·z_k)²`, and per sample
-//! `((1 − a)m + az)² ≤ (1 − a)m² + az²` (Jensen). The shifter path is
+//! **The amount routes, it does not blend.** `shimmer_amount` `a` sets
+//! `u_k = clamp(4a − k, 0, 1)`: direction 0 fills first, then 1, … — at
+//! most one is part-shifted, the others are fully replaced by their
+//! shifted copy or untouched. A blend `(1 − u)m + uz` of two unrelated
+//! signals keeps only `(1 − u)² + u²` of their energy, so blending every
+//! direction at `u` = 0.3 would lose half of each pass's routed energy
+//! while shifting a tenth of it; routing whole directions loses only what
+//! the shifted path itself does. `a` = 1 replaces a quarter of the loop
+//! on every pass.
+//!
+//! **Why the energy stays bounded.** Write `y = Σ m_k·d_k + y_⊥`. Then
+//! `‖y'‖² = ‖y_⊥‖² + Σ_k ((1 − u_k)·m_k + u_k·z_k)²`, and per sample
+//! `((1 − u)m + uz)² ≤ (1 − u)m² + uz²` (Jensen). The shifter path is
 //! non-expansive on every prefix of time: the shifter's gain is at most
 //! `√c_max` (see `shifter.rs`), the one-pole low-pass and the
 //! `x − LP(x)` high-pass have `|H| ≤ 1`, and `cap = 0.97/√c_max`. So
 //! `Σ_{t≤T} z_k² ≤ Σ_{t≤T} m_k²`, hence `Σ_{t≤T} ‖y'‖² ≤ Σ_{t≤T} ‖y‖²`:
 //! for fixed settings the map from the absorbed line outputs to the
-//! next line inputs is non-expansive, whatever the pitch. The
-//! absorption is a strict contraction (`|A_i(f)| ≤ ρ < 1` at any finite
-//! T60), so by the small-gain theorem the loop's total output energy is
-//! at most `‖input‖² / (1 − ρ)²`: no setting of pitch and amount turns
-//! the loop into an oscillator. A parameter move is a finite transient
-//! (the amount and the cap slew over 50 ms) after which the same bound
-//! holds from the state it left.
+//! next line inputs is non-expansive, whatever the pitch. The absorption
+//! is a strict contraction while running (`|A_i(f)| ≤ ρ < 1`: every
+//! design T60 is finite, the compensation's at most [`MAX_T60_S`]), so
+//! by the small-gain theorem the loop's total output energy is at most
+//! `‖input‖² / (1 − ρ)²`: no pitch or amount turns the loop into an
+//! oscillator. Frozen, `ρ = 1` and nothing is routed (below): the loop
+//! is orthogonal and lossless, so its energy is constant. A parameter
+//! move is a finite transient (the amount and the cap slew over 50 ms,
+//! the Freeze ramp takes 100 ms) after which the same bound holds from
+//! the state it left. The tests check the pieces (the shifter's gain
+//! against `c_max` on every prefix, for impulses at every alignment,
+//! noise, sines) and the whole (120 s frozen at +24, 60 s of random
+//! automation).
 //!
-//! **Freeze.** The engine ramps `a` to 0 before it freezes the tank: a
-//! frozen tank is the plain lossless network (orthogonal `H`, unity
-//! absorption, integer reads once the modulation has faded), which holds
-//! its energy exactly. The halo that has built up is held; it stops
-//! climbing (a still-shifting frozen loop could only keep its level with
-//! a gain above 1 on the shifted path, which is how shimmer freezes run
-//! away).
+//! **Decay compensation.** The shifted path keeps only part of what it
+//! is given (the shifter's crossfade averages to about two thirds of the
+//! power of what it reads, the cap and the low-pass take more), so
+//! routing costs the loop a fraction `L = Σ_k (1 − (1 − u_k)² − u_k²τ)/16`
+//! of its energy on every pass (`τ` the typical retained share, [`TAU`]).
+//! Each line's absorption is designed for the T60 that gives the knob's
+//! decay *with* that loss: `1/T′ = 1/T + fs·log10(1 − L)/(6·dᵢ)`, bounded
+//! at [`MAX_T60_S`]. Where the knob asks for more than routing allows the
+//! lines go (nearly) lossless and the tail is as long as the shimmer lets
+//! it be: the more of the loop is shifted, the sooner the energy climbs
+//! out through the low-pass. The compensation only ever lengthens a
+//! design T60, so the bound above is untouched. It follows the *slewed*
+//! amount (the engine redesigns every 16 samples while the amount
+//! moves): a jump in every line's gain at once would step the output.
+//!
+//! **Freeze.** The engine's Freeze ramp (`room/freeze.rs`) scales the
+//! routed share by `1 − hold` along with the input, so at `hold` 1 nothing
+//! is shifted and the frozen tank is the plain lossless network
+//! (orthogonal `H`, unity absorption, integer reads once the modulation
+//! has faded), which holds its energy exactly. The halo that has built up
+//! is held; it stops climbing (a still-shifting frozen loop could only
+//! keep its level with a gain above 1 on the shifted path, which is how
+//! shimmer freezes run away).
 
 use resonance_dsp::reverb::{
     allpass_read, hadamard_in_place, next_prime, Absorption, DecayBands, SmoothRandom,
@@ -55,7 +86,7 @@ use resonance_dsp::{DelayLine, SimpleRng};
 use super::shifter::{self, PitchShifter, ReadWeights};
 
 pub(super) const LINES: usize = 16;
-/// Pitch-shifted feedback components.
+/// Pitch-shifted feedback directions.
 pub(super) const SHIFTERS: usize = 4;
 /// The linear terms `α_k` of the shifted directions (see the module docs).
 const ALPHA: [usize; SHIFTERS] = [0b0000, 0b0010, 0b0100, 0b0110];
@@ -65,10 +96,18 @@ const SHIFT_LP_HZ: f32 = 5_000.0;
 const SHIFT_HP_HZ: f32 = 80.0;
 /// Headroom under the proven bound.
 const CAP_MARGIN: f32 = 0.97;
-/// Slew time of `a` and the cap, ms.
+/// Slew time of the amount and the cap, ms.
 const AMOUNT_SLEW_MS: f32 = 50.0;
 /// Modulation fade when frozen, s (as `Fdn`).
 const MOD_FADE_S: f32 = 0.05;
+/// Longest T60 a running line is designed for (the compensation's
+/// bound; keeps the absorption a strict contraction).
+pub(super) const MAX_T60_S: f32 = 100.0;
+/// Typical share of a routed direction's energy the shifted path hands
+/// back per pass. One value fits every pitch: fitted on impulse
+/// responses, it puts the mid T30 within −14…+12 % of the knob at
+/// amounts 0.15–1 for all six (`the_decay_holds_with_the_shimmer_routed_in`).
+const TAU: f32 = 0.35;
 
 /// Sign of line `i` in direction `alpha` (the Hall's output signs are
 /// `alpha` 0 and `0b0010`).
@@ -86,6 +125,12 @@ fn one_pole_coeff(hz: f32, sample_rate: f32) -> f32 {
     1.0 - (-std::f32::consts::TAU * hz / sample_rate).exp()
 }
 
+/// Routed share of direction `k` at amount `a` (see the module docs).
+#[inline]
+fn route(a: f32, k: usize) -> f32 {
+    (a * SHIFTERS as f32 - k as f32).clamp(0.0, 1.0)
+}
+
 pub(super) struct Tank {
     sample_rate: f32,
     lines: [DelayLine; LINES],
@@ -96,7 +141,10 @@ pub(super) struct Tank {
     glide: f32,
     max_len: usize,
     size: f32,
+    /// The decay target, and the routed share the absorption is
+    /// compensated for.
     bands: DecayBands,
+    design_share: f32,
     absorb: [Absorption; LINES],
     mods: [SmoothRandom; LINES],
     mod_depth: f32,
@@ -134,7 +182,6 @@ impl Tank {
         });
         let longest = (max_ms * sample_rate / 1000.0).ceil() as usize;
         let max_len = longest + 80 * LINES + max_mod.ceil() as usize + 4;
-        let weights = ReadWeights::new(sample_rate);
         let mut tank = Self {
             sample_rate,
             lines: std::array::from_fn(|_| DelayLine::new(max_len + 2)),
@@ -146,6 +193,7 @@ impl Tank {
             max_len,
             size: 1.0,
             bands: DecayBands::flat(2.0),
+            design_share: 0.0,
             absorb: [Absorption::lossless(); LINES],
             mods: std::array::from_fn(|i| {
                 SmoothRandom::new(
@@ -170,7 +218,7 @@ impl Tank {
             hp: [0.0; SHIFTERS],
             lp_a: one_pole_coeff(SHIFT_LP_HZ, sample_rate),
             hp_a: one_pole_coeff(SHIFT_HP_HZ, sample_rate),
-            weights,
+            weights: ReadWeights::new(sample_rate),
             semitones: f32::NAN,
             amount: 0.0,
             amount_target: 0.0,
@@ -215,13 +263,15 @@ impl Tank {
         }
     }
 
-    pub(super) fn decay(&self) -> DecayBands {
-        self.bands
-    }
-
-    pub(super) fn set_decay(&mut self, bands: DecayBands) {
-        self.bands = bands;
-        self.redesign();
+    /// The decay target, compensated for routing `share` of the loop
+    /// (the amount, scaled by the Freeze ramp). Redesigns only on a
+    /// change.
+    pub(super) fn set_decay(&mut self, bands: DecayBands, share: f32) {
+        if bands != self.bands || share != self.design_share {
+            self.bands = bands;
+            self.design_share = share;
+            self.redesign();
+        }
     }
 
     pub(super) fn set_modulation(&mut self, rate_hz: f32, depth_samples: f32) {
@@ -232,8 +282,8 @@ impl Tank {
         }
     }
 
-    /// Lossless loop, input muted, modulation faded out. The caller ramps
-    /// the shifted share to 0 first (see the module docs).
+    /// Lossless loop, input muted, modulation faded out. Only once the
+    /// routed share is 0 (the Freeze ramp sees to it).
     pub(super) fn set_freeze(&mut self, on: bool) {
         self.frozen = on;
         self.redesign();
@@ -256,14 +306,19 @@ impl Tank {
         self.cap_target = (CAP_MARGIN / self.weights.c_max(semitones).sqrt()).min(1.0);
     }
 
-    /// Shifted share of the loop, `0..=1`; slews over 50 ms.
+    /// Routed amount, `0..=1`; slews over 50 ms.
     pub(super) fn set_amount(&mut self, amount: f32) {
         self.amount_target = amount.clamp(0.0, 1.0);
     }
 
-    /// True once the shifted share has reached 0.
-    pub(super) fn shift_silent(&self) -> bool {
-        self.amount == 0.0
+    /// The routed amount now (it slews towards the target).
+    pub(super) fn amount_now(&self) -> f32 {
+        self.amount
+    }
+
+    /// True while the amount is still slewing.
+    pub(super) fn amount_moving(&self) -> bool {
+        self.amount != self.amount_target
     }
 
     /// Put the amount and the cap on their targets (nothing in flight).
@@ -272,8 +327,9 @@ impl Tank {
         self.cap = self.cap_target;
     }
 
-    /// The current loop gain on the shifted path (diagnostic).
-    pub(super) fn cap(&self) -> f32 {
+    /// The loop gain on the shifted path at the current pitch (where the
+    /// slewing cap is headed).
+    pub(super) fn cap_target(&self) -> f32 {
         self.cap_target
     }
 
@@ -281,8 +337,12 @@ impl Tank {
         self.len
     }
 
+    /// One sample. `input` is added to the line writes (ignored while
+    /// frozen); `share_gain` scales the routed amount (the Freeze ramp's
+    /// `1 − hold`).
     #[inline]
-    pub(super) fn tick(&mut self, input: &[f32; LINES]) -> &[f32; LINES] {
+    #[allow(clippy::needless_range_loop)] // eight per-line arrays in step, as `Fdn::tick`
+    pub(super) fn tick(&mut self, input: &[f32; LINES], share_gain: f32) -> &[f32; LINES] {
         let target_scale = if self.frozen { 0.0 } else { 1.0 };
         if self.mod_scale != target_scale {
             self.mod_scale = if self.mod_scale < target_scale {
@@ -321,8 +381,10 @@ impl Tank {
         }
         self.out = y;
 
-        // The shifted path. The shifters always run (so raising the
-        // amount fades in current audio, not a stale buffer).
+        // The shifted path. Every shifter runs whatever the amount, so a
+        // direction routed in later fades in current audio, not a stale
+        // buffer.
+        let share = self.amount * share_gain;
         for k in 0..SHIFTERS {
             let dir = &self.dirs[k];
             let m: f32 = dir.iter().zip(&self.out).map(|(u, v)| u * v).sum();
@@ -330,10 +392,13 @@ impl Tank {
             self.lp[k] += self.lp_a * (s - self.lp[k]);
             let lp = self.lp[k];
             self.hp[k] += self.hp_a * (lp - self.hp[k]);
-            let z = self.cap * (lp - self.hp[k]);
-            let delta = self.amount * (z - m);
-            for (v, u) in y.iter_mut().zip(dir) {
-                *v += delta * u;
+            let u = route(share, k);
+            if u > 0.0 {
+                let z = self.cap * (lp - self.hp[k]);
+                let delta = u * (z - m);
+                for (v, d) in y.iter_mut().zip(dir) {
+                    *v += delta * d;
+                }
             }
         }
 
@@ -368,13 +433,49 @@ impl Tank {
         self.out = [0.0; LINES];
     }
 
+    /// Energy lost per pass to routing `share` (see the module docs).
+    fn routing_loss(&self, share: f32) -> f32 {
+        let lost: f32 = (0..SHIFTERS)
+            .map(|k| {
+                let u = route(share, k);
+                1.0 - (1.0 - u) * (1.0 - u) - u * u * TAU
+            })
+            .sum();
+        (lost / LINES as f32).clamp(0.0, 0.99)
+    }
+
     fn redesign(&mut self) {
-        for i in 0..LINES {
-            if self.frozen {
-                self.absorb[i].set_lossless();
-            } else {
-                self.absorb[i].design(&self.bands, self.len[i] as f32, self.sample_rate);
+        if self.frozen {
+            for a in &mut self.absorb {
+                a.set_lossless();
             }
+            return;
+        }
+        // log10 of the per-pass energy kept by the routing (≤ 0).
+        let kept = (1.0 - self.routing_loss(self.design_share)).log10();
+        let fs = self.sample_rate;
+        for i in 0..LINES {
+            let d = self.len[i] as f32;
+            // The compensation lengthens a T60 up to `MAX_T60_S` (or
+            // leaves it alone above that: the Freeze ramp's own stretch
+            // runs out to infinity, the lossless design it lands on).
+            let stretch = |t60: f32| {
+                let bound = t60.max(MAX_T60_S);
+                let inv = 1.0 / t60 + fs * kept / (6.0 * d);
+                if inv <= 1.0 / bound {
+                    bound
+                } else {
+                    1.0 / inv
+                }
+            };
+            let b = &self.bands;
+            let bands = DecayBands {
+                t60_low: stretch(b.t60_low),
+                t60_mid: stretch(b.t60_mid),
+                t60_high: stretch(b.t60_high),
+                ..*b
+            };
+            self.absorb[i].design(&bands, d, fs);
         }
     }
 

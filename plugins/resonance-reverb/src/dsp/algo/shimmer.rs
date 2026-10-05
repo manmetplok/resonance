@@ -28,23 +28,28 @@
 //! the loop, and the proof that no pitch or amount makes it run away) and
 //! `shimmer/shifter.rs` (the two-tap crossfading shifter and the bound on
 //! its gain that sets the loop's cap). The cap per pitch at 48 kHz:
-//! +12 0.77, +7 0.85, +5 0.88, −12 0.69, +19 0.79, +24 0.60 (the
-//! `shimmer_cap` test prints them).
+//! +12 0.77, +7 0.86, +5 0.88, −12 0.69, +19 0.79, +24 0.60
+//! (`the_shifter_gain_is_inside_the_cap` prints them). The tank also
+//! compensates the decay for what the routed share loses per pass, so
+//! `decay` stays the mid T30 within about ±15 % with the shimmer in.
 //!
-//! **Freeze.** The input ramps to zero over 10 ms and the shifted share
-//! over 50 ms; once both are silent the loop goes lossless (and its
-//! modulation fades out). The tail holds exactly what it had: the halo
-//! stops climbing while frozen (see the tank's docs for why a frozen loop
-//! cannot keep shifting at a constant level). Release unfreezes the loop
-//! at once and ramps the input and the shifted share back in.
+//! **Freeze** is the shared ramp (`room/freeze.rs`, 100 ms, as Plate and
+//! Hall): the input, the build line's feed into the loop, the loop's loss
+//! and the routed shimmer share all fade together, and only when the ramp
+//! lands does the loop switch to exactly lossless (and its modulation
+//! fade out). The tail holds what it had: the halo stops climbing while
+//! frozen (see the tank's docs for why a frozen loop cannot keep
+//! shifting at a constant level). Release ramps all four back.
 //!
 //! **Parameter changes** are applied lazily, once per sample at most and
 //! only when something moved (the plugin calls every setter every
 //! block). Before the first sample (fresh or cleared) everything snaps;
 //! after it the lines, ER taps and build taps glide at [`GLIDE`] samples
-//! per sample, and the shifted share and the cap slew over 50 ms. A pitch
-//! change leaves the shifter taps where they are and changes only their
-//! speed, so switching `shimmer_pitch` on running audio does not step.
+//! per sample, and the routed share and the cap slew over 50 ms (the
+//! decay compensation redesigned every 16 samples along the way). A
+//! pitch change leaves the shifter taps where they are and changes only
+//! their speed, so switching `shimmer_pitch` on running audio does not
+//! step.
 //!
 //! Every buffer is allocated in [`ShimmerEngine::new`] (see
 //! [`ShimmerEngine::buffer_bytes`]).
@@ -58,6 +63,7 @@ use resonance_dsp::DelayLine;
 
 use super::super::er::ER_TAPS;
 use super::super::CHANNELS;
+use super::room::{stretch, FreezeRamp, FreezeTick};
 use super::{Extras, Wet};
 use er::ShimmerEr;
 use tank::{direction_sign, Tank, LINES};
@@ -99,8 +105,8 @@ const DIRECT: f32 = 0.25;
 /// Output gain per line (the ±1 mixes over 16 lines, normalised).
 const OUT_GAIN: f32 = 0.25;
 
-/// Freeze input ramp, ms.
-const FREEZE_RAMP_MS: f32 = 10.0;
+/// Samples between decay-compensation redesigns while the amount slews.
+const REDESIGN_EVERY: u32 = 16;
 
 #[inline]
 fn glide(pos: &mut f32, target: f32) {
@@ -135,14 +141,15 @@ pub struct ShimmerEngine {
     build: f32,
     semitones: f32,
     amount: f32,
-    frozen: bool,
     dirty: bool,
     /// False until the first sample since `new`/`clear`: changes snap.
     primed: bool,
 
-    /// Input gain, ramped by Freeze.
-    in_gain: f32,
-    ramp_step: f32,
+    freeze: FreezeRamp,
+    /// Samples to the next compensation redesign while the amount
+    /// slews, and whether a final one is owed when it lands.
+    amount_countdown: u32,
+    amount_landing: bool,
 
     energy: [f32; LINES],
 }
@@ -196,11 +203,11 @@ impl ShimmerEngine {
             build: 0.5,
             semitones: defaults.shimmer_semitones,
             amount: defaults.shimmer_amount,
-            frozen: false,
             dirty: true,
             primed: false,
-            in_gain: 1.0,
-            ramp_step: 1.0 / (FREEZE_RAMP_MS * 0.001 * sr).max(1.0),
+            freeze: FreezeRamp::new(sr),
+            amount_countdown: REDESIGN_EVERY,
+            amount_landing: false,
             energy: [0.0; LINES],
         };
         engine.apply();
@@ -224,22 +231,29 @@ impl ShimmerEngine {
     }
 
     pub fn set_freeze(&mut self, v: bool) {
-        if v == self.frozen {
+        if v == self.freeze.on() {
             return;
         }
-        self.frozen = v;
-        self.dirty = true;
+        self.freeze.set(v);
         if !self.primed {
             // Nothing in flight: land in the settled state directly, the
             // state `clear` leaves a frozen (or released) engine in.
-            self.in_gain = if v { 0.0 } else { 1.0 };
-            self.tank.set_freeze(v);
-            self.tank.clear();
-        } else if !v {
+            self.settle_freeze();
+        } else if !v && self.tank.is_frozen() {
+            // Out of the lossless loop at zero loss (the design it holds
+            // since the ramp landed); `process` ramps the loss back.
             self.tank.set_freeze(false);
         }
-        // Freezing while running: `process` ramps the input and the
-        // shifted share out first.
+        // Freezing while running: `process` ramps into it.
+    }
+
+    /// The Freeze ramp at its target and the tank in the matching state,
+    /// cleared. Only while nothing sounds.
+    fn settle_freeze(&mut self) {
+        self.freeze.snap();
+        self.tank.set_freeze(self.freeze.on());
+        self.tank.clear();
+        self.apply_loss();
     }
 
     /// The treble crossover, Hz (held at least an octave above
@@ -303,11 +317,21 @@ impl ShimmerEngine {
         }
     }
 
-    /// The decay target the loop is designed for.
+    /// The decay target the loop is designed for, at the loss the Freeze
+    /// ramp leaves.
     fn bands(&self) -> DecayBands {
         let (lo, xover, hi) = self.shape;
         let damping = self.damping.max(2.0 * xover);
-        DecayBands::from_mults(self.t60.max(0.05), lo.max(0.01), hi.max(0.01), xover, damping)
+        let bands =
+            DecayBands::from_mults(self.t60.max(0.05), lo.max(0.01), hi.max(0.01), xover, damping);
+        stretch(bands, self.freeze.loss())
+    }
+
+    /// Redesign the loop's absorption if its target moved (the decay, or
+    /// the routed share it is compensated for).
+    fn apply_loss(&mut self) {
+        let share = self.tank.amount_now() * self.freeze.gain();
+        self.tank.set_decay(self.bands(), share);
     }
 
     /// Push the parameters into the DSP.
@@ -324,16 +348,15 @@ impl ShimmerEngine {
         if snap {
             self.tank.set_glide(GLIDE);
         }
-        let bands = self.bands();
-        if bands != self.tank.decay() {
-            self.tank.set_decay(bands);
+        self.tank.set_semitones(self.semitones);
+        self.tank.set_amount(self.amount);
+        if snap {
+            self.tank.snap_shift();
         }
+        self.apply_loss();
         let depth = self.mod_depth.clamp(0.0, 1.0) * MOD_DEPTH_48K * self.sample_rate / 48_000.0;
         self.tank
             .set_modulation(self.mod_rate.max(0.0) * MOD_RATE_SCALE, depth);
-        self.tank.set_semitones(self.semitones);
-        self.tank
-            .set_amount(if self.frozen { 0.0 } else { self.amount });
 
         self.er.set_size(self.size);
         self.er.retarget();
@@ -344,7 +367,6 @@ impl ShimmerEngine {
         if snap {
             self.er.snap();
             self.build_pos = self.build_target;
-            self.tank.snap_shift();
         }
     }
 
@@ -355,24 +377,32 @@ impl ShimmerEngine {
         }
         self.primed = true;
 
-        // Freeze: ramp the input and the shifted share out, then make the
-        // loop lossless.
-        let target = if self.frozen { 0.0 } else { 1.0 };
-        if self.in_gain != target {
-            self.in_gain = if self.in_gain < target {
-                (self.in_gain + self.ramp_step).min(1.0)
-            } else {
-                (self.in_gain - self.ramp_step).max(0.0)
-            };
+        // Freeze: the input, the loop's feed, its loss and the routed
+        // share fade together, then the loop goes lossless.
+        match self.freeze.tick() {
+            FreezeTick::Still | FreezeTick::Moving => {}
+            FreezeTick::Redesign => self.apply_loss(),
+            FreezeTick::Engage => {
+                self.apply_loss();
+                self.tank.set_freeze(true);
+            }
         }
-        if self.frozen
-            && self.in_gain == 0.0
-            && self.tank.shift_silent()
-            && !self.tank.is_frozen()
-        {
-            self.tank.set_freeze(true);
+        // The decay compensation follows the slewing amount (see the
+        // tank's docs), and lands with it.
+        if self.tank.amount_moving() {
+            self.amount_countdown -= 1;
+            if self.amount_countdown == 0 {
+                self.amount_countdown = REDESIGN_EVERY;
+                self.apply_loss();
+            }
+            self.amount_landing = true;
+        } else if self.amount_landing {
+            self.amount_landing = false;
+            self.amount_countdown = REDESIGN_EVERY;
+            self.apply_loss();
         }
-        let (l, r) = (l * self.in_gain, r * self.in_gain);
+        let g = self.freeze.gain();
+        let (l, r) = (l * g, r * g);
 
         let (er_l, er_r) = self.er.process(l, r);
 
@@ -394,17 +424,21 @@ impl ShimmerEngine {
         self.build_l.push(dl);
         self.build_r.push(dr);
 
-        let mut input = [0.0f32; LINES];
-        for (i, x) in input.iter_mut().enumerate() {
+        // Build: each line is fed from its own point of the window (and
+        // the feed faded by Freeze, after the build line).
+        let mut taps = [0.0f32; LINES];
+        let mut feed = [0.0f32; LINES];
+        for i in 0..LINES {
             glide(&mut self.build_pos[i], self.build_target[i]);
             let line = if i % 2 == 0 { &self.build_l } else { &self.build_r };
-            *x = self.build_w[i] * line.tap_linear(self.build_pos[i]);
+            taps[i] = self.build_w[i] * line.tap_linear(self.build_pos[i]);
+            feed[i] = g * taps[i];
         }
 
-        let y = self.tank.tick(&input);
+        let y = self.tank.tick(&feed, g);
         let (mut late_l, mut late_r) = (0.0f32, 0.0f32);
         for i in 0..LINES {
-            let v = y[i] + DIRECT * input[i];
+            let v = y[i] + DIRECT * taps[i];
             late_l += self.out_l[i] * v;
             late_r += self.out_r[i] * v;
             self.energy[i] = self.energy[i] * 0.995 + y[i].abs() * 0.005;
@@ -427,9 +461,9 @@ impl ShimmerEngine {
         self.build_l.clear();
         self.build_r.clear();
         self.build_pos = self.build_target;
-        self.in_gain = if self.frozen { 0.0 } else { 1.0 };
-        self.tank.set_freeze(self.frozen);
-        self.tank.clear();
+        self.settle_freeze();
+        self.amount_countdown = REDESIGN_EVERY;
+        self.amount_landing = false;
         self.energy = [0.0; LINES];
         self.primed = false;
     }
@@ -457,7 +491,7 @@ impl ShimmerEngine {
     /// The gain cap on the shifted path at the current pitch (see
     /// `shimmer/tank.rs`).
     pub fn shift_cap(&self) -> f32 {
-        self.tank.cap()
+        self.tank.cap_target()
     }
 
     /// Bytes held in delay buffers: the engine's audio memory, all of it

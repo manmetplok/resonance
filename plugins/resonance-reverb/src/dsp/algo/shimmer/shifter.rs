@@ -193,7 +193,7 @@ pub fn max_read_weight(r: f32, sample_rate: f32) -> f32 {
         ] {
             let di = d as usize;
             let f = (d - di as f32) as f64;
-            if t >= di + 1 {
+            if t > di {
                 c[t - di] += w * (1.0 - f);
                 c[t - di - 1] += w * f;
             }
