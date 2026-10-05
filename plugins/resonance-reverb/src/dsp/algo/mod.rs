@@ -11,17 +11,27 @@
 //! audio thread. Every engine is built in `initialize` at the session
 //! sample rate (see [`switch::EngineBank`]) and lives for the instance.
 //!
-//! Adding an algorithm (R3 onward) is: a variant in [`Algorithm`] and in
-//! [`Engine`], one arm in each `match` below and in `dispatch!`, a label
-//! in `params::ALGORITHM_LABELS_ALL` order, and growing
-//! [`Algorithm::BUILT`]. The switch logic in [`switch`] needs no change.
+//! Plate, Room, Chamber, Hall and Ambience are wired here ahead of their
+//! phases (placeholder engines in their own files), so they are built in
+//! parallel without touching this module. An algorithm is selectable once
+//! it joins [`Algorithm::BUILT`], which must stay a prefix of the labels.
 
+pub mod ambience;
+pub mod chamber;
 pub mod classic;
+pub mod hall;
+pub mod plate;
+pub mod room;
 pub(crate) mod switch;
 
 use super::er::ER_TAPS;
 use super::CHANNELS;
+use ambience::AmbienceEngine;
+use chamber::ChamberEngine;
 use classic::ClassicEngine;
+use hall::HallEngine;
+use plate::PlateEngine;
+use room::RoomEngine;
 
 /// One engine output sample: early reflections and late tail, per side.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -39,6 +49,11 @@ pub struct Wet {
 #[repr(u8)]
 pub enum Algorithm {
     Classic = 0,
+    Plate = 1,
+    Room = 2,
+    Chamber = 3,
+    Hall = 4,
+    Ambience = 5,
 }
 
 impl Algorithm {
@@ -61,6 +76,11 @@ impl Algorithm {
     pub fn uses_decay_shape(self) -> bool {
         match self {
             Algorithm::Classic => false,
+            Algorithm::Plate
+            | Algorithm::Room
+            | Algorithm::Chamber
+            | Algorithm::Hall
+            | Algorithm::Ambience => true,
         }
     }
 }
@@ -72,6 +92,11 @@ macro_rules! dispatch {
     ($self:ident, $e:ident => $call:expr) => {
         match $self {
             Engine::Classic($e) => $call,
+            Engine::Plate($e) => $call,
+            Engine::Room($e) => $call,
+            Engine::Chamber($e) => $call,
+            Engine::Hall($e) => $call,
+            Engine::Ambience($e) => $call,
         }
     };
 }
@@ -79,18 +104,33 @@ macro_rules! dispatch {
 /// One instance of one algorithm.
 pub enum Engine {
     Classic(ClassicEngine),
+    Plate(PlateEngine),
+    Room(RoomEngine),
+    Chamber(ChamberEngine),
+    Hall(HallEngine),
+    Ambience(AmbienceEngine),
 }
 
 impl Engine {
     pub fn new(algorithm: Algorithm, sample_rate: f32) -> Self {
         match algorithm {
             Algorithm::Classic => Engine::Classic(ClassicEngine::new(sample_rate)),
+            Algorithm::Plate => Engine::Plate(PlateEngine::new(sample_rate)),
+            Algorithm::Room => Engine::Room(RoomEngine::new(sample_rate)),
+            Algorithm::Chamber => Engine::Chamber(ChamberEngine::new(sample_rate)),
+            Algorithm::Hall => Engine::Hall(HallEngine::new(sample_rate)),
+            Algorithm::Ambience => Engine::Ambience(AmbienceEngine::new(sample_rate)),
         }
     }
 
     pub fn algorithm(&self) -> Algorithm {
         match self {
             Engine::Classic(_) => Algorithm::Classic,
+            Engine::Plate(_) => Algorithm::Plate,
+            Engine::Room(_) => Algorithm::Room,
+            Engine::Chamber(_) => Algorithm::Chamber,
+            Engine::Hall(_) => Algorithm::Hall,
+            Engine::Ambience(_) => Algorithm::Ambience,
         }
     }
 

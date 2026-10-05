@@ -9,3 +9,9 @@ mod baseline;
 mod switching;
 #[path = "algorithms/sync.rs"]
 mod sync;
+#[path = "algorithms/plate.rs"]
+mod plate;
+#[path = "algorithms/room.rs"]
+mod room;
+#[path = "algorithms/hall.rs"]
+mod hall;
