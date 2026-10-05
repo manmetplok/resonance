@@ -21,6 +21,7 @@ mod pan;
 mod peaks;
 pub mod pitch;
 pub mod pitch_rt;
+pub mod reverb;
 mod rng;
 pub mod saturate;
 pub mod segment;
