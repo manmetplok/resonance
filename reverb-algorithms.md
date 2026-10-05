@@ -330,7 +330,14 @@ reference for the CPU budgets.
 | Spring, Nonlinear, Shimmer | Nonlinear: gate length ±5 ms; others stability and silence-guard only | | | | |
 
 Peakiness is compared with Classic at the same `size` and `decay` (the
-baseline table's settings). The FDN engines get ±7 % because their per-line
+baseline table's settings). **As built (R3–R5):** "Classic − N dB" alone is
+unreachable for an engine whose decay matches the knob: Classic often reads
+*below* exponentially decaying white noise of the same T60, because its real
+tail outlasts the knob. Each cell asserts `≤ max(Classic − N, noise floor +
+margin)` (margin 1.0 dB Plate, 1.5 Room/Chamber, 2.0 Hall, the floor measured
+in-test from seeded decaying noise), and Hall's mean must sit ≥ 1 dB under
+Classic's. Measured with `damping` at 20 kHz for Room/Chamber: an exact
+treble decay tilts the late spectrum, which the metric counts as colour. The FDN engines get ±7 % because their per-line
 gains are exact; Classic already manages ±10 % at most settings.
 
 For every algorithm:
@@ -354,6 +361,30 @@ For every algorithm:
 - **CPU.** `benches/reverb_dsp.rs` gains one bench per algorithm at 48 kHz
   with 128-sample blocks. Budget relative to Classic (measured in R0): Plate,
   Room, Chamber and Ambience ≤ 1.5×; Hall and Shimmer ≤ 2.5×.
+
+### 5.3 As built: other deviations (R3–R5)
+
+- Plate: below a 0.87 s decay the tank shrinks so the loop is at most
+  T60/1.2 (size is overridden there); the onset (`er_*`) is an 8-stage
+  allpass cascade, `er_level` scales it, `er_time` stretches it.
+- Room lines 6.4–75 ms (not 5–60: the shortest coloured), glide 0.04
+  samples/sample (0.25 made block-rate size automation a staircase).
+  Ambience at 0.3 s reports EDT/T30 0.44–0.51 (asserted only over the
+  mix-bus range 0.5–1.0 s). Vocal Chamber's mid T30 is +5.6 % at its voicing
+  (the 250 Hz shelf reaches into the 500 Hz band), asserted at ±10 %.
+- Hall: `tail_build` spreads *when* energy enters the loop (taps on a build
+  line at u·20 ms·15^build), so level and decay are independent of it.
+  Density-0.9 is monotonic in build at size 0.5; at size 0.9, build 0 is
+  lumpy (16 separate first returns), and the late-energy peak is the
+  monotonic measure. Memory 2.6 MiB at 96 kHz. Wobble metric: spectral
+  spread of a sustained sine (0.9 cents at defaults vs Classic's 9.8).
+- Size-sweep click checks use step/peak and the second difference: sweeping
+  drags room modes across a sine and legitimately changes its level.
+- `Absorption` (R2) cannot give both shelves deep cuts with crossovers
+  under ~2.5× apart: its mid compensation is capped at unity gain, so the mid
+  decays short there. Tests stay inside the range.
+- CPU per 128-frame block at 48 kHz: Classic 15.6–16 µs, Plate 6.0, Room 16.9,
+  Chamber 16.9, Hall 19.1, Ambience 7.9.
 
 ## 6. Presets
 

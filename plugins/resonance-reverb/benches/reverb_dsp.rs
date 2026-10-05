@@ -27,6 +27,10 @@ type Algorithm = (&'static str, fn(&ReverbParams));
 const ALGORITHMS: &[Algorithm] = &[
     ("classic", |_| {}),
     ("plate", |p| p.algorithm.set_value(1)),
+    ("room", |p| p.algorithm.set_value(2)),
+    ("chamber", |p| p.algorithm.set_value(3)),
+    ("hall", |p| p.algorithm.set_value(4)),
+    ("ambience", |p| p.algorithm.set_value(5)),
 ];
 
 fn test_signal(frames: usize) -> Vec<f32> {

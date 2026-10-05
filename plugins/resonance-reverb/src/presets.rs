@@ -64,4 +64,29 @@ pub const PRESETS: &[PresetEntry] = &[
         name: "Bright Plate",
         json: include_str!("../presets/bright_plate.json"),
     },
+    PresetEntry {
+        id: "drum-room",
+        name: "Drum Room",
+        json: include_str!("../presets/drum_room.json"),
+    },
+    PresetEntry {
+        id: "vocal-chamber",
+        name: "Vocal Chamber",
+        json: include_str!("../presets/vocal_chamber.json"),
+    },
+    PresetEntry {
+        id: "string-hall",
+        name: "String Hall",
+        json: include_str!("../presets/string_hall.json"),
+    },
+    PresetEntry {
+        id: "mix-glue",
+        name: "Mix Glue",
+        json: include_str!("../presets/mix_glue.json"),
+    },
+    PresetEntry {
+        id: "short-ambience",
+        name: "Short Ambience",
+        json: include_str!("../presets/short_ambience.json"),
+    },
 ];
