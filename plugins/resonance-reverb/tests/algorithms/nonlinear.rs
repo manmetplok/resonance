@@ -12,13 +12,12 @@
 //! The golden is re-blessed with `RESONANCE_BLESS=1` (or
 //! `RESONANCE_BLESS_NONLINEAR=1` for this file alone).
 
-use std::path::PathBuf;
-
 use resonance_dsp_test_support as golden;
 use resonance_reverb::dsp::{Algorithm, Extras, ReverbDsp};
 
-const SR: f32 = 48_000.0;
-const BLOCK: usize = 128;
+use crate::common::{
+    assert_not_silent, energy_db, render_scenario, Rng, Scenario, Setup, BLOCK, SR,
+};
 
 const GATED: i32 = 0;
 const REVERSE: i32 = 1;
@@ -60,27 +59,22 @@ fn extras(v: Voicing) -> Extras {
     }
 }
 
-/// Call every setter, in the plugin's block order.
-fn configure(d: &mut ReverbDsp, v: Voicing) {
-    d.set_size(v.size);
-    d.set_decay(2.0);
-    d.set_freeze(false);
-    d.set_damping(v.damping);
-    d.set_predelay(0.0);
-    d.set_er_level(0.4);
-    d.set_er_time(0.5);
-    d.set_mod_rate(v.mod_rate);
-    d.set_mod_depth(v.mod_depth);
-    d.set_wet_filters(false, 600.0, false, 10_000.0, false);
-    d.set_er_tail_balance(0.0);
-    d.set_decay_shape(1.0, 250.0, 0.5);
-    d.set_build(0.5);
-    d.set_extras(extras(v));
+impl Voicing {
+    fn setup(self) -> Setup {
+        Setup::new(Algorithm::Nonlinear, self.size, 2.0).with(|s| {
+            s.damping = self.damping;
+            s.diffusion = self.diffusion;
+            s.mod_rate = self.mod_rate;
+            s.mod_depth = self.mod_depth;
+            s.width = self.width;
+        })
+    }
 }
 
+/// Every setter (the shared [`Setup`]) and `set_extras`.
 fn dsp(v: Voicing) -> ReverbDsp {
-    let mut d = ReverbDsp::with_engines(SR, &[Algorithm::Nonlinear]);
-    configure(&mut d, v);
+    let mut d = v.setup().dsp();
+    d.set_extras(extras(v));
     d
 }
 
@@ -94,11 +88,6 @@ fn render(v: Voicing, n: usize, input: impl Fn(usize) -> f32) -> (Vec<f32>, Vec<
         r.push(b);
     }
     (l, r)
-}
-
-fn energy_db(l: &[f32], r: &[f32]) -> f64 {
-    let e: f64 = l.iter().chain(r).map(|&x| (x as f64) * (x as f64)).sum();
-    10.0 * (e / 2.0).max(1e-30).log10()
 }
 
 /// A snare-like burst at sample `at`: noise with a 1 ms rise and a 25 ms
@@ -310,7 +299,8 @@ fn nonlinear_at_the_defaults_is_not_silent() {
     let (l, r) = render(v, (0.6 * SR) as usize, |i| if i == 0 { 1.0 } else { 0.0 });
     let e = energy_db(&l, &r);
     println!("nonlinear defaults: energy {e:.1} dB re a unit impulse");
-    assert!(e > -40.0 && e < 6.0, "energy {e:.1} dB");
+    assert_not_silent("nonlinear defaults", &l, &r);
+    assert!(e < 6.0, "energy {e:.1} dB");
     // Decorrelated: the two sides of a mono hit differ.
     let c: f64 = l.iter().zip(&r).map(|(&a, &b)| a as f64 * b as f64).sum();
     let (el, er): (f64, f64) = (
@@ -320,23 +310,6 @@ fn nonlinear_at_the_defaults_is_not_silent() {
     let corr = c / (el * er).sqrt();
     println!("nonlinear L/R correlation {corr:.3}");
     assert!(corr.abs() < 0.5, "L/R correlation {corr:.3}");
-}
-
-/// Deterministic xorshift, uniform in `[0, 1)`.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        (self.0 >> 40) as f32 / (1u64 << 24) as f32
-    }
-
-    fn gauss(&mut self) -> f32 {
-        let (a, b) = (self.next().max(1e-7), self.next());
-        (-2.0 * a.ln()).sqrt() * (std::f32::consts::TAU * b).cos()
-    }
 }
 
 /// 60 s of random automation of every setter and both nonlinear extras,
@@ -554,84 +527,65 @@ fn the_viz_getters_describe_the_burst() {
 // ---------------------------------------------------------------------
 // Golden
 
-/// One golden scenario: every setter pinned, an input, a length.
-struct Scenario {
-    name: &'static str,
-    voicing: Voicing,
-    predelay_ms: f32,
-    frames: usize,
-    input: fn(usize) -> (f32, f32),
+/// A unit impulse on both channels at sample 0.
+fn impulse_mono(n: usize) -> (f32, f32) {
+    let x = if n == 0 { 1.0 } else { 0.0 };
+    (x, x)
 }
 
+/// The nonlinear extras of each scenario are pinned by an edit at frame
+/// 0 (before the first sample, so the same as configuring them).
 fn scenarios() -> Vec<Scenario> {
+    let big = Voicing {
+        size: 0.8,
+        damping: 5_000.0,
+        diffusion: 0.95,
+        mod_rate: 2.0,
+        mod_depth: 1.0,
+        shape: REVERSE,
+        length_ms: 120.0,
+        width: 0.8,
+    };
     vec![
-        // A unit impulse through the default gate: the diffusers, the
-        // burst, the decay compensation and the release edge.
+        // A unit impulse through a 150 ms gate: the diffusers, the burst,
+        // the decay compensation and the release edge.
         Scenario {
             name: "impulse_gated_150",
-            voicing: Voicing::shaped(GATED, 150.0),
+            setup: Voicing::shaped(GATED, 150.0).setup(),
             predelay_ms: 0.0,
             frames: 9_600,
-            input: |n| {
-                (
-                    if n == 0 { 1.0 } else { 0.0 },
-                    if n == 0 { 1.0 } else { 0.0 },
-                )
-            },
+            input: impulse_mono,
+            edit: Some((0, |d| d.set_extras(extras(Voicing::shaped(GATED, 150.0))))),
         },
         // Two snares into a big, modulated reverse envelope with a
         // pre-delay and narrowed width: the ramp, the cut, the detector
         // and the retrigger.
         Scenario {
             name: "snares_reverse_retrigger",
-            voicing: Voicing {
-                size: 0.8,
-                damping: 5_000.0,
-                diffusion: 0.95,
-                mod_rate: 2.0,
-                mod_depth: 1.0,
-                shape: REVERSE,
-                length_ms: 120.0,
-                width: 0.8,
-            },
+            setup: big.setup(),
             predelay_ms: 8.0,
             frames: 14_400,
             input: |n| {
                 let s = snare(n) + snare_at(n, 7_200);
                 (s, 0.6 * s)
             },
+            edit: Some((0, |d| d.set_extras(extras(Voicing::shaped(REVERSE, 120.0))))),
         },
         // A flat envelope with its natural decay, mono-in from the right.
         Scenario {
             name: "snare_flat_decay",
-            voicing: Voicing::shaped(FLAT, 80.0),
+            setup: Voicing::shaped(FLAT, 80.0).setup(),
             predelay_ms: 0.0,
             frames: 9_600,
             input: |n| (0.0, snare(n)),
+            edit: Some((0, |d| d.set_extras(extras(Voicing::shaped(FLAT, 80.0))))),
         },
     ]
 }
 
-fn render_scenario(s: &Scenario) -> (Vec<f32>, Vec<f32>, f64) {
-    let v = s.voicing;
-    let mut d = dsp(v);
-    d.set_predelay(s.predelay_ms);
-    let (mut l, mut r) = (Vec::with_capacity(s.frames), Vec::with_capacity(s.frames));
-    let mut e_in = 0.0f64;
-    for n in 0..s.frames {
-        let (x, y) = (s.input)(n);
-        e_in += 0.5 * ((x as f64).powi(2) + (y as f64).powi(2));
-        let (a, b) = d.process(x, y, v.diffusion, v.width);
-        l.push(a);
-        r.push(b);
-    }
-    (l, r, e_in)
-}
-
-fn golden_path() -> PathBuf {
-    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "nonlinear_golden.f32")
-}
-
+/// The shared `check_golden`, less its last-quarter tail guard: a gated
+/// envelope ends in silence by design. Every scenario keeps its silence
+/// guard re its own input.
 #[test]
 fn nonlinear_golden_is_bit_exact() {
     let mut rendered = Vec::new();
@@ -642,8 +596,6 @@ fn nonlinear_golden_is_bit_exact() {
             "{}: non-finite",
             s.name
         );
-        // Silence guard, re the scenario's own input energy. (No tail
-        // check: a gated envelope ends in silence by design.)
         let e = energy_db(&l, &r) - 10.0 * e_in.log10();
         assert!(
             e > -40.0,
@@ -654,7 +606,7 @@ fn nonlinear_golden_is_bit_exact() {
         rendered.extend(r);
     }
 
-    let path = golden_path();
+    let path = golden::golden_path(env!("CARGO_MANIFEST_DIR"), "nonlinear_golden.f32");
     if golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_NONLINEAR"]) {
         golden::bless_f32(&path, &rendered);
         return;

@@ -91,8 +91,8 @@ const LOOP_LPF_RANGE: (f32, f32) = (1_000.0, 12_000.0);
 const LOOP_LPF_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// Largest loop gain (a 30 s decay on the longest spring is 0.9979).
 const MAX_LOOP_GAIN: f32 = 0.9995;
-/// Output gain: the default spring's impulse response carries about the
-/// energy of Room's at the global defaults.
+/// Output gain: a unit impulse into the default spring comes back at
+/// −8 dB of energy (Room at the global defaults: −9.6 dB).
 const OUT_GAIN: f32 = 0.3;
 /// Transient detector: fast and slow peak followers (attack, release ms)
 /// and how far the fast one must sit over the slow one to count.

@@ -12,17 +12,14 @@
 //! The golden is re-blessed with `RESONANCE_BLESS=1` (or
 //! `RESONANCE_BLESS_SPRING=1` for this file alone).
 
-use std::path::PathBuf;
-
 use resonance_dsp::Biquad;
-use resonance_dsp_test_support as golden;
 use resonance_metering::decay::ImpulseReport;
 use resonance_reverb::dsp::{Algorithm, Extras, ReverbDsp};
 
-const SR: f32 = 48_000.0;
-const BLOCK: usize = 128;
+use crate::common::{assert_not_silent, check_golden, energy_db, Rng, Scenario, Setup, BLOCK, SR};
 
-/// Every setter's value, plus diffusion, width and the spring extras.
+/// The setters Spring reads, plus diffusion, width and the spring extras
+/// (everything else at the global defaults, as [`Setup::new`] has it).
 #[derive(Clone, Copy, Debug)]
 struct Voicing {
     size: f32,
@@ -48,6 +45,14 @@ impl Voicing {
             width: 1.0,
         }
     }
+
+    fn setup(self) -> Setup {
+        Setup::new(Algorithm::Spring, self.size, self.decay).with(|s| {
+            s.damping = self.damping;
+            s.diffusion = self.diffusion;
+            s.width = self.width;
+        })
+    }
 }
 
 fn extras(v: Voicing) -> Extras {
@@ -58,27 +63,10 @@ fn extras(v: Voicing) -> Extras {
     }
 }
 
-/// Call every setter, in the plugin's block order.
-fn configure(d: &mut ReverbDsp, v: Voicing) {
-    d.set_size(v.size);
-    d.set_decay(v.decay);
-    d.set_freeze(false);
-    d.set_damping(v.damping);
-    d.set_predelay(0.0);
-    d.set_er_level(0.4);
-    d.set_er_time(0.5);
-    d.set_mod_rate(1.0);
-    d.set_mod_depth(0.3);
-    d.set_wet_filters(false, 600.0, false, 10_000.0, false);
-    d.set_er_tail_balance(0.0);
-    d.set_decay_shape(1.0, 250.0, 0.5);
-    d.set_build(0.5);
-    d.set_extras(extras(v));
-}
-
+/// Every setter (the shared [`Setup`]) and `set_extras`.
 fn dsp(v: Voicing) -> ReverbDsp {
-    let mut d = ReverbDsp::with_engines(SR, &[Algorithm::Spring]);
-    configure(&mut d, v);
+    let mut d = v.setup().dsp();
+    d.set_extras(extras(v));
     d
 }
 
@@ -101,28 +89,6 @@ fn impulse(v: Voicing, seconds: f32) -> (Vec<f32>, Vec<f32>) {
         (seconds * SR) as usize,
         |i| if i == 0 { 1.0 } else { 0.0 },
     )
-}
-
-fn energy_db(l: &[f32], r: &[f32]) -> f64 {
-    let e: f64 = l.iter().chain(r).map(|&x| (x as f64) * (x as f64)).sum();
-    10.0 * (e / 2.0).max(1e-30).log10()
-}
-
-/// Deterministic xorshift, uniform in `[0, 1)`.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        (self.0 >> 40) as f32 / (1u64 << 24) as f32
-    }
-
-    fn gauss(&mut self) -> f32 {
-        let (a, b) = (self.next().max(1e-7), self.next());
-        (-2.0 * a.ln()).sqrt() * (std::f32::consts::TAU * b).cos()
-    }
 }
 
 /// `x` through a band-pass at `hz` (Q 3).
@@ -347,9 +313,8 @@ fn spring_at_the_defaults_is_not_silent() {
         "spring defaults: energy {e:.1} dB re a unit impulse\n{}\n{rep}",
         ImpulseReport::table_header()
     );
-    assert!(e > -40.0, "energy {e:.1} dB (silence guard)");
+    assert_not_silent("spring defaults", &l, &r);
     assert!(e < 6.0, "energy {e:.1} dB");
-    assert!(l.iter().chain(&r).all(|x| x.is_finite()));
 }
 
 /// 60 s of random automation of every setter and both spring extras, as
@@ -589,58 +554,71 @@ fn the_viz_getters_describe_the_springs() {
 // ---------------------------------------------------------------------
 // Golden
 
-/// One golden scenario: every setter pinned, an input, a length.
-struct Scenario {
-    name: &'static str,
-    voicing: Voicing,
-    predelay_ms: f32,
-    frames: usize,
-    input: fn(usize) -> (f32, f32),
-    edit: Option<(usize, fn(&mut ReverbDsp))>,
+/// A unit impulse on both channels at sample 0.
+fn impulse_mono(n: usize) -> (f32, f32) {
+    let x = if n == 0 { 1.0 } else { 0.0 };
+    (x, x)
 }
 
+/// A snare, decorrelated L/R.
+fn snare_lr(n: usize) -> (f32, f32) {
+    (snare(n), 0.7 * snare(n + 101))
+}
+
+/// The spring extras are pinned by an edit at frame 0 (before the first
+/// sample, so the same as configuring them), or by the scenario's own
+/// mid-render edit.
 fn scenarios() -> Vec<Scenario> {
+    let tight = Voicing {
+        size: 0.2,
+        decay: 3.0,
+        damping: 5_000.0,
+        diffusion: 0.5,
+        tension: 0.9,
+        drip: 0.8,
+        width: 0.8,
+    };
     vec![
-        // An impulse into the default spring with some drip: the cascade,
-        // the loop, the drip chirp.
+        // An impulse into the default spring with its default drip (0.3,
+        // the engine's own default extras): the cascade, the loop, the
+        // drip chirp.
         Scenario {
             name: "impulse_defaults",
-            voicing: Voicing {
-                drip: 0.3,
-                ..Voicing::dry()
-            },
+            setup: Voicing::dry().setup(),
             predelay_ms: 0.0,
             frames: 9_600,
-            input: |n| {
-                (
-                    if n == 0 { 1.0 } else { 0.0 },
-                    if n == 0 { 1.0 } else { 0.0 },
-                )
-            },
+            input: impulse_mono,
             edit: None,
         },
-        // A snare into a tight, dark, high-tension spring with a pre-delay
-        // and narrowed width; at 100 ms size and tension move, so the
-        // glides are pinned too.
+        // A snare into a tight, dark, high-tension spring with lots of
+        // drip, a pre-delay and a narrowed width.
         Scenario {
-            name: "snare_tension_glide",
-            voicing: Voicing {
-                size: 0.2,
-                decay: 3.0,
-                damping: 5_000.0,
-                diffusion: 0.5,
-                tension: 0.9,
-                drip: 0.8,
-                width: 0.8,
-            },
+            name: "snare_tight_tense",
+            setup: tight.setup(),
             predelay_ms: 5.0,
-            frames: 12_000,
-            input: |n| (snare(n), 0.7 * snare(n + 101)),
-            edit: Some((4_800, |d| {
-                d.set_size(0.6);
+            frames: 9_600,
+            input: snare_lr,
+            edit: Some((0, |d| {
                 d.set_extras(Extras {
-                    spring_tension: 0.4,
+                    spring_tension: 0.9,
                     spring_drip: 0.8,
+                    ..Extras::default()
+                })
+            })),
+        },
+        // The same snare into the default spring; 100 ms in, size and
+        // tension move, so the read-head and coefficient glides are
+        // pinned too.
+        Scenario {
+            name: "snare_size_tension_glide",
+            setup: Voicing::dry().setup(),
+            predelay_ms: 0.0,
+            frames: 12_000,
+            input: snare_lr,
+            edit: Some((4_800, |d| {
+                d.set_size(0.8);
+                d.set_extras(Extras {
+                    spring_tension: 0.9,
                     ..Extras::default()
                 });
             })),
@@ -648,74 +626,11 @@ fn scenarios() -> Vec<Scenario> {
     ]
 }
 
-fn render_scenario(s: &Scenario) -> (Vec<f32>, Vec<f32>, f64) {
-    let v = s.voicing;
-    let mut d = dsp(v);
-    d.set_predelay(s.predelay_ms);
-    let (mut l, mut r) = (Vec::with_capacity(s.frames), Vec::with_capacity(s.frames));
-    let mut e_in = 0.0f64;
-    for n in 0..s.frames {
-        if let Some((at, edit)) = s.edit {
-            if n == at {
-                edit(&mut d);
-            }
-        }
-        let (x, y) = (s.input)(n);
-        e_in += 0.5 * ((x as f64).powi(2) + (y as f64).powi(2));
-        let (a, b) = d.process(x, y, v.diffusion, v.width);
-        l.push(a);
-        r.push(b);
-    }
-    (l, r, e_in)
-}
-
-fn golden_path() -> PathBuf {
-    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "spring_golden.f32")
-}
-
 #[test]
 fn spring_golden_is_bit_exact() {
-    let mut rendered = Vec::new();
-    for s in scenarios() {
-        let (l, r, e_in) = render_scenario(&s);
-        assert!(
-            l.iter().chain(&r).all(|x| x.is_finite()),
-            "{}: non-finite",
-            s.name
-        );
-        // Silence guard, re the scenario's own input energy.
-        let e = energy_db(&l, &r) - 10.0 * e_in.log10();
-        assert!(
-            e > -40.0,
-            "{}: {e:.1} dB re its input (silence guard)",
-            s.name
-        );
-        let tail = s.frames * 3 / 4;
-        let tail_db = energy_db(&l[tail..], &r[tail..]) - 10.0 * e_in.log10();
-        assert!(
-            tail_db > -60.0,
-            "{}: no tail in the last quarter ({tail_db:.1} dB)",
-            s.name
-        );
-        rendered.extend(l);
-        rendered.extend(r);
-    }
-
-    let path = golden_path();
-    if golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_SPRING"]) {
-        golden::bless_f32(&path, &rendered);
-        return;
-    }
-    let want = golden::load_golden_f32(&path, rendered.len(), "RESONANCE_BLESS=1");
-    let diff = golden::compare_f32(&rendered, &want);
-    if let Some((i, got, want)) = diff.first_diff {
-        panic!(
-            "Spring output changed: {}/{} samples differ, peak delta {:.3e}; first at \
-             sample {i} (got {got:?}, want {want:?}). Re-bless with RESONANCE_BLESS=1 \
-             only for an intended change.",
-            diff.diff_count,
-            rendered.len(),
-            diff.max_abs,
-        );
-    }
+    check_golden(
+        "spring_golden.f32",
+        &["RESONANCE_BLESS", "RESONANCE_BLESS_SPRING"],
+        &scenarios(),
+    );
 }
