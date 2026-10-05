@@ -559,3 +559,175 @@ fn measure_depth_has_no_layer_hint() {
     assert_eq!(wire["depth"]["drr_db_estimate"], json!(3.0));
     assert_eq!(wire["depth"]["layer_hint"], serde_json::Value::Null);
 }
+
+// ---------------- decay (reverb-algorithms.md R9) ----------------
+
+use resonance_metering::decay::{BandDecay, DecayEnd, DecayTimes, ProgramDecay, OCTAVE_BANDS_HZ};
+
+/// What the engine found after the stop.
+enum Found {
+    /// No stop in the range.
+    Nothing,
+    /// A clean decay of this T30 into silence (8 kHz unmeasurable).
+    Clean(f32),
+    /// A decay the range cuts off 0.4 s in, 12 dB down: EDT only.
+    Cut,
+}
+
+/// An engine decay block 1.5 s into the measured range.
+fn decay(rate: u32, found: Found) -> MeasurementDetail {
+    let sr = rate as f32;
+    let empty = || {
+        OCTAVE_BANDS_HZ.map(|center_hz| BandDecay {
+            center_hz,
+            times: DecayTimes::default(),
+        })
+    };
+    let d = match found {
+        Found::Nothing => ProgramDecay {
+            found: false,
+            clean: false,
+            start: 0,
+            end: 0,
+            ends: None,
+            dynamic_range_db: 0.0,
+            times: DecayTimes::default(),
+            bands: empty(),
+            tail_20db_s: None,
+            sample_rate: sr,
+        },
+        Found::Clean(t30) => {
+            let times = DecayTimes {
+                edt: Some(0.987_654),
+                t20: Some(t30 * 0.99),
+                t30: Some(t30),
+            };
+            ProgramDecay {
+                found: true,
+                clean: true,
+                start: (1.5 * sr) as usize,
+                end: (4.0 * sr) as usize,
+                ends: Some(DecayEnd::Floor),
+                dynamic_range_db: 100.0,
+                times,
+                bands: OCTAVE_BANDS_HZ.map(|center_hz| BandDecay {
+                    center_hz,
+                    times: if center_hz < 8_000.0 { times } else { DecayTimes::default() },
+                }),
+                tail_20db_s: Some(t30 / 3.0),
+                sample_rate: sr,
+            }
+        }
+        Found::Cut => ProgramDecay {
+            found: true,
+            clean: false,
+            start: (1.5 * sr) as usize,
+            end: (1.9 * sr) as usize,
+            ends: Some(DecayEnd::RangeEnd),
+            dynamic_range_db: 12.345,
+            times: DecayTimes {
+                edt: Some(2.0),
+                t20: None,
+                t30: None,
+            },
+            bands: empty(),
+            tail_20db_s: None,
+            sample_rate: sr,
+        },
+    };
+    MeasurementDetail {
+        decay: Some(d),
+        ..MeasurementDetail::default()
+    }
+}
+
+/// `meter.measure {track_id, detail: ["decay"]}` over a range starting
+/// 2 s into the song; the `decay` object and the sample rate.
+fn measure_decay(found: Found) -> (serde_json::Value, u64) {
+    let (mut app, cmd_rx) = capture_app();
+    let rate = app.sample_rate;
+    let params = json!({ "target": { "track_id": BASS }, "detail": ["decay"] });
+    let job = started_job(roundtrip(&mut app, request(1, "meter.measure", params)));
+    let sent = sent_detail(&cmd_rx);
+    assert!(sent.decay && !sent.depth && !sent.spectrum, "{sent:?}");
+    let mut m = rendered(StemSource::Track(BASS), rate, decay(rate, found));
+    m.range_start = 2 * u64::from(rate);
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
+        results: vec![m],
+    });
+    (result_json(&mut app, job)["decay"].clone(), u64::from(rate))
+}
+
+#[test]
+fn a_clean_decay_reports_song_time_and_rounded_seconds() {
+    let (wire, rate) = measure_decay(Found::Clean(1.234_567));
+    assert_eq!(wire["found"], json!(true));
+    assert_eq!(wire["clean"], json!(true));
+    // 1.5 s into a range that starts 2 s into the song.
+    assert_eq!(wire["stop_seconds"], json!(3.5));
+    assert_eq!(wire["stop"]["sample"], json!(rate * 7 / 2));
+    assert!(wire["stop"]["bar"].as_u64().is_some_and(|b| b >= 1), "{wire}");
+    assert_eq!(wire["length_seconds"], json!(2.5));
+    assert_eq!(wire["ends"], json!("floor"));
+    assert_eq!(wire["dynamic_range_db"], json!(100.0));
+    assert_eq!(wire["edt_seconds"], json!(0.988));
+    assert_eq!(wire["t30_seconds"], json!(1.235));
+    assert_eq!(wire["tail_20db_seconds"], json!(0.412));
+    let bands = wire["bands"].as_array().expect("bands");
+    assert_eq!(bands.len(), 7);
+    assert_eq!(bands[0]["center_hz"], json!(125.0));
+    assert_eq!(bands[0]["t30_seconds"], json!(1.235));
+    assert_eq!(bands[6]["t30_seconds"], serde_json::Value::Null);
+    assert!(wire.get("note").is_none(), "a clean decay has no note: {wire}");
+}
+
+#[test]
+fn a_cut_off_decay_is_not_clean_and_says_why_in_song_time() {
+    let (wire, _) = measure_decay(Found::Cut);
+    assert_eq!(wire["found"], json!(true));
+    assert_eq!(wire["clean"], json!(false));
+    assert_eq!(wire["ends"], json!("range_end"));
+    assert_eq!(wire["dynamic_range_db"], json!(12.3));
+    assert_eq!(wire["edt_seconds"], json!(2.0));
+    for field in ["t20_seconds", "t30_seconds", "tail_20db_seconds"] {
+        assert_eq!(wire[field], serde_json::Value::Null, "{field}");
+    }
+    let note = wire["note"].as_str().expect("a note");
+    assert!(note.contains("from 3.50 s") && note.contains("range ends"), "{note}");
+}
+
+#[test]
+fn no_stop_reports_nulls_and_a_note() {
+    let (wire, _) = measure_decay(Found::Nothing);
+    assert_eq!(wire["found"], json!(false));
+    assert_eq!(wire["clean"], json!(false));
+    for field in [
+        "stop",
+        "stop_seconds",
+        "length_seconds",
+        "ends",
+        "dynamic_range_db",
+        "edt_seconds",
+        "t20_seconds",
+        "t30_seconds",
+        "tail_20db_seconds",
+    ] {
+        assert_eq!(wire[field], serde_json::Value::Null, "{field}: {wire}");
+    }
+    assert!(wire.get("bands").is_none(), "{wire}");
+    assert!(wire["note"].as_str().expect("a note").contains("no stop found"));
+}
+
+#[test]
+fn decay_is_not_in_a_default_request() {
+    let (mut app, cmd_rx) = capture_app();
+    let job = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
+    assert!(!sent_detail(&cmd_rx).decay);
+    let rate = app.sample_rate;
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
+        results: vec![rendered(StemSource::Master, rate, MeasurementDetail::default())],
+    });
+    assert!(result_json(&mut app, job).get("decay").is_none());
+}

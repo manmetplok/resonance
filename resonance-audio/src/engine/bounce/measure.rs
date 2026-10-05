@@ -600,6 +600,9 @@ pub fn measure_rendered_buffer_detailed(
     let dynamics = detail
         .dynamics
         .then(|| PlrMeter::range(true_peak_dbtp, lufs_integrated, short_term_max));
+    let decay = detail
+        .decay
+        .then(|| resonance_metering::decay::program_decay(&left, &right, rate));
     MixMeasurement {
         target,
         source: MeasureSource::Render,
@@ -619,6 +622,7 @@ pub fn measure_rendered_buffer_detailed(
         bands: band_shares(rate, &left, &right),
         detail: MeasurementDetail {
             dynamics,
+            decay,
             ..spectral_detail(detail, rate, &left, &right)
         },
     }
@@ -643,6 +647,7 @@ fn spectral_detail(detail: DetailSet, rate: f32, left: &[f32], right: &[f32]) ->
         spectrum: detail.spectrum.then(|| spectrum_detail_from(&spec)),
         stereo: detail.stereo.then(|| stereo_detail_from(&spec, left, right)),
         dynamics: None,
+        decay: None,
         // The DRR half needs the other targets and the returns, so
         // `fill_depth` completes it once the whole pass has rendered.
         depth: detail.depth.then(|| DepthDetail {

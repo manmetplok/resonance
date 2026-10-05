@@ -132,6 +132,7 @@ const ASSIST_DETAIL: DetailSet = DetailSet {
     stereo: false,
     dynamics: false,
     depth: false,
+    decay: false,
     assist: true,
 };
 

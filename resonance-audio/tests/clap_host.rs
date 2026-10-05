@@ -64,6 +64,8 @@ mod plugin_output_scrub;
 mod plugin_rescan;
 #[path = "clap_host/probe_chain.rs"]
 mod probe_chain;
+#[path = "clap_host/decay_reverb.rs"]
+mod decay_reverb;
 #[path = "clap_host/depth_reverb.rs"]
 mod depth_reverb;
 #[path = "clap_host/drums_kit_info.rs"]

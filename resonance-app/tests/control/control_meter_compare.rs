@@ -24,6 +24,7 @@ const ALL: DetailSet = DetailSet {
     stereo: true,
     dynamics: true,
     depth: false,
+    decay: false,
     assist: false,
 };
 
