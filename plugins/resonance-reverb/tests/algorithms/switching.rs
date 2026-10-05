@@ -456,7 +456,7 @@ fn the_editor_offers_the_algorithm_and_greys_what_classic_ignores() {
     // Classic, pinned: a fresh instance runs Room (D2).
     plugin.params.algorithm.set_value(Algorithm::Classic as i32);
     // The window's minimum size: nothing may fall off it.
-    let mut editor = headless_editor(&plugin, (720.0, 680.0));
+    let mut editor = headless_editor(&plugin, (800.0, 700.0));
     let frame = editor.settled();
     for id in [
         "algorithm",

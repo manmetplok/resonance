@@ -481,7 +481,8 @@ fn parameter_moves_on_running_audio_do_not_click() {
     let v = Voicing::dry();
     let n = (1.5 * SR) as usize;
     let tone = |i: usize| 0.3 * (std::f32::consts::TAU * 330.0 * i as f32 / SR).sin();
-    let throws: [(&str, fn(&mut ReverbDsp)); 5] = [
+    type Throw = (&'static str, fn(&mut ReverbDsp));
+    let throws: [Throw; 5] = [
         ("none", |_| {}),
         ("size 0.5 -> 1", |d| d.set_size(1.0)),
         ("tension 0.5 -> 1", |d| {
