@@ -263,13 +263,54 @@ every field.
 A genre is a parameter the user gives, never a branch baked into this
 procedure.
 
-## 3c. No reverb on the master
+## 3c. Space on the master (rarely)
 
 Space is a mix decision, made per layer, and a reverb on the summed mix puts
 the kick, the bass and the lead in the same room at the same distance. If the
 mix sounds dry or disjointed, check `meter_stems` with `detail: ["depth"]`:
 when every track reads `dry_only`, the mix has no shared room. Hand back to the
 `spatial` skill to build one, and do not fix it on the master.
+
+Two exceptions, only when the user asks for them. Both need `master.move_effect`
+(and the second `automation.shape`) in `capabilities`. With a second plugin on
+the master, name `plugin_id` on every `master_set_plugin_param` call: omitted,
+it targets the first plugin in the chain.
+
+1. **Glue on a mix that cannot be reopened.** `master_add_effect` with
+   `com.resonance.reverb` and the preset below, then `master_move_effect` to
+   `to_slot` 0, so it runs *before* the mastering chain and the limiter stays
+   last. Then:
+
+<!-- keys: com.resonance.reverb -->
+| Key | Set | Why |
+|---|---|---|
+| `algorithm` | `Ambience` (preset `Mix Glue`) | space without a tail: its early cluster carries the room |
+| `mix` | 0.03-0.10 (the preset has 0.06) | felt, not heard. It is an insert here, not a return |
+| `decay` | 0.3-0.8 s | |
+| `wet_hpf_freq` | 300-500 Hz, with `wet_hpf_on` `On` | the low end stays dry and mono |
+<!-- /keys -->
+
+   Keep it only if `meter_compare {a: snapshot_id}` shows the master's
+   low-band correlation and `mono_loss_db` no worse and `crest_db` down by no
+   more than 0.5 dB. Otherwise remove it (`master_remove_effect`).
+2. **A tail over an abrupt ending.** The same insert before the chain, but a
+   hall: a long, dark tail held behind the last chord, silent for the rest of
+   the song.
+
+<!-- keys: com.resonance.reverb -->
+   Start from `Warm Hall` (`algorithm` `Hall`), `decay` 2-3 s,
+   `wet_hpf_on` `On` at `wet_hpf_freq` 200-300 Hz, and `mix` 0 for the song.
+<!-- /keys -->
+
+   Then an `automation_shape` on the reverb's Mix (`master: true`, the
+   reverb's `plugin_id`, `shape: "ramp"`) rising from 0 to 0.2-0.4 over the
+   last chord. A render runs only 2 s past the last clip, so the tail must
+   fall away inside that: `meter_measure` on the master with
+   `detail: ["decay"]` over the default range, and `dynamic_range_db` at least
+   40 (with `ends` `range_end` it was still falling when the render stopped;
+   shorten the decay). Do not hold it with Freeze: a frozen tail never ends,
+   and the bounce would cut it. Bounce and tell the user to listen: whether
+   the ending wants it is a taste call that a meter cannot make.
 
 ## 4. Hit the targets
 

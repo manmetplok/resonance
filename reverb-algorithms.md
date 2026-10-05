@@ -93,7 +93,7 @@ Mix conventions the algorithms have to support:
 - **Mastering adds no reverb.** Space is a mix decision. The only master-bus
   uses are (a) a very short Ambience at a few percent wet when the user asks
   for "glue" and the stems cannot be revisited, and (b) a tail held over an
-  abrupt last chord, automated in. Both are measured (§9.3).
+  abrupt last chord, automated in. Both are measured (the `mastering` skill, §3c).
 
 ## 3. Scope
 
@@ -455,89 +455,34 @@ test of the engine split.
 | D3 | Expose `algorithm` as a dedicated control-API field or just as a param? | **Just a param.** `track_set_plugin_param` already takes choice labels, and lockstep checks them. No protocol bump. |
 | D4 | Build R9 (decay meter)? | Yes, after R7. Without it the skills set decay from tempo arithmetic and can verify only DRR, not the tail's length. |
 
-## 9. Skill changes (land with R7, creative rows with R8)
+## 9. Skill changes (as landed, R7 with the R8 creative rows)
 
-What is updated **now**, valid against today's plugin: depth.md gains decay
-from tempo and a preset-per-job table, and mastering gains the
-"no reverb on the master" rule (see the git diff alongside this spec). The
-text below is what R7 adds on top. It is written to the lockstep rules: param
-keys, choice labels and preset names only inside `keys` blocks.
+The drafted text that stood here was written before the engines existed; what
+landed is in the skills themselves, revised to the built algorithms:
 
-### 9.1 `spatial/references/depth.md`: "Pick the room by job" (new §1b)
+- `resonance-agent-plugin/skills/spatial/references/depth.md`: §1 (the shared
+  room: load a preset or set `algorithm` first, never the default; presets
+  store an insert mix, so `mix` 1.0 after loading), §1b "Pick the room by job"
+  (type and starting preset per job, all nine presets' jobs, what each type
+  reads and ignores), §2 (`predelay_sync`/`decay_sync`), §4 (second returns by
+  type: back/wash, front, snare, guitar) and §7 "Verify the tail" (the R9
+  `decay` detail on a sending track: `t30_seconds` against the intended decay,
+  `stop_seconds` + `tail_20db_seconds` against the next downbeat, `bands`
+  against the bass multiplier). The spatial `SKILL.md` step 5 points there.
+- `mixing/references/roles.md`: a Room type table per role.
+- `mastering/SKILL.md` §3c "Space on the master (rarely)": the rule plus the
+  two exceptions (Ambience/Mix Glue before the chain, a Hall tail automated in
+  over an abrupt ending).
+- Outside the repo: `~/.claude/skills/resonance-studio` (the Reverb line of
+  references/resonance-reference.md), `singer-songwriter`,
+  `industrial-post-metal` and `resonance-synth-design` swap preset-only advice
+  for type + preset and point at depth.md §1b.
 
-````markdown
-## 1b. Pick the room by job
-
-One shared room is still the default. Choose its `algorithm` by what leads the
-song, and add a second return of a different type only when one room cannot
-place both the front and the back (§4).
-
-<!-- keys: com.resonance.reverb -->
-| The room is for | `algorithm` | Start from | `decay` | `predelay` |
-|---|---|---|---|---|
-| a vocal-led song (shared room) | `Plate` | `Vocal Plate` | 1.2-2.5 s, or `decay_sync` `1/2`-`1 bar` | 20-40 ms, or `predelay_sync` `1/64` |
-| a warm, intimate vocal | `Chamber` | `Vocal Chamber` | 1.0-1.8 s | 10-30 ms |
-| a band in a room, drums leading | `Room` | `Drum Room` | 0.3-0.9 s | 0-10 ms |
-| the back layer (pads, strings) | `Hall` | `String Hall` | 2-4 s | 0-20 ms |
-| a front layer that must stay dry-sounding | `Ambience` | `Short Ambience` | 0.3-0.8 s | 0-10 ms |
-<!-- /keys -->
-
-On every type: `low_decay_mult` above 1 thickens the room and below 1 clears
-the low end; `high_decay_mult` lower is darker (further back). Keep the return
-EQ (§1) on every type.
-
-Tempo: set `decay_sync` instead of computing a decay when the song has one
-tempo. With a tempo map, compute from the tempo where the part plays (§2).
-````
-
-### 9.2 `mixing/references/roles.md`: a "Room type" column
-
-Added to the staging table: Kick none; Snare `Plate` (natural: `Room`; 80s:
-`Nonlinear`, R8); Overheads `Room`; Bass none; Lead vocal `Plate` or
-`Chamber`; Backing vocals the lead's room; Rhythm guitars `Room`; Keys
-`Room`/`Chamber`; Lead synth `Plate`; Pads `Hall`; FX `Hall`/`Shimmer` (R8).
-Clean electric `Spring` (R8). In a keys block.
-
-### 9.3 `mastering/SKILL.md`: "Space on the master (rarely)"
-
-````markdown
-## 3c. Space on the master (rarely)
-
-Space belongs to the mix. If `meter_stems` with `detail: ["depth"]` shows every
-track `dry_only`, go back to the `spatial` skill. Do not fix it here. Two
-exceptions, only when the user asks:
-
-1. **Glue on a mix that cannot be reopened.** `master_add_effect` with
-   `com.resonance.reverb`, placed *before* the mastering chain
-   (`master_move_effect`), then:
-
-<!-- keys: com.resonance.reverb -->
-| Key | Set | Why |
-|---|---|---|
-| `algorithm` | `Ambience` (preset `Mix Glue`) | space without a tail |
-| `mix` | 0.03-0.10 | felt, not heard |
-| `decay` | 0.3-0.8 s | |
-| `wet_hpf_on`, `wet_hpf_freq` | `On`, 300-500 Hz | the low end stays dry and mono |
-<!-- /keys -->
-
-   Keep it only if `meter_compare {a: snapshot_id}` shows the master's low-band
-   correlation and `mono_loss_db` no worse, `crest_db` down by no more than
-   0.5 dB, and the `depth` ordering unchanged.
-2. **A tail over an abrupt ending.** The same insert at `mix` 0 for the song,
-   with an `automation_shape` on its Mix rising over the last chord and Freeze
-   automated on for the final beat. Bounce and tell the user to listen: this is
-   a taste call that a meter cannot make.
-````
-
-### 9.4 `~/.claude/skills/resonance-studio/references/resonance-reference.md`
-
-The Reverb line becomes: algorithm choice (Classic, Plate, Room, Chamber,
-Hall, Ambience, + Spring/Nonlinear/Shimmer after R8), the new keys, the new
-presets, and "type per job: the `spatial` skill's depth.md §1b". Genre skills
-(`singer-songwriter` songcraft §mix, `industrial-post-metal`, synth-design
-recipes) swap their preset-only advice for type + preset: Vocal Chamber/Plate
-for singer-songwriter vocals, Hall/Shimmer for drones, Room for heavy drums,
-Spring on clean guitars.
+Not carried over from the draft: Freeze on the master tail (a frozen tail
+never ends and a bounce runs only 2 s past the last clip, so it would be cut;
+the skill uses a 2-3 s Hall checked by `dynamic_range_db` instead), and "the
+`depth` ordering unchanged" as a master-glue check (stems are measured before
+the master chain, so a master insert cannot move it).
 
 ## 10. References
 

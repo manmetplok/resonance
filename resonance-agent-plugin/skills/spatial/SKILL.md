@@ -102,13 +102,18 @@ Verify each move: `meter_compare {a: snapshot_id}` — `side_mid_db` up above
 
 ## 5. Depth pass
 
-1. **One shared room.** A return bus (`bus_create`) with `com.resonance.reverb`
-   at full wet, fed by post-fader sends (`track_add_send`). One room, many
-   send levels: that is what makes the layers read as one space.
+1. **One shared room, its type chosen by job.** A return bus (`bus_create`)
+   with `com.resonance.reverb` at full wet, fed by post-fader sends
+   (`track_add_send`). One room, many send levels: that is what makes the
+   layers read as one space. Pick its algorithm by what leads the song (a
+   plate or chamber for a vocal, a room for a band, ambience for a dry mix)
+   and load the matching preset as you add it; never leave the algorithm at
+   the plugin's default. A hall or shimmer for the back, a spring for a clean
+   guitar or a gate for an 80s snare is a second return, not the shared room.
 2. **Per-layer sends.** Front lowest, back highest (roles.md for starts).
 3. **Pre-delay and decay from tempo** on the room: 20-40 ms of pre-delay for
    the front, and a decay of one to two beats (busy songs) or one to two bars
-   (ballads), from the song's tempo.
+   (ballads), from the song's tempo, or the reverb's tempo sync.
 4. **Return EQ** before the tank: high-pass about 600 Hz, low-pass about
    10 kHz.
 5. **Duck the return** from the lead, keyed with `bus_set_sidechain`.
@@ -117,9 +122,14 @@ Verify each move: `meter_compare {a: snapshot_id}` — `side_mid_db` up above
 7. **Verify the ordering.** `meter_stems` `detail: ["depth"]`: front's
    `drr_db_estimate` above middle's above back's, and `hf_tilt_db` falling
    front to back.
+8. **Verify the tail.** `meter_measure` (or `meter_stems`) with
+   `detail: ["decay"]` on a track that **sends** to the room (never the return
+   bus), over a range that ends in silence after it stops: `t30_seconds`
+   within about 10 % of the decay you set, and `stop_seconds` plus
+   `tail_20db_seconds` before the next downbeat on rhythmic material.
 
-Keys, presets, the tempo table and the targets:
-`${CLAUDE_SKILL_DIR}/references/depth.md`.
+Room type per job, keys, presets, the tempo and sync tables, the tail check
+and the targets: `${CLAUDE_SKILL_DIR}/references/depth.md`.
 
 ## 6. Verify, then stop
 
@@ -143,7 +153,8 @@ what it cost*. Every edit is an ordinary undo step.
 - `${CLAUDE_SKILL_DIR}/references/width.md` — width targets, the mono-maker,
   pan compensation, decorrelation and M/S keys, Haas risk.
 - `${CLAUDE_SKILL_DIR}/references/depth.md` — layer cues, the room recipe,
-  pre-delay from tempo, return EQ and ducking keys, DRR targets.
+  the room type per job, pre-delay and decay from tempo, return EQ and ducking
+  keys, DRR targets, the tail check.
 - `${CLAUDE_PLUGIN_ROOT}/skills/mixing/references/roles.md` — per-role
   staging and role inference.
 - `${CLAUDE_PLUGIN_ROOT}/skills/mixing/references/reading-meters.md` — the
