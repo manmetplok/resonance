@@ -99,4 +99,14 @@ pub const PRESETS: &[PresetEntry] = &[
         name: "80s Gate",
         json: include_str!("../presets/eighties_gate.json"),
     },
+    PresetEntry {
+        id: "octave-halo",
+        name: "Octave Halo",
+        json: include_str!("../presets/octave_halo.json"),
+    },
+    PresetEntry {
+        id: "fifth-bloom",
+        name: "Fifth Bloom",
+        json: include_str!("../presets/fifth_bloom.json"),
+    },
 ];

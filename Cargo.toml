@@ -106,6 +106,16 @@ opt-level = 2
 [profile.dev.package.resonance-common]
 opt-level = 2
 
+# The reverb's algorithm tests render tens of seconds of long tails per
+# engine and analyse them (resonance-metering's decay harness); unoptimized
+# that was ~50s of the suite. Renders are bit-identical at any opt level
+# (Rust never contracts to FMA), so the goldens hold either way.
+[profile.dev.package.resonance-reverb]
+opt-level = 2
+
+[profile.dev.package.resonance-metering]
+opt-level = 2
+
 # DEP-11 (code-review-2026-10-02): wgpu/naga/iced/ort/zbus/etc. all build
 # with full (debug = 2) debuginfo by default, which is most of the disk
 # cost of a `target/debug` tree (worktrees have piled up to 629 GB across

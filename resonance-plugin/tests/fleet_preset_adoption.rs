@@ -216,7 +216,7 @@ const PINNED_IDS: &[(&str, &[&str])] = &[
         "tight-room", "vocal-plate", "warm-hall", "cathedral", "ambient-bloom", "shimmer-drone",
         "snare-plate", "snare-tight", "snare-ambient", "snare-gated", "bright-plate",
         "drum-room", "vocal-chamber", "string-hall", "mix-glue", "short-ambience",
-        "surf-spring", "eighties-gate",
+        "surf-spring", "eighties-gate", "octave-halo", "fifth-bloom",
     ]),
     ("resonance-stereo", &[
         "init-transparent", "mono-bass-below-120", "widen-mono-source", "master-gentle-width",
@@ -387,7 +387,7 @@ fn every_factory_preset_is_a_complete_format_1_file() {
         );
         total += entries.len();
     }
-    assert_eq!(total, 103, "95 factory presets in 9 plugins at the audit, + 8 reverb ones");
+    assert_eq!(total, 105, "95 factory presets in 9 plugins at the audit, + 10 reverb ones");
 }
 
 /// Convergence (10)/(11): the preset library now searches with the shared
@@ -487,5 +487,5 @@ fn every_factory_preset_matches_its_own_filters_after_the_swap() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 103);
+    assert_eq!(checked, 105);
 }

@@ -101,6 +101,7 @@ impl Algorithm {
         Algorithm::Ambience,
         Algorithm::Spring,
         Algorithm::Nonlinear,
+        Algorithm::Shimmer,
     ];
 
     /// The algorithm a parameter value selects. Out-of-range indices fall

@@ -33,6 +33,7 @@ const ALGORITHMS: &[Algorithm] = &[
     ("ambience", |p| p.algorithm.set_value(5)),
     ("spring", |p| p.algorithm.set_value(6)),
     ("nonlinear", |p| p.algorithm.set_value(7)),
+    ("shimmer", |p| p.algorithm.set_value(8)),
 ];
 
 fn test_signal(frames: usize) -> Vec<f32> {
