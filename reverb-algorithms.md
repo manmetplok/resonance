@@ -285,21 +285,48 @@ decay meter reuses it), used by the plugin tests and the bench:
 | Modal peakiness | Late-tail (200 ms+) magnitude spectrum, 1/24-octave smoothing; max − median, dB | Colourlessness (L3) |
 | Late IACC | Interaural cross-correlation of L/R over 80 ms+ | Stereo decorrelation at width 1 |
 | Mono fold loss | Late L+R energy vs L and R energy | The wet return survives mono (the `spatial` skill's mono check) |
-| Silence guard | Wet energy over the first 2 s > −60 dBFS per scenario | No vacuous golden (memory: silent goldens) |
+| Silence guard | Total impulse-response energy > −40 dB re a unit impulse, per scenario (a 2 s RMS > −60 dBFS sat only 0.5–3 dB above Classic's quietest settings) | No vacuous golden (memory: silent goldens) |
 
 R0 also runs the harness on **Classic** and records its numbers in this spec,
 as the baseline the new engines must beat on L1–L4.
 
+**Classic baseline (R0, 48 kHz, unit impulse, 100 % wet, no pre-delay,
+defaults otherwise; `cargo test -p resonance-reverb --test algorithms baseline -- --nocapture`):**
+
+| size | decay | damping | mid T30 | err | EDT | 125 Hz | 1 kHz | 8 kHz | density 0.9 | peakiness | IACC |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0.2 | 0.5 s | 8 k | 0.47 | −7 % | 0.59 | 0.43 | 0.47 | 0.46 | 28 ms | 8.9 dB | 0.44 |
+| 0.5 | 2 s | 8 k | 1.95 | −3 % | 1.01 | 1.95 | 1.91 | 0.83 | 62 ms | 7.0 dB | 0.15 |
+| 0.9 | 2 s | 8 k | 2.10 | +5 % | 2.22 | 2.08 | 2.06 | 1.45 | 197 ms | 5.6 dB | 0.12 |
+| 0.2 | 8 s | 8 k | 6.40 | −20 % | 4.17 | 7.63 | 5.78 | 0.55 | 28 ms | 10.3 dB | 0.07 |
+| 0.5 | 8 s | 8 k | 7.19 | −10 % | 3.54 | 7.72 | 6.81 | 1.35 | 62 ms | 7.8 dB | 0.08 |
+| 0.5 | 8 s | 20 k | 7.66 | −4 % | 4.71 | 7.73 | 7.52 | 3.11 | 62 ms | 7.0 dB | 0.05 |
+
+(Exponentially decaying white noise reads 4.4 dB peakiness.) Findings: mid
+decay is already within ±10 % except short sizes at long decays (−20 %), so
+the new engines win on **band shape and colour**, not mid accuracy. Bass never
+outlasts mid (L2). Treble dies early even with damping open (8 kHz holds 3.1 s
+of an 8 s knob), so something besides the damping filter loses top: the
+interpolated modulated reads or the diffusers. EDT does not follow the knob.
+Density reaches 1.0 erratically (91–679 ms), so 0.9 is the threshold used in
+§5.2. Mono fold is −3 dB everywhere (decorrelated, no cancellation). Classic
+costs 15.8 µs per 128-frame block (0.6 % of the block budget), which is the
+reference for the CPU budgets.
+
 ### 5.2 Acceptance per algorithm
 
-| Algorithm | Decay accuracy (mid T30 vs knob) | Band decays | Density reaches 1.0 by | Peakiness | Late IACC |
+| Algorithm | Decay accuracy (mid T30 vs knob) | Band decays | Echo density reaches 0.9 by | Peakiness | Late IACC |
 |---|---|---|---|---|---|
 | Plate | ±10 % | treble ≥ 0.7 × mid at default | 10 ms | ≤ Classic − 2 dB | ≤ 0.3 |
-| Room | ±10 % | as set, ±15 % | 20 ms | ≤ Classic − 2 dB | ≤ 0.3 |
-| Chamber | ±10 % | bass ≥ 1.2 × mid at default | 15 ms | ≤ Classic − 2 dB | ≤ 0.3 |
-| Hall | ±10 % at 1–10 s | as set, ±15 % | 60–150 ms (slow build is the point) | ≤ Classic − 3 dB | ≤ 0.2 |
+| Room | ±7 % | as set, ±15 % | 20 ms | ≤ Classic − 2 dB | ≤ 0.3 |
+| Chamber | ±7 % | bass ≥ 1.2 × mid at default | 15 ms | ≤ Classic − 2 dB | ≤ 0.3 |
+| Hall | ±7 % at 1–10 s | as set, ±15 % | 60–150 ms (slow build is the point) | ≤ Classic − 3 dB | ≤ 0.2 |
 | Ambience | EDT ≤ 0.4 × T30 | — | 15 ms | — | ≤ 0.3 |
 | Spring, Nonlinear, Shimmer | Nonlinear: gate length ±5 ms; others stability and silence-guard only | | | | |
+
+Peakiness is compared with Classic at the same `size` and `decay` (the
+baseline table's settings). The FDN engines get ±7 % because their per-line
+gains are exact; Classic already manages ±10 % at most settings.
 
 For every algorithm:
 
