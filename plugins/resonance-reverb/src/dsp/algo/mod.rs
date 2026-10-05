@@ -99,6 +99,8 @@ impl Algorithm {
         Algorithm::Chamber,
         Algorithm::Hall,
         Algorithm::Ambience,
+        Algorithm::Spring,
+        Algorithm::Nonlinear,
     ];
 
     /// The algorithm a parameter value selects. Out-of-range indices fall
