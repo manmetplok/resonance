@@ -19,7 +19,7 @@
 use crate::client::ControlClient;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{
-    CallToolResult, ContentBlock, Implementation, InitializeResult, ServerCapabilities, ServerInfo,
+    CallToolResult, ContentBlock, Implementation, InitializeResult, ServerCapabilities, ServerConfig,
 };
 use rmcp::{ErrorData as McpError, ServerHandler};
 use resonance_control::ids::JobId;
@@ -488,7 +488,7 @@ impl ServerHandler for ResonanceMcp {
         }
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         // Report OUR crate name/version, not rmcp's: `from_build_env`
         // reads env! at the rmcp crate's compile site.
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
