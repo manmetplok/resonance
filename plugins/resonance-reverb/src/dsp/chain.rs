@@ -14,7 +14,7 @@
 use resonance_dsp::DelayLine;
 
 use super::algo::switch::EngineBank;
-use super::algo::Algorithm;
+use super::algo::{Algorithm, Extras};
 use super::er::ER_TAPS;
 use super::return_eq::ReturnEq;
 use super::CHANNELS;
@@ -167,6 +167,12 @@ impl ReverbDsp {
     pub fn set_build(&mut self, build: f32) {
         self.engines.cfg.build = Some(build);
         self.engines.for_live(|e| e.set_build(build));
+    }
+
+    /// The creative algorithms' parameters (ignored by the others).
+    pub fn set_extras(&mut self, extras: Extras) {
+        self.engines.cfg.extras = Some(extras);
+        self.engines.for_live(|e| e.set_extras(&extras));
     }
 
     /// Configure the return EQ (the wet HPF/LPF before the tank). `steep`

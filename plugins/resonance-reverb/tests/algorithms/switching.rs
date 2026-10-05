@@ -69,8 +69,8 @@ fn max_step(interleaved: &[f32]) -> f32 {
 #[test]
 fn the_algorithm_param_offers_exactly_the_built_algorithms() {
     let plugin = ResonanceReverb::new();
-    assert_eq!(PARAM_COUNT, 29);
-    assert_eq!(plugin.param_count(), 29);
+    assert_eq!(PARAM_COUNT, 35);
+    assert_eq!(plugin.param_count(), 35);
     let p = &plugin.params.algorithm;
     assert_eq!(p.id(), "algorithm");
     assert_eq!(p.choices(), Some(ALGORITHM_LABELS));
@@ -86,8 +86,8 @@ fn the_algorithm_param_offers_exactly_the_built_algorithms() {
     p.set_plain(ALGORITHM_LABELS_ALL.len() as f64);
     assert_eq!(plugin.params.algorithm(), *Algorithm::BUILT.last().unwrap());
 
-    // Params 22..=28, appended in the spec's order.
-    let ids: Vec<&str> = (22..29).map(|i| plugin.param(i).id()).collect();
+    // Params 22..=34, appended in the spec's order.
+    let ids: Vec<&str> = (22..35).map(|i| plugin.param(i).id()).collect();
     assert_eq!(
         ids,
         [
@@ -97,7 +97,13 @@ fn the_algorithm_param_offers_exactly_the_built_algorithms() {
             "high_decay_mult",
             "predelay_sync",
             "decay_sync",
-            "tail_build"
+            "tail_build",
+            "shimmer_pitch",
+            "shimmer_amount",
+            "nl_shape",
+            "nl_length",
+            "spring_tension",
+            "spring_drip",
         ]
     );
     // Bass Decay sits at 1.0x in the middle of its dial.
@@ -337,6 +343,12 @@ fn the_editor_offers_the_algorithm_and_greys_what_classic_ignores() {
         "low_xover",
         "high_decay_mult",
         "tail_build",
+        "shimmer_pitch",
+        "shimmer_amount",
+        "nl_shape",
+        "nl_length",
+        "spring_tension",
+        "spring_drip",
     ] {
         assert!(frame.widget(id).is_some(), "`{id}` is not drawn");
     }

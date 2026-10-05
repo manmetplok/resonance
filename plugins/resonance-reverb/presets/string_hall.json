@@ -45,7 +45,13 @@
         "high_decay_mult": 0.5,
         "predelay_sync": 0,
         "decay_sync": 0,
-        "tail_build": 0.6
+        "tail_build": 0.6,
+        "shimmer_pitch": 0,
+        "shimmer_amount": 0.3,
+        "nl_shape": 0,
+        "nl_length": 300.0,
+        "spring_tension": 0.5,
+        "spring_drip": 0.3
       }
     }
   }

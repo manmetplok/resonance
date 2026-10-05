@@ -21,8 +21,11 @@ pub mod chamber;
 pub mod classic;
 mod engine;
 pub mod hall;
+pub mod nonlinear;
 pub mod plate;
 pub mod room;
+pub mod shimmer;
+pub mod spring;
 pub(crate) mod switch;
 
 pub use engine::Engine;
@@ -34,6 +37,38 @@ pub struct Wet {
     pub er_r: f32,
     pub late_l: f32,
     pub late_r: f32,
+}
+
+/// The creative algorithms' own parameters (§4.1, indices 29-34), set as
+/// one value every block; an engine that does not use them ignores it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Extras {
+    /// Shimmer pitch shift, semitones (from `shimmer_pitch`).
+    pub shimmer_semitones: f32,
+    /// Share of the Shimmer loop that is pitch-shifted, `0..=1`.
+    pub shimmer_amount: f32,
+    /// `nl_shape` index: 0 Gated, 1 Reverse, 2 Flat.
+    pub nl_shape: i32,
+    /// Nonlinear envelope length, ms.
+    pub nl_length_ms: f32,
+    /// Spring chirp rate (dispersion), `0..=1`.
+    pub spring_tension: f32,
+    /// Spring transient "drip", `0..=1`.
+    pub spring_drip: f32,
+}
+
+impl Default for Extras {
+    /// The parameters' defaults.
+    fn default() -> Self {
+        Self {
+            shimmer_semitones: 12.0,
+            shimmer_amount: 0.3,
+            nl_shape: 0,
+            nl_length_ms: 300.0,
+            spring_tension: 0.5,
+            spring_drip: 0.3,
+        }
+    }
 }
 
 /// The `algorithm` parameter's values, in label order. The order is fixed
@@ -48,6 +83,9 @@ pub enum Algorithm {
     Chamber = 3,
     Hall = 4,
     Ambience = 5,
+    Spring = 6,
+    Nonlinear = 7,
+    Shimmer = 8,
 }
 
 impl Algorithm {
@@ -76,19 +114,20 @@ impl Algorithm {
 
     /// Whether this algorithm reads `build` (the ER-to-late crossfade).
     pub fn uses_build(self) -> bool {
-        matches!(self, Algorithm::Hall)
+        matches!(self, Algorithm::Hall | Algorithm::Shimmer)
     }
 
     /// Whether this algorithm reads `low_decay_mult`, `low_xover` and
     /// `high_decay_mult`. The editor greys the three out when it does not.
     pub fn uses_decay_shape(self) -> bool {
         match self {
-            Algorithm::Classic => false,
+            Algorithm::Classic | Algorithm::Spring | Algorithm::Nonlinear => false,
             Algorithm::Plate
             | Algorithm::Room
             | Algorithm::Chamber
             | Algorithm::Hall
-            | Algorithm::Ambience => true,
+            | Algorithm::Ambience
+            | Algorithm::Shimmer => true,
         }
     }
 }

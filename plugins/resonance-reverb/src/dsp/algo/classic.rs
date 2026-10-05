@@ -200,6 +200,9 @@ impl ClassicEngine {
     /// Classic has no build envelope.
     pub fn set_build(&mut self, _v: f32) {}
 
+    /// Classic has no creative parameters.
+    pub fn set_extras(&mut self, _extras: &super::Extras) {}
+
     /// Process one pre-delayed stereo sample pair into its early and
     /// late parts.
     pub fn process(&mut self, dl: f32, dr: f32, diffusion_amount: f32) -> Wet {

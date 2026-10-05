@@ -453,6 +453,7 @@ impl PlateEngine {
 
     /// Plate has no build envelope.
     pub fn set_build(&mut self, _v: f32) {}
+    pub fn set_extras(&mut self, _extras: &super::Extras) {}
 
     /// The tank scale from `size`, capped by the decay (module docs).
     fn retarget_scale(&mut self) {

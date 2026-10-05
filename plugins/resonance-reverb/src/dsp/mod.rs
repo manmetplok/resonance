@@ -43,7 +43,7 @@ pub(crate) const DIFFUSION_STEPS: usize = 4;
 /// taps instead of relocating them per block (which clicked).
 pub(crate) const TAP_SLEW_PER_SAMPLE: f32 = 0.25;
 
-pub use algo::Algorithm;
+pub use algo::{Algorithm, Extras};
 pub(crate) use chain::MAX_PREDELAY_SECONDS;
 pub use chain::ReverbDsp;
 pub use duck::{Ducker, DUCK_MAX_GR_DB};

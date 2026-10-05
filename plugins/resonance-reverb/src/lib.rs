@@ -280,6 +280,8 @@ impl ResonanceReverb {
             self.smoothers.high_decay_mult.current(),
         );
         reverb.set_build(self.smoothers.build.current());
+        // Unsmoothed: the creative engines smooth what needs it themselves.
+        reverb.set_extras(self.params.extras());
 
         let duck_amount = self.params.duck_amount.value();
         let duck_threshold = self.params.duck_threshold.value();

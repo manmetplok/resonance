@@ -20,6 +20,7 @@
 use resonance_plugin::{editor_widgets, IntParam};
 use plugin_gui_core::egui;
 
+use crate::dsp::Algorithm;
 use crate::params::ReverbParams;
 use crate::viz::ReverbViz;
 
@@ -120,6 +121,42 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams, viz: &ReverbViz) {
             ui.vertical(|ui| {
                 ui.add_space(16.0);
                 editor_widgets::bool_checkbox(ui, &params.freeze, "Freeze");
+            });
+        });
+
+        ui.add_space(2.0);
+
+        // The creative algorithms' own controls, each greyed (not hidden)
+        // unless its algorithm is selected.
+        let algorithm = params.algorithm();
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.add_enabled_ui(algorithm == Algorithm::Shimmer, |ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(16.0);
+                    editor_widgets::int_choice(ui, &params.shimmer_pitch, 64.0);
+                });
+                ui.add_space(4.0);
+                editor_widgets::float_knob(ui, &params.shimmer_amount, "Shimmer", "pitched loop");
+            });
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.add_enabled_ui(algorithm == Algorithm::Nonlinear, |ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(16.0);
+                    editor_widgets::int_choice(ui, &params.nl_shape, 86.0);
+                });
+                ui.add_space(4.0);
+                editor_widgets::float_knob(ui, &params.nl_length, "Length", "envelope");
+            });
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.add_enabled_ui(algorithm == Algorithm::Spring, |ui| {
+                editor_widgets::float_knob(ui, &params.spring_tension, "Tension", "chirp");
+                ui.add_space(4.0);
+                editor_widgets::float_knob(ui, &params.spring_drip, "Drip", "");
             });
         });
 

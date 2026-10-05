@@ -76,6 +76,7 @@ macro_rules! room_family_engine {
                 self.core.set_decay_shape(low_mult, low_xover_hz, high_mult)
             }
             pub fn set_build(&mut self, _v: f32) {}
+            pub fn set_extras(&mut self, _extras: &$crate::dsp::algo::Extras) {}
 
             #[inline]
             pub fn process(&mut self, l: f32, r: f32, diffusion: f32) -> $crate::dsp::algo::Wet {

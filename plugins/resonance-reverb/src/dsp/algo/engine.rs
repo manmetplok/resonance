@@ -7,9 +7,12 @@ use super::ambience::AmbienceEngine;
 use super::chamber::ChamberEngine;
 use super::classic::ClassicEngine;
 use super::hall::HallEngine;
+use super::nonlinear::NonlinearEngine;
 use super::plate::PlateEngine;
 use super::room::RoomEngine;
-use super::{Algorithm, Wet};
+use super::shimmer::ShimmerEngine;
+use super::spring::SpringEngine;
+use super::{Algorithm, Extras, Wet};
 
 /// Forward one call to whichever engine `$self` holds. Every engine
 /// exposes the same inherent method set (the decay-shape setter is a
@@ -23,6 +26,9 @@ macro_rules! dispatch {
             Engine::Chamber($e) => $call,
             Engine::Hall($e) => $call,
             Engine::Ambience($e) => $call,
+            Engine::Spring($e) => $call,
+            Engine::Nonlinear($e) => $call,
+            Engine::Shimmer($e) => $call,
         }
     };
 }
@@ -35,6 +41,9 @@ pub enum Engine {
     Chamber(ChamberEngine),
     Hall(HallEngine),
     Ambience(AmbienceEngine),
+    Spring(SpringEngine),
+    Nonlinear(NonlinearEngine),
+    Shimmer(ShimmerEngine),
 }
 
 impl Engine {
@@ -46,6 +55,9 @@ impl Engine {
             Algorithm::Chamber => Engine::Chamber(ChamberEngine::new(sample_rate)),
             Algorithm::Hall => Engine::Hall(HallEngine::new(sample_rate)),
             Algorithm::Ambience => Engine::Ambience(AmbienceEngine::new(sample_rate)),
+            Algorithm::Spring => Engine::Spring(SpringEngine::new(sample_rate)),
+            Algorithm::Nonlinear => Engine::Nonlinear(NonlinearEngine::new(sample_rate)),
+            Algorithm::Shimmer => Engine::Shimmer(ShimmerEngine::new(sample_rate)),
         }
     }
 
@@ -57,6 +69,9 @@ impl Engine {
             Engine::Chamber(_) => Algorithm::Chamber,
             Engine::Hall(_) => Algorithm::Hall,
             Engine::Ambience(_) => Algorithm::Ambience,
+            Engine::Spring(_) => Algorithm::Spring,
+            Engine::Nonlinear(_) => Algorithm::Nonlinear,
+            Engine::Shimmer(_) => Algorithm::Shimmer,
         }
     }
 
@@ -101,6 +116,12 @@ impl Engine {
     /// The tail's build-up time, `0..=1` (Hall; a no-op elsewhere).
     pub fn set_build(&mut self, v: f32) {
         dispatch!(self, e => e.set_build(v))
+    }
+
+    /// The creative algorithms' parameters (Spring, Nonlinear, Shimmer;
+    /// a no-op elsewhere).
+    pub fn set_extras(&mut self, extras: &Extras) {
+        dispatch!(self, e => e.set_extras(extras))
     }
 
     #[inline]

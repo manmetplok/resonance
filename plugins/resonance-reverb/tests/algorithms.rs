@@ -15,3 +15,11 @@ mod plate;
 mod room;
 #[path = "algorithms/hall.rs"]
 mod hall;
+#[path = "algorithms/common.rs"]
+mod common;
+#[path = "algorithms/spring.rs"]
+mod spring;
+#[path = "algorithms/nonlinear.rs"]
+mod nonlinear;
+#[path = "algorithms/shimmer.rs"]
+mod shimmer;

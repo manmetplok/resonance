@@ -9,7 +9,7 @@ use resonance_plugin::*;
 use crate::dsp::Algorithm;
 use crate::sync::{DECAY_SYNC_LABELS, PREDELAY_SYNC_LABELS};
 
-pub const PARAM_COUNT: usize = 29;
+pub const PARAM_COUNT: usize = 35;
 
 /// Every `algorithm` label the spec fixes (reverb-algorithms.md §4.1), in
 /// parameter order. Only the first [`Algorithm::BUILT`]`.len()` exist in
@@ -87,7 +87,27 @@ pub struct ReverbParams {
     /// How slowly the tail builds after the early reflections, `0..=1`.
     /// Hall only (and Shimmer, later); greyed elsewhere.
     pub build: FloatParam,
+    // -- Creative algorithms (R8): read by one algorithm each ------------
+    /// Shimmer: the pitch shift in the loop ([`SHIMMER_PITCH_LABELS`]).
+    pub shimmer_pitch: IntParam,
+    /// Shimmer: share of the loop that is pitch-shifted.
+    pub shimmer_amount: FloatParam,
+    /// Nonlinear: envelope shape ([`NL_SHAPE_LABELS`]).
+    pub nl_shape: IntParam,
+    /// Nonlinear: envelope length.
+    pub nl_length: FloatParam,
+    /// Spring: chirp rate (dispersion).
+    pub spring_tension: FloatParam,
+    /// Spring: transient "drip".
+    pub spring_drip: FloatParam,
 }
+
+/// Labels of [`ReverbParams::shimmer_pitch`], in parameter order.
+pub const SHIMMER_PITCH_LABELS: &[&str] = &["+12", "+7", "+5", "-12", "+19", "+24"];
+/// Semitones of each [`SHIMMER_PITCH_LABELS`] entry.
+pub const SHIMMER_PITCH_SEMITONES: [f32; 6] = [12.0, 7.0, 5.0, -12.0, 19.0, 24.0];
+/// Labels of [`ReverbParams::nl_shape`].
+pub const NL_SHAPE_LABELS: &[&str] = &["Gated", "Reverse", "Flat"];
 
 /// Labels of [`ReverbParams::wet_filter_slope`].
 pub const WET_SLOPE_LABELS: &[&str] = &["12 dB/oct", "18 dB/oct"];
@@ -124,6 +144,12 @@ impl ReverbParams {
             26 => &self.predelay_sync,
             27 => &self.decay_sync,
             28 => &self.build,
+            29 => &self.shimmer_pitch,
+            30 => &self.shimmer_amount,
+            31 => &self.nl_shape,
+            32 => &self.nl_length,
+            33 => &self.spring_tension,
+            34 => &self.spring_drip,
             _ => &self.predelay,
         }
     }
@@ -431,8 +457,69 @@ impl Default for ReverbParams {
                 .with_unit("%")
                 .with_value_to_string(formatters::v2s_f32_percentage(0))
                 .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            shimmer_pitch: IntParam::new(
+                "shimmer_pitch",
+                "Shimmer Pitch",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: SHIMMER_PITCH_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(SHIMMER_PITCH_LABELS),
+            shimmer_amount: percent("shimmer_amount", "Shimmer", 0.3),
+            nl_shape: IntParam::new(
+                "nl_shape",
+                "Nonlin Shape",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: NL_SHAPE_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(NL_SHAPE_LABELS),
+            nl_length: FloatParam::new(
+                "nl_length",
+                "Nonlin Length",
+                300.0,
+                FloatRange::Skewed {
+                    min: 50.0,
+                    max: 1000.0,
+                    factor: FloatRange::skew_factor(-1.0),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+            spring_tension: percent("spring_tension", "Tension", 0.5),
+            spring_drip: percent("spring_drip", "Drip", 0.3),
         }
     }
+}
+
+impl ReverbParams {
+    /// The creative algorithms' parameters as one engine value.
+    pub fn extras(&self) -> crate::dsp::Extras {
+        let pitch = usize::try_from(self.shimmer_pitch.value())
+            .unwrap_or(0)
+            .min(SHIMMER_PITCH_SEMITONES.len() - 1);
+        crate::dsp::Extras {
+            shimmer_semitones: SHIMMER_PITCH_SEMITONES[pitch],
+            shimmer_amount: self.shimmer_amount.value(),
+            nl_shape: self.nl_shape.value(),
+            nl_length_ms: self.nl_length.value(),
+            spring_tension: self.spring_tension.value(),
+            spring_drip: self.spring_drip.value(),
+        }
+    }
+}
+
+/// A `0..=1` parameter shown as a percentage.
+fn percent(id: &'static str, name: &'static str, default: f32) -> FloatParam {
+    FloatParam::new(id, name, default, FloatRange::Linear { min: 0.0, max: 1.0 })
+        .with_unit("%")
+        .with_value_to_string(formatters::v2s_f32_percentage(0))
+        .with_string_to_value(formatters::s2v_f32_percentage())
 }
 
 /// Readout of [`ReverbParams::er_tail_balance`]: which side it leans to.

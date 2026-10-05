@@ -23,7 +23,7 @@
 //! Outside a fade the active engine is fed the input untouched, so a bank
 //! that never switches renders bit-identically to the engine alone.
 
-use super::{Algorithm, Engine, Wet};
+use super::{Algorithm, Engine, Extras, Wet};
 
 /// Algorithm switch crossfade length.
 pub(crate) const SWITCH_FADE_MS: f32 = 50.0;
@@ -44,6 +44,7 @@ pub(crate) struct EngineConfig {
     /// `(low_decay_mult, low_xover_hz, high_decay_mult)`.
     pub decay_shape: Option<(f32, f32, f32)>,
     pub build: Option<f32>,
+    pub extras: Option<Extras>,
 }
 
 impl EngineConfig {
@@ -80,6 +81,9 @@ impl EngineConfig {
         }
         if let Some(v) = self.build {
             e.set_build(v);
+        }
+        if let Some(x) = self.extras {
+            e.set_extras(&x);
         }
     }
 }

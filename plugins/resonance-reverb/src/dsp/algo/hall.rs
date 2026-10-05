@@ -322,6 +322,9 @@ impl HallEngine {
         }
     }
 
+    /// Hall has no creative parameters.
+    pub fn set_extras(&mut self, _extras: &super::Extras) {}
+
     /// The build, `0..=1`: the late field's injection spread
     /// `T_build = 20 ms · 15^build`.
     pub fn set_build(&mut self, v: f32) {
