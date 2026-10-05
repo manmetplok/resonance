@@ -10,6 +10,8 @@
 //!   plate's building block).
 //! - [`SmoothRandom`]: a seeded, smoothed random modulator.
 //! - [`ShoeboxEr`]: first/second-order image-source early reflections.
+//! - [`DispersiveAllpass`]: a first-order allpass cascade, the spring's
+//!   chirp (R8).
 //!
 //! Everything is real-time safe after construction (no allocation in any
 //! per-sample path), deterministic for a seed, and `clear`/`reset` returns
@@ -17,6 +19,7 @@
 
 mod absorption;
 mod allpass;
+mod dispersive;
 mod fdn;
 mod matrix;
 mod shoebox;
@@ -24,6 +27,7 @@ mod smooth_random;
 
 pub use absorption::{loop_gain, Absorption, DecayBands};
 pub use allpass::{allpass_read, Allpass};
+pub use dispersive::{stage_group_delay, DispersiveAllpass, MAX_DISPERSION_COEFFICIENT};
 pub use fdn::{next_prime, Fdn, FdnConfig};
 pub use matrix::{hadamard_in_place, householder_in_place, MatrixKind};
 pub use shoebox::{ErTap, ShoeboxEr, FIRST_ORDER_TAPS, MAX_TAPS};
