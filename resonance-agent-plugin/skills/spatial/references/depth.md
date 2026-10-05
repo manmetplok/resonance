@@ -33,6 +33,9 @@ A return bus with the reverb at full wet, fed by post-fader sends:
 | `Tight Room` | dense, close material; a short shared room |
 | `Vocal Plate` | a vocal-led song |
 | `Warm Hall` | a slower, sparser song |
+| `Cathedral` or `Ambient Bloom` | the back/wash return of §4, not the shared room |
+| `Snare Plate` | a snare-only return when the snare needs more sheen than the shared room gives |
+| `Snare Gated` | an 80s snare, on its own return |
 
 | Key | On the return | Why |
 |---|---|---|
@@ -69,6 +72,29 @@ lands in the layer's range: 20-40 ms for the front.
 The general form is 60000 / BPM / k with k = 8 (a 1/32 note), 16 or 32. A
 1/32 note only fits the front's 20-40 ms at about 188 BPM or faster; below
 that it is too long (80 ms at 94 BPM).
+
+### Decay from tempo
+
+A room whose tail is still loud on the next strong beat smears the groove.
+Size the shared room's decay to the song: decay ≈ n × 60 / BPM seconds, with n
+beats. Use n = 1-2 for busy, rhythmic material and n = 4-8 (one to two bars of
+4/4) for ballads and sparse songs. The back/wash return of §4 may run longer
+than the shared room: that is what it is for.
+
+| BPM | 1 beat | 2 beats | 1 bar (4/4) | 2 bars |
+|---|---|---|---|---|
+| 60 | 1.0 s | 2.0 s | 4.0 s | 8.0 s |
+| 80 | 0.75 s | 1.5 s | 3.0 s | 6.0 s |
+| 100 | 0.6 s | 1.2 s | 2.4 s | 4.8 s |
+| 120 | 0.5 s | 1.0 s | 2.0 s | 4.0 s |
+| 140 | 0.43 s | 0.86 s | 1.7 s | 3.4 s |
+| 170 | 0.35 s | 0.71 s | 1.4 s | 2.8 s |
+
+<!-- keys: com.resonance.reverb -->
+Set the result as `decay` on the return. It is the knob's nominal time, so
+treat it as a start. Keep `damping` lower (darker) as `decay` grows: a long,
+bright tail reads as harsh rather than deep.
+<!-- /keys -->
 
 ## 3. Duck the room from the lead
 

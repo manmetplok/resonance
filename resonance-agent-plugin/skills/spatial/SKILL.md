@@ -106,8 +106,9 @@ Verify each move: `meter_compare {a: snapshot_id}` — `side_mid_db` up above
    at full wet, fed by post-fader sends (`track_add_send`). One room, many
    send levels: that is what makes the layers read as one space.
 2. **Per-layer sends.** Front lowest, back highest (roles.md for starts).
-3. **Pre-delay from tempo** on the room: 20-40 ms for the front, from the
-   song's tempo.
+3. **Pre-delay and decay from tempo** on the room: 20-40 ms of pre-delay for
+   the front, and a decay of one to two beats (busy songs) or one to two bars
+   (ballads), from the song's tempo.
 4. **Return EQ** before the tank: high-pass about 600 Hz, low-pass about
    10 kHz.
 5. **Duck the return** from the lead, keyed with `bus_set_sidechain`.

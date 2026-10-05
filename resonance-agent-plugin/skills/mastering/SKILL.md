@@ -263,6 +263,14 @@ every field.
 A genre is a parameter the user gives, never a branch baked into this
 procedure.
 
+## 3c. No reverb on the master
+
+Space is a mix decision, made per layer, and a reverb on the summed mix puts
+the kick, the bass and the lead in the same room at the same distance. If the
+mix sounds dry or disjointed, check `meter_stems` with `detail: ["depth"]`:
+when every track reads `dry_only`, the mix has no shared room. Hand back to the
+`spatial` skill to build one, and do not fix it on the master.
+
 ## 4. Hit the targets
 
 | Target | Value | Why |
