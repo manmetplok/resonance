@@ -436,6 +436,23 @@ pub struct TempoInfo {
     pub song_pos_beats: f64,
 }
 
+impl TempoInfo {
+    /// Beats (quarter notes) in one bar of the host's meter; see
+    /// [`beats_per_bar`].
+    pub fn beats_per_bar(&self) -> f32 {
+        beats_per_bar(self.time_sig_num, self.time_sig_den)
+    }
+}
+
+/// Beats (quarter notes) in one bar of a time signature: 3 in 6/8, 3.5 in
+/// 7/8. A host that reports no meter (a zero field) gets 4/4.
+pub fn beats_per_bar(time_sig_num: u16, time_sig_den: u16) -> f32 {
+    if time_sig_num == 0 || time_sig_den == 0 {
+        return 4.0;
+    }
+    time_sig_num as f32 * 4.0 / time_sig_den as f32
+}
+
 /// The main trait that plugin authors implement.
 ///
 /// The CLAP bridge wraps this trait to produce a valid CLAP plugin.

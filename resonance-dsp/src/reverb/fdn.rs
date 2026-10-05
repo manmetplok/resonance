@@ -152,8 +152,8 @@ impl<const N: usize> Fdn<N> {
             freeze: false,
             out: [0.0; N],
         };
+        // Glide is 0 here, so this also puts the read heads on the lengths.
         fdn.set_size(1.0);
-        fdn.read = fdn.len.map(|l| l as f32);
         fdn
     }
 
@@ -181,8 +181,14 @@ impl<const N: usize> Fdn<N> {
     }
 
     /// Read-head slew for size changes, samples per sample (0 = jump).
+    /// Turning the glide off mid-slew jumps the heads to their targets
+    /// (a zero slew would otherwise strand them short of the lengths the
+    /// absorption is designed for).
     pub fn set_glide(&mut self, samples_per_sample: f32) {
         self.glide = samples_per_sample.max(0.0);
+        if self.glide <= 0.0 {
+            self.read = self.len.map(|l| l as f32);
+        }
     }
 
     /// The three-band decay target.

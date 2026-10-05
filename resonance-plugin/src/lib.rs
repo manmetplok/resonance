@@ -54,8 +54,9 @@ pub use presets::{
 };
 pub use state::{wire_clap_id, ParamRename, StateUpgrade, STATE_VERSION};
 pub use plugin::{
-    ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, KitInfoSource, NoteEvent,
-    OutputBuffer, OutputPortSpec, ParamTextSource, PluginEvent, ResonancePlugin, TempoInfo,
+    beats_per_bar, ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, KitInfoSource,
+    NoteEvent, OutputBuffer, OutputPortSpec, ParamTextSource, PluginEvent, ResonancePlugin,
+    TempoInfo,
 };
 pub use range::{FloatRange, IntRange};
 /// The shared marks store and file-manager launcher, re-exported so a

@@ -186,6 +186,9 @@ src/dsp/
   The ER/tail balance needs each engine to return `(er_l, er_r, late_l, late_r)`.
   Plate and Spring have no discrete ERs, so for them it weights their first
   50 ms (the onset) against the rest.
+- **A switch while frozen is deferred** until Freeze is released, then fades
+  as usual; switching immediately would fade the held tail into an engine
+  that is frozen and empty.
 - **Freeze** is per engine: loop gains to 1 and input muted (as today). Plate,
   Room, Chamber, Hall, Ambience and Shimmer support it. Nonlinear and Spring
   ignore it, and the editor greys it out.
@@ -253,7 +256,9 @@ so `+12` with Freeze cannot run away.
 ### 4.5 Tempo sync
 
 `process` already receives `TempoInfo`. With `predelay_sync` ≠ `Off` and tempo
-present, the pre-delay target is `60000 / bpm / k` ms (k from the label). It
+present, the pre-delay target is `240000 / bpm / k` ms for the label `1/k`
+(a note value: a beat is a quarter note, so `1/64` is 31.25 ms at 120 BPM,
+the vocal range §6's table uses), held under the 1 s pre-delay line. It
 goes through the existing pre-delay crossfade, so a tempo change does not
 click. `decay_sync` sets T60 = beats × 60 / bpm. Without tempo (offline host,
 transport stopped with no tempo) both fall back to the ms/s knobs. The editor

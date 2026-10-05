@@ -107,15 +107,14 @@ impl ShoeboxEr {
     }
 
     /// Write the taps, sorted by delay, into `out` and return how many
-    /// (`min(tap_count(), out.len())`). No allocation: safe on any thread.
+    /// (`min(tap_count(), out.len())`). A short `out` gets the earliest
+    /// taps. No allocation: safe on any thread.
     pub fn write_taps(&self, sample_rate: f32, out: &mut [ErTap]) -> usize {
         let beta = (1.0 - self.absorption.clamp(0.0, 0.999)).sqrt();
         let d_ref = self.direct_distance();
+        let mut all = [ErTap::default(); MAX_TAPS];
         let mut n = 0;
         let mut push = |pos: [f32; 3], order: u8| {
-            if n >= out.len() {
-                return;
-            }
             let r = dist(pos, self.listener).max(1e-3);
             let gain = beta.powi(order as i32) * d_ref / r;
             let dx = pos[0] - self.listener[0];
@@ -123,7 +122,7 @@ impl ShoeboxEr {
             let horiz = (dx * dx + dy * dy).sqrt();
             let pan = if horiz > 1e-6 { dx / horiz } else { 0.0 };
             let (l, rr) = constant_power_pan(pan);
-            out[n] = ErTap {
+            all[n] = ErTap {
                 delay_samples: r / self.speed_of_sound * sample_rate,
                 gain_l: gain * l,
                 gain_r: gain * rr,
@@ -162,14 +161,16 @@ impl ShoeboxEr {
                 }
             }
         }
-        // Insertion sort by delay (≤ 24 entries).
+        // Insertion sort by delay (≤ 24 entries), then keep the earliest.
         for i in 1..n {
             let mut j = i;
-            while j > 0 && out[j - 1].delay_samples > out[j].delay_samples {
-                out.swap(j - 1, j);
+            while j > 0 && all[j - 1].delay_samples > all[j].delay_samples {
+                all.swap(j - 1, j);
                 j -= 1;
             }
         }
+        let n = n.min(out.len());
+        out[..n].copy_from_slice(&all[..n]);
         n
     }
 

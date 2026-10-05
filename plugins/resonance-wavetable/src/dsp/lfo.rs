@@ -248,12 +248,7 @@ impl TransportPlan {
 }
 
 /// Beats per bar for a host time signature, in quarter notes.
-pub fn beats_per_bar(time_sig_num: u16, time_sig_den: u16) -> f32 {
-    if time_sig_num == 0 || time_sig_den == 0 {
-        return 4.0;
-    }
-    time_sig_num as f32 * 4.0 / time_sig_den as f32
-}
+pub use resonance_plugin::beats_per_bar;
 
 /// LFO frequency for a tempo-synced cycle.
 ///

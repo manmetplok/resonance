@@ -73,7 +73,7 @@ impl Allpass {
     }
 
     /// One sample with the length moved by `offset` samples (fractional,
-    /// either sign; the effective length is clamped to `[1, max_delay]`).
+    /// either sign; the effective length is clamped to `[1.5, max_delay]`).
     #[inline]
     pub fn process_modulated(&mut self, x: f32, offset: f32) -> f32 {
         let s = self.read(offset);
@@ -107,7 +107,9 @@ impl Allpass {
             self.interp = s;
             return s;
         }
-        let d = (self.delay as f32 + offset).clamp(1.0, self.max_delay as f32);
+        // 1.5, not 1: `allpass_read` needs `pos ≥ 0.5` to keep its pole
+        // at |η| ≤ 1/3; below that it drifts toward the unit circle.
+        let d = (self.delay as f32 + offset).clamp(1.5, self.max_delay as f32);
         allpass_read(&self.line, d - 1.0, &mut self.interp)
     }
 

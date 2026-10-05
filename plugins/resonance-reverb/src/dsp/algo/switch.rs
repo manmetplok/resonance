@@ -14,6 +14,12 @@
 //! queued, newest wins, and starts when the running one completes — the
 //! pattern `er.rs` and the pre-delay use.
 //!
+//! **Freeze defers a switch.** A frozen engine holds its tail with its
+//! input muted, so an incoming engine would start frozen and empty and
+//! the fade would retire the held sound into silence. While Freeze is on
+//! a request is queued instead (newest wins), and it starts with the
+//! normal fade the moment Freeze is released.
+//!
 //! Outside a fade the active engine is fed the input untouched, so a bank
 //! that never switches renders bit-identically to the engine alone.
 
@@ -129,6 +135,28 @@ impl EngineBank {
         self.fade_left > 0
     }
 
+    fn frozen(&self) -> bool {
+        self.cfg.freeze == Some(true)
+    }
+
+    /// Freeze or release every live engine. Releasing starts a switch
+    /// that was deferred while frozen.
+    pub(crate) fn set_freeze(&mut self, freeze: bool) {
+        self.cfg.freeze = Some(freeze);
+        self.for_live(|e| e.set_freeze(freeze));
+        if !freeze && self.fade_left == 0 {
+            self.start_pending();
+        }
+    }
+
+    fn start_pending(&mut self) {
+        if let Some(next) = self.pending.take() {
+            if next != self.active {
+                self.begin(next);
+            }
+        }
+    }
+
     pub(crate) fn active(&self) -> &Engine {
         &self.engines[self.active]
     }
@@ -153,7 +181,7 @@ impl EngineBank {
         if !self.primed {
             self.active = slot;
             self.activate(slot);
-        } else if self.fade_left > 0 {
+        } else if self.fade_left > 0 || self.frozen() {
             self.pending = Some(slot);
         } else if slot != self.active {
             self.begin(slot);
@@ -188,10 +216,8 @@ impl EngineBank {
         let o = self.engines[out].process(l * g, r * g, diffusion);
         if self.fade_left == 0 {
             self.outgoing = None;
-            if let Some(next) = self.pending.take() {
-                if next != self.active {
-                    self.begin(next);
-                }
+            if !self.frozen() {
+                self.start_pending();
             }
         }
         Wet {
@@ -205,12 +231,16 @@ impl EngineBank {
     /// Forget all audio. Lands on the newest requested slot with no fade,
     /// the state a fresh bank configured once is in.
     pub(crate) fn clear(&mut self) {
+        // Only the engines that have run since their activation hold
+        // audio: an idle engine is cleared by `activate` when it is next
+        // switched to, so clearing it here too would be a wasted memset
+        // of its every buffer on the audio thread.
         self.fade_left = 0;
-        self.outgoing = None;
         self.pending = None;
-        for e in &mut self.engines {
-            e.clear();
+        if let Some(o) = self.outgoing.take() {
+            self.engines[o].clear();
         }
+        self.engines[self.active].clear();
         if self.active != self.requested {
             // A reset mid-fade: the newest request wins, configured
             // exactly as a snap on a fresh bank would configure it.

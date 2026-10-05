@@ -160,6 +160,35 @@ fn a_switch_requested_mid_fade_is_queued_and_the_newest_wins() {
     assert!(!dsp.switching(), "a request back to the incoming slot queued a switch");
 }
 
+/// RMS of an interleaved stretch.
+fn rms(interleaved: &[f32]) -> f32 {
+    (interleaved.iter().map(|x| x * x).sum::<f32>() / interleaved.len() as f32).sqrt()
+}
+
+#[test]
+fn a_switch_while_frozen_waits_for_the_release_and_keeps_the_tail() {
+    let mut dsp = bank(2);
+    run(&mut dsp, 0, 24_000);
+    dsp.set_freeze(true);
+    let held = rms(&run(&mut dsp, 24_000, 4_800));
+    assert!(held > 1e-3, "nothing was frozen ({held})");
+
+    dsp.set_engine_slot(1);
+    assert_eq!(dsp.engine_slot(), 0, "a switch started while frozen");
+    assert!(!dsp.switching());
+    let after = rms(&run(&mut dsp, 28_800, 4 * FADE));
+    assert!(
+        after > 0.5 * held,
+        "the frozen tail did not survive a switch request: {held} -> {after}"
+    );
+
+    dsp.set_freeze(false);
+    assert!(dsp.switching(), "releasing Freeze did not start the deferred switch");
+    run(&mut dsp, 28_800 + 4 * FADE, FADE);
+    assert_eq!(dsp.engine_slot(), 1);
+    assert!(!dsp.switching());
+}
+
 #[test]
 fn before_the_first_sample_a_switch_snaps() {
     let mut dsp = bank(2);

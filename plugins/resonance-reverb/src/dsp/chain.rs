@@ -23,7 +23,7 @@ use super::CHANNELS;
 /// are sized from this at the *actual* sample rate at construction —
 /// this used to be a hardcoded 48 000 samples, which was only "1
 /// second" at 48 kHz and silently halved the maximum at 96 kHz.
-const MAX_PREDELAY_SECONDS: f32 = 1.0;
+pub(crate) const MAX_PREDELAY_SECONDS: f32 = 1.0;
 /// Pre-delay tap-move crossfade length, ms (see `set_predelay`).
 const PREDELAY_FADE_MS: f32 = 20.0;
 
@@ -242,8 +242,7 @@ impl ReverbDsp {
     /// Set or unset freeze mode, on every engine: each holds its own
     /// tail at full loop gain with its input muted.
     pub fn set_freeze(&mut self, freeze: bool) {
-        self.engines.cfg.freeze = Some(freeze);
-        self.engines.for_live(|e| e.set_freeze(freeze));
+        self.engines.set_freeze(freeze);
     }
 
     /// Set high-frequency damping cutoff.
