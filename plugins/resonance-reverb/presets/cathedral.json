@@ -6,26 +6,26 @@
   "meta": {
     "name": "Cathedral",
     "author": "Resonance",
-    "description": "Huge 0.9-size space, 8 s decay, dark damping at 3.5 kHz, a cavernous wash for pads, strings, or ambient vocals.",
+    "description": "The largest hall: 7.5 s decay, bass held to 1.5x, treble cut to 0.4x above 3 kHz, reflections spread wide and a slow build that blooms over a quarter second. A cavernous wash for pads, strings, choirs and ambient vocals.",
     "category": "Bus",
     "instrument": ["strings", "synth", "vocal"],
-    "genres": ["cinematic", "ambient"],
-    "character": ["lush", "wide", "evolving"],
-    "tags": ["hall"]
+    "genres": ["cinematic", "ambient", "post-metal"],
+    "character": ["lush", "wide", "dark", "evolving"],
+    "tags": ["hall", "long-decay", "back-layer"]
   },
   "state": {
     "encoding": "resonance-json",
     "doc": {
       "params": {
-        "predelay": 40.0,
+        "predelay": 35.0,
         "er_level": 0.30,
         "er_time": 0.80,
-        "size": 0.90,
-        "decay": 8.0,
-        "damping": 3500.0,
+        "size": 0.95,
+        "decay": 7.5,
+        "damping": 3000.0,
         "diffusion": 0.95,
         "mod_rate": 0.4,
-        "mod_depth": 0.35,
+        "mod_depth": 0.40,
         "width": 1.0,
         "mix": 0.40,
         "freeze": 0,
@@ -39,13 +39,13 @@
         "duck_attack": 15.0,
         "duck_release": 200.0,
         "er_tail_balance": 0.0,
-        "algorithm": 0,
-        "low_decay_mult": 1.0,
+        "algorithm": 4,
+        "low_decay_mult": 1.5,
         "low_xover": 250.0,
-        "high_decay_mult": 0.5,
+        "high_decay_mult": 0.4,
         "predelay_sync": 0,
         "decay_sync": 0,
-        "tail_build": 0.5
+        "tail_build": 0.8
       }
     }
   }
