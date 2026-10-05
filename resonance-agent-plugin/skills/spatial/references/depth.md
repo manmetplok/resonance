@@ -108,8 +108,10 @@ What each type reads, so a move is never made on a knob the type ignores:
   `Reverse` rising then cut, `Flat` flat then a natural fall). It restarts on
   every transient of its input, so feed it from the snare (and toms) only: a
   sustained part sent to it triggers once and is then gated away.
-- **Spring** is mono-in and has no early reflections; it ignores the ER keys,
-  the modulation, the decay multipliers, `tail_build` and `freeze`.
+- **Spring** is mono-in and has no early reflections: `er_tail_balance`
+  weights its first pass (the onset chirp) against the repeats, toward -1 the
+  onset alone. It ignores `er_level`, `er_time`, the modulation, the decay
+  multipliers, `tail_build` and `freeze`.
   `spring_tension` is the chirp (higher, a longer boing), `spring_drip` the
   extra chirp on each pick attack.
 - **Shimmer** pitch-shifts part of its loop: `shimmer_pitch` (`+12` an octave

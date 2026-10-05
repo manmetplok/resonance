@@ -1,10 +1,11 @@
 # Reverb algorithms: spec
 
-Status: **proposed, 2026-10-05.** Nothing here is built yet. The skill changes
-in §9 are drafted and land with R7. They cannot land earlier, because the
-lockstep tests (`resonance-mcp/tests/agent_plugin_lockstep.rs` and the
-plugin's `tests/skill_keys.rs`) fail any skill that names a param key, choice
-label or preset the plugin does not have.
+Status: **built, 2026-10-06.** R0–R9 are on master: nine algorithms
+(Classic, Plate, Room, Chamber, Hall, Ambience, Spring, Nonlinear, Shimmer),
+the `resonance_metering::decay` harness, the `decay` meter detail, and the
+skills (§9). What differs from the text below is recorded in §5.3. Open: a
+live agent session that mixes a real project with the type table (R7's exit
+check, needs the running app), and the by-hand Wayland editor tests.
 
 ## 1. Why
 
@@ -392,6 +393,16 @@ For every algorithm:
 - R9: the `decay` meter detail is read on the **track that sends** to a
   reverb return (its stem carries its sends' returns); a `{bus_id}` target
   hears only tracks routed into the bus, so a send-fed return reads silent.
+- D2 mechanism: the plugin's `STATE_UPGRADE` hook (`params::upgrade_state`)
+  inserts `algorithm` = Classic into any state whose non-empty `params` lacks
+  the key; it runs on every load path (plugin, both CLAP bridge paths, preset
+  bank/session). `Algorithm::DEFAULT` = Room is shared by the param and
+  `ReverbDsp::new()`.
+- Spring's onset (`er_*`) is the input's first pass through each spring (its
+  own cascade); the recirculated passes are `late_*`. Same linear system,
+  rounding-level difference; Spring now costs 16.6 µs per block.
+- Editor minimum size is 800×700 (the R8 controls row pushed the return row
+  off the strip at 720×680).
 - CPU per 128-frame block at 48 kHz: Classic 15.6–16 µs, Plate 6.0, Room 16.9,
   Chamber 16.9, Hall 19.1, Ambience 7.9.
 
