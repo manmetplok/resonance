@@ -63,8 +63,10 @@ impl Algorithm {
         Algorithm::Ambience,
     ];
 
-    /// The algorithm a parameter value selects. Out-of-range values
-    /// (a hand-edited state, a newer build's index) fall back to Classic.
+    /// The algorithm a parameter value selects. Out-of-range indices fall
+    /// back to Classic, but the `algorithm` parameter clamps to its range
+    /// first, so a newer build's index arrives here as the last of
+    /// [`Algorithm::BUILT`].
     pub fn from_index(index: i32) -> Self {
         usize::try_from(index)
             .ok()

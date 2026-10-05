@@ -45,8 +45,10 @@
 //! - **Freeze**: the loop goes lossless and its input muted (`Fdn` does
 //!   both); the ER and the diffusers are fed silence, so they drain.
 //!
-//! Every setter dedupes (the plugin calls each one every block), and
-//! nothing after [`RoomCore::new`] allocates.
+//! Every setter dedupes (the plugin calls each one every block), the loop
+//! redesign a decay, damping or shape change needs runs once at the next
+//! sample however many of them moved, and nothing after [`RoomCore::new`]
+//! allocates.
 
 use resonance_dsp::reverb::{Allpass, DecayBands, Fdn, FdnConfig};
 
@@ -131,6 +133,12 @@ pub(in crate::dsp::algo) struct RoomCore<const N: usize> {
     mod_depth: f32,
     frozen: bool,
     primed: bool,
+    /// The loop needs a redesign (a decay, damping or shape change). Done
+    /// at the next sample, so a block's worth of setter calls costs one.
+    dirty: bool,
+    /// The diffusion the diffuser coefficients were last set for (NaN:
+    /// not yet).
+    diffusion: f32,
     /// Tank-view envelope, one per line pair.
     energies: [f32; CHANNELS],
     /// `late_level` with the decay normalisation applied.
@@ -203,6 +211,8 @@ impl<const N: usize> RoomCore<N> {
             mod_depth: 0.0,
             frozen: false,
             primed: false,
+            dirty: false,
+            diffusion: f32::NAN,
             energies: [0.0; CHANNELS],
             late_gain: v.late_level,
         };
@@ -246,6 +256,7 @@ impl<const N: usize> RoomCore<N> {
     }
 
     fn redesign(&mut self) {
+        self.dirty = false;
         let (lo, hi) = self.v.decay_range;
         let (low_mult, low_xover, high_mult) = self.shape;
         let t60 = self.decay.clamp(lo, hi);
@@ -263,21 +274,21 @@ impl<const N: usize> RoomCore<N> {
     pub(in crate::dsp::algo) fn set_decay(&mut self, v: f32) {
         if v != self.decay {
             self.decay = v;
-            self.redesign();
+            self.dirty = true;
         }
     }
 
     pub(in crate::dsp::algo) fn set_damping(&mut self, v: f32) {
         if v != self.damping {
             self.damping = v;
-            self.redesign();
+            self.dirty = true;
         }
     }
 
     pub(in crate::dsp::algo) fn set_decay_shape(&mut self, low: f32, xover: f32, high: f32) {
         if (low, xover, high) != self.shape {
             self.shape = (low, xover, high);
-            self.redesign();
+            self.dirty = true;
         }
     }
 
@@ -316,15 +327,22 @@ impl<const N: usize> RoomCore<N> {
     #[inline]
     pub(in crate::dsp::algo) fn process(&mut self, l: f32, r: f32, diffusion: f32) -> Wet {
         self.primed = true;
+        if self.dirty {
+            self.redesign();
+        }
+        if diffusion != self.diffusion {
+            self.diffusion = diffusion;
+            let g = diffusion.clamp(0.0, 1.0) * self.v.diffuser_gain;
+            for ap in self.diffuser.iter_mut().flatten() {
+                ap.set_gain(g);
+            }
+        }
         let (l, r) = if self.frozen { (0.0, 0.0) } else { (l, r) };
-        let g = diffusion.clamp(0.0, 1.0) * self.v.diffuser_gain;
         let (mut dl, mut dr) = (l, r);
         for ap in &mut self.diffuser[0] {
-            ap.set_gain(g);
             dl = ap.process(dl);
         }
         for ap in &mut self.diffuser[1] {
-            ap.set_gain(g);
             dr = ap.process(dr);
         }
         let (er_l, er_r) = if self.v.diffused_early {

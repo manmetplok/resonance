@@ -70,7 +70,6 @@
 //! Every buffer is allocated in [`HallEngine::new`]: 2.6 MiB at 96 kHz,
 //! 1.3 MiB at 48 kHz (see [`HallEngine::buffer_bytes`]).
 
-#[path = "hall/er.rs"]
 mod er;
 
 use resonance_dsp::reverb::{Allpass, DecayBands, Fdn, FdnConfig};
