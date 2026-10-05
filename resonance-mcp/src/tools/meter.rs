@@ -56,9 +56,9 @@ impl ResonanceMcp {
                        \
                        DETAIL (opt-in, source \"render\" only; omitted from the result unless \
                        asked for, so the default reply stays small): detail takes any of \
-                       \"spectrum\", \"stereo\", \"dynamics\", \"depth\" and adds one object \
-                       per name (depth is described on meter_stems, where it is meant to be \
-                       used). \
+                       \"spectrum\", \"stereo\", \"dynamics\", \"depth\", \"decay\" and adds \
+                       one object per name (depth is described on meter_stems, where it is \
+                       meant to be used). \
                        \
                        spectrum holds the warmth and harshness proxies. third_octave is 31 \
                        ISO 1/3-octave band levels, 20 Hz..20 kHz, in dB where a full-scale sine \
@@ -94,6 +94,38 @@ impl ResonanceMcp {
                        typical for a master) and psr_db (true_peak_db minus lufs_short_max; \
                        keep it at 8 or more). Compare detail numbers between two states only at \
                        matched loudness. \
+                       \
+                       decay measures how long a tail really is, by number: the reverb time \
+                       read off the LAST stop in the range, where a sustained level (within 2 \
+                       dB of its last half second) starts to fall, up to the next onset (a 6 \
+                       dB rise) or the range end, by Schroeder integration of the energy after \
+                       the stop. Use it on the TRACK that sends to the reverb, over a range \
+                       that ends in silence after a stop: its stem carries its sends' returns \
+                       back, while a {bus_id: N} target hears only tracks routed INTO that bus, \
+                       never sends, so a send-fed return measured by bus_id is silent (a reverb \
+                       inserted on a group bus is measured on that bus). For the song's last \
+                       note use the default range \
+                       (an explicit range is clamped to the song end and cuts the tail, the \
+                       default renders 2 s past the last clip). Fields: found (a stop exists; \
+                       false means everything else is null and note says why); clean (falls \
+                       far enough for T30: 40 dB to a floor, 45 when cut off); stop (song \
+                       position of the stop, null for a reference), stop_seconds, \
+                       length_seconds; ends: floor (silence, or a quiet part playing on), \
+                       onset (new signal came in) or range_end (still falling); \
+                       dynamic_range_db (level before the stop minus the lowest level after, \
+                       100 = digital silence); edt_seconds (first 10 dB, x6: the perceived \
+                       length), t20_seconds (-5..-25 dB) and t30_seconds (-5..-35 dB, what a \
+                       reverb's decay knob means), each null when the decay does not fall far \
+                       enough (EDT 15 dB, T20 30, T30 40; 5 dB more when cut off); \
+                       tail_20db_seconds (from the stop to 20 dB down: compare stop_seconds + \
+                       tail_20db_seconds with the next downbeat to see whether the tail \
+                       clears it); bands, 7 octaves 125 Hz..8 kHz of {center_hz, t30_seconds}; \
+                       note when not clean. A decay overlapped by new notes is not a decay: on \
+                       a mix whose tail other parts cover there is nothing to read. A \
+                       self-decaying note (piano, pluck) adds its own decay to EDT, the track's \
+                       dry signal stopping makes EDT short against T30 (which still reads the \
+                       room, within about 10 % of the reverb's decay knob), and tails over \
+                       about 15 s are not detected. \
                        \
                        A null field means the number does not exist for this measurement, never \
                        zero: either the range was silent or too short for that meter's window, \
@@ -148,7 +180,9 @@ impl ResonanceMcp {
                        \
                        detail (e.g. [\"spectrum\", \"stereo\"]) works exactly as on \
                        meter_measure and adds its objects to the master and to every entry; it \
-                       costs one spectral analysis per entry on top of the render. \
+                       costs one spectral analysis per entry on top of the render. detail \
+                       [\"decay\"] reads every track's tail length in one pass (see meter_measure \
+                       for its fields). \
                        \
                        DEPTH: detail [\"depth\"] adds a depth object per entry for judging \
                        front-to-back staging: hf_tilt_db (energy 6-16 kHz over 1-4 kHz; falls \

@@ -355,6 +355,9 @@ const ALL_DETAIL: DetailSet = DetailSet {
     // Depth is a per-track ranking with extra return renders, not a
     // character proxy to compare; a snapshot or compare never needs it.
     depth: false,
+    // A tail length, not a figure a loudness-matched compare has a delta
+    // for: ask for it explicitly.
+    decay: false,
     // The assistant's own LTAS is `master.assist`'s alone.
     assist: false,
 };
@@ -780,6 +783,7 @@ fn detail_set(details: &[MeasureDetail]) -> DetailSet {
             MeasureDetail::Stereo => set.stereo = true,
             MeasureDetail::Dynamics => set.dynamics = true,
             MeasureDetail::Depth => set.depth = true,
+            MeasureDetail::Decay => set.decay = true,
         }
     }
     set
@@ -814,7 +818,7 @@ fn stems_result(app: &Resonance, results: &[MixMeasurement]) -> Option<StemsResu
     let master = results
         .iter()
         .find(|m| m.target == StemSource::Master)
-        .map(|m| with_solo(app, measure_result(m, app.sample_rate)))?;
+        .map(|m| with_solo(app, measure_result(app, m)))?;
 
     let mut tracks: Vec<TrackMeasurement> = results
         .iter()
@@ -828,7 +832,7 @@ fn stems_result(app: &Resonance, results: &[MixMeasurement]) -> Option<StemsResu
                 track_id: id.into(),
                 name: entry_name(app, m.target, id),
                 includes_track_ids: includes,
-                measurement: measure_result(m, app.sample_rate),
+                measurement: measure_result(app, m),
             })
         })
         .collect();
@@ -974,15 +978,15 @@ pub(crate) fn mix_measured(
                     // meaningless for it.
                     Some(id) => MeasureResult {
                         target: MeasureTarget::Reference(id),
-                        ..measure_result(m, app.sample_rate)
+                        ..measure_result(app, m)
                     },
-                    None => with_solo(app, measure_result(m, app.sample_rate)),
+                    None => with_solo(app, measure_result(app, m)),
                 })
                 .and_then(|r| serde_json::to_value(r).ok())
         }
         proto::STEMS => stems_result(app, &results).and_then(|r| serde_json::to_value(r).ok()),
         proto::SNAPSHOT => results.first().and_then(|m| {
-            let measurement = with_solo(app, measure_result(m, app.sample_rate));
+            let measurement = with_solo(app, measure_result(app, m));
             let snapshot_id = app.control.meter_snapshots.insert(m.clone());
             serde_json::to_value(SnapshotResult {
                 snapshot_id,
@@ -1046,9 +1050,11 @@ pub(crate) fn mix_measure_error(app: &mut Resonance, measure_id: u64, message: S
 /// represent, and every figure the live streaming tap cannot supply
 /// becomes `null` rather than the placeholder zero the engine carries.
 ///
-/// `sample_rate` is the engine's, used only to turn the measured frame
-/// count into seconds.
-pub(crate) fn measure_result(m: &MixMeasurement, sample_rate: u32) -> MeasureResult {
+/// `app` supplies the engine's sample rate, used to turn the measured
+/// frame count into seconds, and the tempo map the `decay` detail's
+/// song position is read from.
+pub(crate) fn measure_result(app: &Resonance, m: &MixMeasurement) -> MeasureResult {
+    let sample_rate = app.sample_rate;
     let live = m.source == EngineSource::Live;
     MeasureResult {
         // Filled in by `with_solo` for master targets, which are the
@@ -1100,6 +1106,52 @@ pub(crate) fn measure_result(m: &MixMeasurement, sample_rate: u32) -> MeasureRes
         stereo: m.detail.stereo.as_ref().map(wire_stereo),
         dynamics: m.detail.dynamics.map(wire_dynamics),
         depth: m.detail.depth.as_ref().map(wire_depth),
+        decay: m.detail.decay.as_ref().map(|d| wire_decay(app, m, d)),
+    }
+}
+
+/// The `decay` detail on the wire: sample offsets into the measured range
+/// become song time (and a song position, except for decoded audio such
+/// as a reference, which has no place on the timeline).
+fn wire_decay(
+    app: &Resonance,
+    m: &MixMeasurement,
+    d: &resonance_metering::decay::ProgramDecay,
+) -> proto::DecayDetail {
+    let sr = f64::from(app.sample_rate.max(1));
+    let offset_s = m.range_start as f64 / sr;
+    let found = |v: f64| d.found.then_some(v);
+    let secs = |v: Option<f32>| round_opt(v, 1_000.0);
+    let start_sample = m.range_start + d.start as u64;
+    proto::DecayDetail {
+        found: d.found,
+        clean: d.clean,
+        stop: (d.found && m.source == EngineSource::Render)
+            .then(|| super::view_model::song_position(app, start_sample)),
+        stop_seconds: found(round_to((offset_s + d.start as f64 / sr) as f32, 1_000.0)),
+        length_seconds: found(round_to(d.length_s(), 1_000.0)),
+        ends: d.ends.map(|e| match e {
+            resonance_metering::decay::DecayEnd::Floor => proto::DecayEnd::Floor,
+            resonance_metering::decay::DecayEnd::Onset => proto::DecayEnd::Onset,
+            resonance_metering::decay::DecayEnd::RangeEnd => proto::DecayEnd::RangeEnd,
+        }),
+        dynamic_range_db: found(round_to(d.dynamic_range_db, 10.0)),
+        edt_seconds: secs(d.times.edt),
+        t20_seconds: secs(d.times.t20),
+        t30_seconds: secs(d.times.t30),
+        tail_20db_seconds: secs(d.tail_20db_s),
+        bands: if d.found {
+            d.bands
+                .iter()
+                .map(|b| proto::DecayBand {
+                    center_hz: f64::from(b.center_hz),
+                    t30_seconds: secs(b.times.t30),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        note: d.note(offset_s),
     }
 }
 
