@@ -3,12 +3,10 @@
 //! sweeps and bit-exact goldens.
 //!
 //! Every render goes through `ReverbDsp::with_engines(SR, &[algorithm])`
-//! with every engine setter called explicitly (`room/common.rs`).
+//! with every engine setter called explicitly (`crate::common::Setup`).
 
 #[path = "room/acceptance.rs"]
 mod acceptance;
-#[path = "room/common.rs"]
-mod common;
 #[path = "room/golden.rs"]
 mod golden;
 #[path = "room/stability.rs"]

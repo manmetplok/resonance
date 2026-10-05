@@ -19,6 +19,7 @@
 //! [`AudioCommand::MeasureMix`]: super::AudioCommand::MeasureMix
 //! [`AudioEvent::MixMeasured`]: super::AudioEvent::MixMeasured
 
+use resonance_metering::decay::ProgramDecay;
 use resonance_metering::detail::{SpectrumDetail, StereoDetail};
 use resonance_metering::RangeDynamics;
 use resonance_metering::offline::BandShares;
@@ -89,6 +90,10 @@ pub struct DetailSet {
     /// each return's measured gain (renders every return a track sends
     /// to, once per pass).
     pub depth: bool,
+    /// The last free decay in the range: EDT / T20 / T30 read off a stop
+    /// in the program material
+    /// ([`program_decay`][resonance_metering::decay::program_decay]).
+    pub decay: bool,
     /// The mastering assistant's 1/6-octave mono LTAS
     /// ([`sixth_octave_ltas`][resonance_metering::spectrum::offline::sixth_octave_ltas]),
     /// for `master.assist`.
@@ -98,7 +103,7 @@ pub struct DetailSet {
 impl DetailSet {
     /// True when at least one detail is requested.
     pub fn any(self) -> bool {
-        self.spectrum || self.stereo || self.dynamics || self.depth || self.assist
+        self.spectrum || self.stereo || self.dynamics || self.depth || self.decay || self.assist
     }
 }
 
@@ -146,6 +151,9 @@ pub struct MeasurementDetail {
     pub dynamics: Option<RangeDynamics>,
     /// See [`DepthDetail`].
     pub depth: Option<DepthDetail>,
+    /// See [`ProgramDecay`]. Sample positions count from the measured
+    /// range's start.
+    pub decay: Option<ProgramDecay>,
     /// The assistant LTAS, `NUM_OCTAVE_BINS` 1/6-octave levels, dB, 20 Hz
     /// first. See [`DetailSet::assist`].
     pub assist_ltas: Option<Vec<f32>>,

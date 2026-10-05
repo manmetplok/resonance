@@ -43,12 +43,13 @@ an EQ move the song did not need.
 ## Detail blocks (opt-in)
 
 Both tools take `detail`, a list of any of `"spectrum"`, `"stereo"`,
-`"dynamics"` and `"depth"`, e.g. `detail: ["spectrum", "stereo"]`. Each named
+`"dynamics"`, `"depth"` and `"decay"`, e.g. `detail: ["spectrum", "stereo"]`. Each named
 detail adds one object to every result (the master and every `meter_stems`
 entry), named after the detail. Without `detail` the reply is exactly the
 standard fields above. Details need a render: asking for one with
 `source: "live"` is refused. They cost one spectral analysis per entry, not an
 extra render, except `depth`, which also renders each return (see below).
+`"decay"` costs an envelope pass and seven octave filters over the decay.
 
 Judge any change in a detail number at **matched loudness**. A louder mix reads
 brighter and "better" in every one of these.
@@ -174,6 +175,47 @@ Caveats:
 - Send levels are read at their current static values. Automated send rides are
   not in the estimate; everything rendered does honour automation.
 - It costs one extra render per return and per sending track.
+
+### Decay: how long a tail really is
+
+`detail: ["decay"]` reads the reverb time off the **last stop** in the range:
+where a sustained level (within 2 dB of its last half second) starts to fall,
+up to the next onset (a 6 dB rise) or the end of the range. The energy after
+the stop is Schroeder-integrated, as for an impulse response.
+
+Measure the **track that sends to the reverb**, over a range that ends in
+silence after a stop (`meter_stems` gives every track's at once). Its stem
+carries its sends' returns back, so the tail after its last note is the room. A
+`{bus_id: N}` target hears only tracks routed into that bus, never sends, so a
+send-fed return measured that way is silent. A reverb inserted on a group bus
+is measured on that bus. For the song's last note use the default range: an
+explicit `range` is clamped to the song's end and cuts the tail, while the
+default renders 2 s past the last clip.
+
+| Field | What it means | How to read it |
+|---|---|---|
+| `found` | A stop exists in the range | `false`: every other field is `null` and `note` says why. |
+| `clean` | The decay falls far enough for T30 | 40 dB down to a floor, 45 when an onset or the range end cuts it off. `false`: read `note`. |
+| `stop`, `stop_seconds` | Where the analysed decay starts: a song position, and song seconds | `stop` is `null` for a reference. Check it is the stop you meant. |
+| `length_seconds` | How long the analysed decay runs | |
+| `ends` | `floor`, `onset` or `range_end` | `onset`: new signal came in. `range_end`: still falling when the range ended, so extend the range. `floor` covers silence and a quiet part that keeps playing. |
+| `dynamic_range_db` | Level before the stop minus the lowest level after it | 100 means it reaches digital silence. |
+| `edt_seconds` | Fit over the first 10 dB, times 6 | The length you **hear**. Shorter than T30 on a track, because its dry signal stops at once (a cliff before the tail). Needs 15 dB of range (20 when cut off). |
+| `t20_seconds` | Fit over -5..-25 dB | Needs 30 dB (35 when cut off). |
+| `t30_seconds` | Fit over -5..-35 dB | The reverb's decay time as its knob means it: reads within about 10 % of the knob even with the dry signal in. Needs 40 dB (45 when cut off). |
+| `tail_20db_seconds` | From the stop until the level is 20 dB down | The tail has cleared when `stop_seconds` plus this is before the next downbeat or note. |
+| `bands` | 7 octaves, 125 Hz to 8 kHz, each `{center_hz, t30_seconds}` | Bass outlasting mids is a muddy room; treble dying first is natural. |
+| `note` | Present when the decay is not clean | Says where the deepest decay was and why it fell short. |
+
+Limits:
+
+- A decay overlapped by new notes is not a decay. On a mix whose tail other
+  parts keep covering there is nothing to read. Measure the one track, over a
+  range where the arrangement stops.
+- A note that decays on its own (piano, pluck) adds its own decay to EDT.
+  Sustained material (pads, held notes) gives the cleanest reading.
+- Tails longer than about 15 s fall too slowly to tell from a sustained level,
+  so no stop is found.
 
 ## Before and after: `meter_snapshot` and `meter_compare`
 

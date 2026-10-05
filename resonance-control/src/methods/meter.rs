@@ -37,8 +37,8 @@
 //!
 //! ## Opt-in detail
 //!
-//! `detail: ["spectrum", "stereo", "dynamics"]` (any subset) on either
-//! method adds a per-detail object to
+//! `detail: ["spectrum", "stereo", "dynamics", "depth", "decay"]` (any
+//! subset) on either method adds a per-detail object to
 //! every result (warmth-width-depth.md §7.1) — see [`MeasureDetail`].
 //! Without `detail` the payload is exactly what it always was: the
 //! detail objects are omitted, not `null`, so the default reply stays
@@ -144,6 +144,13 @@ pub enum MeasureDetail {
     /// Meant for `meter.stems`, where the layer hint ranks the tracks;
     /// each return a track sends to is rendered once more per pass.
     Depth,
+    /// [`DecayDetail`]: the last free decay in the range (a stop in the
+    /// music into silence) and its EDT / T20 / T30, broadband and per
+    /// octave — how long a reverb's tail really is. Meant for the track
+    /// that sends to the reverb (its stem carries the return back) over a
+    /// range that ends in silence after a stop. Costs one envelope pass,
+    /// plus seven octave filters over the decay itself.
+    Decay,
 }
 
 /// Params for `meter.measure`. Every field is optional: the default is
@@ -164,7 +171,8 @@ pub struct MeasureParams {
     /// Defaults to `"render"`.
     #[serde(default)]
     pub source: MeasureSource,
-    /// Opt-in detail blocks, any of `["spectrum", "stereo", "dynamics"]`.
+    /// Opt-in detail blocks, any of `["spectrum", "stereo", "dynamics",
+    /// "depth", "decay"]`.
     /// Defaults to none, which
     /// keeps the reply to the standard figures. Requires `source:
     /// "render"`.
@@ -384,6 +392,103 @@ pub struct DynamicsDetail {
     pub psr_db: Option<f64>,
 }
 
+/// How the analysed decay in a [`DecayDetail`] ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum DecayEnd {
+    /// It fell to a floor and stayed there: silence, a noise floor, or a
+    /// quiet part that keeps playing underneath.
+    Floor,
+    /// New signal came in (the next note, or the arrangement re-entering).
+    Onset,
+    /// The range ended while it was still falling.
+    RangeEnd,
+}
+
+/// One octave band of [`DecayDetail::bands`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DecayBand {
+    /// Octave centre: 125, 250, 500, 1000, 2000, 4000 or 8000 Hz.
+    pub center_hz: f64,
+    /// The band's T30, seconds; `null` when the band does not fall far
+    /// enough inside the decay.
+    pub t30_seconds: Option<f64>,
+}
+
+/// The `decay` detail (reverb-algorithms.md R9): the reverberation time
+/// of the target, read off the LAST free decay in the range — a stop in
+/// the music (the song's last note, a break) into silence — by Schroeder
+/// integration of the energy after the stop (the interrupted-noise
+/// method, with the music as the noise).
+///
+/// What counts: a stop is where a SUSTAINED level (within 2 dB of its own
+/// last half second) starts to fall; the decay runs from there to the
+/// next onset (a 6 dB rise) or the end of the range. The latest stop that
+/// falls far enough for T30 is analysed; if none does, the deepest one is,
+/// with `clean: false`, its unreachable times `null` and a `note`.
+///
+/// What to measure: the TRACK that sends to the reverb. Its stem carries
+/// its sends' returns back, so the tail after its last note is the room;
+/// a `bus_id` target hears only tracks ROUTED into that bus, never sends,
+/// so a send-fed return measured by `bus_id` is silent. A reverb inserted
+/// on a group bus is measured on that bus.
+///
+/// Limits: a decay overlapped by new notes is not a decay — on a mix
+/// whose tail other parts keep covering there is nothing to read, so
+/// measure the one track, over a range that ends in silence after a stop.
+/// A note that decays by itself (piano, pluck) puts its own decay into
+/// EDT. The track's dry signal stopping makes EDT read short against
+/// T30, which still reads the room.
+/// A tail longer than about 15 s cannot be told from a sustained level.
+/// A range given explicitly is clamped to the song's end, which cuts the
+/// final tail: for the song's last note use the default (whole-song)
+/// range, which renders 2 s past the last clip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DecayDetail {
+    /// A stop was found. When `false` every other figure is `null` (or
+    /// empty) and `note` says why.
+    pub found: bool,
+    /// The decay falls far enough for T30: 40 dB when it ends on a floor,
+    /// 45 when an onset or the range end cuts it (the margin keeps the
+    /// cut-off end out of the fit).
+    pub clean: bool,
+    /// The stop the analysed decay starts at, as a song position. `null`
+    /// when nothing was found, and for a reference target.
+    pub stop: Option<crate::SongPosition>,
+    /// The stop in seconds: song time, or from the start of a reference.
+    pub stop_seconds: Option<f64>,
+    /// Length of the analysed decay, seconds.
+    pub length_seconds: Option<f64>,
+    /// Why it ends where it does.
+    pub ends: Option<DecayEnd>,
+    /// The level before the stop minus the lowest level of the decay, dB
+    /// (100 = it reaches digital silence).
+    pub dynamic_range_db: Option<f64>,
+    /// Early decay time, seconds: the fit over the first 10 dB,
+    /// extrapolated to 60 dB. What the ear calls the room's length.
+    /// Needs 15 dB of range (20 when cut off).
+    pub edt_seconds: Option<f64>,
+    /// T60 from the fit over -5..-25 dB. Needs 30 dB (35 cut off).
+    pub t20_seconds: Option<f64>,
+    /// T60 from the fit over -5..-35 dB — the reverb's decay time as its
+    /// knob means it. Needs 40 dB (45 cut off).
+    pub t30_seconds: Option<f64>,
+    /// Seconds from the stop until the level is 20 dB below where it
+    /// was: when the tail has cleared enough not to smear the next note.
+    /// `null` when it never falls 20 dB inside the decay.
+    pub tail_20db_seconds: Option<f64>,
+    /// T30 per octave band, 125 Hz to 8 kHz. Empty when nothing was found.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bands: Vec<DecayBand>,
+    /// Present when the decay is not clean: what was found and why it
+    /// falls short.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 /// Everything one measurement pass reports about one slice of the mix.
 ///
 /// ## Why so many fields are nullable
@@ -519,6 +624,9 @@ pub struct MeasureResult {
     /// The `depth` detail, present only when `detail` asked for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth: Option<DepthDetail>,
+    /// The `decay` detail, present only when `detail` asked for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decay: Option<DecayDetail>,
 }
 
 // ---------------------------------------------------------------------------

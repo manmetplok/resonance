@@ -42,8 +42,11 @@
 //!   `mod_depth × Voicing::mod_depth_max` samples (at 48 kHz, scaled with
 //!   the rate) along `SmoothRandom` curves at `mod_rate` targets per
 //!   second.
-//! - **Freeze**: the loop goes lossless and its input muted (`Fdn` does
-//!   both); the ER and the diffusers are fed silence, so they drain.
+//! - **Freeze** ramps in and out over 100 ms ([`FreezeRamp`]): the input
+//!   (so the reflections, the diffusers and the direct diffuse path) and
+//!   the loop's injection fade while the loop's loss falls to none, and
+//!   only then does the `Fdn` switch to lossless. The reflections and the
+//!   diffusers drain.
 //!
 //! Every setter dedupes (the plugin calls each one every block), the loop
 //! redesign a decay, damping or shape change needs runs once at the next
@@ -56,6 +59,7 @@ use super::super::super::er::ER_TAPS;
 use super::super::super::CHANNELS;
 use super::super::Wet;
 use super::early::{EarlyVoicing, ShoeboxEarly};
+use super::freeze::{stretch, FreezeRamp, FreezeTick};
 
 /// FDN read-head slew on a size change, samples per sample: at most a
 /// 4 % (0.7 semitone) Doppler bend while the lines move, and a full-range
@@ -103,7 +107,7 @@ pub(in crate::dsp::algo) struct Voicing {
 
 /// Balanced ±1 pattern (Thue–Morse): any 2ᵏ-long prefix sums to zero.
 fn thue_morse(i: usize) -> f32 {
-    if i.count_ones() % 2 == 0 {
+    if i.count_ones().is_multiple_of(2) {
         1.0
     } else {
         -1.0
@@ -131,7 +135,7 @@ pub(in crate::dsp::algo) struct RoomCore<const N: usize> {
     shape: (f32, f32, f32),
     mod_rate: f32,
     mod_depth: f32,
-    frozen: bool,
+    freeze: FreezeRamp,
     primed: bool,
     /// The loop needs a redesign (a decay, damping or shape change). Done
     /// at the next sample, so a block's worth of setter calls costs one.
@@ -209,7 +213,7 @@ impl<const N: usize> RoomCore<N> {
             shape: (1.0, 250.0, 0.5),
             mod_rate: f32::NAN,
             mod_depth: 0.0,
-            frozen: false,
+            freeze: FreezeRamp::new(sample_rate),
             primed: false,
             dirty: false,
             diffusion: f32::NAN,
@@ -262,13 +266,8 @@ impl<const N: usize> RoomCore<N> {
         let t60 = self.decay.clamp(lo, hi);
         self.early.set_decay(t60);
         self.late_gain = self.v.late_level * t60.recip().powf(self.v.late_decay_norm);
-        self.fdn.set_decay(DecayBands::from_mults(
-            t60,
-            low_mult,
-            high_mult,
-            low_xover,
-            self.damping,
-        ));
+        let bands = DecayBands::from_mults(t60, low_mult, high_mult, low_xover, self.damping);
+        self.fdn.set_decay(stretch(bands, self.freeze.loss()));
     }
 
     pub(in crate::dsp::algo) fn set_decay(&mut self, v: f32) {
@@ -293,10 +292,29 @@ impl<const N: usize> RoomCore<N> {
     }
 
     pub(in crate::dsp::algo) fn set_freeze(&mut self, on: bool) {
-        if on != self.frozen {
-            self.frozen = on;
-            self.fdn.set_freeze(on);
+        if on == self.freeze.on() {
+            return;
         }
+        self.freeze.set(on);
+        if !self.primed {
+            // Nothing is sounding: land in the settled state, the one
+            // `clear` leaves.
+            self.settle_freeze();
+        } else if !on && self.fdn.is_frozen() {
+            // Out of the lossless loop at zero loss (the design it holds
+            // since the ramp landed); the ramp brings the loss back.
+            self.fdn.set_freeze(false);
+        }
+    }
+
+    /// The Freeze ramp at its target and the loop in the matching state
+    /// (cleared: its modulation fade complete). Only while nothing is
+    /// sounding.
+    fn settle_freeze(&mut self) {
+        self.freeze.snap();
+        self.fdn.set_freeze(self.freeze.on());
+        self.fdn.clear();
+        self.dirty = true;
     }
 
     pub(in crate::dsp::algo) fn set_mod_rate(&mut self, v: f32) {
@@ -327,6 +345,16 @@ impl<const N: usize> RoomCore<N> {
     #[inline]
     pub(in crate::dsp::algo) fn process(&mut self, l: f32, r: f32, diffusion: f32) -> Wet {
         self.primed = true;
+        match self.freeze.tick() {
+            FreezeTick::Still | FreezeTick::Moving => {}
+            FreezeTick::Redesign => self.dirty = true,
+            FreezeTick::Engage => {
+                // Zero loss (a unity design, within one step of the last),
+                // then the exact lossless loop.
+                self.redesign();
+                self.fdn.set_freeze(true);
+            }
+        }
         if self.dirty {
             self.redesign();
         }
@@ -337,7 +365,10 @@ impl<const N: usize> RoomCore<N> {
                 ap.set_gain(g);
             }
         }
-        let (l, r) = if self.frozen { (0.0, 0.0) } else { (l, r) };
+        // Freeze fades the input out, and the loop's injection again, so
+        // it is silent when the loop closes (see `freeze.rs`).
+        let g = self.freeze.gain();
+        let (l, r) = (l * g, r * g);
         let (mut dl, mut dr) = (l, r);
         for ap in &mut self.diffuser[0] {
             dl = ap.process(dl);
@@ -350,12 +381,13 @@ impl<const N: usize> RoomCore<N> {
         } else {
             self.early.process(l, r)
         };
-        let input: [f32; N] = std::array::from_fn(|i| self.in_l[i] * dl + self.in_r[i] * dr);
+        let input: [f32; N] =
+            std::array::from_fn(|i| g * (self.in_l[i] * dl + self.in_r[i] * dr));
         let y = self.fdn.tick(&input);
         let (mut late_l, mut late_r) = (self.v.direct_diffuse * dl, self.v.direct_diffuse * dr);
-        for i in 0..N {
-            late_l += self.out_l[i] * y[i];
-            late_r += self.out_r[i] * y[i];
+        for ((yi, ol), or) in y.iter().zip(&self.out_l).zip(&self.out_r) {
+            late_l += ol * yi;
+            late_r += or * yi;
         }
         // Tank view: a ~4 ms follower of each line pair's magnitude.
         let per = N / CHANNELS;
@@ -377,7 +409,7 @@ impl<const N: usize> RoomCore<N> {
 
     pub(in crate::dsp::algo) fn clear(&mut self) {
         self.early.clear();
-        self.fdn.clear();
+        self.settle_freeze();
         for ap in self.diffuser.iter_mut().flatten() {
             ap.clear();
         }

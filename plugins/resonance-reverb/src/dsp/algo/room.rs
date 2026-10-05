@@ -27,9 +27,11 @@
 //!   `decay`, see `room/early.rs`).
 
 mod early;
+mod freeze;
 mod tank;
 
 pub(in crate::dsp::algo) use self::early::EarlyVoicing;
+pub(in crate::dsp::algo) use self::freeze::{stretch, FreezeRamp, FreezeTick};
 pub(in crate::dsp::algo) use self::tank::{RoomCore, Voicing};
 
 /// The inherent method set every engine exposes (see `engine.rs`),
