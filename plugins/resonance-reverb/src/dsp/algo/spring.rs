@@ -78,9 +78,9 @@ const DRIP_COEFFICIENT: f32 = 0.95;
 /// Drip level at `spring_drip` 1.
 const DRIP_GAIN: f32 = 1.5;
 /// Round trip at `size` 0 and 1, ms.
-const ROUND_TRIP_MS: (f32, f32) = (30.0, 90.0);
+pub(crate) const ROUND_TRIP_MS: (f32, f32) = (30.0, 90.0);
 /// Spring B's length and dispersion against A's.
-const B_LENGTH: f32 = 1.13;
+pub(crate) const B_LENGTH: f32 = 1.13;
 const B_DISPERSION: f32 = 0.98;
 /// Coefficient at `spring_tension` 0 and 1.
 const TENSION_COEFFICIENT: (f32, f32) = (0.55, 0.92);

@@ -444,6 +444,14 @@ fn a_fresh_reverb_is_room_and_a_legacy_one_classic() {
     resonance_reverb::params::upgrade_state(&mut doc);
     assert_eq!(doc, once);
     assert_eq!(doc["params"]["algorithm"], 0.0);
+
+    // A partial state that names a parameter which arrived with
+    // `algorithm` was written after it existed: its silence on the
+    // algorithm is not a legacy Classic, so the instance keeps its own.
+    let mut plugin = ResonanceReverb::new();
+    assert!(plugin.load_state(br#"{"params":{"decay_sync":2.0,"mix":0.5}}"#));
+    assert_eq!(plugin.params.algorithm(), Algorithm::Room);
+    assert_eq!(plugin.params.decay_sync.value(), 2);
 }
 
 #[cfg(feature = "editor")]

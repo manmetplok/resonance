@@ -26,19 +26,18 @@ pub(super) fn draw(
     let radius = (body.width().min(body.height()) * 0.5 - LABEL_MARGIN).max(8.0);
     let levels = display_levels(energies);
     let overall = overall_level(energies);
-    let node = |c: usize| {
+    // Each line's direction from the centre and its node on the ring.
+    let nodes: [(egui::Vec2, egui::Pos2); FDN_CHANNELS] = std::array::from_fn(|c| {
         let angle = -FRAC_PI_2 + c as f32 * TAU / FDN_CHANNELS as f32;
-        (
-            angle,
-            centre + radius * egui::vec2(angle.cos(), angle.sin()),
-        )
-    };
+        let dir = egui::vec2(angle.cos(), angle.sin());
+        (dir, centre + radius * dir)
+    });
 
     // The feedback matrix: every line into every other.
     let chord = egui::Stroke::new(0.5, faded(theme::ACCENT_SOFT, 0.08 + 0.3 * overall));
-    for i in 0..FDN_CHANNELS {
-        for j in i + 1..FDN_CHANNELS {
-            painter.line_segment([node(i).1, node(j).1], chord);
+    for (i, &(_, a)) in nodes.iter().enumerate() {
+        for &(_, b) in &nodes[i + 1..] {
+            painter.line_segment([a, b], chord);
         }
     }
     painter.circle_stroke(centre, radius, egui::Stroke::new(1.0, theme::BORDER));
@@ -53,7 +52,7 @@ pub(super) fn draw(
 
     let node_r = (radius * 0.16).clamp(4.0, 14.0);
     for (c, &level) in levels.iter().enumerate() {
-        let (angle, p) = node(c);
+        let (dir, p) = nodes[c];
         // A spoke from the centre, as long as the line is loud.
         painter.line_segment(
             [centre, centre + (p - centre) * level],
@@ -66,7 +65,7 @@ pub(super) fn draw(
             faded(theme::ACCENT, 0.3 + 0.7 * level),
         );
         painter.circle_stroke(p, node_r, egui::Stroke::new(1.0, theme::ACCENT_SOFT));
-        let label = centre + (radius + LABEL_MARGIN * 0.55) * egui::vec2(angle.cos(), angle.sin());
+        let label = centre + (radius + LABEL_MARGIN * 0.55) * dir;
         painter.text(
             label,
             egui::Align2::CENTER_CENTER,

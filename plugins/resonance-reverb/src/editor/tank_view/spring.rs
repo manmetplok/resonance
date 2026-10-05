@@ -9,6 +9,7 @@
 
 use plugin_gui_core::egui;
 
+use crate::dsp::algo::spring::{B_LENGTH, ROUND_TRIP_MS};
 use crate::editor::ReverbEditorApp;
 use crate::viz::FDN_CHANNELS;
 
@@ -19,11 +20,6 @@ use crate::editor::theme;
 const ECHOES: usize = 5;
 /// Polyline points per chirp.
 const POINTS: usize = 48;
-/// The round trip at `size` 0 and 1, ms (the engine's map), for before
-/// the engine has published its own.
-const ROUND_TRIP_MS: (f32, f32) = (30.0, 90.0);
-/// Spring B's length against A's (the engine's).
-const B_LENGTH: f32 = 1.13;
 
 pub(super) fn draw(
     painter: &egui::Painter,
@@ -41,7 +37,7 @@ pub(super) fn draw(
     let tension = params.spring_tension.value().clamp(0.0, 1.0);
     let drip = params.spring_drip.value().clamp(0.0, 1.0);
     // The round trips the engine publishes (A on the even slots, B on the
-    // odd), or the size knob's before it has run.
+    // odd), or the engine's map of the size knob before it has run.
     let fallback = {
         let (lo, hi) = ROUND_TRIP_MS;
         lo * (hi / lo).powf(params.size.value().clamp(0.0, 1.0))

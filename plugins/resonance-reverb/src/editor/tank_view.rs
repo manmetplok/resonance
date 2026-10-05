@@ -63,8 +63,15 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, app: &ReverbEditorApp) {
     if body.width() < 40.0 || body.height() < 40.0 {
         return;
     }
-    let energies = app.viz.read_channel_energies();
-    let delays_ms = app.viz.read_fdn_delay_ms();
+    // The viz holds whatever the last processed block's engine published:
+    // after a switch the audio thread has not run yet (an inactive
+    // plugin, or the next block), it is the previous algorithm's, which
+    // this layout must not label as its own. Draw idle until it catches up.
+    let (energies, delays_ms) = if app.viz.tank_algorithm() == Some(algorithm as i32) {
+        (app.viz.read_channel_energies(), app.viz.read_fdn_delay_ms())
+    } else {
+        ([0.0; FDN_CHANNELS], [0.0; FDN_CHANNELS])
+    };
     match algorithm {
         Algorithm::Plate => plate::draw(painter, body, &energies, &delays_ms),
         Algorithm::Spring => spring::draw(painter, body, app, &energies, &delays_ms),

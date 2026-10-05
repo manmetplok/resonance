@@ -8,7 +8,7 @@
 //! reader can tolerate one straddled sample at frame boundaries (it's
 //! only ever rendering a viz).
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
 use resonance_metering::{AtomicF32, AtomicF32Array, AtomicF32Pair, AtomicHistoryRing};
@@ -66,6 +66,9 @@ pub struct ReverbViz {
     channel_energies: AtomicF32Array<FDN_CHANNELS>,
     /// FDN delay lengths in ms for the tank labels.
     fdn_delay_ms: AtomicF32Array<FDN_CHANNELS>,
+    /// The algorithm (`Algorithm as i32`) whose engine published the
+    /// energies and lengths above, -1 before any has.
+    tank_algorithm: AtomicI32,
 
     /// ER tap times in ms (left, right), as bit-punned atomic f32.
     er_tap_ms_l: AtomicF32Array<ER_TAPS>,
@@ -95,6 +98,7 @@ impl ReverbViz {
             out_db: AtomicF32Pair::new(f32::NEG_INFINITY),
             channel_energies: AtomicF32Array::new(0.0),
             fdn_delay_ms: AtomicF32Array::new(0.0),
+            tank_algorithm: AtomicI32::new(-1),
             er_tap_ms_l: AtomicF32Array::new(0.0),
             er_tap_ms_r: AtomicF32Array::new(0.0),
             er_tap_gain_l: AtomicF32Array::new(0.0),
@@ -153,6 +157,18 @@ impl ReverbViz {
 
     pub fn read_fdn_delay_ms(&self) -> [f32; FDN_CHANNELS] {
         self.fdn_delay_ms.load()
+    }
+
+    /// Record which algorithm's engine published the tank energies and
+    /// lengths (`Algorithm as i32`).
+    pub fn store_tank_algorithm(&self, algorithm: i32) {
+        self.tank_algorithm.store(algorithm, Ordering::Relaxed);
+    }
+
+    /// The algorithm (`Algorithm as i32`) whose engine published the tank
+    /// energies and lengths, `None` before any block has run.
+    pub fn tank_algorithm(&self) -> Option<i32> {
+        Some(self.tank_algorithm.load(Ordering::Relaxed)).filter(|&a| a >= 0)
     }
 
     pub fn store_er_taps(&self, times: &[(f32, f32); ER_TAPS], gains: &[(f32, f32); ER_TAPS]) {

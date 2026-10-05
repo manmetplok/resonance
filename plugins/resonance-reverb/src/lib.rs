@@ -344,6 +344,7 @@ impl ResonanceReverb {
         self.viz.store_duck_gr_db(ducker.gain_reduction_db());
         self.viz.store_channel_energies(&reverb.channel_energies());
         self.viz.store_fdn_delay_ms(&reverb.fdn_delay_ms());
+        self.viz.store_tank_algorithm(reverb.algorithm() as i32);
         self.viz
             .store_er_taps(&reverb.er_tap_times_ms(), &reverb.er_tap_gains());
         self.viz.push_tail_rms(reverb.take_wet_rms());

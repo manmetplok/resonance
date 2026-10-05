@@ -27,6 +27,16 @@ pub const ALGORITHM_LABELS: &[&str] = ALGORITHM_LABELS_ALL.split_at(Algorithm::B
 /// The `algorithm` parameter's id.
 pub const ALGORITHM_ID: &str = "algorithm";
 
+/// Parameters that landed with `algorithm` (reverb-algorithms.md R1): a
+/// state naming any of them postdates it.
+const PARAMS_SINCE_ALGORITHM: &[&str] = &[
+    "low_decay_mult",
+    "low_xover",
+    "high_decay_mult",
+    "predelay_sync",
+    "decay_sync",
+];
+
 /// The reverb's state upgrade (`ResonancePlugin::STATE_UPGRADE`, run on
 /// every load path before a param is read): a state that names
 /// parameters but no `algorithm` was written before the parameter
@@ -37,12 +47,18 @@ pub const ALGORITHM_ID: &str = "algorithm";
 /// parameter too, so the key's absence is the only reliable mark).
 ///
 /// Idempotent: a state that names an algorithm keeps it. A state with
-/// no params at all names nothing and leaves the instance as it is.
+/// no params at all names nothing and leaves the instance as it is, and
+/// so does a partial one that names a parameter added with `algorithm`
+/// ([`PARAMS_SINCE_ALGORITHM`]): it was written after it existed, so its
+/// silence on the algorithm is not a legacy Classic.
 pub fn upgrade_state(state: &mut serde_json::Value) {
     let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
         return;
     };
-    if params.is_empty() || params.contains_key(ALGORITHM_ID) {
+    if params.is_empty()
+        || params.contains_key(ALGORITHM_ID)
+        || PARAMS_SINCE_ALGORITHM.iter().any(|id| params.contains_key(*id))
+    {
         return;
     }
     params.insert(
