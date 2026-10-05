@@ -275,3 +275,116 @@ fn impulse_report_bundles_the_metrics() {
     assert!(rep.echo_density.time_to_reach(0.9).unwrap() < 0.005);
     assert!(rep.rms_2s_dbfs > -30.0 && rep.rms_2s_dbfs < 0.0);
 }
+
+// ---------------------------------------------------------------------------
+// Program-material decay (R9, the `meter.measure` `decay` detail)
+// ---------------------------------------------------------------------------
+
+use resonance_metering::decay::{program_decay, DecayEnd};
+
+/// Stereo noise: a sustained plateau of `plateau_s`, then a free decay of
+/// `t60` lasting `tail_s` (independent channels).
+fn plateau_then_decay(seed: u64, plateau_s: f32, t60: f32, tail_s: f32) -> (Vec<f32>, Vec<f32>) {
+    let (np, nt) = ((plateau_s * SR) as usize, (tail_s * SR) as usize);
+    let mut g = Gauss(seed);
+    let mut chan = || -> Vec<f32> {
+        (0..np + nt)
+            .map(|i| {
+                let a = if i < np { 1.0 } else { env(i - np, t60) };
+                0.3 * g.next() * a
+            })
+            .collect()
+    };
+    (chan(), chan())
+}
+
+#[test]
+fn program_decay_recovers_a_known_t60_after_a_stop() {
+    for (seed, t60) in [(11, 0.5f32), (12, 1.5), (13, 3.0)] {
+        // Leading silence and a plateau, then the free decay into
+        // nothing: the song's last note into a reverb.
+        let (mut l, mut r) = plateau_then_decay(seed, 1.0, t60, 1.2 * t60 + 0.3);
+        let lead = vec![0.0f32; (0.5 * SR) as usize];
+        l.splice(0..0, lead.iter().copied());
+        r.splice(0..0, lead.iter().copied());
+        let d = program_decay(&l, &r, SR);
+        assert!(d.found && d.clean, "T60 {t60}: {d:?}");
+        assert_close(&format!("T60 {t60} T30"), d.times.t30, t60, 0.05);
+        assert_close(&format!("T60 {t60} T20"), d.times.t20, t60, 0.05);
+        assert_close(&format!("T60 {t60} EDT"), d.times.edt, t60, 0.10);
+        let stop = 1.5;
+        assert!(
+            (d.start_s() - stop).abs() < 0.05,
+            "T60 {t60}: decay starts at {} s, stop at {stop}",
+            d.start_s()
+        );
+        assert!(d.dynamic_range_db >= 60.0, "T60 {t60}: {} dB", d.dynamic_range_db);
+        // 20 dB of a T60 decay is a third of it.
+        let t20 = d.tail_20db_s.expect("tail falls 20 dB");
+        assert!((t20 - t60 / 3.0).abs() < 0.06, "T60 {t60}: 20 dB down after {t20} s");
+        let mid = d.bands.iter().find(|b| b.center_hz == 1_000.0).unwrap();
+        assert_close(&format!("T60 {t60} T30@1k"), mid.times.t30, t60, 0.10);
+        assert!(d.note(0.0).is_none());
+    }
+}
+
+#[test]
+fn the_last_clean_stop_wins_over_an_earlier_one() {
+    let (l1, r1) = plateau_then_decay(21, 1.0, 0.5, 1.0);
+    let (l2, r2) = plateau_then_decay(22, 1.0, 1.0, 1.5);
+    let l: Vec<f32> = l1.iter().chain(&l2).copied().collect();
+    let r: Vec<f32> = r1.iter().chain(&r2).copied().collect();
+    let d = program_decay(&l, &r, SR);
+    assert!(d.clean, "{d:?}");
+    assert!((d.start_s() - 3.0).abs() < 0.05, "second stop: {}", d.start_s());
+    assert_close("second decay T30", d.times.t30, 1.0, 0.05);
+}
+
+#[test]
+fn an_overlapped_decay_is_not_clean() {
+    // Plateau, a 2 s decay, and 0.3 s later (at −9 dB) the next part
+    // comes back in at the same level and plays to the end of the range:
+    // no free decay.
+    let (mut l, mut r) = plateau_then_decay(31, 1.0, 2.0, 0.3);
+    let mut g = Gauss(32);
+    for _ in 0..(1.5 * SR) as usize {
+        l.push(0.3 * g.next());
+        r.push(0.3 * g.next());
+    }
+    let d = program_decay(&l, &r, SR);
+    assert!(d.found && !d.clean, "{d:?}");
+    assert_eq!(d.ends, Some(DecayEnd::Onset));
+    assert!(d.dynamic_range_db < 20.0, "{} dB", d.dynamic_range_db);
+    assert_eq!(d.times.t30, None);
+    assert_eq!(d.times.t20, None);
+    assert!(d.bands.iter().all(|b| b.times.t30.is_none()));
+    let note = d.note(10.0).expect("a note says why");
+    assert!(note.contains("new signal") && note.contains("from 11.0"), "{note}");
+}
+
+#[test]
+fn a_decay_cut_by_the_range_end_has_no_t30() {
+    // A 3 s decay cut 0.5 s in (−10 dB).
+    let (l, r) = plateau_then_decay(41, 1.0, 3.0, 0.5);
+    let d = program_decay(&l, &r, SR);
+    assert!(d.found && !d.clean, "{d:?}");
+    assert_eq!(d.ends, Some(DecayEnd::RangeEnd));
+    assert_eq!(d.times.t30, None);
+    assert!(d.note(0.0).unwrap().contains("range ends"));
+}
+
+#[test]
+fn no_stop_in_the_range_reports_nothing() {
+    // Steady noise throughout, and silence.
+    let mut g = Gauss(51);
+    let (l, r) = (g.take(2 * SR as usize), g.take(2 * SR as usize));
+    let zeros = vec![0.0f32; SR as usize];
+    for (l, r) in [(&l[..], &r[..]), (&zeros[..], &zeros[..])] {
+        let d = program_decay(l, r, SR);
+        assert!(!d.found && !d.clean, "{d:?}");
+        assert_eq!(d.ends, None);
+        assert_eq!(d.times, Default::default());
+        assert!(d.tail_20db_s.is_none());
+        assert!(d.note(0.0).unwrap().contains("no stop found"));
+    }
+}

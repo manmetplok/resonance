@@ -36,6 +36,7 @@ fn detail() -> DetailSet {
         stereo: true,
         dynamics: true,
         depth: false,
+        decay: false,
         assist: true,
     }
 }

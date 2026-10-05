@@ -55,10 +55,17 @@
 //! A plain Hadamard row would make each output the next input of one
 //! line, a comb at that line's length.
 //!
-//! **Freeze.** The input (ER and late path) ramps to zero over 10 ms; once
-//! it is silent the Fdn goes lossless (its own freeze also mutes its input
-//! and fades the modulation out). Release unfreezes the Fdn at once and
-//! ramps the input back.
+//! **Freeze** ramps in and out over 100 ms ([`FreezeRamp`]). The input
+//! (ER and late path) fades, and so does the loop's injection *after* the
+//! build line: the build line (up to 300 ms) and the diffusers are still
+//! handing the loop the last of the input when Freeze lands, and a gate
+//! there would cut a live injection. Meanwhile the loop's loss falls to
+//! none (every T60 stretched toward infinity), so the lines' gains climb
+//! to unity in steps far below a click instead of jumping there. Only
+//! then does the Fdn switch to lossless (and fade its modulation out).
+//! The direct share of the build taps is not gated: it is heard, not
+//! recirculated, and drains with the build line. Release leaves the
+//! lossless loop at zero loss and ramps the same way back.
 //!
 //! **Parameter changes** are applied lazily, at most once per sample and
 //! only when something moved: the plugin calls every setter every block,
@@ -77,6 +84,7 @@ use resonance_dsp::DelayLine;
 
 use super::super::er::ER_TAPS;
 use super::super::CHANNELS;
+use super::room::{stretch, FreezeRamp, FreezeTick};
 use super::Wet;
 use er::HallEr;
 
@@ -122,9 +130,6 @@ const DIRECT: f32 = 0.25;
 /// Output gain per line (the ±1 mixes over 16 lines, normalised).
 const OUT_GAIN: f32 = 0.25;
 
-/// Freeze input ramp, ms.
-const FREEZE_RAMP_MS: f32 = 10.0;
-
 /// Output sign of line `i`: the bent function `b0·b1 ⊕ b2·b3` of its
 /// index bits for L, the same `⊕ b1` for R (see the module docs).
 fn output_sign(i: usize, right: bool) -> f32 {
@@ -169,14 +174,11 @@ pub struct HallEngine {
     mod_rate: f32,
     mod_depth: f32,
     build: f32,
-    frozen: bool,
     dirty: bool,
     /// False until the first sample since `new`/`clear`: changes snap.
     primed: bool,
 
-    /// Input gain, ramped by Freeze.
-    in_gain: f32,
-    ramp_step: f32,
+    freeze: FreezeRamp,
 
     energy: [f32; LINES],
 }
@@ -237,11 +239,9 @@ impl HallEngine {
             mod_rate: 1.0,
             mod_depth: 0.3,
             build: 0.5,
-            frozen: false,
             dirty: true,
             primed: false,
-            in_gain: 1.0,
-            ramp_step: 1.0 / (FREEZE_RAMP_MS * 0.001 * sr).max(1.0),
+            freeze: FreezeRamp::new(sr),
             energy: [0.0; LINES],
         };
         hall.apply();
@@ -265,20 +265,29 @@ impl HallEngine {
     }
 
     pub fn set_freeze(&mut self, v: bool) {
-        if v == self.frozen {
+        if v == self.freeze.on() {
             return;
         }
-        self.frozen = v;
+        self.freeze.set(v);
         if !self.primed {
             // Nothing in flight: land in the settled state directly, the
             // state `clear` leaves a frozen (or released) engine in.
-            self.in_gain = if v { 0.0 } else { 1.0 };
-            self.fdn.set_freeze(v);
-            self.fdn.clear();
-        } else if !v {
+            self.settle_freeze();
+        } else if !v && self.fdn.is_frozen() {
+            // Out of the lossless loop at zero loss (the design it holds
+            // since the ramp landed); `process` ramps the loss back.
             self.fdn.set_freeze(false);
         }
-        // Freezing while running: `process` ramps the input out first.
+        // Freezing while running: `process` ramps into it.
+    }
+
+    /// The Freeze ramp at its target and the Fdn in the matching state,
+    /// cleared (its modulation fade complete). Only while nothing sounds.
+    fn settle_freeze(&mut self) {
+        self.freeze.snap();
+        self.fdn.set_freeze(self.freeze.on());
+        self.fdn.clear();
+        self.apply_loss();
     }
 
     /// The treble crossover, Hz (decay above it tends to `decay ×
@@ -335,11 +344,22 @@ impl HallEngine {
         }
     }
 
-    /// The decay target the Fdn is designed for.
+    /// The decay target the Fdn is designed for, at the loss the Freeze
+    /// ramp leaves.
     fn bands(&self) -> DecayBands {
         let (lo, xover, hi) = self.shape;
         let damping = self.damping.max(2.0 * xover);
-        DecayBands::from_mults(self.t60.max(0.05), lo.max(0.01), hi.max(0.01), xover, damping)
+        let bands =
+            DecayBands::from_mults(self.t60.max(0.05), lo.max(0.01), hi.max(0.01), xover, damping);
+        stretch(bands, self.freeze.loss())
+    }
+
+    /// Redesign the Fdn's absorption if its target moved.
+    fn apply_loss(&mut self) {
+        let bands = self.bands();
+        if bands != self.fdn.decay() {
+            self.fdn.set_decay(bands);
+        }
     }
 
     /// Push the parameters into the DSP (see the module docs).
@@ -356,10 +376,7 @@ impl HallEngine {
         if snap {
             self.fdn.set_glide(GLIDE);
         }
-        let bands = self.bands();
-        if bands != self.fdn.decay() {
-            self.fdn.set_decay(bands);
-        }
+        self.apply_loss();
         let depth = self.mod_depth.clamp(0.0, 1.0) * MOD_DEPTH_48K * self.sample_rate / 48_000.0;
         self.fdn
             .set_modulation(self.mod_rate.max(0.0) * MOD_RATE_SCALE, depth);
@@ -383,19 +400,18 @@ impl HallEngine {
         }
         self.primed = true;
 
-        // Freeze: ramp the input out, then make the loop lossless.
-        let target = if self.frozen { 0.0 } else { 1.0 };
-        if self.in_gain != target {
-            self.in_gain = if self.in_gain < target {
-                (self.in_gain + self.ramp_step).min(1.0)
-            } else {
-                (self.in_gain - self.ramp_step).max(0.0)
-            };
+        // Freeze: the input and the loop's injection fade while the loss
+        // falls, then the loop goes lossless (see the module docs).
+        match self.freeze.tick() {
+            FreezeTick::Still | FreezeTick::Moving => {}
+            FreezeTick::Redesign => self.apply_loss(),
+            FreezeTick::Engage => {
+                self.apply_loss();
+                self.fdn.set_freeze(true);
+            }
         }
-        if self.frozen && self.in_gain == 0.0 && !self.fdn.is_frozen() {
-            self.fdn.set_freeze(true);
-        }
-        let (l, r) = (l * self.in_gain, r * self.in_gain);
+        let g = self.freeze.gain();
+        let (l, r) = (l * g, r * g);
 
         let (er_l, er_r) = self.er.process(l, r);
 
@@ -418,18 +434,21 @@ impl HallEngine {
         self.build_l.push(dl);
         self.build_r.push(dr);
 
-        // Build: each line is fed from its own point of the window.
-        let mut input = [0.0f32; LINES];
-        for (i, x) in input.iter_mut().enumerate() {
+        // Build: each line is fed from its own point of the window (and
+        // the feed faded by Freeze, after the build line).
+        let mut taps = [0.0f32; LINES];
+        let mut feed = [0.0f32; LINES];
+        for i in 0..LINES {
             glide(&mut self.build_pos[i], self.build_target[i]);
             let line = if i % 2 == 0 { &self.build_l } else { &self.build_r };
-            *x = self.build_w[i] * line.tap_linear(self.build_pos[i]);
+            taps[i] = self.build_w[i] * line.tap_linear(self.build_pos[i]);
+            feed[i] = g * taps[i];
         }
 
-        let y = self.fdn.tick(&input);
+        let y = self.fdn.tick(&feed);
         let (mut late_l, mut late_r) = (0.0f32, 0.0f32);
         for i in 0..LINES {
-            let v = y[i] + DIRECT * input[i];
+            let v = y[i] + DIRECT * taps[i];
             late_l += self.out_l[i] * v;
             late_r += self.out_r[i] * v;
             self.energy[i] = self.energy[i] * 0.995 + y[i].abs() * 0.005;
@@ -452,9 +471,7 @@ impl HallEngine {
         self.build_l.clear();
         self.build_r.clear();
         self.build_pos = self.build_target;
-        self.in_gain = if self.frozen { 0.0 } else { 1.0 };
-        self.fdn.set_freeze(self.frozen);
-        self.fdn.clear();
+        self.settle_freeze();
         self.energy = [0.0; LINES];
         self.primed = false;
     }

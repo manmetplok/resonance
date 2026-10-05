@@ -383,6 +383,15 @@ For every algorithm:
 - `Absorption` (R2) cannot give both shelves deep cuts with crossovers
   under ~2.5× apart: its mid compensation is capped at unity gain, so the mid
   decays short there. Tests stay inside the range.
+- Freeze on the new engines is a 100 ms ramp, the same on engage and
+  release (reversible mid-way): input and loop feed fade, the loop's loss
+  falls to zero, and only then is the network exactly lossless. A hard gate
+  clicked and the click was then held forever in the lossless loop. Plate's
+  Freeze also mutes its onset (ER) path. Shared ramp:
+  `src/dsp/algo/room/freeze.rs`.
+- R9: the `decay` meter detail is read on the **track that sends** to a
+  reverb return (its stem carries its sends' returns); a `{bus_id}` target
+  hears only tracks routed into the bus, so a send-fed return reads silent.
 - CPU per 128-frame block at 48 kHz: Classic 15.6–16 µs, Plate 6.0, Room 16.9,
   Chamber 16.9, Hall 19.1, Ambience 7.9.
 

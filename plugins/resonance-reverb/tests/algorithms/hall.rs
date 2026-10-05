@@ -31,100 +31,18 @@
 //!   (up to 30 dB deep here), which make instantaneous frequency
 //!   meaningless at the nulls.
 
-use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use resonance_dsp_test_support as golden;
 use resonance_metering::decay::{modal_peakiness_db, ImpulseReport, PEAKINESS_START_S};
 use resonance_reverb::dsp::algo::hall::HallEngine;
 use resonance_reverb::dsp::{Algorithm, ReverbDsp};
 
-const SR: f32 = 48_000.0;
-const BLOCK: usize = 128;
-const TAU: f32 = std::f32::consts::TAU;
+use crate::common::*;
 
-/// Every engine setter's value for one render.
-#[derive(Clone, Copy, Debug)]
-struct Set {
-    size: f32,
-    decay: f32,
-    damping: f32,
-    er_level: f32,
-    er_time: f32,
-    mod_rate: f32,
-    mod_depth: f32,
-    /// `(low_decay_mult, low_xover, high_decay_mult)`.
-    shape: (f32, f32, f32),
-    build: f32,
-    diffusion: f32,
-}
-
-impl Set {
-    /// The plugin's defaults (decay shape included), at `size`/`decay`.
-    fn at(size: f32, decay: f32) -> Self {
-        Self {
-            size,
-            decay,
-            damping: 8_000.0,
-            er_level: 0.4,
-            er_time: 0.5,
-            mod_rate: 1.0,
-            mod_depth: 0.3,
-            shape: (1.0, 250.0, 0.5),
-            build: 0.5,
-            diffusion: 0.8,
-        }
-    }
-}
-
-fn configure(d: &mut ReverbDsp, s: &Set) {
-    d.set_size(s.size);
-    d.set_decay(s.decay);
-    d.set_freeze(false);
-    d.set_damping(s.damping);
-    d.set_predelay(0.0);
-    d.set_er_level(s.er_level);
-    d.set_er_time(s.er_time);
-    d.set_mod_rate(s.mod_rate);
-    d.set_mod_depth(s.mod_depth);
-    d.set_decay_shape(s.shape.0, s.shape.1, s.shape.2);
-    d.set_build(s.build);
-    d.set_wet_filters(false, 600.0, false, 10_000.0, false);
-    d.set_er_tail_balance(0.0);
-}
-
-fn dsp(alg: Algorithm, s: &Set) -> ReverbDsp {
-    let mut d = ReverbDsp::with_engines(SR, &[alg]);
-    configure(&mut d, s);
-    d
-}
-
-/// Unit impulse on both channels at sample 0 (a mono send).
-fn ir(alg: Algorithm, s: &Set, secs: f32) -> (Vec<f32>, Vec<f32>) {
-    let mut d = dsp(alg, s);
-    let n = (secs * SR) as usize;
-    let (mut l, mut r) = (Vec::with_capacity(n), Vec::with_capacity(n));
-    for i in 0..n {
-        let x = if i == 0 { 1.0 } else { 0.0 };
-        let (a, b) = d.process(x, x, s.diffusion, 1.0);
-        l.push(a);
-        r.push(b);
-    }
-    (l, r)
-}
-
-/// Energy of a stereo response re a unit impulse on one channel, dB.
-fn energy_db(l: &[f32], r: &[f32]) -> f64 {
-    let e: f64 = l.iter().chain(r).map(|&x| (x as f64) * (x as f64)).sum();
-    10.0 * (e / 2.0).max(1e-30).log10()
-}
-
-/// The silence guard of §5.1: total IR energy above −40 dB re a unit
-/// impulse.
-fn guard(what: &str, l: &[f32], r: &[f32]) {
-    let e = energy_db(l, r);
-    assert!(e > -40.0, "{what}: IR energy {e:.1} dB (silence guard)");
-    assert!(l.iter().chain(r).all(|x| x.is_finite()), "{what}: non-finite output");
+/// The Hall at `size`/`decay`, the plugin's defaults (decay shape
+/// included) otherwise.
+fn hall(size: f32, decay: f32) -> Setup {
+    Setup::new(Algorithm::Hall, size, decay)
 }
 
 /// Long enough for the T30 fit (−35 dB at 0.58·T60) with margin, and for
@@ -159,11 +77,11 @@ fn grid() -> &'static [Cell] {
         let mut cells = Vec::new();
         for &size in &SIZES {
             for &decay in &DECAYS {
-                let s = Set::at(size, decay);
-                let (l, r) = ir(Algorithm::Hall, &s, t30_seconds(decay));
-                guard(&format!("hall {size}/{decay}"), &l, &r);
+                let s = hall(size, decay);
+                let (l, r) = s.impulse(t30_seconds(decay));
+                assert_not_silent(&format!("hall {size}/{decay}"), &l, &r);
                 let hall = ImpulseReport::analyze(&l, &r, SR);
-                let (l, r) = ir(Algorithm::Classic, &s, t30_seconds(decay));
+                let (l, r) = s.on(Algorithm::Classic).impulse(t30_seconds(decay));
                 let classic = ImpulseReport::analyze(&l, &r, SR);
                 cells.push(Cell {
                     size,
@@ -246,11 +164,11 @@ fn the_tail_is_less_peaky_than_classic() {
         rows.push((c.size, c.decay, c.hall.peakiness_db.unwrap(), c.classic.peakiness_db.unwrap()));
     }
     for &decay in &DECAYS {
-        let s = Set::at(0.2, decay);
-        let (l, r) = ir(Algorithm::Hall, &s, 1.3);
-        guard(&format!("hall 0.2/{decay}"), &l, &r);
+        let s = hall(0.2, decay);
+        let (l, r) = s.impulse(1.3);
+        assert_not_silent(&format!("hall 0.2/{decay}"), &l, &r);
         let hall = mean_peakiness(&l, &r);
-        let (l, r) = ir(Algorithm::Classic, &s, 1.3);
+        let (l, r) = s.on(Algorithm::Classic).impulse(1.3);
         rows.push((0.2, decay, hall, mean_peakiness(&l, &r)));
     }
     println!("\nsize decay  Hall  Classic  floor  limit (dB peakiness)");
@@ -288,13 +206,15 @@ fn band_decays_follow_the_multipliers_within_15_percent() {
     // Crossovers two octaves from the measured bands (125 Hz and 8 kHz),
     // where the first-order shelves have reached their asymptote.
     for shape in [(1.5, 500.0, 0.5), (0.6, 500.0, 0.3)] {
-        let s = Set {
+        let s = Setup {
             damping: 2_000.0,
-            shape,
-            ..Set::at(0.5, 3.0)
+            low_mult: shape.0,
+            low_xover: shape.1,
+            high_mult: shape.2,
+            ..hall(0.5, 3.0)
         };
-        let (l, r) = ir(Algorithm::Hall, &s, t30_seconds(3.0 * shape.0.max(1.0)));
-        guard(&format!("bands {shape:?}"), &l, &r);
+        let (l, r) = s.impulse(t30_seconds(3.0 * shape.0.max(1.0)));
+        assert_not_silent(&format!("bands {shape:?}"), &l, &r);
         let rep = ImpulseReport::analyze(&l, &r, SR);
         let band = |hz: f32| {
             let b = rep.bands.iter().find(|b| b.center_hz == hz).unwrap();
@@ -332,16 +252,16 @@ fn the_build_delays_density_and_the_late_energy_peak() {
         let mut dens = Vec::new();
         let mut peaks = Vec::new();
         for build in [0.0, 0.5, 1.0] {
-            let s = Set {
+            let s = Setup {
                 build,
-                ..Set::at(size, 2.5)
+                ..hall(size, 2.5)
             };
-            let (l, r) = ir(Algorithm::Hall, &s, 0.7);
-            guard(&format!("build {build}"), &l, &r);
+            let (l, r) = s.impulse(0.7);
+            assert_not_silent(&format!("build {build}"), &l, &r);
             let rep = ImpulseReport::analyze(&l, &r, SR);
             let d = rep.echo_density.time_to_reach(0.9).unwrap();
             // The late field alone: its energy envelope is what builds.
-            let (l, r) = ir(Algorithm::Hall, &Set { er_level: 0.0, ..s }, 0.7);
+            let (l, r) = s.with(|s| s.er_level = 0.0).impulse(0.7);
             let p = energy_peak_s(&l, &r);
             println!("{size:>4.1} {build:>5.1}  {:>5.0} ms  {:>5.0} ms", d * 1e3, p * 1e3);
             dens.push(d);
@@ -378,12 +298,12 @@ fn the_build_delays_density_and_the_late_energy_peak() {
 /// RMS spread (cents) of the steady-state response to a 1 kHz sine at a
 /// 10 s decay; see the module docs.
 fn sine_spread_cents(alg: Algorithm, mod_depth: f32, mod_rate: f32) -> f32 {
-    let s = Set {
+    let s = Setup {
         mod_depth,
         mod_rate,
-        ..Set::at(0.5, 10.0)
+        ..hall(0.5, 10.0)
     };
-    let mut d = dsp(alg, &s);
+    let mut d = s.on(alg).dsp();
     let hop = (0.001 * SR) as usize;
     let f = 1_000.0f64;
     let start = (3.0 * SR) as usize;
@@ -439,21 +359,6 @@ fn the_modulation_does_not_wobble_a_long_tail() {
 // For every algorithm: stability, freeze, reset, glides
 // ---------------------------------------------------------------------------
 
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        (self.0 >> 40) as f32 / (1u64 << 24) as f32
-    }
-
-    fn range(&mut self, lo: f32, hi: f32) -> f32 {
-        lo + (hi - lo) * self.next()
-    }
-}
-
 /// One automated parameter: stepped or ramped to random targets.
 struct Lane {
     lo: f32,
@@ -495,7 +400,7 @@ impl Lane {
 #[test]
 fn sixty_seconds_of_random_automation_stay_finite_and_bounded() {
     let mut rng = Rng(0x00C0_FFEE_5EED_0005);
-    let mut d = dsp(Algorithm::Hall, &Set::at(0.5, 2.0));
+    let mut d = hall(0.5, 2.0).dsp();
     let mut lanes = [
         Lane::new(0.0, 1.0, 0.5),         // size
         Lane::new(0.1, 30.0, 2.0),        // decay
@@ -558,8 +463,8 @@ fn sixty_seconds_of_random_automation_stay_finite_and_bounded() {
 
 #[test]
 fn freeze_holds_the_tail_for_sixty_seconds() {
-    let s = Set::at(0.7, 5.0);
-    let mut d = dsp(Algorithm::Hall, &s);
+    let s = hall(0.7, 5.0);
+    let mut d = s.dsp();
     let mut rng = Rng(0x0F2E_E2E0);
     for _ in 0..SR as usize {
         let (x, y) = (0.5 * (2.0 * rng.next() - 1.0), 0.5 * (2.0 * rng.next() - 1.0));
@@ -617,8 +522,8 @@ fn run_probe(d: &mut ReverbDsp, from: usize, len: usize, diffusion: f32) -> Vec<
 
 #[test]
 fn reset_renders_exactly_like_a_fresh_engine() {
-    let first = Set::at(0.3, 1.5);
-    let then = Set {
+    let first = hall(0.3, 1.5);
+    let then = Setup {
         size: 0.8,
         decay: 4.0,
         damping: 5_000.0,
@@ -626,21 +531,24 @@ fn reset_renders_exactly_like_a_fresh_engine() {
         er_time: 0.7,
         mod_rate: 2.0,
         mod_depth: 0.8,
-        shape: (1.4, 300.0, 0.45),
+        low_mult: 1.4,
+        low_xover: 300.0,
+        high_mult: 0.45,
         build: 0.9,
         diffusion: 0.6,
+        ..hall(0.5, 2.0)
     };
     for freeze_after in [false, true] {
-        let mut reused = dsp(Algorithm::Hall, &first);
+        let mut reused = first.dsp();
         run_probe(&mut reused, 0, (0.7 * SR) as usize, first.diffusion);
         // A retune mid-signal (size, ER and build glides in flight), then
         // the host's reset.
-        configure(&mut reused, &then);
+        then.apply(&mut reused);
         reused.set_freeze(freeze_after);
         run_probe(&mut reused, 0, 3_000, then.diffusion);
         reused.clear();
 
-        let mut fresh = dsp(Algorithm::Hall, &then);
+        let mut fresh = then.dsp();
         fresh.set_freeze(freeze_after);
 
         let mut a = run_probe(&mut reused, 0, 12_000, then.diffusion);
@@ -659,77 +567,62 @@ fn reset_renders_exactly_like_a_fresh_engine() {
     }
 }
 
-/// Largest sample-to-sample step on either channel of an interleaved run,
-/// over the run's peak: a sustained sine of any level reads
-/// `2·sin(ω/2)` (0.029 at 220 Hz), a glide's Doppler bend up to `1 + slew`
-/// times that, and a tap that relocates mid-signal well above.
-fn step_over_peak(interleaved: &[f32]) -> f32 {
-    let peak = interleaved.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-    let mut worst = 0.0f32;
-    for ch in 0..2 {
-        let side: Vec<f32> = interleaved.iter().skip(ch).step_by(2).copied().collect();
-        for w in side.windows(2) {
-            worst = worst.max((w[1] - w[0]).abs());
-        }
-    }
-    worst / peak.max(1e-9)
-}
-
 /// Size, build and ER spacing swept together across their range under a
 /// sustained 220 Hz sine, at block rate as the plugin's smoothers deliver
 /// them. `switching.rs`'s pattern (largest step against a held render
-/// plus a margin) with two changes: the held reference is rendered at *both* ends
-/// of the sweep, and steps are taken over each render's peak. The steady
-/// level of a sine through a room depends on the room, and a sweep drags
-/// the room's modes across the sine (the swept level overshoots both
-/// ends'), so an absolute step bound would flag level, not clicks. The
-/// glides (0.1 samples per sample) may add their 10 % Doppler.
+/// plus a margin) with two changes: the held reference is rendered at
+/// *both* ends of the sweep, and steps are taken over each render's peak
+/// ([`Clicks`]). The steady level of a sine through a room depends on the
+/// room, and a sweep drags the room's modes across the sine (the swept
+/// level overshoots both ends'), so an absolute step bound would flag
+/// level, not clicks. The glides (0.1 samples per sample) may add their
+/// 10 % Doppler.
 #[test]
 fn size_build_and_er_sweeps_under_a_sustained_sine_do_not_click() {
-    let sine = |n: usize| 0.5 * (TAU * 220.0 * n as f32 / SR).sin();
-    let from = Set {
+    let from = Setup {
         build: 0.2,
         er_time: 0.3,
-        ..Set::at(0.1, 2.0)
+        ..hall(0.1, 2.0)
     };
-    let to = Set {
+    let to = Setup {
         build: 0.9,
         er_time: 0.8,
-        ..Set::at(0.95, 2.0)
+        ..hall(0.95, 2.0)
     };
     let (warm, window) = (SR as usize, SR as usize / 2);
-    let run = |d: &mut ReverbDsp, start: usize, len: usize, sweep: bool| {
-        let mut out = Vec::with_capacity(2 * len);
-        for (k, n) in (start..start + len).enumerate() {
-            if sweep && k % BLOCK == 0 {
-                let t = k as f32 / len as f32;
-                d.set_size(from.size + (to.size - from.size) * t);
-                d.set_build(from.build + (to.build - from.build) * t);
-                d.set_er_time(from.er_time + (to.er_time - from.er_time) * t);
-            }
-            let x = sine(n);
-            let (a, b) = d.process(x, x, from.diffusion, 1.0);
-            out.push(a);
-            out.push(b);
-        }
-        out
-    };
-    let held = |s: &Set| {
-        let mut d = dsp(Algorithm::Hall, s);
-        run(&mut d, 0, warm, false);
-        step_over_peak(&run(&mut d, warm, window, false))
+    let held = |s: &Setup| {
+        let mut d = s.dsp();
+        run_sine(&mut d, s, 0, warm, |_, _| {});
+        let (l, r) = run_sine(&mut d, s, warm, window, |_, _| {});
+        Clicks::of(&l, &r).step
     };
     let held = held(&from).max(held(&to));
-    let mut swept = dsp(Algorithm::Hall, &from);
-    run(&mut swept, 0, warm, false);
-    let through = run(&mut swept, warm, window, true);
-    let peak = through.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-    let sweep = step_over_peak(&through);
+    let mut swept = from.dsp();
+    run_sine(&mut swept, &from, 0, warm, |_, _| {});
+    let (l, r) = run_sine(&mut swept, &from, warm, window, |d, k| {
+        let t = k as f32 / window as f32;
+        d.set_size(from.size + (to.size - from.size) * t);
+        d.set_build(from.build + (to.build - from.build) * t);
+        d.set_er_time(from.er_time + (to.er_time - from.er_time) * t);
+    });
+    let Clicks { step: sweep, peak, .. } = Clicks::of(&l, &r);
     println!("\nsweep: step/peak {sweep:.5} against {held:.5} held (peak {peak:.3})");
     assert!(peak > 0.05, "the swept render is near silent (peak {peak})");
     assert!(
         sweep <= 1.1 * held + 2e-3,
         "the sweep clicks: step/peak {sweep:.5} against {held:.5} held"
+    );
+}
+
+/// Freeze engaged and released under a sustained sine: no click either
+/// way, though the build line and the diffusers are still feeding the
+/// loop when Freeze lands.
+#[test]
+fn freeze_engage_and_release_do_not_click() {
+    assert_freeze_is_click_free(&hall(0.5, 2.0), FREEZE_CLICK_MARGIN);
+    assert_freeze_is_click_free(
+        &hall(0.9, 5.0).with(|s| s.build = 1.0),
+        FREEZE_CLICK_MARGIN,
     );
 }
 
@@ -747,7 +640,7 @@ fn mib(b: usize) -> f64 {
 
 #[test]
 fn the_viz_getters_describe_the_engine() {
-    let mut d = dsp(Algorithm::Hall, &Set::at(0.5, 2.0));
+    let mut d = hall(0.5, 2.0).dsp();
     for n in 0..24_000 {
         let x = if n == 0 { 1.0 } else { 0.0 };
         d.process(x, x, 0.8, 1.0);
@@ -785,7 +678,7 @@ fn the_hall_presets_are_voiced_as_halls() {
         let (lo, hi) = (f("low_decay_mult"), f("high_decay_mult"));
         assert!((1.2..=1.5).contains(&lo), "{name}: bass decay ×{lo}");
         assert!((0.4..=0.6).contains(&hi), "{name}: treble decay ×{hi}");
-        let s = Set {
+        let s = Setup {
             size: f("size"),
             decay: f("decay"),
             damping: f("damping"),
@@ -793,12 +686,15 @@ fn the_hall_presets_are_voiced_as_halls() {
             er_time: f("er_time"),
             mod_rate: f("mod_rate"),
             mod_depth: f("mod_depth"),
-            shape: (lo, f("low_xover"), hi),
+            low_mult: lo,
+            low_xover: f("low_xover"),
+            high_mult: hi,
             build: f("tail_build"),
             diffusion: f("diffusion"),
+            ..hall(0.5, 2.0)
         };
-        let (l, r) = ir(Algorithm::Hall, &s, 1.0);
-        guard(name, &l, &r);
+        let (l, r) = s.impulse(1.0);
+        assert_not_silent(name, &l, &r);
     }
 }
 
@@ -806,126 +702,68 @@ fn the_hall_presets_are_voiced_as_halls() {
 // Goldens
 // ---------------------------------------------------------------------------
 
-/// Deterministic pseudo-noise from the absolute sample index.
-fn noise(n: u64) -> f32 {
-    let mut s = n.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1) as u32;
-    s ^= s >> 16;
-    s = s.wrapping_mul(2_246_822_519);
-    s ^= s >> 13;
-    (s >> 8) as f32 * (2.0 / (1 << 23) as f32) - 1.0
-}
-
-struct Scenario {
-    name: &'static str,
-    set: Set,
-    burst: bool,
-    seconds: f32,
-}
-
 fn scenarios() -> [Scenario; 3] {
     [
         // The defaults at a medium hall: ER pattern, build, onset.
         Scenario {
             name: "impulse_defaults",
-            set: Set::at(0.6, 3.0),
-            burst: false,
-            seconds: 0.25,
+            setup: hall(0.6, 3.0),
+            predelay_ms: 0.0,
+            frames: 12_000,
+            input: impulse_lr,
+            edit: None,
         },
         // Small, dark, no build, little diffusion, no modulation: the
         // other corner of every stage.
         Scenario {
             name: "impulse_small_dark_fast",
-            set: Set {
+            setup: Setup {
                 damping: 1_500.0,
                 er_level: 0.9,
                 er_time: 0.1,
                 mod_depth: 0.0,
-                shape: (0.7, 400.0, 0.2),
+                low_mult: 0.7,
+                low_xover: 400.0,
+                high_mult: 0.2,
                 build: 0.0,
                 diffusion: 0.3,
-                ..Set::at(0.05, 0.8)
+                ..hall(0.05, 0.8)
             },
-            burst: false,
-            seconds: 0.2,
+            predelay_ms: 0.0,
+            frames: 9_600,
+            input: impulse_lr,
+            edit: None,
         },
         // A noise burst into a large, modulated, slow-building hall: the
         // SmoothRandom modulation and the absorption at a Hall voicing.
         Scenario {
             name: "burst_modulated",
-            set: Set {
+            setup: Setup {
                 damping: 4_500.0,
                 er_level: 0.5,
                 er_time: 0.8,
                 mod_rate: 3.0,
                 mod_depth: 1.0,
-                shape: (1.4, 300.0, 0.45),
+                low_mult: 1.4,
+                low_xover: 300.0,
+                high_mult: 0.45,
                 build: 0.8,
                 diffusion: 0.95,
-                ..Set::at(0.95, 6.0)
+                ..hall(0.95, 6.0)
             },
-            burst: true,
-            seconds: 0.35,
+            predelay_ms: 0.0,
+            frames: 16_800,
+            input: burst,
+            edit: None,
         },
     ]
 }
 
-/// Impulse: L at 0, R at 37. Burst: 15 ms of Hann-windowed noise.
-fn render_scenario(s: &Scenario) -> (Vec<f32>, Vec<f32>) {
-    let mut d = dsp(Algorithm::Hall, &s.set);
-    let n = (s.seconds * SR) as usize;
-    let (mut l, mut r) = (Vec::with_capacity(n), Vec::with_capacity(n));
-    for i in 0..n {
-        let (x, y) = if s.burst {
-            if i < 720 {
-                let w = 0.5 - 0.5 * (TAU * i as f32 / 720.0).cos();
-                (0.8 * w * noise(i as u64), 0.8 * w * noise(i as u64 + 9_973))
-            } else {
-                (0.0, 0.0)
-            }
-        } else {
-            (if i == 0 { 1.0 } else { 0.0 }, if i == 37 { 1.0 } else { 0.0 })
-        };
-        let (a, b) = d.process(x, y, s.set.diffusion, 1.0);
-        l.push(a);
-        r.push(b);
-    }
-    (l, r)
-}
-
-fn golden_path() -> PathBuf {
-    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "hall_golden.f32")
-}
-
 #[test]
 fn hall_output_is_bit_exact() {
-    let mut rendered = Vec::new();
-    for s in scenarios() {
-        let (l, r) = render_scenario(&s);
-        // Each scenario's own silence guard: energy, and a tail still
-        // sounding in its last quarter.
-        guard(s.name, &l, &r);
-        let q = 3 * l.len() / 4;
-        let tail = l[q..].iter().chain(&r[q..]).fold(0.0f32, |m, x| m.max(x.abs()));
-        assert!(tail > 1e-4, "scenario `{}` has no tail ({tail:.2e})", s.name);
-        rendered.extend(l);
-        rendered.extend(r);
-    }
-
-    let path = golden_path();
-    if golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_HALL_GOLDEN"]) {
-        golden::bless_f32(&path, &rendered);
-        return;
-    }
-    let want = golden::load_golden_f32(&path, rendered.len(), "RESONANCE_BLESS=1");
-    let diff = golden::compare_f32(&rendered, &want);
-    if let Some((i, got, want)) = diff.first_diff {
-        panic!(
-            "Hall output changed: {}/{} samples differ, peak delta {:.3e}; first at \
-             sample {i} (got {got:?}, want {want:?}). Re-bless with RESONANCE_BLESS=1 \
-             only if the change was intended.",
-            diff.diff_count,
-            rendered.len(),
-            diff.max_abs,
-        );
-    }
+    check_golden(
+        "hall_golden.f32",
+        &["RESONANCE_BLESS", "RESONANCE_BLESS_HALL_GOLDEN"],
+        &scenarios(),
+    );
 }

@@ -13,11 +13,15 @@
 //! - [`stereo`]: late IACC and mono-fold loss.
 //! - [`ImpulseReport`]: all of it for one stereo response, printable as a
 //!   table row.
+//! - [`program`]: the same decay times read off a stop in program
+//!   material instead of an impulse ([`program_decay`], the
+//!   `meter.measure` `decay` detail).
 
 pub mod bands;
 pub mod density;
 pub mod edc;
 pub mod peakiness;
+pub mod program;
 pub mod stereo;
 
 use std::fmt;
@@ -28,6 +32,7 @@ pub use edc::{edc_from_energy, energy_decay_curve, DecayTimes, Edc};
 pub use peakiness::{
     modal_peakiness_db, PEAKINESS_BAND_HZ, PEAKINESS_SEGMENT_S, PEAKINESS_START_S,
 };
+pub use program::{program_decay, required_range_db, DecayEnd, ProgramDecay, CLEAN_DECAY_DB};
 pub use stereo::{late_iacc, mono_fold_db, IACC_MAX_LAG_S, LATE_START_S, MONO_FOLD_FLOOR_DB};
 
 /// Decay times of one octave band.
