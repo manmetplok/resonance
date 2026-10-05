@@ -8,6 +8,10 @@
 //!
 //! The sidechain key only drives the ducker's detector; it never reaches
 //! the output. With no key connected the ducker keys off the dry input.
+//!
+//! The room itself is one of several engines (`algorithm`, reverb-
+//! algorithms.md); pre-delay and decay can follow the host tempo
+//! (`predelay_sync`, `decay_sync`).
 
 use std::sync::Arc;
 
@@ -16,10 +20,11 @@ use resonance_plugin::*;
 pub mod dsp;
 pub mod params;
 pub mod presets;
+pub mod sync;
 pub mod viz;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use dsp::{Ducker, ReverbDsp};
 use params::{ReverbParams, ReverbSmoothers, PARAM_COUNT};
@@ -46,6 +51,10 @@ pub struct ResonanceReverb {
     reverb: Option<ReverbDsp>,
     /// Wet-return ducker; `None` until `initialize`.
     ducker: Option<Ducker>,
+    /// False until the first block after `initialize`: that block starts
+    /// a synced decay's smoother on its target instead of ramping to it
+    /// from the knob value.
+    sync_primed: bool,
 }
 
 impl ResonancePlugin for ResonanceReverb {
@@ -76,6 +85,7 @@ impl ResonancePlugin for ResonanceReverb {
             viz: ReverbViz::new(),
             reverb: None,
             ducker: None,
+            sync_primed: false,
         }
     }
 
@@ -90,6 +100,7 @@ impl ResonancePlugin for ResonanceReverb {
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.smoothers.prepare(sample_rate, &self.params);
         self.reverb = Some(ReverbDsp::new(sample_rate));
+        self.sync_primed = false;
         self.ducker = Some(Ducker::new(
             sample_rate,
             dsp::duck::INITIAL_ATTACK_MS,
@@ -112,9 +123,9 @@ impl ResonancePlugin for ResonanceReverb {
         outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         _events: &mut EventIterator<'_>,
-        _tempo: Option<TempoInfo>,
+        tempo: Option<TempoInfo>,
     ) {
-        self.render(outputs, frames, None);
+        self.render(outputs, frames, None, tempo);
     }
 
     fn process_with_key(
@@ -123,9 +134,9 @@ impl ResonancePlugin for ResonanceReverb {
         key: Option<KeyBuffer<'_>>,
         frames: usize,
         _events: &mut EventIterator<'_>,
-        _tempo: Option<TempoInfo>,
+        tempo: Option<TempoInfo>,
     ) {
-        self.render(outputs, frames, key.map(|k| (k.left, k.right)));
+        self.render(outputs, frames, key.map(|k| (k.left, k.right)), tempo);
     }
 
     /// The loaded-preset identity rides along with the parameter values,
@@ -182,12 +193,14 @@ impl resonance_plugin::ParamTextSource for ReverbParamText {
 
 impl ResonanceReverb {
     /// One block. `key` is the external sidechain when the host has
-    /// connected one; it only feeds the ducker's detector.
+    /// connected one; it only feeds the ducker's detector. `tempo` drives
+    /// the pre-delay and decay sync.
     fn render(
         &mut self,
         outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         key: Option<(&[f32], &[f32])>,
+        tempo: Option<TempoInfo>,
     ) {
         // Routing is a fact about the connection, not about this block
         // having audio in it: publish it before any early return.
@@ -203,8 +216,23 @@ impl ResonanceReverb {
             return;
         };
 
+        // Tempo sync (reverb-algorithms.md §4.5). A synced decay goes
+        // through the decay smoother like a knob move; a synced pre-delay
+        // goes straight to the pre-delay's own tap crossfade, so a tempo
+        // change never clicks. Without a usable tempo both are `None`
+        // and the knobs rule, exactly as before sync existed.
+        let synced_predelay = sync::predelay_ms(self.params.predelay_sync.value(), tempo);
+        let synced_decay = sync::decay_s(self.params.decay_sync.value(), tempo);
+        self.viz.store_synced(synced_predelay, synced_decay);
+
         // Update smoother targets from the atomic param values once per block.
-        self.smoothers.retarget_from(&self.params);
+        self.smoothers.retarget_from(&self.params, synced_decay);
+        if let (Some(t60), false) = (synced_decay, self.sync_primed) {
+            // The first block starts on the synced decay rather than
+            // ramping to it from the knob value `initialize` primed.
+            self.smoothers.decay.reset(t60);
+        }
+        self.sync_primed = true;
         let freeze = self.params.freeze.value();
 
         // Advance the block-rate smoothers to their end-of-block state. These
@@ -223,12 +251,16 @@ impl ResonanceReverb {
         self.smoothers.wet_hpf_freq.skip(n);
         self.smoothers.wet_lpf_freq.skip(n);
         self.smoothers.er_tail_balance.skip(n);
+        self.smoothers.low_decay_mult.skip(n);
+        self.smoothers.low_xover.skip(n);
+        self.smoothers.high_decay_mult.skip(n);
 
+        reverb.set_algorithm(self.params.algorithm());
         reverb.set_size(self.smoothers.size.current());
         reverb.set_decay(self.smoothers.decay.current());
         reverb.set_freeze(freeze);
         reverb.set_damping(self.smoothers.damping.current());
-        reverb.set_predelay(self.smoothers.predelay.current());
+        reverb.set_predelay(synced_predelay.unwrap_or(self.smoothers.predelay.current()));
         reverb.set_er_level(self.smoothers.er_level.current());
         reverb.set_er_time(self.smoothers.er_time.current());
         reverb.set_mod_rate(self.smoothers.mod_rate.current());
@@ -241,6 +273,11 @@ impl ResonanceReverb {
             self.params.wet_filter_slope.value() == 1,
         );
         reverb.set_er_tail_balance(self.smoothers.er_tail_balance.current());
+        reverb.set_decay_shape(
+            self.smoothers.low_decay_mult.current(),
+            self.smoothers.low_xover.current(),
+            self.smoothers.high_decay_mult.current(),
+        );
 
         let duck_amount = self.params.duck_amount.value();
         let duck_threshold = self.params.duck_threshold.value();

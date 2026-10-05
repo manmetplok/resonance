@@ -6,7 +6,23 @@
 /// mutate smoother state through `&mut self`.
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 22;
+use crate::dsp::Algorithm;
+use crate::sync::{DECAY_SYNC_LABELS, PREDELAY_SYNC_LABELS};
+
+pub const PARAM_COUNT: usize = 28;
+
+/// Every `algorithm` label the spec fixes (reverb-algorithms.md §4.1), in
+/// parameter order. Only the first [`Algorithm::BUILT`]`.len()` exist in
+/// this build; see [`ALGORITHM_LABELS`].
+pub const ALGORITHM_LABELS_ALL: &[&str] = &[
+    "Classic", "Plate", "Room", "Chamber", "Hall", "Ambience", "Spring", "Nonlinear", "Shimmer",
+];
+
+/// The labels of the algorithms this build has: the declared choice
+/// table of [`ReverbParams::algorithm`]. The editor's selector, the
+/// host's display and the control API all read this, so an unbuilt
+/// algorithm is never offered.
+pub const ALGORITHM_LABELS: &[&str] = ALGORITHM_LABELS_ALL.split_at(Algorithm::BUILT.len()).0;
 
 pub struct ReverbParams {
     pub predelay: FloatParam,
@@ -49,6 +65,25 @@ pub struct ReverbParams {
     /// "in the room"), toward +1 the early reflections fade out (far,
     /// just the wash).
     pub er_tail_balance: FloatParam,
+    // -- Algorithms and tempo sync (reverb-algorithms.md §4.1) -----------
+    //
+    // Appended after index 21. Each defaults to a no-op for Classic: a
+    // state saved before them loads as Classic with both syncs off.
+    /// Which engine runs. Its range grows as algorithms land.
+    pub algorithm: IntParam,
+    /// Bass decay as a multiple of the mid decay, below `low_xover`.
+    /// Not read by Classic.
+    pub low_decay_mult: FloatParam,
+    /// Crossover between the bass and mid decay bands. Not read by Classic.
+    pub low_xover: FloatParam,
+    /// Treble decay as a multiple of the mid decay, above `damping`.
+    /// Not read by Classic.
+    pub high_decay_mult: FloatParam,
+    /// Pre-delay as a note value at the host tempo; `Off` uses `predelay`.
+    pub predelay_sync: IntParam,
+    /// Decay (T60) as a note/bar length at the host tempo; `Off` uses
+    /// `decay`.
+    pub decay_sync: IntParam,
 }
 
 /// Labels of [`ReverbParams::wet_filter_slope`].
@@ -79,8 +114,19 @@ impl ReverbParams {
             19 => &self.duck_attack,
             20 => &self.duck_release,
             21 => &self.er_tail_balance,
+            22 => &self.algorithm,
+            23 => &self.low_decay_mult,
+            24 => &self.low_xover,
+            25 => &self.high_decay_mult,
+            26 => &self.predelay_sync,
+            27 => &self.decay_sync,
             _ => &self.predelay,
         }
+    }
+
+    /// The selected algorithm.
+    pub fn algorithm(&self) -> Algorithm {
+        Algorithm::from_index(self.algorithm.value())
     }
 }
 
@@ -303,6 +349,79 @@ impl Default for ReverbParams {
                 },
             )
             .with_value_to_string(format_balance()),
+
+            algorithm: IntParam::new(
+                "algorithm",
+                "Algorithm",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: ALGORITHM_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(ALGORITHM_LABELS),
+
+            low_decay_mult: FloatParam::new(
+                "low_decay_mult",
+                "Bass Decay",
+                1.0,
+                // -1.2 puts 1.0x at the middle of the dial (the range is
+                // 1/4x..4x, symmetric in octaves around it).
+                FloatRange::Skewed {
+                    min: 0.25,
+                    max: 4.0,
+                    factor: FloatRange::skew_factor(-1.2),
+                },
+            )
+            .with_unit("x")
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+
+            low_xover: FloatParam::new(
+                "low_xover",
+                "Bass Xover",
+                250.0,
+                FloatRange::Skewed {
+                    min: 50.0,
+                    max: 1000.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" Hz")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+
+            high_decay_mult: FloatParam::new(
+                "high_decay_mult",
+                "Treble Decay",
+                0.5,
+                FloatRange::Linear {
+                    min: 0.05,
+                    max: 1.0,
+                },
+            )
+            .with_unit("x")
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+
+            predelay_sync: IntParam::new(
+                "predelay_sync",
+                "Pre-delay Sync",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: PREDELAY_SYNC_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(PREDELAY_SYNC_LABELS),
+
+            decay_sync: IntParam::new(
+                "decay_sync",
+                "Decay Sync",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: DECAY_SYNC_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(DECAY_SYNC_LABELS),
         }
     }
 }
@@ -339,6 +458,9 @@ pub struct ReverbSmoothers {
     pub wet_hpf_freq: Smoother,
     pub wet_lpf_freq: Smoother,
     pub er_tail_balance: Smoother,
+    pub low_decay_mult: Smoother,
+    pub low_xover: Smoother,
+    pub high_decay_mult: Smoother,
 }
 
 impl Default for ReverbSmoothers {
@@ -364,6 +486,9 @@ impl ReverbSmoothers {
             wet_hpf_freq: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
             wet_lpf_freq: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
             er_tail_balance: Smoother::new(SmoothingStyle::Linear(50.0)),
+            low_decay_mult: Smoother::new(SmoothingStyle::Logarithmic(100.0)),
+            low_xover: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
+            high_decay_mult: Smoother::new(SmoothingStyle::Linear(100.0)),
         }
     }
 
@@ -385,6 +510,9 @@ impl ReverbSmoothers {
         self.wet_hpf_freq.set_sample_rate(sample_rate);
         self.wet_lpf_freq.set_sample_rate(sample_rate);
         self.er_tail_balance.set_sample_rate(sample_rate);
+        self.low_decay_mult.set_sample_rate(sample_rate);
+        self.low_xover.set_sample_rate(sample_rate);
+        self.high_decay_mult.set_sample_rate(sample_rate);
 
         self.predelay.reset(params.predelay.value());
         self.er_level.reset(params.er_level.value());
@@ -400,16 +528,22 @@ impl ReverbSmoothers {
         self.wet_hpf_freq.reset(params.wet_hpf_freq.value());
         self.wet_lpf_freq.reset(params.wet_lpf_freq.value());
         self.er_tail_balance.reset(params.er_tail_balance.value());
+        self.low_decay_mult.reset(params.low_decay_mult.value());
+        self.low_xover.reset(params.low_xover.value());
+        self.high_decay_mult.reset(params.high_decay_mult.value());
     }
 
     /// Push the current atomic param values as smoother targets at
-    /// the start of each block.
-    pub fn retarget_from(&mut self, params: &ReverbParams) {
+    /// the start of each block. `synced_decay` is the tempo-synced T60
+    /// while `decay_sync` is in effect; it stands in for the knob, so the
+    /// decay ramps to it like any knob move and lands exactly.
+    pub fn retarget_from(&mut self, params: &ReverbParams, synced_decay: Option<f32>) {
         self.predelay.set_target(params.predelay.value());
         self.er_level.set_target(params.er_level.value());
         self.er_time.set_target(params.er_time.value());
         self.size.set_target(params.size.value());
-        self.decay.set_target(params.decay.value());
+        self.decay
+            .set_target(synced_decay.unwrap_or_else(|| params.decay.value()));
         self.damping.set_target(params.damping.value());
         self.diffusion.set_target(params.diffusion.value());
         self.mod_rate.set_target(params.mod_rate.value());
@@ -419,5 +553,8 @@ impl ReverbSmoothers {
         self.wet_hpf_freq.set_target(params.wet_hpf_freq.value());
         self.wet_lpf_freq.set_target(params.wet_lpf_freq.value());
         self.er_tail_balance.set_target(params.er_tail_balance.value());
+        self.low_decay_mult.set_target(params.low_decay_mult.value());
+        self.low_xover.set_target(params.low_xover.value());
+        self.high_decay_mult.set_target(params.high_decay_mult.value());
     }
 }

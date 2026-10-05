@@ -67,16 +67,28 @@ fn detune_all(plugin: &Plugin) -> Vec<(String, f64)> {
             Some(v) => moved.push((p.id().to_string(), v)),
             // A parameter whose range contains nothing but its default can
             // never be observed to round-trip, so it is named rather than
-            // quietly skipped.
-            None => stuck.push(p.id().to_string()),
+            // quietly skipped. It still belongs in the snapshot, at the
+            // one value it can hold.
+            None => {
+                stuck.push(p.id().to_string());
+                moved.push((p.id().to_string(), p.get_plain()));
+            }
         }
     }
-    assert!(
-        stuck.is_empty(),
-        "no in-range value differs from the default for: {stuck:?}"
+    assert_eq!(
+        stuck, SINGLE_VALUED,
+        "no in-range value differs from the default for these parameters \
+         (only the ones in SINGLE_VALUED may be single-valued)"
     );
     moved
 }
+
+/// Parameters whose range holds nothing but their default, so they cannot
+/// be moved: `algorithm` has one choice, `Classic`, until the second
+/// algorithm lands (reverb-algorithms.md §4.1: its range grows by phase).
+/// The assertion above is exact, so when the range grows this list has to
+/// shrink, and `algorithm` joins the round-trip.
+const SINGLE_VALUED: &[&str] = &["algorithm"];
 
 fn snapshot(plugin: &Plugin) -> Vec<(String, f64)> {
     (0..plugin.param_count())

@@ -1,7 +1,8 @@
 //! Reverb editor — egui UI hosted by the platform GUI runtime.
 //!
 //! Layout (top-down):
-//! - Header: plugin name, preset dropdown, live readouts, freeze indicator.
+//! - Header: plugin name, algorithm selector, preset dropdown, live
+//!   readouts, freeze indicator.
 //! - Central: impulse tail hero visualisation on the left, FDN tank view
 //!   on the right, stereo peak meters along the bottom of the central area.
 //! - Bottom: control strip — the room (two rows) and the return channel
@@ -11,14 +12,15 @@ use std::sync::Arc;
 
 use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, RuntimeEditorHandle};
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
-use resonance_plugin::preset_ui::preset_bar;
 use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
-use resonance_plugin::Param;
-use plugin_gui_core::{egui, EditorApp};
+use resonance_plugin::preset_ui::preset_bar;
+use resonance_plugin::{editor_widgets, Param};
+use plugin_gui_core::{egui, widgets, EditorApp};
 
 use crate::params::{ReverbParams, PARAM_COUNT};
 use crate::viz::ReverbViz;
 
+mod center;
 mod controls;
 mod impulse_view;
 mod meters;
@@ -27,6 +29,21 @@ mod theme;
 
 const WINDOW_W: u32 = 1320;
 const WINDOW_H: u32 = 780;
+
+/// The reverb editor driven headless at `size`, with a recording
+/// announcer — for the plugin's tests. Not plugin API.
+#[doc(hidden)]
+pub fn headless_editor(
+    plugin: &crate::ResonanceReverb,
+    size: (f32, f32),
+) -> resonance_plugin::editor_widgets::headless::HeadlessEditor {
+    let app = ReverbEditorApp::new(
+        plugin.params.clone(),
+        plugin.viz.clone(),
+        plugin.presets.clone(),
+    );
+    resonance_plugin::editor_widgets::headless::HeadlessEditor::new(Box::new(app), size)
+}
 
 // ---------------------------------------------------------------------------
 // Factory
@@ -128,7 +145,7 @@ impl EditorApp for ReverbEditorApp {
             .exact_size(320.0)
             .show_inside(ui, |ui| controls::draw(ui, &self.params, &self.viz));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
+        egui::CentralPanel::default().show_inside(ui, |ui| center::draw(ui, self));
     }
 }
 
@@ -141,6 +158,17 @@ fn draw_header(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
                 .color(theme::ACCENT),
         );
         ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        // The algorithm first: it decides which controls below apply.
+        editor_widgets::choice_segmented(
+            ui,
+            &app.params.algorithm,
+            &widgets::SegmentedStyle::LAVENDER,
+        );
+
+        ui.add_space(12.0);
         ui.separator();
         ui.add_space(8.0);
 
@@ -162,7 +190,10 @@ fn draw_header(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
-        let decay = app.params.decay.value();
+        let decay = app
+            .viz
+            .synced_decay_s()
+            .unwrap_or_else(|| app.params.decay.value());
         let size = app.params.size.value();
         let diff = app.params.diffusion.value();
         ui.label(egui::RichText::new(format!("RT60 {decay:>4.1} s")).color(theme::TEXT));
@@ -193,34 +224,3 @@ fn draw_header(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
     });
 }
 
-fn draw_center(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
-    let avail = ui.available_rect_before_wrap();
-
-    // Reserve a thin strip along the bottom for the stereo peak meters.
-    let meter_h = 28.0f32;
-    let gap = 8.0f32;
-    let viz_rect = egui::Rect::from_min_max(
-        egui::pos2(avail.left() + gap, avail.top() + gap),
-        egui::pos2(avail.right() - gap, avail.bottom() - meter_h - gap),
-    );
-    let meter_rect = egui::Rect::from_min_max(
-        egui::pos2(avail.left() + gap, avail.bottom() - meter_h),
-        egui::pos2(avail.right() - gap, avail.bottom() - 2.0),
-    );
-
-    // Split the viz area: impulse hero (left ~68%) + FDN tank (right ~32%).
-    let tank_w = 300.0f32.min(viz_rect.width() * 0.35);
-    let impulse_rect = egui::Rect::from_min_max(
-        viz_rect.min,
-        egui::pos2(viz_rect.right() - tank_w - gap, viz_rect.bottom()),
-    );
-    let tank_rect = egui::Rect::from_min_max(
-        egui::pos2(impulse_rect.right() + gap, viz_rect.top()),
-        viz_rect.max,
-    );
-
-    let painter = ui.painter_at(avail);
-    impulse_view::draw(&painter, impulse_rect, app);
-    tank_view::draw(&painter, tank_rect, app);
-    meters::draw(&painter, meter_rect, &app.viz);
-}
