@@ -18,7 +18,9 @@
 //! input muted, so an incoming engine would start frozen and empty and
 //! the fade would retire the held sound into silence. While Freeze is on
 //! a request is queued instead (newest wins), and it starts with the
-//! normal fade the moment Freeze is released.
+//! normal fade the moment Freeze is released. A switch between two
+//! engines that both ignore Freeze (Spring, Nonlinear) is not deferred:
+//! neither holds a frozen tail.
 //!
 //! Outside a fade the active engine is fed the input untouched, so a bank
 //! that never switches renders bit-identically to the engine alone.
@@ -147,6 +149,16 @@ impl EngineBank {
         self.cfg.freeze == Some(true)
     }
 
+    /// Whether Freeze defers a switch from the active engine to `slot`:
+    /// only when one of the two honours it (a switch between engines that
+    /// ignore Freeze has no held tail to lose and no frozen, empty engine
+    /// to fade into).
+    fn defers(&self, slot: usize) -> bool {
+        self.frozen()
+            && (self.engines[self.active].algorithm().uses_freeze()
+                || self.engines[slot].algorithm().uses_freeze())
+    }
+
     /// Freeze or release every live engine. Releasing starts a switch
     /// that was deferred while frozen.
     pub(crate) fn set_freeze(&mut self, freeze: bool) {
@@ -158,10 +170,15 @@ impl EngineBank {
     }
 
     fn start_pending(&mut self) {
-        if let Some(next) = self.pending.take() {
-            if next != self.active {
-                self.begin(next);
-            }
+        let Some(next) = self.pending else {
+            return;
+        };
+        if self.defers(next) {
+            return;
+        }
+        self.pending = None;
+        if next != self.active {
+            self.begin(next);
         }
     }
 
@@ -189,10 +206,14 @@ impl EngineBank {
         if !self.primed {
             self.active = slot;
             self.activate(slot);
-        } else if self.fade_left > 0 || self.frozen() {
+        } else if self.fade_left > 0 || self.defers(slot) {
             self.pending = Some(slot);
-        } else if slot != self.active {
-            self.begin(slot);
+        } else {
+            // Newest wins: a request deferred by Freeze is superseded.
+            self.pending = None;
+            if slot != self.active {
+                self.begin(slot);
+            }
         }
     }
 
@@ -224,9 +245,7 @@ impl EngineBank {
         let o = self.engines[out].process(l * g, r * g, diffusion);
         if self.fade_left == 0 {
             self.outgoing = None;
-            if !self.frozen() {
-                self.start_pending();
-            }
+            self.start_pending();
         }
         Wet {
             er_l: a.er_l + o.er_l * g,

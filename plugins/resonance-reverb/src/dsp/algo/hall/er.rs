@@ -1,5 +1,5 @@
-//! The Hall's early reflections: a thinned image-source pattern of a large
-//! shoebox, spread over 30–120 ms.
+//! The Hall's early reflections (the Shimmer's too): a thinned
+//! image-source pattern of a large shoebox, spread over 30–120 ms.
 //!
 //! [`ShoeboxEr`] gives a concert-hall-shaped room's first- and
 //! second-order reflections (gains and pans from the geometry). The floor
@@ -40,7 +40,7 @@ const ENERGY: f32 = 0.25;
 /// what the geometry gives it, relative to the first.
 const TAPER: f32 = 0.7;
 
-pub(super) struct HallEr {
+pub(in crate::dsp::algo) struct HallEr {
     sample_rate: f32,
     line_l: DelayLine,
     line_r: DelayLine,
@@ -57,7 +57,7 @@ pub(super) struct HallEr {
 }
 
 impl HallEr {
-    pub(super) fn new(sample_rate: f32) -> Self {
+    pub(in crate::dsp::algo) fn new(sample_rate: f32) -> Self {
         // A 34 × 46 × 17 m hall, source on stage, listener mid-stalls.
         let room = ShoeboxEr::new(
             [34.0, 46.0, 17.0],
@@ -127,12 +127,12 @@ impl HallEr {
         er
     }
 
-    pub(super) fn set_level(&mut self, norm: f32) {
+    pub(in crate::dsp::algo) fn set_level(&mut self, norm: f32) {
         self.level = norm.clamp(0.0, 1.0);
     }
 
     /// `er_time` 0..1 → spacing 0.5×–1.5×. Returns whether it moved.
-    pub(super) fn set_time(&mut self, norm: f32) -> bool {
+    pub(in crate::dsp::algo) fn set_time(&mut self, norm: f32) -> bool {
         let s = 0.5 + norm.clamp(0.0, 1.0);
         let moved = s != self.time_scale;
         self.time_scale = s;
@@ -140,7 +140,7 @@ impl HallEr {
     }
 
     /// `size` 0..1 → spacing 0.8×–1.2×. Returns whether it moved.
-    pub(super) fn set_size(&mut self, norm: f32) -> bool {
+    pub(in crate::dsp::algo) fn set_size(&mut self, norm: f32) -> bool {
         let s = 0.8 + 0.4 * norm.clamp(0.0, 1.0);
         let moved = s != self.size_scale;
         self.size_scale = s;
@@ -148,7 +148,7 @@ impl HallEr {
     }
 
     /// Recompute the tap targets from the two spacing factors.
-    pub(super) fn retarget(&mut self) {
+    pub(in crate::dsp::algo) fn retarget(&mut self) {
         let k = self.time_scale * self.size_scale * 0.001 * self.sample_rate;
         for (t, b) in self.target.iter_mut().zip(&self.base_ms) {
             *t = ((b.0 * k).min(self.max_pos), (b.1 * k).min(self.max_pos));
@@ -156,12 +156,12 @@ impl HallEr {
     }
 
     /// Put every read head on its target (fresh/reset, nothing to glide).
-    pub(super) fn snap(&mut self) {
+    pub(in crate::dsp::algo) fn snap(&mut self) {
         self.pos = self.target;
     }
 
     #[inline]
-    pub(super) fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+    pub(in crate::dsp::algo) fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
         self.line_l.push(l);
         self.line_r.push(r);
         let (mut out_l, mut out_r) = (0.0f32, 0.0f32);
@@ -175,25 +175,25 @@ impl HallEr {
         (out_l * self.level, out_r * self.level)
     }
 
-    pub(super) fn clear(&mut self) {
+    pub(in crate::dsp::algo) fn clear(&mut self) {
         self.line_l.clear();
         self.line_r.clear();
         self.snap();
     }
 
     /// Current tap times, ms (L, R), for the editor.
-    pub(super) fn tap_times_ms(&self) -> [(f32, f32); ER_TAPS] {
+    pub(in crate::dsp::algo) fn tap_times_ms(&self) -> [(f32, f32); ER_TAPS] {
         let k = 1000.0 / self.sample_rate;
         self.target.map(|(l, r)| (l * k, r * k))
     }
 
     /// Tap gains (L, R) including `er_level`, for the editor.
-    pub(super) fn tap_gains(&self) -> [(f32, f32); ER_TAPS] {
+    pub(in crate::dsp::algo) fn tap_gains(&self) -> [(f32, f32); ER_TAPS] {
         self.gains.map(|(l, r)| (l * self.level, r * self.level))
     }
 
     /// Bytes held in delay buffers.
-    pub(super) fn buffer_bytes(&self) -> usize {
+    pub(in crate::dsp::algo) fn buffer_bytes(&self) -> usize {
         2 * (self.max_pos as usize + 4).next_power_of_two() * std::mem::size_of::<f32>()
     }
 }

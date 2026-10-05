@@ -120,6 +120,12 @@ impl Algorithm {
         matches!(self, Algorithm::Hall | Algorithm::Shimmer)
     }
 
+    /// Whether this algorithm honours `freeze` (§4.2: Spring and Nonlinear
+    /// ignore it, and the editor greys it for them).
+    pub fn uses_freeze(self) -> bool {
+        !matches!(self, Algorithm::Spring | Algorithm::Nonlinear)
+    }
+
     /// Whether this algorithm reads `low_decay_mult`, `low_xover` and
     /// `high_decay_mult`. The editor greys the three out when it does not.
     pub fn uses_decay_shape(self) -> bool {

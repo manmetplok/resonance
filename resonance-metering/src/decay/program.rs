@@ -216,6 +216,12 @@ impl ProgramDecay {
     }
 }
 
+/// `L² + R²` of one sample pair.
+#[inline]
+fn pair_energy((&l, &r): (&f32, &f32)) -> f64 {
+    (l as f64) * (l as f64) + (r as f64) * (r as f64)
+}
+
 fn db(e: f64) -> f32 {
     (10.0 * e.max(1e-30).log10()) as f32
 }
@@ -237,14 +243,13 @@ pub fn program_decay(left: &[f32], right: &[f32], sample_rate: f32) -> ProgramDe
     let n = left.len().min(right.len());
     let (left, right) = (&left[..n], &right[..n]);
     let win = ((ENVELOPE_WINDOW_S * sample_rate).round() as usize).max(1);
-    let energy: Vec<f64> = left
-        .iter()
-        .zip(right)
-        .map(|(&l, &r)| (l as f64) * (l as f64) + (r as f64) * (r as f64))
-        .collect();
-    let raw: Vec<f64> = energy
+    // Per-sample energy is only needed over the decay itself (below);
+    // the envelope sums it window by window, so a whole-song range costs
+    // one f64 per window here, not one per sample.
+    let raw: Vec<f64> = left
         .chunks(win)
-        .map(|c| c.iter().sum::<f64>() / c.len() as f64)
+        .zip(right.chunks(win))
+        .map(|(l, r)| l.iter().zip(r).map(pair_energy).sum::<f64>() / l.len() as f64)
         .collect();
     let windows = raw.len();
     if windows < 3 {
@@ -257,7 +262,7 @@ pub fn program_decay(left: &[f32], right: &[f32], sample_rate: f32) -> ProgramDe
             db(raw[lo..hi].iter().sum::<f64>() / (hi - lo) as f64)
         })
         .collect();
-    
+
     let loudest = smooth.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let gate = GATE_ABS_DB.max(loudest - GATE_REL_DB);
     let lookback = ((SUSTAIN_LOOKBACK_S / ENVELOPE_WINDOW_S).round() as usize).max(1);
@@ -373,7 +378,9 @@ pub fn program_decay(left: &[f32], right: &[f32], sample_rate: f32) -> ProgramDe
         t20: t.t20.filter(|_| reach(25.0)),
         t30: t.t30.filter(|_| reach(CLEAN_DECAY_DB)),
     };
-    out.times = gated(edc_from_energy(&energy[start..end], sample_rate).times());
+    let decay_energy: Vec<f64> =
+        left[start..end].iter().zip(&right[start..end]).map(pair_energy).collect();
+    out.times = gated(edc_from_energy(&decay_energy, sample_rate).times());
 
     let pre = start.saturating_sub((BAND_PREROLL_S * sample_rate) as usize);
     out.bands = OCTAVE_BANDS_HZ.map(|fc| {

@@ -117,10 +117,16 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams, viz: &ReverbViz) {
             });
             ui.add_space(4.0);
 
-            // Freeze is a toggle, not a knob — render as a checkbox.
-            ui.vertical(|ui| {
-                ui.add_space(16.0);
-                editor_widgets::bool_checkbox(ui, &params.freeze, "Freeze");
+            // Freeze is a toggle, not a knob — render as a checkbox. Greyed
+            // for the algorithms that ignore it (§4.2), unless it is on: it
+            // must stay releasable, since it defers a switch away from a
+            // frozen engine.
+            let freeze_live = params.algorithm().uses_freeze() || params.freeze.value();
+            ui.add_enabled_ui(freeze_live, |ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(16.0);
+                    editor_widgets::bool_checkbox(ui, &params.freeze, "Freeze");
+                });
             });
         });
 

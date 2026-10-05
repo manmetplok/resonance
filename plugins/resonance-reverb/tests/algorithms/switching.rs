@@ -197,6 +197,33 @@ fn a_switch_while_frozen_waits_for_the_release_and_keeps_the_tail() {
     assert!(!dsp.switching());
 }
 
+/// Spring and Nonlinear ignore Freeze (§4.2): with Freeze on, a switch
+/// between them has no held tail to keep and starts at once, while a
+/// switch to an engine that honours Freeze still waits for the release,
+/// and a newer request back to the active engine cancels it.
+#[test]
+fn freeze_defers_only_switches_that_involve_a_freezing_engine() {
+    let algorithms = [Algorithm::Spring, Algorithm::Nonlinear, Algorithm::Hall];
+    let mut dsp = ReverbDsp::with_engines(SR, &algorithms);
+    configure(&mut dsp);
+    run(&mut dsp, 0, 4_800);
+    dsp.set_freeze(true);
+    run(&mut dsp, 4_800, 480);
+
+    dsp.set_engine_slot(1);
+    assert!(dsp.switching(), "Spring -> Nonlinear waited for a Freeze neither honours");
+    run(&mut dsp, 5_280, FADE);
+    assert_eq!(dsp.engine_slot(), 1);
+
+    dsp.set_engine_slot(2);
+    assert_eq!(dsp.engine_slot(), 1, "a switch into a freezing engine started while frozen");
+    assert!(!dsp.switching());
+    dsp.set_engine_slot(1);
+    dsp.set_freeze(false);
+    assert!(!dsp.switching(), "a superseded deferred request started on release");
+    assert_eq!(dsp.engine_slot(), 1);
+}
+
 #[test]
 fn before_the_first_sample_a_switch_snaps() {
     let mut dsp = bank(2);

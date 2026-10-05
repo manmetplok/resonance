@@ -14,7 +14,7 @@
 //! ```
 //!
 //! **The hall.** Everything around the loop is the Hall's design (see
-//! `hall.rs`): its spread ER (`shimmer/er.rs`, a copy), its 8-stage input
+//! `hall.rs`): its spread ER (`hall/er.rs`, shared), its 8-stage input
 //! diffusion, its build line (`tail_build` spreads *when* energy enters
 //! the loop: line `i` is fed from `u_i · T_build`, `T_build = 20 ms ·
 //! 15^build`), its 40–200 ms line range (20–100 ms at `size` 0), seed 49
@@ -54,7 +54,6 @@
 //! Every buffer is allocated in [`ShimmerEngine::new`] (see
 //! [`ShimmerEngine::buffer_bytes`]).
 
-mod er;
 pub mod shifter;
 mod tank;
 
@@ -65,7 +64,7 @@ use super::super::er::ER_TAPS;
 use super::super::CHANNELS;
 use super::room::{stretch, FreezeRamp, FreezeTick};
 use super::{Extras, Wet};
-use er::ShimmerEr;
+use super::hall::er::HallEr;
 use tank::{direction_sign, Tank, LINES};
 
 /// Loop line range at `size` 1.
@@ -117,7 +116,7 @@ fn glide(pos: &mut f32, target: f32) {
 
 pub struct ShimmerEngine {
     sample_rate: f32,
-    er: ShimmerEr,
+    er: HallEr,
     diffusers: [[Allpass; DIFFUSERS]; 2],
     diffusion: f32,
     build_l: DelayLine,
@@ -181,7 +180,7 @@ impl ShimmerEngine {
         let defaults = Extras::default();
         let mut engine = Self {
             sample_rate: sr,
-            er: ShimmerEr::new(sr),
+            er: HallEr::new(sr),
             diffusers,
             diffusion: 0.0,
             build_l: DelayLine::new(build_max as usize + 4),
@@ -243,6 +242,10 @@ impl ShimmerEngine {
             // Out of the lossless loop at zero loss (the design it holds
             // since the ramp landed); `process` ramps the loss back.
             self.tank.set_freeze(false);
+        } else if v && self.freeze.held() {
+            // Re-engaged before a sample moved the ramp off frozen: the
+            // ramp is already there and will not `Engage` again.
+            self.tank.set_freeze(true);
         }
         // Freezing while running: `process` ramps into it.
     }

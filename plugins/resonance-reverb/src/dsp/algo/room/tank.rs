@@ -304,6 +304,10 @@ impl<const N: usize> RoomCore<N> {
             // Out of the lossless loop at zero loss (the design it holds
             // since the ramp landed); the ramp brings the loss back.
             self.fdn.set_freeze(false);
+        } else if on && self.freeze.held() {
+            // Re-engaged before a sample moved the ramp off frozen: the
+            // ramp is already there and will not `Engage` again.
+            self.fdn.set_freeze(true);
         }
     }
 

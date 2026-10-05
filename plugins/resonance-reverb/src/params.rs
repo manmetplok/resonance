@@ -85,7 +85,7 @@ pub struct ReverbParams {
     /// `decay`.
     pub decay_sync: IntParam,
     /// How slowly the tail builds after the early reflections, `0..=1`.
-    /// Hall only (and Shimmer, later); greyed elsewhere.
+    /// Hall and Shimmer only; greyed elsewhere.
     pub build: FloatParam,
     // -- Creative algorithms (R8): read by one algorithm each ------------
     /// Shimmer: the pitch shift in the loop ([`SHIMMER_PITCH_LABELS`]).
@@ -104,8 +104,10 @@ pub struct ReverbParams {
 
 /// Labels of [`ReverbParams::shimmer_pitch`], in parameter order.
 pub const SHIMMER_PITCH_LABELS: &[&str] = &["+12", "+7", "+5", "-12", "+19", "+24"];
-/// Semitones of each [`SHIMMER_PITCH_LABELS`] entry.
-pub const SHIMMER_PITCH_SEMITONES: [f32; 6] = [12.0, 7.0, 5.0, -12.0, 19.0, 24.0];
+/// Semitones of each [`SHIMMER_PITCH_LABELS`] entry: the shifter's own
+/// table, which its gain bound (`ReadWeights`) is computed for entry by
+/// entry, so a pitch offered here always gets its exact loop cap.
+pub use crate::dsp::algo::shimmer::shifter::SEMITONES as SHIMMER_PITCH_SEMITONES;
 /// Labels of [`ReverbParams::nl_shape`].
 pub const NL_SHAPE_LABELS: &[&str] = &["Gated", "Reverse", "Flat"];
 

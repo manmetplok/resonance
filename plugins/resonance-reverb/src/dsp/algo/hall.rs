@@ -77,7 +77,7 @@
 //! Every buffer is allocated in [`HallEngine::new`]: 2.6 MiB at 96 kHz,
 //! 1.3 MiB at 48 kHz (see [`HallEngine::buffer_bytes`]).
 
-mod er;
+pub(in crate::dsp::algo) mod er;
 
 use resonance_dsp::reverb::{Allpass, DecayBands, Fdn, FdnConfig};
 use resonance_dsp::DelayLine;
@@ -277,6 +277,10 @@ impl HallEngine {
             // Out of the lossless loop at zero loss (the design it holds
             // since the ramp landed); `process` ramps the loss back.
             self.fdn.set_freeze(false);
+        } else if v && self.freeze.held() {
+            // Re-engaged before a sample moved the ramp off frozen: the
+            // ramp is already there and will not `Engage` again.
+            self.fdn.set_freeze(true);
         }
         // Freezing while running: `process` ramps into it.
     }
