@@ -1,0 +1,58 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "fifth-bloom",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Fifth Bloom",
+    "author": "Resonance",
+    "description": "A slow-building 8 s Shimmer at +7: each pass adds a fifth above, so a held note blooms into an open-fifth chord. For pads, drones and swelled guitar; 180 Hz return HPF.",
+    "category": "Creative",
+    "instrument": ["synth", "keys", "electric-guitar", "strings"],
+    "genres": ["ambient", "cinematic", "post-metal"],
+    "character": ["evolving", "lush", "wide"],
+    "tags": ["shimmer", "fifth", "pads", "long-decay"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 30.0,
+        "er_level": 0.2,
+        "er_time": 0.7,
+        "size": 0.75,
+        "decay": 8.0,
+        "damping": 7500.0,
+        "diffusion": 0.90,
+        "mod_rate": 0.7,
+        "mod_depth": 0.40,
+        "width": 1.0,
+        "mix": 0.40,
+        "freeze": 0,
+        "wet_hpf_on": 1,
+        "wet_hpf_freq": 180.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0,
+        "algorithm": 8,
+        "low_decay_mult": 1.1,
+        "low_xover": 250.0,
+        "high_decay_mult": 0.55,
+        "predelay_sync": 0,
+        "decay_sync": 0,
+        "tail_build": 0.9,
+        "shimmer_pitch": 1,
+        "shimmer_amount": 0.4,
+        "nl_shape": 0,
+        "nl_length": 300.0,
+        "spring_tension": 0.5,
+        "spring_drip": 0.3
+      }
+    }
+  }
+}
