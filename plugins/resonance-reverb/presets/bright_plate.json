@@ -1,0 +1,52 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "bright-plate",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Bright Plate",
+    "author": "Resonance",
+    "description": "Short, crisp plate for snare and percussion sheen: 1.2 s, a strong dense attack, treble held to 0.9x, bass decay cut to 0.7x and a 350 Hz return HPF so the low end stays dry, 25% mix.",
+    "category": "Track",
+    "instrument": ["snare", "drums", "drum-bus"],
+    "genres": ["pop", "rock", "indie"],
+    "character": ["bright", "metallic", "punchy"],
+    "tags": ["plate", "snare", "percussion", "sheen"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 8.0,
+        "er_level": 0.60,
+        "er_time": 0.30,
+        "size": 0.30,
+        "decay": 1.2,
+        "damping": 9000.0,
+        "diffusion": 0.90,
+        "mod_rate": 1.4,
+        "mod_depth": 0.25,
+        "width": 1.0,
+        "mix": 0.25,
+        "freeze": 0,
+        "wet_hpf_on": 1,
+        "wet_hpf_freq": 350.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 12000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0,
+        "algorithm": 1,
+        "low_decay_mult": 0.7,
+        "low_xover": 300.0,
+        "high_decay_mult": 0.9,
+        "predelay_sync": 0,
+        "decay_sync": 0,
+        "tail_build": 0.5
+      }
+    }
+  }
+}

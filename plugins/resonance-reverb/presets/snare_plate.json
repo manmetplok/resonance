@@ -6,12 +6,12 @@
   "meta": {
     "name": "Snare Plate",
     "author": "Resonance",
-    "description": "Bright plate on snare: 1.5 s decay, damping rolled up to 10 kHz for metallic sheen, tight 0.35 size, 25% mix.",
+    "description": "Bright plate on snare: dense from the first millisecond, 1.5 s, treble held to 0.85x above 10 kHz for metallic sheen, tight 0.35 size, 25% mix.",
     "category": "Track",
     "instrument": ["snare"],
     "genres": [],
     "character": ["bright", "metallic"],
-    "tags": ["plate"]
+    "tags": ["plate", "snare"]
   },
   "state": {
     "encoding": "resonance-json",
@@ -39,10 +39,10 @@
         "duck_attack": 15.0,
         "duck_release": 200.0,
         "er_tail_balance": 0.0,
-        "algorithm": 0,
+        "algorithm": 1,
         "low_decay_mult": 1.0,
         "low_xover": 250.0,
-        "high_decay_mult": 0.5,
+        "high_decay_mult": 0.85,
         "predelay_sync": 0,
         "decay_sync": 0,
         "tail_build": 0.5
