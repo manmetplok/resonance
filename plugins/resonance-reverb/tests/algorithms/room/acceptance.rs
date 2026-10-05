@@ -22,7 +22,7 @@
 use resonance_metering::decay::ImpulseReport;
 use resonance_reverb::dsp::Algorithm;
 
-use super::common::*;
+use crate::common::*;
 
 const SIZES: [f32; 3] = [0.2, 0.5, 0.9];
 const DECAYS: [f32; 3] = [0.3, 0.8, 1.5];

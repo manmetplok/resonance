@@ -17,8 +17,7 @@ use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
 use resonance_reverb::params::ReverbParams;
 use resonance_reverb::ResonanceReverb;
 
-const SR: f32 = 48_000.0;
-const BLOCK: usize = 128;
+use crate::common::{energy_db, BLOCK, SR};
 
 #[derive(Clone, Copy, Debug)]
 struct Setting {
@@ -103,11 +102,6 @@ fn render(s: Setting) -> (Vec<f32>, Vec<f32>) {
         n += frames;
     }
     (out_l, out_r)
-}
-
-fn energy_db(l: &[f32], r: &[f32]) -> f64 {
-    let e: f64 = l.iter().chain(r).map(|&x| (x as f64) * (x as f64)).sum();
-    10.0 * (e / (2 * l.len()) as f64).max(1e-30).log10()
 }
 
 #[test]
