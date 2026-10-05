@@ -48,6 +48,8 @@ fn every_factory_preset_parses() {
 #[test]
 fn dsp_processes_impulse_without_nans() {
     let mut plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (reverb-algorithms.md D2).
+    plugin.params.algorithm.set_value(resonance_reverb::dsp::Algorithm::Classic as i32);
     plugin.initialize(48_000.0, 4096);
 
     let frames = 4096usize;
@@ -80,6 +82,8 @@ fn dsp_processes_impulse_without_nans() {
 #[ignore = "diagnostic; prints the IR envelope table, asserts nothing"]
 fn debug_impulse_response_envelope() {
     let mut plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (reverb-algorithms.md D2).
+    plugin.params.algorithm.set_value(resonance_reverb::dsp::Algorithm::Classic as i32);
     plugin.initialize(48_000.0, 4096);
     plugin.params.mix.set_value(1.0); // 100% wet
     plugin.params.er_level.set_value(0.0); // isolate FDN path
@@ -143,6 +147,8 @@ fn debug_impulse_response_envelope() {
 #[test]
 fn wet_onset_is_room_like_not_cathedral() {
     let mut plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (reverb-algorithms.md D2).
+    plugin.params.algorithm.set_value(resonance_reverb::dsp::Algorithm::Classic as i32);
     plugin.initialize(48_000.0, 4096);
     // Crank mix to 1.0 so the signal we measure is purely wet, and
     // drop ER to 0 to isolate the FDN/diffusion path from the ER path.

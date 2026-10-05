@@ -71,9 +71,13 @@ pub struct ReverbDsp {
 }
 
 impl ReverbDsp {
-    /// A processor with one engine per built algorithm, on Classic.
+    /// A processor with one engine per built algorithm, on
+    /// [`Algorithm::DEFAULT`] — what a fresh plugin's `algorithm`
+    /// parameter selects, so the two agree before the first block.
     pub fn new(sample_rate: f32) -> Self {
-        Self::with_engines(sample_rate, Algorithm::BUILT)
+        let mut dsp = Self::with_engines(sample_rate, Algorithm::BUILT);
+        dsp.set_algorithm(Algorithm::DEFAULT);
+        dsp
     }
 
     /// A processor whose engine bank holds exactly `slots`, starting on

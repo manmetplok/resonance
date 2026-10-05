@@ -294,6 +294,8 @@ fn scenarios() -> Vec<Scenario> {
 /// render can never depend on scenario order. See the module header.
 fn render_scenario(s: &Scenario) -> Vec<f32> {
     let mut plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (reverb-algorithms.md D2).
+    plugin.params.algorithm.set_value(resonance_reverb::dsp::Algorithm::Classic as i32);
     (s.setup)(&plugin.params);
     plugin.initialize(SR, MAX_BLOCK as u32);
 

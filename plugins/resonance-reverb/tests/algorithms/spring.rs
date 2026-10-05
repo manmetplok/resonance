@@ -551,6 +551,109 @@ fn the_viz_getters_describe_the_springs() {
     assert!((big.fdn_delay_ms()[0] - 90.0).abs() < 0.01);
 }
 
+/// A 5 ms snare click into the default spring (default drip) at ER/tail
+/// `balance`.
+fn snare_at_balance(balance: f32, n: usize) -> (Vec<f32>, Vec<f32>) {
+    let v = Voicing {
+        drip: 0.3,
+        ..Voicing::dry()
+    };
+    let mut d = dsp(v);
+    d.set_er_tail_balance(balance);
+    let (mut l, mut r) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    for i in 0..n {
+        let x = if i < (0.005 * SR) as usize { snare(i) } else { 0.0 };
+        let (a, b) = d.process(x, x, v.diffusion, v.width);
+        l.push(a);
+        r.push(b);
+    }
+    (l, r)
+}
+
+/// §4.2: Spring has no discrete ERs, so the ER/tail balance weights its
+/// onset (the first pass through the springs, before the first echo
+/// comes round) against the echoes. Balance −1 keeps an audible onset and
+/// no echoes; +1 keeps the echoes and removes the onset.
+#[test]
+fn er_tail_balance_weights_the_onset_against_the_echoes() {
+    let n = (0.6 * SR) as usize;
+    // The first echo leaves the loop one round trip in (minus the
+    // cascade's own ~5 ms): everything before 30 ms is onset at the
+    // default size, everything after 90 ms is echoes.
+    let onset = ..(0.030 * SR) as usize;
+    let echoes = (0.090 * SR) as usize..;
+    let (l0, r0) = snare_at_balance(0.0, n);
+    let (le, re) = snare_at_balance(-1.0, n);
+    let (lt, rt) = snare_at_balance(1.0, n);
+    let db = |l: &[f32], r: &[f32]| energy_db(l, r);
+    let centre_onset = db(&l0[onset], &r0[onset]);
+    let centre_echoes = db(&l0[echoes.clone()], &r0[echoes.clone()]);
+    let er_onset = db(&le[onset], &re[onset]);
+    let er_echoes = db(&le[echoes.clone()], &re[echoes.clone()]);
+    let tail_onset = db(&lt[onset], &rt[onset]);
+    let tail_echoes = db(&lt[echoes.clone()], &rt[echoes.clone()]);
+    println!(
+        "spring balance: onset {centre_onset:.1} / {er_onset:.1} / {tail_onset:.1} dB, \
+         echoes {centre_echoes:.1} / {er_echoes:.1} / {tail_echoes:.1} dB (0 / -1 / +1)"
+    );
+    // −1: the onset is all there, the echoes are gone.
+    assert!((er_onset - centre_onset).abs() < 1.0, "-1 lost the onset");
+    assert!(er_onset > -40.0, "-1 onset is inaudible: {er_onset:.1} dB");
+    assert!(er_echoes < centre_echoes - 40.0, "-1 kept the echoes");
+    // +1: the echoes are all there, the onset is gone.
+    assert!((tail_echoes - centre_echoes).abs() < 1.0, "+1 lost the echoes");
+    assert!(tail_onset < centre_onset - 40.0, "+1 kept the onset");
+}
+
+/// A 200 Hz tone burst every 150 ms (an abrupt start each time, so every
+/// burst trips the drip's transient detector).
+fn tone_bursts(i: usize) -> f32 {
+    let period = (0.15 * SR) as usize;
+    let k = i % period;
+    if k < (0.08 * SR) as usize {
+        0.5 * (std::f32::consts::TAU * 200.0 * k as f32 / SR).sin()
+    } else {
+        0.0
+    }
+}
+
+/// `spring_drip` is set once per block; automating it during hits must
+/// not zipper. Drip stepping between 0 and 1 every block, over tone
+/// bursts, has no sharper edges (largest second difference) than drip
+/// held at 1.
+#[test]
+fn drip_automation_during_hits_does_not_zipper() {
+    let v = Voicing::dry();
+    let n = (1.2 * SR) as usize;
+    let block = 256;
+    let worst = |automate: bool| {
+        let mut d = dsp(Voicing { drip: 1.0, ..v });
+        let (mut prev, mut prev_step, mut worst) = (0.0f32, 0.0f32, 0.0f32);
+        for i in 0..n {
+            if automate && i % block == 0 {
+                let drip = if (i / block) % 2 == 0 { 1.0 } else { 0.0 };
+                d.set_extras(Extras {
+                    spring_drip: drip,
+                    ..extras(v)
+                });
+            }
+            let x = tone_bursts(i);
+            let (l, _) = d.process(x, x, v.diffusion, v.width);
+            let step = l - prev;
+            worst = worst.max((step - prev_step).abs());
+            prev_step = step;
+            prev = l;
+        }
+        worst
+    };
+    let (held, automated) = (worst(false), worst(true));
+    println!("spring drip: largest second difference held {held:.5}, automated {automated:.5}");
+    assert!(
+        automated <= 1.25 * held,
+        "drip automation zippers: {automated:.5} vs held {held:.5}"
+    );
+}
+
 // ---------------------------------------------------------------------
 // Golden
 

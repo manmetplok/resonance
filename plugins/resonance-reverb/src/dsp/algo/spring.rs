@@ -38,14 +38,22 @@
 //!   (`|fast| ≫ |slow|` peak followers, the ducker's [`Ballistics`]) through
 //!   a steeper, separate cascade (coefficient 0.95) into both springs: a
 //!   pluck or a snare gets an extra falling "drip" chirp that then echoes
-//!   with the rest, a sustained note gets none once it has settled.
+//!   with the rest, a sustained note gets none once it has settled. The
+//!   amount glides like the coefficients (20 ms), so automating it during
+//!   hits does not zipper.
 //! - **Stereo.** Mono-in (the sum, high-passed at 90 Hz: a spring tank
 //!   carries no low bass). Spring B is 13 % longer and 2 % less dispersive
 //!   than A; A is the left output, B the right.
-//! - **No early reflections.** Everything is returned in `late_*` and
-//!   `er_*` is zero, so the shared ER/tail balance only scales the whole
-//!   spring (toward −1 it fades out). `er_level`, `er_time`, `diffusion`,
-//!   `mod_*`, the decay-shape multipliers and `tail_build` are ignored.
+//! - **Onset and echoes.** A spring has no discrete early reflections,
+//!   so (§4.2) the ER/tail balance weights its onset against the rest:
+//!   the input's first pass through each spring (the direct chirp, before
+//!   the first echo comes round one round trip later) is returned in
+//!   `er_*`, every recirculated pass in `late_*`. The two run through
+//!   separate cascades with the same coefficients, and their sum is what
+//!   goes round the loop, so at the centred balance the output is the
+//!   single-cascade spring's (to float rounding: the cascade is linear).
+//!   `er_level`, `er_time`, `diffusion`, `mod_*`, the decay-shape
+//!   multipliers and `tail_build` are ignored.
 //! - **Freeze** is ignored (the spec greys it for Spring).
 //!
 //! Every setter dedupes (the plugin calls each one every block); the loop
@@ -102,6 +110,9 @@ const TRANSIENT_RATIO: f32 = 2.0;
 
 /// One dispersive loop.
 struct Spring {
+    /// The input's first pass (the onset, `er_*`).
+    onset: DispersiveAllpass,
+    /// The recirculated passes (the echoes, `late_*`).
     cascade: DispersiveAllpass,
     line: DelayLine,
     interp: f32,
@@ -126,6 +137,7 @@ struct Spring {
 impl Spring {
     fn new(max_line: usize) -> Self {
         Self {
+            onset: DispersiveAllpass::new(STAGES, STAGES, 0.0),
             cascade: DispersiveAllpass::new(STAGES, STAGES, 0.0),
             line: DelayLine::new(max_line),
             interp: 0.0,
@@ -143,14 +155,21 @@ impl Spring {
 
     /// Land every glide and empty the loop.
     fn clear(&mut self) {
+        self.onset.clear();
         self.cascade.clear();
         self.line.clear();
         self.interp = 0.0;
         self.lpf.reset();
         self.read = self.read_target;
         self.a = self.a_target;
-        self.cascade.set_coefficient(self.a);
+        self.set_coefficient();
         self.land();
+    }
+
+    /// Both cascades on `a`: the onset is the same spring's first pass.
+    fn set_coefficient(&mut self) {
+        self.onset.set_coefficient(self.a);
+        self.cascade.set_coefficient(self.a);
     }
 
     /// Put the gain and the filter on their targets.
@@ -190,7 +209,7 @@ impl Spring {
             } else {
                 self.a + d * a_step
             };
-            self.cascade.set_coefficient(self.a);
+            self.set_coefficient();
         }
         if self.read != self.read_target {
             let d = self.read_target - self.read;
@@ -247,8 +266,10 @@ pub struct SpringEngine {
     hpf: Biquad,
     drip: DispersiveAllpass,
     transient: Transient,
-    /// Per-sample coefficient glide step.
+    /// Per-sample coefficient (and drip) glide step.
     a_step: f32,
+    /// The drip amount in effect; glides to `drip_amount` at `a_step`.
+    drip_live: f32,
     // Last values set (dedupe).
     size: f32,
     decay: f32,
@@ -280,6 +301,7 @@ impl SpringEngine {
             damping: 8_000.0,
             tension: defaults.spring_tension,
             drip_amount: defaults.spring_drip,
+            drip_live: defaults.spring_drip,
             dirty: false,
             primed: false,
             energies: [0.0; CHANNELS],
@@ -338,7 +360,7 @@ impl SpringEngine {
             for s in &mut self.springs {
                 s.read = s.read_target;
                 s.a = s.a_target;
-                s.cascade.set_coefficient(s.a);
+                s.set_coefficient();
                 s.land();
             }
         }
@@ -381,6 +403,10 @@ impl SpringEngine {
             self.dirty = true;
         }
         self.drip_amount = extras.spring_drip.clamp(0.0, 1.0);
+        if !self.primed {
+            // Nothing is sounding: no glide.
+            self.drip_live = self.drip_amount;
+        }
     }
 
     #[inline]
@@ -391,29 +417,39 @@ impl SpringEngine {
         self.primed = true;
         let x = self.hpf.process(0.5 * (l + r));
         let t = self.transient.next(x);
-        let drip = self.drip.process(x * t * self.drip_amount * DRIP_GAIN);
-        let input = x + drip;
         let a_step = self.a_step;
+        if self.drip_live != self.drip_amount {
+            let d = self.drip_amount - self.drip_live;
+            self.drip_live = if d.abs() < 1e-6 {
+                self.drip_amount
+            } else {
+                self.drip_live + d * a_step
+            };
+        }
+        let drip = self.drip.process(x * t * self.drip_live * DRIP_GAIN);
+        let input = x + drip;
         let fa = self.springs[0].feedback(a_step);
         let fb = self.springs[1].feedback(a_step);
-        // Both cascades at once: two independent chains interleave.
+        // Both springs at once: two independent chains interleave. The
+        // first pass and the recirculated ones run in separate cascades
+        // (onset and echoes), and their sum goes round the loop.
         let [sa, sb] = &mut self.springs;
-        let (ya, yb) = sa
-            .cascade
-            .process_pair(&mut sb.cascade, input + fa, input + fb);
+        let (oa, ob) = sa.onset.process_pair(&mut sb.onset, input, input);
+        let (ea, eb) = sa.cascade.process_pair(&mut sb.cascade, fa, fb);
+        let (ya, yb) = (oa + ea, ob + eb);
         sa.line.push(ya);
         sb.line.push(yb);
         // Tank view: a ~4 ms follower per spring, A on the even slots.
-        let (ea, eb) = (ya.abs(), yb.abs());
+        let (level_a, level_b) = (ya.abs(), yb.abs());
         for (c, e) in self.energies.iter_mut().enumerate() {
-            let m = if c % 2 == 0 { ea } else { eb };
+            let m = if c % 2 == 0 { level_a } else { level_b };
             *e += 0.005 * (m - *e);
         }
         Wet {
-            er_l: 0.0,
-            er_r: 0.0,
-            late_l: ya * OUT_GAIN,
-            late_r: yb * OUT_GAIN,
+            er_l: oa * OUT_GAIN,
+            er_r: ob * OUT_GAIN,
+            late_l: ea * OUT_GAIN,
+            late_r: eb * OUT_GAIN,
         }
     }
 
@@ -426,6 +462,7 @@ impl SpringEngine {
         }
         self.hpf.reset();
         self.drip.clear();
+        self.drip_live = self.drip_amount;
         self.transient.clear();
         self.energies = [0.0; CHANNELS];
         self.primed = false;

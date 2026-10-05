@@ -585,3 +585,31 @@ fn the_non_param_state_survives_the_active_state_path() {
         );
     }
 }
+
+/// reverb-algorithms.md D2 on both sides of the boundary: a fresh
+/// instance reports Room, and a project saved before `algorithm` existed
+/// (no key) loads as Classic whether the plugin is active or not — the
+/// active path writes the atomics itself, so it must run the plugin's
+/// state upgrade too.
+#[test]
+fn a_legacy_document_loads_as_classic_active_or_inactive() {
+    const ALGORITHM_CLASSIC: f64 = 0.0;
+    const ALGORITHM_ROOM: f64 = 2.0;
+    let legacy = br#"{"version":1,"params":{"decay":3.1,"mix":0.45}}"#;
+
+    let mut instance = hosted();
+    assert_eq!(host_value(&mut instance, "algorithm"), ALGORITHM_ROOM);
+    assert!(host_load(&mut instance, legacy));
+    assert_eq!(host_value(&mut instance, "algorithm"), ALGORITHM_CLASSIC);
+
+    let mut instance = hosted();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert_eq!(host_value(&mut instance, "algorithm"), ALGORITHM_ROOM);
+    assert!(host_load(&mut instance, legacy));
+    assert_eq!(host_value(&mut instance, "algorithm"), ALGORITHM_CLASSIC);
+    assert_eq!(host_value(&mut instance, "decay"), 3.1f32 as f64);
+    instance.deactivate(processor);
+    assert_eq!(host_value(&mut instance, "algorithm"), ALGORITHM_CLASSIC);
+}
