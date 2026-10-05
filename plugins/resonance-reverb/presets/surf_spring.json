@@ -1,17 +1,17 @@
 {
   "format": "resonance.preset",
   "format_version": 1,
-  "id": "snare-gated",
+  "id": "surf-spring",
   "plugin": { "id": "com.resonance.reverb" },
   "meta": {
-    "name": "Snare Gated",
+    "name": "Surf Spring",
     "author": "Resonance",
-    "description": "The 80s gated snare on the Nonlinear algorithm: a dense burst held flat for 300 ms after every hit, then cut in 10 ms. The gate retriggers on each snare, so it slams without washing over the next beat. 200 Hz return HPF keeps the kick out.",
-    "category": "Creative",
-    "instrument": ["snare", "drums"],
-    "genres": ["rock", "pop"],
-    "character": ["punchy", "aggressive", "static"],
-    "tags": ["gated", "nonlinear"]
+    "description": "A guitar-amp spring tank on the Spring algorithm: 2.5 s of dispersive, chirping echoes with a fair amount of drip on every pick attack. For clean electric guitar (surf, twang, dub); 150 Hz return HPF, 30% mix, inserted on the guitar or on a send.",
+    "category": "Track",
+    "instrument": ["electric-guitar", "guitar"],
+    "genres": ["rock", "indie", "dub"],
+    "character": ["vintage", "bright", "metallic"],
+    "tags": ["spring", "surf", "drip", "amp"]
   },
   "state": {
     "encoding": "resonance-json",
@@ -20,17 +20,17 @@
         "predelay": 0.0,
         "er_level": 0.4,
         "er_time": 0.5,
-        "size": 0.6,
-        "decay": 2.0,
-        "damping": 10000.0,
+        "size": 0.55,
+        "decay": 2.5,
+        "damping": 7000.0,
         "diffusion": 0.8,
         "mod_rate": 0.5,
-        "mod_depth": 0.2,
-        "width": 1.0,
-        "mix": 0.35,
+        "mod_depth": 0.0,
+        "width": 0.8,
+        "mix": 0.3,
         "freeze": 0,
         "wet_hpf_on": 1,
-        "wet_hpf_freq": 200.0,
+        "wet_hpf_freq": 150.0,
         "wet_lpf_on": 0,
         "wet_lpf_freq": 10000.0,
         "wet_filter_slope": 0,
@@ -39,7 +39,7 @@
         "duck_attack": 15.0,
         "duck_release": 200.0,
         "er_tail_balance": 0.0,
-        "algorithm": 7,
+        "algorithm": 6,
         "low_decay_mult": 1.0,
         "low_xover": 250.0,
         "high_decay_mult": 0.5,
@@ -50,8 +50,8 @@
         "shimmer_amount": 0.3,
         "nl_shape": 0,
         "nl_length": 300.0,
-        "spring_tension": 0.5,
-        "spring_drip": 0.3
+        "spring_tension": 0.7,
+        "spring_drip": 0.6
       }
     }
   }
