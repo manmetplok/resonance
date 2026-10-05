@@ -6,12 +6,12 @@
   "meta": {
     "name": "Tight Room",
     "author": "Resonance",
-    "description": "Small 0.2-size room with a 0.6 s decay and high early-reflection level, tight and dry, not a wash.",
+    "description": "Small Room (0.2 size, 0.6 s): a short shoebox with strong early reflections leaning ahead of the tail, tight and dry rather than a wash. Puts a source in a small real space at 25% mix.",
     "category": "Track",
     "instrument": ["drums", "room"],
     "genres": [],
-    "character": ["dry", "narrow"],
-    "tags": ["short-decay"]
+    "character": ["dry", "narrow", "punchy"],
+    "tags": ["room", "short-decay", "early-reflections", "small-room"]
   },
   "state": {
     "encoding": "resonance-json",
@@ -19,13 +19,13 @@
       "params": {
         "predelay": 5.0,
         "er_level": 0.55,
-        "er_time": 0.25,
-        "size": 0.20,
+        "er_time": 0.3,
+        "size": 0.2,
         "decay": 0.6,
         "damping": 7000.0,
         "diffusion": 0.75,
         "mod_rate": 0.8,
-        "mod_depth": 0.20,
+        "mod_depth": 0.15,
         "width": 0.9,
         "mix": 0.25,
         "freeze": 0,
@@ -38,8 +38,8 @@
         "duck_threshold": -30.0,
         "duck_attack": 15.0,
         "duck_release": 200.0,
-        "er_tail_balance": 0.0,
-        "algorithm": 0,
+        "er_tail_balance": -0.15,
+        "algorithm": 2,
         "low_decay_mult": 1.0,
         "low_xover": 250.0,
         "high_decay_mult": 0.5,
