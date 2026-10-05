@@ -23,3 +23,6 @@ mod spring;
 mod nonlinear;
 #[path = "algorithms/shimmer.rs"]
 mod shimmer;
+#[cfg(feature = "editor")]
+#[path = "algorithms/editor.rs"]
+mod editor;

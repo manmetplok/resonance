@@ -20,7 +20,7 @@ pub(super) fn draw(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
         egui::pos2(avail.right() - gap, avail.bottom() - 2.0),
     );
 
-    // Split the viz area: impulse hero (left ~68%) + FDN tank (right ~32%).
+    // Split the viz area: impulse hero (left ~68%) + tank view (right ~32%).
     let tank_w = 300.0f32.min(viz_rect.width() * 0.35);
     let impulse_rect = egui::Rect::from_min_max(
         viz_rect.min,

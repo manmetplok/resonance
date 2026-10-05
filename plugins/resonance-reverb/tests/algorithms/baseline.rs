@@ -74,6 +74,8 @@ fn render_seconds(s: Setting) -> f32 {
 
 fn render(s: Setting) -> (Vec<f32>, Vec<f32>) {
     let mut plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (reverb-algorithms.md D2).
+    plugin.params.algorithm.set_value(resonance_reverb::dsp::Algorithm::Classic as i32);
     pin(&plugin.params, s);
     plugin.initialize(SR, BLOCK as u32);
 

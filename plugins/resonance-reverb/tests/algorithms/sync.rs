@@ -37,6 +37,8 @@ fn label_index(labels: &[&str], label: &str) -> i32 {
 /// A plugin, fully wet, set up by `setup` before `initialize`.
 fn plugin(setup: impl Fn(&ReverbParams)) -> ResonanceReverb {
     let mut plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (reverb-algorithms.md D2).
+    plugin.params.algorithm.set_value(resonance_reverb::dsp::Algorithm::Classic as i32);
     plugin.params.mix.set_value(1.0);
     setup(&plugin.params);
     plugin.initialize(SR, BLOCK as u32);

@@ -16,6 +16,9 @@ editor = ["dep:plugin-gui-core", "resonance-plugin/editor-widgets"]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-dsp = { path = "../../resonance-dsp" }
 resonance-metering = { path = "../../resonance-metering" }
+# The state upgrade (`params::upgrade_state`, reverb-algorithms.md D2)
+# edits the state document before a param is read.
+serde_json.workspace = true
 
 # Only the platform-neutral half of the editor stack is named here. The
 # platform GUI runtime (Wayland today, Cocoa on macOS) is selected by
@@ -27,8 +30,6 @@ plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
 [dev-dependencies]
 criterion.workspace = true
 resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
-# Only tests/{state,plugin}.rs use this (DEP-08).
-serde_json.workspace = true
 # `tests/state.rs` drives this plugin through a real (in-process) CLAP host
 # across the C ABI, which is the only way to reach the state path the bridge
 # takes while the plugin is active and its object lives in the audio processor.

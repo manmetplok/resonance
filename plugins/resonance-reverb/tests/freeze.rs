@@ -26,6 +26,8 @@ fn rms(samples: &[f32]) -> f32 {
 #[test]
 fn freeze_with_continuous_input_stays_bounded() {
     let mut reverb = ReverbDsp::new(SAMPLE_RATE);
+    // Classic, pinned: a fresh processor runs Room (reverb-algorithms.md D2).
+    reverb.set_algorithm(resonance_reverb::dsp::Algorithm::Classic);
     reverb.set_size(0.5);
     reverb.set_decay(2.0);
     reverb.set_damping(20_000.0);

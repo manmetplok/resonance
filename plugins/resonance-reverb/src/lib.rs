@@ -72,6 +72,10 @@ impl ResonancePlugin for ResonanceReverb {
     const FACTORY_PRESETS: &'static [resonance_plugin::presets::FactoryPreset] =
         presets::PRESETS;
 
+    /// A state from before the `algorithm` parameter loads as Classic,
+    /// though a fresh instance is Room (reverb-algorithms.md D2).
+    const STATE_UPGRADE: Option<resonance_plugin::StateUpgrade> = Some(params::upgrade_state);
+
     const INPUT_CHANNELS: Option<u32> = Some(2);
     /// Stereo key for the wet-return ducker.
     const SIDECHAIN_INPUT: Option<u32> = Some(2);

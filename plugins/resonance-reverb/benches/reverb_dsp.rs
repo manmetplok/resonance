@@ -22,10 +22,10 @@ const FRAMES: usize = 128;
 /// Bench name and the parameter edit that selects the algorithm.
 type Algorithm = (&'static str, fn(&ReverbParams));
 
-/// Every algorithm the plugin offers. Classic is the factory default, so it
-/// needs no edit.
+/// Every algorithm the plugin offers, each selected explicitly (a fresh
+/// instance runs Room, reverb-algorithms.md D2).
 const ALGORITHMS: &[Algorithm] = &[
-    ("classic", |_| {}),
+    ("classic", |p| p.algorithm.set_value(0)),
     ("plate", |p| p.algorithm.set_value(1)),
     ("room", |p| p.algorithm.set_value(2)),
     ("chamber", |p| p.algorithm.set_value(3)),

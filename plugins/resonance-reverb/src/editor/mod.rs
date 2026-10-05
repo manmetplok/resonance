@@ -3,7 +3,7 @@
 //! Layout (top-down):
 //! - Header: plugin name, algorithm selector, preset dropdown, live
 //!   readouts, freeze indicator.
-//! - Central: impulse tail hero visualisation on the left, FDN tank view
+//! - Central: impulse tail hero visualisation on the left, per-algorithm tank
 //!   on the right, stereo peak meters along the bottom of the central area.
 //! - Bottom: control strip — the room (two rows) and the return channel
 //!   (return EQ, ducking, ER/tail depth).
@@ -94,7 +94,7 @@ impl EditorFactory for ReverbEditorFactory {
                 title: "Resonance Reverb".to_string(),
                 app_id: resonance_plugin::first_party::REVERB.to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
-                min_size: (720, 680),
+                min_size: (800, 700),
                 resizable: true,
             },
         )
@@ -142,7 +142,7 @@ impl EditorApp for ReverbEditorApp {
             .show_inside(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("reverb_strip")
-            .exact_size(320.0)
+            .exact_size(356.0)
             .show_inside(ui, |ui| controls::draw(ui, &self.params, &self.viz));
 
         egui::CentralPanel::default().show_inside(ui, |ui| center::draw(ui, self));

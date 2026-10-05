@@ -24,6 +24,33 @@ pub const ALGORITHM_LABELS_ALL: &[&str] = &[
 /// algorithm is never offered.
 pub const ALGORITHM_LABELS: &[&str] = ALGORITHM_LABELS_ALL.split_at(Algorithm::BUILT.len()).0;
 
+/// The `algorithm` parameter's id.
+pub const ALGORITHM_ID: &str = "algorithm";
+
+/// The reverb's state upgrade (`ResonancePlugin::STATE_UPGRADE`, run on
+/// every load path before a param is read): a state that names
+/// parameters but no `algorithm` was written before the parameter
+/// existed, when every reverb was Classic, and is given Classic — the
+/// parameter's default is [`Algorithm::DEFAULT`] (reverb-algorithms.md
+/// D2), which such a state must not pick up. Covers projects and
+/// presets alike, whatever their state version (version 1 predates the
+/// parameter too, so the key's absence is the only reliable mark).
+///
+/// Idempotent: a state that names an algorithm keeps it. A state with
+/// no params at all names nothing and leaves the instance as it is.
+pub fn upgrade_state(state: &mut serde_json::Value) {
+    let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
+        return;
+    };
+    if params.is_empty() || params.contains_key(ALGORITHM_ID) {
+        return;
+    }
+    params.insert(
+        ALGORITHM_ID.to_string(),
+        serde_json::json!(Algorithm::Classic as i32 as f64),
+    );
+}
+
 pub struct ReverbParams {
     pub predelay: FloatParam,
     pub er_level: FloatParam,
@@ -69,7 +96,9 @@ pub struct ReverbParams {
     //
     // Appended after index 21. Each defaults to a no-op for Classic: a
     // state saved before them loads as Classic with both syncs off.
-    /// Which engine runs. Its range grows as algorithms land.
+    /// Which engine runs. A fresh instance runs [`Algorithm::DEFAULT`];
+    /// a state that names no algorithm loads as Classic
+    /// ([`upgrade_state`]).
     pub algorithm: IntParam,
     /// Bass decay as a multiple of the mid decay, below `low_xover`.
     /// Not read by Classic.
@@ -383,9 +412,9 @@ impl Default for ReverbParams {
             .with_value_to_string(format_balance()),
 
             algorithm: IntParam::new(
-                "algorithm",
+                ALGORITHM_ID,
                 "Algorithm",
-                0,
+                Algorithm::DEFAULT as i32,
                 IntRange::Linear {
                     min: 0,
                     max: ALGORITHM_LABELS.len() as i32 - 1,

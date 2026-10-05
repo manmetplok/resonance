@@ -29,6 +29,7 @@
 //!     (a decay played backwards), then cut;
 //!   - `Flat`: flat for `L`, then a natural exponential decay whose T60
 //!     is `L` again (the classic "non-linear" decay: hold, then fall).
+//!
 //!   Before the first trigger, and after the envelope ends, the output is
 //!   silent. Every edge (the gate opening, a retrigger, Reverse's cut, a
 //!   shape or length change mid-envelope) goes through a gain smoother of
@@ -266,7 +267,7 @@ impl NonlinearEngine {
             }
             let o = sign();
             out_l[i] = o * fold;
-            out_r[i] = if (i as u32).count_ones() % 2 == 0 {
+            out_r[i] = if (i as u32).count_ones().is_multiple_of(2) {
                 o * fold
             } else {
                 -o * fold
@@ -466,9 +467,9 @@ impl NonlinearEngine {
         let input: [f32; N] = std::array::from_fn(|i| self.in_l[i] * dl + self.in_r[i] * dr);
         let y = self.fdn.tick(&input);
         let (mut late_l, mut late_r) = (DIRECT_DIFFUSE * dl, DIRECT_DIFFUSE * dr);
-        for i in 0..N {
-            late_l += self.out_l[i] * y[i];
-            late_r += self.out_r[i] * y[i];
+        for ((&ol, &or), &yi) in self.out_l.iter().zip(&self.out_r).zip(y.iter()) {
+            late_l += ol * yi;
+            late_r += or * yi;
         }
         let per = N / CHANNELS;
         for (c, e) in self.energies.iter_mut().enumerate() {

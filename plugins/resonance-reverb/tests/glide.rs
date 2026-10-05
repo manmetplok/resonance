@@ -67,6 +67,8 @@ fn er_dominant(p: &ReverbParams) {
 /// sweep's start value.
 fn max_delta(setup: fn(&ReverbParams), edit: fn(&ReverbParams, f32)) -> f32 {
     let mut plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (reverb-algorithms.md D2).
+    plugin.params.algorithm.set_value(resonance_reverb::dsp::Algorithm::Classic as i32);
     setup(&plugin.params);
     edit(&plugin.params, 0.0);
     plugin.initialize(SR, BLOCK as u32);
@@ -159,6 +161,8 @@ fn predelay_sweep_stays_click_free() {
 #[test]
 fn static_params_render_finite_nonzero() {
     let mut plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (reverb-algorithms.md D2).
+    plugin.params.algorithm.set_value(resonance_reverb::dsp::Algorithm::Classic as i32);
     plugin.params.mix.set_value(1.0);
     plugin.params.size.set_value(0.7);
     plugin.params.predelay.set_value(30.0);
@@ -207,6 +211,8 @@ fn static_params_render_finite_nonzero() {
 /// pre-delay tap length.
 fn onset_with_predelay(sr: f32, ms: f32) -> usize {
     let mut dsp = ReverbDsp::new(sr);
+    // Classic, pinned: a fresh processor runs Room (reverb-algorithms.md D2).
+    dsp.set_algorithm(resonance_reverb::dsp::Algorithm::Classic);
     dsp.set_predelay(ms);
     let total = sr as usize + 8_000;
     for n in 0..total {

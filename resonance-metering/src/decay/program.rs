@@ -281,15 +281,15 @@ pub fn program_decay(left: &[f32], right: &[f32], sample_rate: f32) -> ProgramDe
         let mut low = smooth[stop];
         let mut end = windows;
         let mut ends = DecayEnd::RangeEnd;
-        for k in stop + 1..windows {
-            if smooth[k] > low + ONSET_RISE_DB && smooth[k] >= gate {
+        for (k, &level) in smooth.iter().enumerate().take(windows).skip(stop + 1) {
+            if level > low + ONSET_RISE_DB && level >= gate {
                 // The smoothing reaches SMOOTH_RADIUS windows ahead of the
                 // onset; cut before it.
                 end = k.saturating_sub(SMOOTH_RADIUS).max(stop + 1);
                 ends = DecayEnd::Onset;
                 break;
             }
-            low = low.min(smooth[k]);
+            low = low.min(level);
         }
         // The plateau: the median smoothed level of the sustained
         // look-back, which a stop detected a little late into the decay
@@ -319,7 +319,7 @@ pub fn program_decay(left: &[f32], right: &[f32], sample_rate: f32) -> ProgramDe
     // Latest clean stop first; else the deepest (latest on a tie).
     let mut best: Option<Candidate> = None;
     for stop in (0..windows - 1).rev() {
-        if !(sustained[stop] && !sustained[stop + 1]) {
+        if !sustained[stop] || sustained[stop + 1] {
             continue;
         }
         let c = candidate(stop);

@@ -89,6 +89,13 @@ pub enum Algorithm {
 }
 
 impl Algorithm {
+    /// What a newly inserted reverb runs (reverb-algorithms.md D2): the
+    /// `algorithm` parameter's default and the engine a fresh
+    /// [`crate::dsp::ReverbDsp`] starts on. A state written before the
+    /// parameter existed names no algorithm and loads as Classic instead
+    /// ([`crate::params::upgrade_state`]).
+    pub const DEFAULT: Algorithm = Algorithm::Room;
+
     /// The algorithms this build has, in parameter order. The `algorithm`
     /// parameter's range ends at the last of these, so an unbuilt
     /// algorithm is never selectable.

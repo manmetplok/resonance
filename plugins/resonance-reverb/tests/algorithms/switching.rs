@@ -352,6 +352,100 @@ fn legacy_state_loads_as_classic_with_sync_off() {
     assert_eq!(plugin.params.algorithm(), *Algorithm::BUILT.last().unwrap());
 }
 
+/// The plugin's params as the preset loaders take them.
+fn param_list(plugin: &ResonanceReverb) -> Vec<&dyn Param> {
+    (0..plugin.param_count()).map(|i| plugin.param(i)).collect()
+}
+
+/// Load `json` the way a preset is loaded (the preset bank's path: the
+/// plugin's renames and state upgrade, then the shared loader).
+fn apply_preset(plugin: &ResonanceReverb, json: &str) {
+    assert!(resonance_plugin::presets::apply_with(
+        json,
+        &param_list(plugin),
+        plugin.param_renames(),
+        ResonanceReverb::STATE_UPGRADE,
+    ));
+}
+
+/// D2 (reverb-algorithms.md §8): a newly inserted reverb runs Room, the
+/// plugin and its DSP agree on it before the first block, and a state
+/// that names no algorithm, however it arrives, is still Classic.
+#[test]
+fn a_fresh_reverb_is_room_and_a_legacy_one_classic() {
+    let plugin = ResonanceReverb::new();
+    assert_eq!(Algorithm::DEFAULT, Algorithm::Room);
+    assert_eq!(plugin.params.algorithm(), Algorithm::Room);
+    assert_eq!(
+        plugin.params.algorithm.default_plain(),
+        Algorithm::Room as i32 as f64
+    );
+    let mut dsp = ReverbDsp::new(SR);
+    assert_eq!(dsp.algorithm(), Algorithm::Room);
+    dsp.set_algorithm(Algorithm::Room);
+    assert!(!dsp.switching(), "a fresh processor was not already on Room");
+
+    // A fresh plugin renders exactly what one told to run Room does.
+    let wet = |pin: bool| {
+        let mut plugin = ResonanceReverb::new();
+        plugin.params.mix.set_value(1.0);
+        if pin {
+            plugin.params.algorithm.set_value(Algorithm::Room as i32);
+        }
+        plugin.initialize(SR, BLOCK as u32);
+        render(&mut plugin, 8)
+    };
+    assert_eq!(wet(false), wet(true), "a fresh plugin does not render Room");
+
+    // A legacy project (no `algorithm` key, either state version) loads
+    // as Classic; so does a legacy preset through the preset loaders,
+    // which run the same upgrade.
+    const V0: &str = r#"{"params":{"decay":3.0,"mix":0.4}}"#;
+    const V1: &str = r#"{"version":1,"params":{"decay":3.0,"mix":0.4}}"#;
+    for blob in [V0, V1] {
+        let mut plugin = ResonanceReverb::new();
+        assert!(plugin.load_state(blob.as_bytes()));
+        assert_eq!(plugin.params.algorithm(), Algorithm::Classic, "{blob}");
+        assert_eq!(plugin.params.decay.value(), 3.0);
+
+        let plugin = ResonanceReverb::new();
+        apply_preset(&plugin, blob);
+        assert_eq!(plugin.params.algorithm(), Algorithm::Classic, "preset {blob}");
+    }
+
+    // A state or preset that names an algorithm loads what it says,
+    // Classic included.
+    for (label, index) in [("Classic", 0), ("Plate", 1), ("Room", 2), ("Spring", 6)] {
+        let blob = format!(r#"{{"version":1,"params":{{"algorithm":{index}.0,"mix":0.4}}}}"#);
+        let mut plugin = ResonanceReverb::new();
+        assert!(plugin.load_state(blob.as_bytes()));
+        assert_eq!(plugin.params.algorithm.value(), index, "{label}");
+        let plugin = ResonanceReverb::new();
+        apply_preset(&plugin, &blob);
+        assert_eq!(plugin.params.algorithm.value(), index, "preset {label}");
+    }
+    // Every factory preset names its algorithm, so the upgrade never
+    // touches one.
+    for entry in resonance_reverb::presets::PRESETS {
+        let mut doc: serde_json::Value = serde_json::from_str(&entry.state_json()).unwrap();
+        let before = doc.clone();
+        resonance_reverb::params::upgrade_state(&mut doc);
+        assert_eq!(doc, before, "{} names no `algorithm`", entry.name);
+    }
+
+    // A state that names nothing leaves the instance as it is, and the
+    // upgrade is idempotent.
+    let mut plugin = ResonanceReverb::new();
+    assert!(plugin.load_state(br#"{"params":{}}"#));
+    assert_eq!(plugin.params.algorithm(), Algorithm::Room);
+    let mut doc: serde_json::Value = serde_json::from_str(V1).unwrap();
+    resonance_reverb::params::upgrade_state(&mut doc);
+    let once = doc.clone();
+    resonance_reverb::params::upgrade_state(&mut doc);
+    assert_eq!(doc, once);
+    assert_eq!(doc["params"]["algorithm"], 0.0);
+}
+
 #[cfg(feature = "editor")]
 #[test]
 fn the_editor_offers_the_algorithm_and_greys_what_classic_ignores() {
@@ -359,8 +453,10 @@ fn the_editor_offers_the_algorithm_and_greys_what_classic_ignores() {
     use resonance_reverb::editor::headless_editor;
 
     let plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (D2).
+    plugin.params.algorithm.set_value(Algorithm::Classic as i32);
     // The window's minimum size: nothing may fall off it.
-    let mut editor = headless_editor(&plugin, (720.0, 680.0));
+    let mut editor = headless_editor(&plugin, (800.0, 700.0));
     let frame = editor.settled();
     for id in [
         "algorithm",

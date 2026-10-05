@@ -103,6 +103,8 @@ fn render(plugin: &mut ResonanceReverb, blocks: usize) -> Vec<f32> {
 
 fn fresh() -> ResonanceReverb {
     let mut plugin = ResonanceReverb::new();
+    // Classic, pinned: a fresh instance runs Room (reverb-algorithms.md D2).
+    plugin.params.algorithm.set_value(resonance_reverb::dsp::Algorithm::Classic as i32);
     modulated(&plugin.params);
     plugin.initialize(SR, MAX_BLOCK as u32);
     plugin
