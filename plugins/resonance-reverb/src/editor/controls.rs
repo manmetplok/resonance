@@ -10,14 +10,37 @@
 //! the wet HPF/LPF before the tank, the ducker with a readout of what it
 //! is keyed from and how far it is pulling the return down, and the
 //! ER/tail depth balance.
+//!
+//! Pre-delay and decay each carry a tempo-sync choice beside the knob,
+//! with the value in effect underneath it. The decay-shape knobs (Bass
+//! Decay, Bass Xover, Treble Decay) are greyed out, never hidden, for an
+//! algorithm that does not read them, so the layout does not jump when
+//! the algorithm changes.
 
-use resonance_plugin::editor_widgets;
+use resonance_plugin::{editor_widgets, IntParam};
 use plugin_gui_core::egui;
 
 use crate::params::ReverbParams;
 use crate::viz::ReverbViz;
 
 use super::theme;
+
+/// A sync choice for the knob just left of it, with what it resolves to:
+/// the synced value while the host supplies a tempo, "no tempo" while
+/// the knob is standing in for it, nothing while sync is off.
+fn sync_choice(ui: &mut egui::Ui, param: &IntParam, synced: Option<String>) {
+    ui.vertical(|ui| {
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("Sync").size(10.0).color(theme::TEXT_DIM));
+        editor_widgets::int_choice(ui, param, 64.0);
+        let (text, color) = match synced {
+            Some(text) => (text, theme::TEXT),
+            None if param.value() != 0 => ("no tempo".to_string(), theme::TEXT_DIM),
+            None => (String::new(), theme::TEXT_DIM),
+        };
+        ui.label(egui::RichText::new(text).color(color));
+    });
+}
 
 pub fn draw(ui: &mut egui::Ui, params: &ReverbParams, viz: &ReverbViz) {
     ui.vertical(|ui| {
@@ -37,6 +60,11 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams, viz: &ReverbViz) {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             editor_widgets::float_knob(ui, &params.predelay, "Pre-delay", "before tail");
+            sync_choice(
+                ui,
+                &params.predelay_sync,
+                viz.synced_predelay_ms().map(|ms| format!("= {ms:.1} ms")),
+            );
             ui.add_space(4.0);
             editor_widgets::float_knob(ui, &params.er_level, "ER Level", "early refl.");
             ui.add_space(4.0);
@@ -45,6 +73,11 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams, viz: &ReverbViz) {
             editor_widgets::float_knob(ui, &params.size, "Size", "");
             ui.add_space(4.0);
             editor_widgets::float_knob(ui, &params.decay, "Decay", "RT60");
+            sync_choice(
+                ui,
+                &params.decay_sync,
+                viz.synced_decay_s().map(|s| format!("= {s:.2} s")),
+            );
             ui.add_space(4.0);
             editor_widgets::float_knob(ui, &params.damping, "Damping", "HF cutoff");
         });
@@ -62,6 +95,21 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams, viz: &ReverbViz) {
             editor_widgets::float_knob(ui, &params.width, "Width", "stereo");
             ui.add_space(4.0);
             editor_widgets::float_knob(ui, &params.mix, "Mix", "dry/wet");
+            ui.add_space(4.0);
+
+            // Frequency-dependent decay, for the algorithms that have it.
+            ui.add_enabled_ui(params.algorithm().uses_decay_shape(), |ui| {
+                editor_widgets::float_knob(ui, &params.low_decay_mult, "Bass Decay", "x mid");
+                ui.add_space(4.0);
+                editor_widgets::float_knob(ui, &params.low_xover, "Bass Xover", "");
+                ui.add_space(4.0);
+                editor_widgets::float_knob(
+                    ui,
+                    &params.high_decay_mult,
+                    "Treble Decay",
+                    "x mid",
+                );
+            });
             ui.add_space(4.0);
 
             // Freeze is a toggle, not a knob — render as a checkbox.

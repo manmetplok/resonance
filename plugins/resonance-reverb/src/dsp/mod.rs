@@ -1,13 +1,16 @@
-//! Core reverb DSP: 8-channel diffusion network + feedback delay network.
+//! Core reverb DSP: shared stages around a selectable engine.
 //!
-//! Architecture (Signalsmith/Geraint Luff style):
-//!   Input -> Pre-delay -> 4-step Diffusion Network -> FDN Feedback Loop -> Stereo Output
+//! Architecture:
+//!   Input -> Return EQ -> Pre-delay -> Engine (er, late) -> ER/tail balance -> Width
 //!
-//! The diffusion network blurs input into dense reflections using Hadamard mixing.
-//! The FDN provides the decaying tail with Householder feedback and frequency-dependent damping.
+//! The first engine, Classic (Signalsmith/Geraint Luff style), runs a
+//! 4-step Hadamard diffusion network into an 8-line FDN with Householder
+//! feedback and frequency-dependent damping, plus parallel early
+//! reflections.
 //!
 //! This module is split into:
 //! - [`chain`] — top-level [`ReverbDsp`] orchestrator wiring all the stages together
+//! - [`algo`] — the engines (one per algorithm), their dispatch and the switch crossfade
 //! - [`diffusion`] — input diffusion network (cascaded Hadamard-mixed delay lines)
 //! - [`er`] — early reflections (parallel multi-tap stereo delay)
 //! - [`fdn`] — late-tail Feedback Delay Network: delay bank + Householder feedback
@@ -15,6 +18,7 @@
 //! - [`return_eq`] — the wet HPF/LPF on the reverb input (before the tank)
 //! - [`duck`] — the wet-return ducker, keyed by the sidechain or the dry input
 
+pub mod algo;
 mod chain;
 mod diffusion;
 pub(crate) mod duck;
@@ -39,6 +43,7 @@ pub(crate) const DIFFUSION_STEPS: usize = 4;
 /// taps instead of relocating them per block (which clicked).
 pub(crate) const TAP_SLEW_PER_SAMPLE: f32 = 0.25;
 
+pub use algo::Algorithm;
 pub use chain::ReverbDsp;
 pub use duck::{Ducker, DUCK_MAX_GR_DB};
 pub use er::ER_TAPS;

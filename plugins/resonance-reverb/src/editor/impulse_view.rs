@@ -42,9 +42,16 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, app: &ReverbEditorApp) {
 
     draw_grid(painter, inner, axis_y);
 
-    // Pull param snapshot once per frame.
-    let predelay_ms = app.params.predelay.value();
-    let decay_s = app.params.decay.value();
+    // Pull param snapshot once per frame. Pre-delay and decay are the
+    // values in effect: the tempo-synced ones while sync rules.
+    let predelay_ms = app
+        .viz
+        .synced_predelay_ms()
+        .unwrap_or_else(|| app.params.predelay.value());
+    let decay_s = app
+        .viz
+        .synced_decay_s()
+        .unwrap_or_else(|| app.params.decay.value());
     let mod_rate = app.params.mod_rate.value();
     let mod_depth = app.params.mod_depth.value();
     let er_level = app.params.er_level.value();

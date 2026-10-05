@@ -82,6 +82,10 @@ pub struct ReverbViz {
     key_connected: AtomicBool,
     /// The ducker's current gain reduction on the wet return, dB (>= 0).
     duck_gr_db: AtomicF32,
+    /// The tempo-synced pre-delay (ms) and decay (s) in effect, NaN while
+    /// the knob rules (sync off, or no tempo from the host).
+    synced_predelay_ms: AtomicF32,
+    synced_decay_s: AtomicF32,
 }
 
 impl ReverbViz {
@@ -98,7 +102,28 @@ impl ReverbViz {
             tail: TailHistory::new(),
             key_connected: AtomicBool::new(false),
             duck_gr_db: AtomicF32::new(0.0),
+            synced_predelay_ms: AtomicF32::new(f32::NAN),
+            synced_decay_s: AtomicF32::new(f32::NAN),
         })
+    }
+
+    /// Publish the synced values in effect this block (`None` = the knob
+    /// rules).
+    pub fn store_synced(&self, predelay_ms: Option<f32>, decay_s: Option<f32>) {
+        self.synced_predelay_ms
+            .store(predelay_ms.unwrap_or(f32::NAN), Ordering::Relaxed);
+        self.synced_decay_s
+            .store(decay_s.unwrap_or(f32::NAN), Ordering::Relaxed);
+    }
+
+    /// The tempo-synced pre-delay in ms, while one is in effect.
+    pub fn synced_predelay_ms(&self) -> Option<f32> {
+        Some(self.synced_predelay_ms.load(Ordering::Relaxed)).filter(|v| !v.is_nan())
+    }
+
+    /// The tempo-synced decay (T60) in s, while one is in effect.
+    pub fn synced_decay_s(&self) -> Option<f32> {
+        Some(self.synced_decay_s.load(Ordering::Relaxed)).filter(|v| !v.is_nan())
     }
 
     pub fn store_peaks(&self, in_l_db: f32, in_r_db: f32, out_l_db: f32, out_r_db: f32) {
