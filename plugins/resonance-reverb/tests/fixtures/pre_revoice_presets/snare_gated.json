@@ -1,0 +1,52 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "snare-gated",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Snare Gated",
+    "author": "Resonance",
+    "description": "High 0.7 early-reflection level cut off abruptly by a 0.3 s decay, the classic 80s gated-snare slam, not a natural space.",
+    "category": "Creative",
+    "instrument": ["snare", "drums"],
+    "genres": ["rock"],
+    "character": ["punchy", "aggressive", "static"],
+    "tags": ["gated"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 0.0,
+        "er_level": 0.70,
+        "er_time": 0.15,
+        "size": 0.70,
+        "decay": 0.3,
+        "damping": 10000.0,
+        "diffusion": 0.60,
+        "mod_rate": 0.3,
+        "mod_depth": 0.10,
+        "width": 1.0,
+        "mix": 0.35,
+        "freeze": 0,
+        "wet_hpf_on": 0,
+        "wet_hpf_freq": 600.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0,
+        "algorithm": 0,
+        "low_decay_mult": 1.0,
+        "low_xover": 250.0,
+        "high_decay_mult": 0.5,
+        "predelay_sync": 0,
+        "decay_sync": 0,
+        "tail_build": 0.5
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "shimmer-drone",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Shimmer Drone",
+    "author": "Resonance",
+    "description": "12 s decay with fast, deep modulation (2 Hz / 60%) and low early-reflection level, a shimmering, ever-moving drone tail.",
+    "category": "Creative",
+    "instrument": ["synth"],
+    "genres": ["ambient"],
+    "character": ["evolving", "lush", "airy"],
+    "tags": ["long-decay"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 80.0,
+        "er_level": 0.15,
+        "er_time": 0.75,
+        "size": 0.75,
+        "decay": 12.0,
+        "damping": 9000.0,
+        "diffusion": 0.90,
+        "mod_rate": 2.0,
+        "mod_depth": 0.60,
+        "width": 1.0,
+        "mix": 0.45,
+        "freeze": 0,
+        "wet_hpf_on": 0,
+        "wet_hpf_freq": 600.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0,
+        "algorithm": 0,
+        "low_decay_mult": 1.0,
+        "low_xover": 250.0,
+        "high_decay_mult": 0.5,
+        "predelay_sync": 0,
+        "decay_sync": 0,
+        "tail_build": 0.5
+      }
+    }
+  }
+}

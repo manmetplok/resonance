@@ -1,0 +1,52 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "cathedral",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Cathedral",
+    "author": "Resonance",
+    "description": "Huge 0.9-size space, 8 s decay, dark damping at 3.5 kHz, a cavernous wash for pads, strings, or ambient vocals.",
+    "category": "Bus",
+    "instrument": ["strings", "synth", "vocal"],
+    "genres": ["cinematic", "ambient"],
+    "character": ["lush", "wide", "evolving"],
+    "tags": ["hall"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 40.0,
+        "er_level": 0.30,
+        "er_time": 0.80,
+        "size": 0.90,
+        "decay": 8.0,
+        "damping": 3500.0,
+        "diffusion": 0.95,
+        "mod_rate": 0.4,
+        "mod_depth": 0.35,
+        "width": 1.0,
+        "mix": 0.40,
+        "freeze": 0,
+        "wet_hpf_on": 0,
+        "wet_hpf_freq": 600.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0,
+        "algorithm": 0,
+        "low_decay_mult": 1.0,
+        "low_xover": 250.0,
+        "high_decay_mult": 0.5,
+        "predelay_sync": 0,
+        "decay_sync": 0,
+        "tail_build": 0.5
+      }
+    }
+  }
+}

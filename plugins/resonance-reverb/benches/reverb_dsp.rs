@@ -24,7 +24,10 @@ type Algorithm = (&'static str, fn(&ReverbParams));
 
 /// Every algorithm the plugin offers. Classic is the factory default, so it
 /// needs no edit.
-const ALGORITHMS: &[Algorithm] = &[("classic", |_| {})];
+const ALGORITHMS: &[Algorithm] = &[
+    ("classic", |_| {}),
+    ("plate", |p| p.algorithm.set_value(1)),
+];
 
 fn test_signal(frames: usize) -> Vec<f32> {
     (0..frames)

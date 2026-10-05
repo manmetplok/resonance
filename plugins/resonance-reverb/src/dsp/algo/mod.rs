@@ -54,7 +54,7 @@ impl Algorithm {
     /// The algorithms this build has, in parameter order. The `algorithm`
     /// parameter's range ends at the last of these, so an unbuilt
     /// algorithm is never selectable.
-    pub const BUILT: &'static [Algorithm] = &[Algorithm::Classic];
+    pub const BUILT: &'static [Algorithm] = &[Algorithm::Classic, Algorithm::Plate];
 
     /// The algorithm a parameter value selects. Out-of-range values
     /// (a hand-edited state, a newer build's index) fall back to Classic.

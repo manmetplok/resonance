@@ -59,4 +59,9 @@ pub const PRESETS: &[PresetEntry] = &[
         name: "Snare Gated",
         json: include_str!("../presets/snare_gated.json"),
     },
+    PresetEntry {
+        id: "bright-plate",
+        name: "Bright Plate",
+        json: include_str!("../presets/bright_plate.json"),
+    },
 ];

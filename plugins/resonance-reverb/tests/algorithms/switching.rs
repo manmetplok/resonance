@@ -81,9 +81,10 @@ fn the_algorithm_param_offers_exactly_the_built_algorithms() {
     // `track_set_plugin_param` resolves a choice label.
     assert_eq!(p.display(0.0), "Classic");
     assert_eq!(p.parse("Classic"), Some(0.0));
-    // A newer build's index clamps onto what this build has.
-    p.set_plain(4.0);
-    assert_eq!(plugin.params.algorithm(), Algorithm::Classic);
+    // A newer build's index clamps onto the newest algorithm this build
+    // has (the parameter's range clamps before the lookup sees it).
+    p.set_plain(ALGORITHM_LABELS_ALL.len() as f64);
+    assert_eq!(plugin.params.algorithm(), *Algorithm::BUILT.last().unwrap());
 
     // Params 22..=28, appended in the spec's order.
     let ids: Vec<&str> = (22..29).map(|i| plugin.param(i).id()).collect();
@@ -309,12 +310,13 @@ fn legacy_state_loads_as_classic_with_sync_off() {
     assert_eq!(p.build.value(), 0.5);
     assert_eq!(p.predelay.value(), 22.0);
 
-    // A state naming an algorithm this build does not have yet loads as
-    // Classic rather than failing.
-    const FUTURE: &str = r#"{"version":1,"params":{"algorithm":4.0}}"#;
+    // A state naming an algorithm this build does not have yet loads
+    // (clamped onto the newest algorithm this build has) rather than
+    // failing.
+    const FUTURE: &str = r#"{"version":1,"params":{"algorithm":99.0}}"#;
     let mut plugin = ResonanceReverb::new();
     assert!(plugin.load_state(FUTURE.as_bytes()));
-    assert_eq!(plugin.params.algorithm(), Algorithm::Classic);
+    assert_eq!(plugin.params.algorithm(), *Algorithm::BUILT.last().unwrap());
 }
 
 #[cfg(feature = "editor")]

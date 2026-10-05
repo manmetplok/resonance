@@ -20,7 +20,6 @@ use std::path::PathBuf;
 
 use resonance_dsp_test_support as golden;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
-use resonance_reverb::presets::PRESETS;
 use resonance_reverb::ResonanceReverb;
 
 const SR: f32 = 48_000.0;
@@ -96,30 +95,29 @@ fn states() -> Vec<(String, Vec<u8>)> {
         ("project_v1".to_string(), PROJECT_V1.as_bytes().to_vec()),
         ("project_v0".to_string(), PROJECT_V0.as_bytes().to_vec()),
     ];
-    // The bank as it stood when the golden was blessed. Named rather than
-    // enumerated, so a preset added later cannot change what this pins.
-    for name in PRE_W8_PRESETS {
-        let p = PRESETS
-            .iter()
-            .find(|p| p.name == *name)
-            .unwrap_or_else(|| panic!("factory preset `{name}` disappeared"));
-        v.push((format!("preset {}", p.name), p.json.as_bytes().to_vec()));
+    // The bank as it stood when the golden was blessed, frozen as
+    // fixtures: the live presets have since moved onto the new
+    // algorithms (reverb-algorithms.md D1), which is a deliberate sound
+    // change this file must not see.
+    for (name, json) in PRE_W8_PRESETS {
+        v.push((format!("preset {name}"), json.as_bytes().to_vec()));
     }
     v
 }
 
-/// Factory presets that existed before W8, in bank order.
-const PRE_W8_PRESETS: &[&str] = &[
-    "Tight Room",
-    "Vocal Plate",
-    "Warm Hall",
-    "Cathedral",
-    "Ambient Bloom",
-    "Shimmer Drone",
-    "Snare Plate",
-    "Snare Tight",
-    "Snare Ambient",
-    "Snare Gated",
+/// Factory presets that existed before W8, in bank order, as they were
+/// before the algorithm re-voice (copied from 30504ced).
+const PRE_W8_PRESETS: &[(&str, &str)] = &[
+    ("Tight Room", include_str!("fixtures/pre_revoice_presets/tight_room.json")),
+    ("Vocal Plate", include_str!("fixtures/pre_revoice_presets/vocal_plate.json")),
+    ("Warm Hall", include_str!("fixtures/pre_revoice_presets/warm_hall.json")),
+    ("Cathedral", include_str!("fixtures/pre_revoice_presets/cathedral.json")),
+    ("Ambient Bloom", include_str!("fixtures/pre_revoice_presets/ambient_bloom.json")),
+    ("Shimmer Drone", include_str!("fixtures/pre_revoice_presets/shimmer_drone.json")),
+    ("Snare Plate", include_str!("fixtures/pre_revoice_presets/snare_plate.json")),
+    ("Snare Tight", include_str!("fixtures/pre_revoice_presets/snare_tight.json")),
+    ("Snare Ambient", include_str!("fixtures/pre_revoice_presets/snare_ambient.json")),
+    ("Snare Gated", include_str!("fixtures/pre_revoice_presets/snare_gated.json")),
 ];
 
 #[test]

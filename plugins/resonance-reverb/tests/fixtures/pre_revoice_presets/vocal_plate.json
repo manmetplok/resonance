@@ -1,0 +1,52 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "vocal-plate",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Vocal Plate",
+    "author": "Resonance",
+    "description": "Classic plate on vocals: 1.8 s decay, high diffusion, 15 ms predelay to keep the vocal upfront, 30% mix.",
+    "category": "Track",
+    "instrument": ["vocal", "lead-vocal"],
+    "genres": ["pop"],
+    "character": ["warm", "lush"],
+    "tags": ["plate"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 15.0,
+        "er_level": 0.45,
+        "er_time": 0.30,
+        "size": 0.35,
+        "decay": 1.8,
+        "damping": 8000.0,
+        "diffusion": 0.85,
+        "mod_rate": 1.2,
+        "mod_depth": 0.30,
+        "width": 1.0,
+        "mix": 0.30,
+        "freeze": 0,
+        "wet_hpf_on": 0,
+        "wet_hpf_freq": 600.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0,
+        "algorithm": 0,
+        "low_decay_mult": 1.0,
+        "low_xover": 250.0,
+        "high_decay_mult": 0.5,
+        "predelay_sync": 0,
+        "decay_sync": 0,
+        "tail_build": 0.5
+      }
+    }
+  }
+}

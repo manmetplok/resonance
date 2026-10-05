@@ -84,11 +84,8 @@ fn detune_all(plugin: &Plugin) -> Vec<(String, f64)> {
 }
 
 /// Parameters whose range holds nothing but their default, so they cannot
-/// be moved: `algorithm` has one choice, `Classic`, until the second
-/// algorithm lands (reverb-algorithms.md §4.1: its range grows by phase).
-/// The assertion above is exact, so when the range grows this list has to
-/// shrink, and `algorithm` joins the round-trip.
-const SINGLE_VALUED: &[&str] = &["algorithm"];
+/// be moved. None since Plate joined `algorithm` (reverb-algorithms.md R3).
+const SINGLE_VALUED: &[&str] = &[];
 
 fn snapshot(plugin: &Plugin) -> Vec<(String, f64)> {
     (0..plugin.param_count())
