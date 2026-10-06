@@ -32,6 +32,8 @@ rustfft.workspace = true
 base64.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
+# `mlock` for the wavetable bundle (`dsp::wavetable::ensure_resident`).
+libc.workspace = true
 
 # Editor dependencies — only pulled in when the `editor` feature is on.
 # Only the platform-neutral half of the editor stack is named here. The

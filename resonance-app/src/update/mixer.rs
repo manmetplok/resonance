@@ -64,6 +64,12 @@ pub enum MixerMessage {
     ToggleSendPreFader(SendId),
     /// Enable / disable a send while keeping its routing and level.
     ToggleSendEnabled(SendId),
+    /// Overwrite an existing send with these fields in one engine edit
+    /// (`track.set_send`). Several fields changed at once must go out as
+    /// ONE `SetAuxSend`: each single-field message above re-sends the whole
+    /// send built from the echo-only mirror, so a batch of them all start
+    /// from the same pre-edit snapshot and only the last one sticks.
+    SetSend(AuxSend),
     /// Mark a bus as an aux *return* bus, or clear the flag.
     SetBusReturnRole(BusId, bool),
     /// Create a brand-new FX return bus and route `source` into it in one
@@ -94,6 +100,7 @@ impl MixerMessage {
             | Self::SetSendDest(_, _)
             | Self::ToggleSendPreFader(_)
             | Self::ToggleSendEnabled(_)
+            | Self::SetSend(_)
             | Self::SetBusReturnRole(_, _)
             | Self::CreateReturnFromSend { .. } => UndoAction::Record,
         }
@@ -147,6 +154,9 @@ pub fn handle(r: &mut Resonance, m: MixerMessage) -> Task<Message> {
         }
         MixerMessage::ToggleSendEnabled(send_id) => {
             upsert_send(r, send_id, |s| s.enabled = !s.enabled);
+        }
+        MixerMessage::SetSend(send) => {
+            upsert_send(r, send.id, |s| *s = send);
         }
         MixerMessage::SetBusReturnRole(bus_id, is_return) => {
             let _ = r.engine.send(AudioCommand::SetBusRole { bus_id, is_return });

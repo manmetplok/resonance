@@ -235,6 +235,9 @@ impl SynthEngine {
         // `initialize()` — this keeps plugin instantiation fast instead of
         // burning multi-seconds on additive synthesis.
         self.wavetables = crate::dsp::wavetable::load_bundled();
+        // Pin the bundle now, on the main thread, so no note page-faults it
+        // in on the audio thread. A no-op after the first instance.
+        crate::dsp::wavetable::ensure_resident();
         // The user slots, sized once here so installing a table later is a
         // slot write — never a push — on the audio thread.
         self.wavetables.reserve_exact(NUM_OSCS);

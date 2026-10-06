@@ -24,6 +24,16 @@
 /// and mip levels are reached with one multiply-add into a flat slice. Every
 /// instance shares the same read-only pages, so the OS keeps a single physical
 /// copy for the whole process.
+///
+/// Residency
+/// ---------
+/// Those pages are file-backed, demand-paged from the `.clap`: left alone,
+/// the first note to read a cold table page-faults on the audio thread (a
+/// major fault on a compressed filesystem costs milliseconds — an xrun). So
+/// [`ensure_resident`] `mlock`s the whole blob once per process from
+/// `initialize()`, which faults it in and keeps it pinned; without a memlock
+/// allowance it falls back to touching every page, which starts the session
+/// warm but leaves the pages evictable.
 #[cfg(target_endian = "big")]
 compile_error!("bundled wavetables assume little-endian f32 layout");
 
@@ -103,6 +113,54 @@ static WAVETABLE_BLOB: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
     env!("OUT_DIR"),
     "/wavetables.bin"
 )));
+
+/// The embedded bundle's bytes, for the residency test.
+#[doc(hidden)]
+pub fn bundle_bytes() -> &'static [u8] {
+    &WAVETABLE_BLOB.0
+}
+
+/// Make the whole bundle resident before any audio thread reads it (see
+/// "Residency" above). Main thread only — it reads ~40 MB on first call.
+/// Once per process: every instance shares the same static pages.
+pub fn ensure_resident() {
+    static DONE: std::sync::Once = std::sync::Once::new();
+    DONE.call_once(|| {
+        let bytes = bundle_bytes();
+        if let Err(e) = lock_pages(bytes) {
+            tracing::warn!(
+                "wavetable bundle: mlock failed ({e}); prefaulting instead — \
+                 raise RLIMIT_MEMLOCK to keep it resident"
+            );
+            // One read per 4 KB page faults it in; `read_volatile` keeps the
+            // loop from being elided.
+            for i in (0..bytes.len()).step_by(4096) {
+                // SAFETY: `i` is in bounds of a live `'static` slice.
+                unsafe { std::ptr::read_volatile(bytes.as_ptr().add(i)) };
+            }
+        }
+    });
+}
+
+/// `mlock` the pages spanning `bytes` (start rounded down, end up).
+#[cfg(unix)]
+fn lock_pages(bytes: &[u8]) -> std::io::Result<()> {
+    // SAFETY: sysconf has no preconditions.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+    let start = bytes.as_ptr() as usize & !(page - 1);
+    let end = (bytes.as_ptr() as usize + bytes.len()).next_multiple_of(page);
+    // SAFETY: the range covers mapped pages of a `'static` read-only blob;
+    // mlock changes residency only, never contents.
+    match unsafe { libc::mlock(start as *const libc::c_void, end - start) } {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+}
+
+#[cfg(not(unix))]
+fn lock_pages(_bytes: &[u8]) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
 
 /// Build borrowed views over the embedded bundle. Runs once per plugin
 /// instance at `initialize()` time and costs a few hundred nanoseconds: it
