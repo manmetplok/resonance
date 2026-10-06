@@ -602,6 +602,10 @@ pub fn render_stem(
 /// master FX). Returns the rendered buffer and the feeders, or `None`
 /// when no track sends there.
 ///
+/// A feeder may be a sub-track (a kit tap): its parent comes along only
+/// to drive the fan-out, and neither the parent's nor the siblings'
+/// routes reach the output (`SendFilter::OnlyInto`).
+///
 /// Busses sending into the return are not included: their members'
 /// dry signal would ride along. What this measures is the return's
 /// output-to-input ratio, which that subset shows as well as the whole.

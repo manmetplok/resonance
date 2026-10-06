@@ -170,10 +170,12 @@ than the shared room: that is what it is for.
 
 <!-- keys: com.resonance.reverb -->
 Set the result as `decay` on the return, inside the job's range in §1b. On
-every type but `algorithm` `Classic` it is the mid-band T60 and measures within
-a few percent of the knob (`Shimmer` within about 15 %). Keep the treble
-shorter as `decay` grows (`high_decay_mult` down, or `damping` lower on the
-types that ignore it): a long, bright tail reads as harsh rather than deep.
+every type but `algorithm` `Classic` it is the mid-band T60: a 100 % wet
+impulse response measures within a few percent of the knob (`Shimmer` within
+about 15 %). That is the DSP's own calibration, not what a meter reads on a
+mixed track — see §7 to verify it against the mix. Keep the treble shorter as
+`decay` grows (`high_decay_mult` down, or `damping` lower on the types that
+ignore it): a long, bright tail reads as harsh rather than deep.
 
 Or sync it: `decay_sync` sets the T60 to a length at the song's tempo, `1/4`
 one beat, `1/2` two beats, `1 bar`, `2 bars` or `4 bars` (a bar in the song's
@@ -281,17 +283,26 @@ room actually does. Do it once per return, after its settings are final.
    entry, or its last note with the default range (an explicit range is
    clamped to the song's end and cuts the tail). Sustained material (a pad, a
    held vocal note) reads cleanest; a pluck adds its own decay.
-2. **Measure.** `meter_measure {target: {track_id}, range, detail: ["decay"]}`,
-   or `meter_stems` with `detail: ["decay"]` for every sender at once.
+2. **Raise the send, then measure.** The reading depends on how loud the wet
+   is against the track's own dry signal, so set the send's `level_db` to
+   about 0 dB (`track_set_send {send_id, level_db: 0}`) before measuring, and
+   put it back after. `meter_measure {target: {track_id}, range,
+   detail: ["decay"]}`, or `meter_stems` with `detail: ["decay"]` for every
+   sender at once.
 3. **Read** (fields in reading-meters.md, "Decay"):
    - `found` and `clean` true, and `stop` the stop you meant. Otherwise `note`
      says why: extend the range (`ends` is `range_end`), or pick a stop that
      other notes do not cover.
-   - `t30_seconds` within about 10 % of the decay you intended: the knob, or
-     for a synced decay its beats × 60 / BPM. Further off, read the plugin
-     back with `bus_plugin_params`: the type, a sync you forgot, or Ambience's
-     1 s ceiling. On a gated Nonlinear return T30 means little; read
-     `tail_20db_seconds` against the gate length instead.
+   - The 1 kHz band's T30 (`bands`, the entry with `center_hz` 1000) within
+     about 10 % of the decay you intended: the knob, or for a synced decay its
+     beats × 60 / BPM. Read that field, not bare `t30_seconds` — broadband
+     reads short, intentionally when the high-decay multiplier is under 1,
+     and worse the more the dry signal dominates the stem, and even the
+     1 kHz band reads short at the send's ordinary (non-raised) level.
+     Further off, read the plugin back with `bus_plugin_params`: the type, a
+     sync you forgot, or Ambience's 1 s ceiling. On a gated Nonlinear return
+     T30 means little; read `tail_20db_seconds` against the gate length
+     instead.
    - `stop_seconds` plus `tail_20db_seconds` falls before the next downbeat
      (song seconds from the tempo) on rhythmic material: the tail has cleared
      20 dB before the groove needs the space. Later than that, shorten the

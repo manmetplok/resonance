@@ -7,9 +7,9 @@
 //!   fan-out. A job writes only the [`TrackSlot`]s it owns and never a
 //!   shared sum, so jobs are independent of each other.
 //! - **The reduction**, serial, in track-map order: the post-fader route,
-//!   the aux sends and the sub-track routes each job left in its slots —
-//!   exactly the additions, in exactly the order, the single per-track
-//!   loop used to make. The mix is therefore bit-identical to that loop
+//!   the aux sends and the sub-track routes and sends each job left in
+//!   its slots — exactly the additions, in exactly the order, the single
+//!   per-track loop used to make. The mix is therefore bit-identical to that loop
 //!   whatever order the jobs ran in.
 //!
 //! Sub-tracks are skipped by the top-level walk — they carry no source of
@@ -283,9 +283,9 @@ fn run_track_job(
 }
 
 /// The ordered reduction: for each top-level track, in map order, replay
-/// the post-fader route and aux sends its job recorded, then its
-/// sub-tracks' routes — the order the single per-track loop summed in.
-/// Also returns each job's MIDI carry to the stash.
+/// the post-fader route and aux sends its job recorded, then each of its
+/// sub-tracks' route and aux sends — the order the single per-track loop
+/// summed in. Also returns each job's MIDI carry to the stash.
 fn reduce_track_pass(
     ctx: &BlockCtx<'_>,
     slots: &mut [TrackSlot],
@@ -301,42 +301,14 @@ fn reduce_track_pass(
             continue;
         }
         let slot = &mut slots[idx];
-        // Depth measurement (warmth-width-depth.md §7.6): a return's
-        // feeder reaches the mix only through its sends into that return;
-        // a dry render taps no send.
-        let filter = strategy.send_filter(track.id);
-        let send_only = match filter {
-            Some(SendFilter::OnlyInto(bus)) => Some(bus),
-            _ => None,
-        };
         if let Some(route) = slot.route.take() {
             let src = (slot.l.as_slice(), slot.r.as_slice());
-            if send_only.is_none() {
-                route_post_fader(
-                    route.dest,
-                    src,
-                    route.gains,
-                    (&mut *data, &mut *bus_bufs),
-                    ctx,
-                );
-            }
-            if filter != Some(SendFilter::Dry) {
-                apply_track_aux_sends(track.id, route.gains, src, ctx, bus_bufs, send_only);
-            }
+            replay_route(track.id, route, src, (&mut *data, &mut *bus_bufs), ctx, strategy);
         }
         if let Some(stash) = stash.as_deref_mut() {
             stash.restore(&mut slot.carry);
         }
-        if !std::mem::take(&mut slot.fanned_out) || send_only.is_some() {
-            // A send-only feeder's sub-tracks carry its other outputs,
-            // which are not what the return is fed; drop their routes.
-            if send_only.is_some() {
-                for (sub_idx, sub_track) in tracks.values().enumerate().take(n) {
-                    if matches!(sub_track.sub_track_of, Some((parent, _)) if parent == track.id) {
-                        slots[sub_idx].route = None;
-                    }
-                }
-            }
+        if !std::mem::take(&mut slot.fanned_out) {
             continue;
         }
         for (sub_idx, sub_track) in tracks.values().enumerate().take(n) {
@@ -345,15 +317,46 @@ fn reduce_track_pass(
             }
             let sub_slot = &mut slots[sub_idx];
             if let Some(route) = sub_slot.route.take() {
-                route_post_fader(
-                    route.dest,
-                    (sub_slot.l.as_slice(), sub_slot.r.as_slice()),
-                    route.gains,
-                    (&mut *data, &mut *bus_bufs),
-                    ctx,
-                );
+                let src = (sub_slot.l.as_slice(), sub_slot.r.as_slice());
+                let out = (&mut *data, &mut *bus_bufs);
+                replay_route(sub_track.id, route, src, out, ctx, strategy);
             }
         }
+    }
+}
+
+/// Replay one track's (or sub-track's) recorded route: its post-fader sum
+/// into its destination, then its aux sends tapped from the same
+/// pre-fader `src` with the same fader ramp — a sub-track's ramp already
+/// carries its parent's group trim, so a kit tap's sends follow exactly
+/// the rules a top-level track's do (field report 2026-10-06 §3).
+///
+/// Depth measurement (warmth-width-depth.md §7.6): a return's named
+/// feeder reaches the mix only through its sends into that return, every
+/// other track in that render reaches nothing, and a dry render taps no
+/// send.
+fn replay_route(
+    track_id: TrackId,
+    route: SlotRoute,
+    src: (&[f32], &[f32]),
+    out: (&mut [f32], &mut BusBufs),
+    ctx: &BlockCtx<'_>,
+    strategy: &RenderStrategy<'_>,
+) {
+    let (data, bus_bufs) = out;
+    let filter = strategy.send_filter(track_id);
+    let send_only = match filter {
+        Some(SendFilter::OnlyInto(bus)) => Some(bus),
+        _ => None,
+    };
+    if send_only.is_none() && strategy.measured_return().is_some() {
+        return;
+    }
+    if send_only.is_none() {
+        route_post_fader(route.dest, src, route.gains, (&mut *data, &mut *bus_bufs), ctx);
+    }
+    if filter != Some(SendFilter::Dry) {
+        apply_track_aux_sends(track_id, route.gains, src, ctx, bus_bufs, send_only);
     }
 }
 

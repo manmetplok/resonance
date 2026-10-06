@@ -271,7 +271,9 @@ fn measure_mix_holding(
 /// renders what the return makes of its feeders' sends alone, and its
 /// gain is `E_out / E_in`, with `E_in` the sum over its feeders of their
 /// DRY energy ([`render_dry_track_stem`]) times the send gain squared
-/// (pre-fader sends divide the source's fader back out). Cost: one render
+/// (pre-fader sends divide the source's fader back out). A feeder may be a
+/// sub-track (a kit tap): its sends render like any track's, and the
+/// return render keeps its parent and siblings out. Cost: one render
 /// per return plus one per feeder, on top of the pass. That assumes the feeders are uncorrelated,
 /// which is exact for one feeder and close for a mix. A track's DRR then
 /// follows from its own sends and those gains ([`depth::drr_db_estimate`]).
@@ -346,9 +348,16 @@ fn fill_depth(
                     e
                 }
             };
-            let fader_sq = tracks
-                .get(&feeder)
-                .map_or(1.0, |t| f64::from(t.volume()).powi(2));
+            // The faders between the pre-fader tap and the dry stem: the
+            // track's own, and for a sub-track (a kit tap) its parent's
+            // group trim, which rides on the tap's route too.
+            let fader_sq = tracks.get(&feeder).map_or(1.0, |t| {
+                let parent = t
+                    .sub_track_of
+                    .and_then(|(parent, _)| tracks.get(&parent))
+                    .map_or(1.0, |p| f64::from(p.volume()));
+                (f64::from(t.volume()) * parent).powi(2)
+            });
             for send in enabled_from(feeder).into_iter().filter(|s| s.dest == bus) {
                 let level = 10f64.powf(f64::from(send.level_db) / 20.0);
                 let tapped = if send.pre_fader {

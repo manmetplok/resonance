@@ -175,6 +175,10 @@ Caveats:
 - Send levels are read at their current static values. Automated send rides are
   not in the estimate; everything rendered does honour automation.
 - It costs one extra render per return and per sending track.
+- On sustained tonal material (a pad, a drone) wet and dry are coherent, so a
+  send on/off energy comparison is unreliable — Room and Chamber can show
+  steady-state gain up to +11-12 dB at extreme settings from that coherence
+  alone. Treat `return_gain_db` as indicative only on that kind of track.
 
 ### Decay: how long a tail really is
 
@@ -202,9 +206,9 @@ default renders 2 s past the last clip.
 | `dynamic_range_db` | Level before the stop minus the lowest level after it | 100 means it reaches digital silence. |
 | `edt_seconds` | Fit over the first 10 dB, times 6 | The length you **hear**. Shorter than T30 on a track, because its dry signal stops at once (a cliff before the tail). Needs 15 dB of range (20 when cut off). |
 | `t20_seconds` | Fit over -5..-25 dB | Needs 30 dB (35 when cut off). |
-| `t30_seconds` | Fit over -5..-35 dB | The reverb's decay time as its knob means it: reads within about 10 % of the knob even with the dry signal in. Needs 40 dB (45 when cut off). |
+| `t30_seconds` | Fit over -5..-35 dB | Broadband, on the sending track (dry + wet): reads short of the knob, intentionally when the high-decay multiplier is under 1 (faster treble), and further short the more the dry signal dominates the stem. Don't verify the knob against this field. Needs 40 dB (45 when cut off). |
 | `tail_20db_seconds` | From the stop until the level is 20 dB down | The tail has cleared when `stop_seconds` plus this is before the next downbeat or note. |
-| `bands` | 7 octaves, 125 Hz to 8 kHz, each `{center_hz, t30_seconds}` | Bass outlasting mids is a muddy room; treble dying first is natural. |
+| `bands` | 7 octaves, 125 Hz to 8 kHz, each `{center_hz, t30_seconds}` | Bass outlasting mids is a muddy room; treble dying first is natural. Verify the decay knob against the `center_hz` 1000 entry's `t30_seconds`, not broadband — and even that reads short at an ordinary send level, so raise the send toward 0 dB re the track before measuring and restore it afterward. |
 | `note` | Present when the decay is not clean | Says where the deepest decay was and why it fell short. |
 
 Limits:

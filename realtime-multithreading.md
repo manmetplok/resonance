@@ -98,7 +98,9 @@ fan-out (which routes each sub-track). Split it into:
 - **Reduce (serial, audio thread):** for each track in `tracks` order,
   replay exactly `route_post_fader` → `apply_track_aux_sends` → sub-track
   routes from the record. These are the existing functions, fed from slots
-  instead of `scratch.track_buf_*`.
+  instead of `scratch.track_buf_*`. (As built, each sub-track's route is
+  followed by its own aux sends too — field report 2026-10-06 §3; before
+  that a kit tap's sends were never rendered.)
 
 Pre-fader aux sends read the pre-fader buffer and post-fader sends apply
 the ramp. Both work because the slot holds the pre-fader signal and the

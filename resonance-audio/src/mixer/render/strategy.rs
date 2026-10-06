@@ -106,8 +106,11 @@ pub(crate) enum RenderStrategy<'a> {
 pub enum SendFilter {
     /// The tracks render in full — chain, fader, pan, automation — but
     /// reach the mix ONLY through their sends into this return bus: their
-    /// main output, their other sends and their sub-tracks' routes are
-    /// dropped. What the return makes of them is then its output.
+    /// main output and their other sends are dropped, and so is every
+    /// track the render holds that is not named — a named track's
+    /// sub-tracks, a named sub-track's parent and siblings. What the
+    /// return makes of them is then its output. A named sub-track (a kit
+    /// tap) is a feeder like any other.
     OnlyInto(BusId),
     /// The tracks render as usual but tap no aux send at all: the dry
     /// signal alone.
@@ -198,6 +201,22 @@ impl RenderStrategy<'_> {
                 send_filter: Some((names, filter)),
                 ..
             } if names(id) => Some(*filter),
+            _ => None,
+        }
+    }
+
+    /// The return bus this render measures, when it is a return
+    /// measurement ([`SendFilter::OnlyInto`]). Then only the named
+    /// feeders reach the mix, and only through their sends: every other
+    /// track in the render — a feeder's sub-tracks, a tap feeder's parent
+    /// and siblings — reaches nothing.
+    #[inline]
+    pub(crate) fn measured_return(&self) -> Option<BusId> {
+        match self {
+            Self::Bounce {
+                send_filter: Some((_, SendFilter::OnlyInto(bus))),
+                ..
+            } => Some(*bus),
             _ => None,
         }
     }
