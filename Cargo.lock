@@ -5097,6 +5097,7 @@ dependencies = [
  "clack-plugin",
  "criterion",
  "hound",
+ "libc",
  "parking_lot",
  "plugin-gui-core",
  "resonance-dsp",
