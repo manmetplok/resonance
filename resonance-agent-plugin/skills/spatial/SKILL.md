@@ -122,11 +122,14 @@ Verify each move: `meter_compare {a: snapshot_id}` — `side_mid_db` up above
 7. **Verify the ordering.** `meter_stems` `detail: ["depth"]`: front's
    `drr_db_estimate` above middle's above back's, and `hf_tilt_db` falling
    front to back.
-8. **Verify the tail.** `meter_measure` (or `meter_stems`) with
-   `detail: ["decay"]` on a track that **sends** to the room (never the return
-   bus), over a range that ends in silence after it stops: `t30_seconds`
-   within about 10 % of the decay you set, and `stop_seconds` plus
-   `tail_20db_seconds` before the next downbeat on rhythmic material.
+8. **Verify the tail.** Raise the send to about 0 dB re the track first (the
+   reading depends on wet against the track's own dry signal), then
+   `meter_measure` (or `meter_stems`) with `detail: ["decay"]` on that track
+   (never the return bus), over a range that ends in silence after it stops:
+   the 1 kHz band's T30 (`bands`, `center_hz` 1000) within about 10 % of the
+   decay you set — not bare `t30_seconds`, which reads short — and
+   `stop_seconds` plus `tail_20db_seconds` before the next downbeat on
+   rhythmic material. Restore the send afterward.
 
 Room type per job, keys, presets, the tempo and sync tables, the tail check
 and the targets: `${CLAUDE_SKILL_DIR}/references/depth.md`.

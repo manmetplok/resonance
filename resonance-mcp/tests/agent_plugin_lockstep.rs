@@ -39,7 +39,11 @@
 //!   description word, a plugin id, a skill or a crate;
 //! - every control method a skill's preflight names, against
 //!   `resonance_control::methods::capabilities()`: a misspelt one would
-//!   stop the skill as "app too old" on a build that has everything.
+//!   stop the skill as "app too old" on a build that has everything;
+//! - the decay-verification guidance names the 1 kHz band field rather
+//!   than bare `t30_seconds` (field report 2026-10-06 §4): broadband
+//!   reads short of the knob on a sending track, and a skill that
+//!   verifies against it teaches the agent to over-turn the decay.
 //!
 //! The scans above the keys-block checks read the text *outside* the
 //! blocks.
@@ -210,6 +214,32 @@ fn every_skill_preflights_with_control_hello() {
              but not to the app binary the user actually has open — the handshake is the only \
              thing that catches that skew.",
             file.display(),
+        );
+    }
+}
+
+/// Field report 2026-10-06 §4: a decay reading taken off bare, broadband
+/// `t30_seconds` on a sending track (dry + wet) reads short of the knob,
+/// and an agent that verifies against it over-turns the decay. Every
+/// file that tells an agent how to verify a reverb's decay against its
+/// knob must point at the 1 kHz band (`bands`, `center_hz` 1000)
+/// instead, not just mention `t30_seconds` somewhere in passing.
+#[test]
+fn decay_verification_guidance_names_the_band_not_bare_t30_seconds() {
+    for rel in [
+        "skills/spatial/SKILL.md",
+        "skills/spatial/references/depth.md",
+        "skills/mixing/references/reading-meters.md",
+    ] {
+        let path = plugin_dir().join(rel);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        assert!(
+            text.contains("center_hz` 1000"),
+            "{} verifies decay against t30_seconds without naming the 1 kHz band \
+             (`bands`, `center_hz` 1000) — broadband reads short of the knob, which is the \
+             field-report-2026-10-06 §4 overclaim this guards against.",
+            path.display(),
         );
     }
 }
