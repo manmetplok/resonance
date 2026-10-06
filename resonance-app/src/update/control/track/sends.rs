@@ -186,46 +186,32 @@ pub(super) fn set_send(app: &mut Resonance, request: &Request) -> (Response, Tas
         }
     }
 
-    // Each existing message edits one field; the engine treats every one
-    // as an upsert on the same send id. Toggles are only dispatched when
-    // the state actually needs to flip, so an idempotent set is a no-op.
-    // Up to four messages, grouped into ONE undoable transaction: one
-    // revision bump per call, one edit_undo for the whole call.
+    // Build the final send once and dispatch ONE full-overwrite edit. Not
+    // one message per field: each of those re-sends the whole send copied
+    // from the echo-only mirror, so a batch of them all start from the
+    // same pre-call snapshot and only the last one sticks (field report
+    // 2026-10-06 §2). An idempotent set dispatches nothing. The compound
+    // keeps the call at one revision bump and one edit_undo.
+    let mut edited = send;
+    if let Some(to_bus) = params.to_bus {
+        edited.dest = to_bus.0;
+    }
+    if let Some(db) = params.level_db {
+        edited.level_db = db;
+    }
+    if let Some(pre) = params.pre_fader {
+        edited.pre_fader = pre;
+    }
+    if let Some(enabled) = params.enabled {
+        edited.enabled = enabled;
+    }
     app.with_compound_undo(|app| {
-        let mut tasks = Vec::new();
-        if let Some(to_bus) = params.to_bus {
-            if send.dest != to_bus.0 {
-                tasks.push(run_via_update(
-                    app,
-                    Message::Mixer(MixerMessage::SetSendDest(send.id, to_bus.0)),
-                ));
-            }
-        }
-        if let Some(db) = params.level_db {
-            if send.level_db != db {
-                tasks.push(run_via_update(
-                    app,
-                    Message::Mixer(MixerMessage::SetSendLevel(send.id, db)),
-                ));
-            }
-        }
-        if let Some(pre) = params.pre_fader {
-            if send.pre_fader != pre {
-                tasks.push(run_via_update(
-                    app,
-                    Message::Mixer(MixerMessage::ToggleSendPreFader(send.id)),
-                ));
-            }
-        }
-        if let Some(enabled) = params.enabled {
-            if send.enabled != enabled {
-                tasks.push(run_via_update(
-                    app,
-                    Message::Mixer(MixerMessage::ToggleSendEnabled(send.id)),
-                ));
-            }
-        }
-        (ack(app, request), Task::batch(tasks))
+        let task = if edited == send {
+            Task::none()
+        } else {
+            run_via_update(app, Message::Mixer(MixerMessage::SetSend(edited)))
+        };
+        (ack(app, request), task)
     })
 }
 

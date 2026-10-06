@@ -338,7 +338,7 @@ fn add_send_is_one_revision_bump_and_one_undo_entry() {
 }
 
 /// `track.set_send` changing destination, level, tap point, and enable
-/// in one call dispatches four messages; the call is ONE undoable
+/// in one call is one engine edit; the call is ONE undoable
 /// transaction, so one `edit.undo` takes the whole re-route back.
 #[test]
 fn set_send_of_four_fields_is_one_atomic_undo_transaction() {
@@ -378,6 +378,106 @@ fn set_send_of_four_fields_is_one_atomic_undo_transaction() {
     // quarter of it.
     let _ = app.update(Message::Undo);
     assert_eq!(app.test_undo_history().test_undo_entries().len(), entries);
+}
+
+/// Play the engine's part for every send edit the app emitted: each
+/// `SetAuxSend` is a full overwrite, echoed back as `AuxSendChanged` in
+/// the order it was sent. Returns how many it echoed.
+fn pump_send_echoes(
+    app: &mut Resonance,
+    rx: &crossbeam_channel::Receiver<AudioCommand>,
+) -> usize {
+    let commands: Vec<AudioCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    let mut echoed = 0;
+    for command in commands {
+        if let AudioCommand::SetAuxSend {
+            id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        } = command
+        {
+            app.test_apply_engine_event(AudioEvent::AuxSendChanged {
+                send_id: id,
+                source,
+                dest,
+                level_db,
+                pre_fader,
+                enabled,
+            });
+            echoed += 1;
+        }
+    }
+    echoed
+}
+
+/// Field report 2026-10-06 §2: `to_bus` + `level_db` in one call used to
+/// keep the old destination, because each field went out as its own full
+/// `SetAuxSend` built from the same pre-call mirror, and the last one won.
+#[test]
+fn set_send_of_destination_and_level_applies_both() {
+    let mut app = app();
+    let reverb = create_bus(&mut app, "Reverb");
+    let delay = create_bus(&mut app, "Delay");
+    let send_id = add_send(&mut app, GUITAR, reverb, 0.0);
+    let rx = app.test_capture_engine();
+
+    let _: MutationAck = call(
+        &mut app,
+        "track.set_send",
+        serde_json::json!({"send_id": send_id, "to_bus": delay, "level_db": -9.0}),
+    )
+    .result()
+    .expect("track.set_send succeeds");
+    let echoed = pump_send_echoes(&mut app, &rx);
+
+    let send = sends_of(&mut app, GUITAR).remove(0);
+    assert_eq!(send.to_bus.0, delay, "the destination must change");
+    assert!((send.level_db - -9.0).abs() < 1e-4, "and so must the level");
+    assert_eq!(echoed, 1, "one engine edit per call");
+}
+
+/// All four fields in one call land, and one undo restores all four.
+#[test]
+fn set_send_of_four_fields_applies_all_and_undo_restores_all() {
+    let mut app = app();
+    let reverb = create_bus(&mut app, "Reverb");
+    let delay = create_bus(&mut app, "Delay");
+    let send_id = add_send(&mut app, GUITAR, reverb, 0.0);
+    let rx = app.test_capture_engine();
+
+    let _: MutationAck = call(
+        &mut app,
+        "track.set_send",
+        serde_json::json!({
+            "send_id": send_id,
+            "to_bus": delay,
+            "level_db": -9.0,
+            "pre_fader": true,
+            "enabled": false,
+        }),
+    )
+    .result()
+    .expect("track.set_send succeeds");
+    pump_send_echoes(&mut app, &rx);
+
+    let send = sends_of(&mut app, GUITAR).remove(0);
+    assert_eq!(send.to_bus.0, delay);
+    assert!((send.level_db - -9.0).abs() < 1e-4);
+    assert!(send.pre_fader);
+    assert!(!send.enabled);
+
+    let _ = app.update(Message::Undo);
+    assert!(pump_send_echoes(&mut app, &rx) >= 1, "undo re-sends the send");
+
+    let send = sends_of(&mut app, GUITAR).remove(0);
+    assert_eq!(send.send_id.0, send_id);
+    assert_eq!(send.to_bus.0, reverb, "undo restores the destination");
+    assert!(send.level_db.abs() < 1e-4, "undo restores the level");
+    assert!(!send.pre_fader, "undo restores the tap point");
+    assert!(send.enabled, "undo restores the enable");
 }
 
 #[test]
