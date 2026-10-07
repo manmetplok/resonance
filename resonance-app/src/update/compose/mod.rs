@@ -786,6 +786,10 @@ pub(crate) fn control_generate_vocal(
             cfg.seed = crate::util::bump_seed(cfg.seed, 0x94D049BB133111EB);
         }
     }
+    // With the lane's bank (or its vocoder) not installed the roll writes
+    // the melody and skips its auto-render, keeping the old audio; the
+    // banner it raises is cleared here because `vocal.generate` reports
+    // the missing bank as its result's `render_error`, not as a failure.
     let task = vocal_render::roll_vocal_melody(r, definition_id, track_id);
     r.compose.last_error = None;
     task

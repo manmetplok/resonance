@@ -366,6 +366,49 @@ fn generate_reports_the_missing_bank_instead_of_succeeding_silently() {
     assert_eq!(generate(&mut app).render_error, None);
 }
 
+/// A render that would fail on a missing bank must not take the lane's
+/// old audio with it: the GUI re-render and `vocal.generate`'s
+/// auto-render both check the bank before the tear-down. `generate`
+/// still writes its melody and reports the bank as `render_error`.
+#[test]
+fn a_render_with_a_missing_bank_keeps_the_old_audio() {
+    use resonance_app::compose::messages::LaneInspectorMsg;
+    use resonance_app::compose::ComposeMessage;
+    use resonance_app::message::Message;
+
+    let mut app = app_with_project();
+    let def = vocal_lane(&mut app);
+    generate(&mut app);
+    let placement = app.compose_state().placements[0].id;
+    let old_audio = std::env::temp_dir().join("resonance-missing-bank-old-take.wav");
+    app.test_install_vocal_audio_clip(def, placement, TRACK, 900_777, old_audio);
+    let epoch = app.test_vocal_render_epoch(def, TRACK);
+    let rerender = Message::Compose(ComposeMessage::LaneInspector {
+        definition_id: def,
+        track_id: TRACK,
+        msg: LaneInspectorMsg::RerenderVocalAudio,
+    });
+
+    let _ = app.update(rerender.clone());
+    assert_eq!(app.test_vocal_audio_clips(TRACK), [(def, 900_777)], "old audio kept");
+    assert_eq!(app.test_vocal_render_epoch(def, TRACK), epoch, "nothing queued");
+    let banner = app.compose_state().last_error.clone().expect("a banner");
+    assert!(banner.contains("\"lilia\"") && banner.contains("voicebanks"), "{banner}");
+
+    let result = generate(&mut app);
+    assert_eq!(
+        result.render_error.map(|e| e.kind),
+        Some(ErrorKind::VoicebankMissing)
+    );
+    assert_eq!(app.test_vocal_audio_clips(TRACK), [(def, 900_777)], "still kept");
+
+    // Installed, the same render replaces it.
+    app.test_install_shipped_voicebanks();
+    let _ = app.update(rerender);
+    assert!(app.test_vocal_audio_clips(TRACK).is_empty(), "torn down for the new take");
+    assert_ne!(app.test_vocal_render_epoch(def, TRACK), epoch, "a render is queued");
+}
+
 #[test]
 fn render_naming_an_unknown_bank_is_a_typo_not_a_missing_bank() {
     let mut app = app_with_project();

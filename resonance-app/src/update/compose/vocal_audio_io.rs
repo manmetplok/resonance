@@ -167,6 +167,9 @@ pub(crate) struct VocalRenderJob {
     pub render_cache: Arc<Mutex<SvsRenderCache>>,
     /// The lane's bank, resolved on the main thread.
     pub bank: vocal_svs::BankProfile,
+    /// Where a user bank with the lane's id goes, for the missing-bank
+    /// message (the same folder the control pre-check names).
+    pub install_dir: Option<PathBuf>,
 }
 
 impl VocalRenderJob {
@@ -193,6 +196,7 @@ impl VocalRenderJob {
             self.engine_sample_rate,
             &mut cache,
             &self.bank,
+            self.install_dir.clone(),
         ) {
             Ok(Some(r)) => r,
             Ok(None) => return Ok(None),
