@@ -1281,7 +1281,7 @@ fn with_lock<R>(
 /// Whether process `pid` is running (unix: `kill(pid, 0)`; `EPERM` means
 /// it exists under another user).
 #[cfg(unix)]
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
@@ -1297,7 +1297,7 @@ fn pid_alive(pid: u32) -> bool {
 
 /// Unknown on this platform: assume alive, so only the age rule sweeps.
 #[cfg(not(unix))]
-fn pid_alive(_pid: u32) -> bool {
+pub(crate) fn pid_alive(_pid: u32) -> bool {
     true
 }
 

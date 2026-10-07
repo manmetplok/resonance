@@ -644,6 +644,15 @@ fn voicebank_install(
     if id.is_empty() {
         return reject(request, RpcError::invalid_params("id cannot be empty"));
     }
+    if !resonance_common::plok_download::is_safe_id(&id) {
+        return reject(
+            request,
+            RpcError::not_found(format!(
+                "{id:?} is not a voicebank id (ids are plain folder names); vocal_voicebanks \
+                 lists the available ids"
+            )),
+        );
+    }
     let roots = app.voicebanks.roots().clone();
     let lib = app.voicebank_library.lib.clone();
     if let Some(index) = lib.index(roots.banks.as_deref()) {

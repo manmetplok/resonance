@@ -47,6 +47,7 @@ mod profile;
 mod roots;
 mod scan;
 mod stamp;
+mod terms;
 
 pub use builtin::{BuiltinBank, BuiltinSpeaker, BUILTIN_BANKS};
 pub use installed::InstalledBank;
@@ -60,16 +61,21 @@ pub use profile::{
 };
 pub use roots::{VoicebankRoots, MODELS_DIR_ENV, VOCODER_DIR_ENV, VOICEBANK_DIR_ENV};
 pub use stamp::BankStamp;
+pub use terms::BankTerms;
+use terms::IndexBank;
 
 /// The scanned voicebanks. See the module docs.
 #[derive(Debug, Default)]
 pub struct VoicebankRegistry {
     roots: VoicebankRoots,
     banks: BTreeMap<String, Arc<InstalledBank>>,
-    /// The plok.org index's banks, by id, with whether each sings English
-    /// (its `languages` name `en`, or name nothing) — what the typo guard
-    /// accepts besides installed and built-in banks.
-    index_banks: BTreeMap<String, bool>,
+    /// The plok.org index's banks, by id — what the typo guard accepts
+    /// besides installed and built-in banks, and the hash an install
+    /// record must carry to be trusted for a built-in bank's terms.
+    index_banks: BTreeMap<String, IndexBank>,
+    /// Bumped by every rescan (and index change), so a view can cache what
+    /// it derives from the banks.
+    revision: u64,
 }
 
 impl VoicebankRegistry {
@@ -79,6 +85,7 @@ impl VoicebankRegistry {
             roots,
             banks: BTreeMap::new(),
             index_banks: BTreeMap::new(),
+            revision: 0,
         };
         registry.rescan();
         registry
@@ -86,6 +93,11 @@ impl VoicebankRegistry {
 
     pub fn roots(&self) -> &VoicebankRoots {
         &self.roots
+    }
+
+    /// Bumped by every rescan and index change.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Every installed bank, by id.
@@ -103,31 +115,17 @@ impl VoicebankRegistry {
         self.banks.contains_key(id) || builtin::builtin(id).is_some()
     }
 
-    /// Remember the index's banks (see [`Self::in_index`]).
-    pub fn set_index(&mut self, index: &PlokIndex) {
-        self.index_banks = index
-            .voicebanks
-            .iter()
-            .map(|b| {
-                let english = b.languages.is_empty()
-                    || b.languages.iter().any(|l| l.eq_ignore_ascii_case("en"));
-                (b.id.clone(), english)
-            })
-            .collect();
-    }
-
-    /// `Some(sings English)` when the plok.org index lists bank `id`.
-    pub fn in_index(&self, id: &str) -> Option<bool> {
-        self.index_banks.get(id).copied()
-    }
-
     /// The facts for bank `id`, installed or not.
     pub fn profile(&self, id: &VoicebankId) -> BankProfile {
         BankProfile::new(id.clone(), self.banks.get(id.as_str()).cloned())
     }
 
-    /// Where a user bank with this id would be installed.
+    /// Where a user bank with this id would be installed; `None` for an
+    /// id that is not a plain folder name.
     pub fn user_bank_dir(&self, id: &str) -> Option<PathBuf> {
+        if !resonance_common::plok_download::is_safe_id(id) {
+            return None;
+        }
         self.roots.banks.as_ref().map(|d| d.join(id))
     }
 }

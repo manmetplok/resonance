@@ -10,7 +10,11 @@
 //! - [`poll`] runs from the tick: it collects finished installs, rescans
 //!   the registry, and only then resolves a `vocal.voicebank_install`
 //!   control job — so a client that waited sees the bank listed — and
-//!   rebuilds the overlay's rows when the library or the marks moved.
+//!   rebuilds the overlay's rows when the library, the registry or the
+//!   marks moved. A running install's progress only patches its own row's
+//!   status; typing in the search field or selecting a row re-filters the
+//!   browser and rebuilds no rows. Nothing here reads the disk while it
+//!   holds the library's lock (the install threads write it every chunk).
 //!
 //! None of this is project state: every message is `UndoAction::Skip`.
 
@@ -21,8 +25,10 @@ use resonance_audio::types::TrackId;
 use resonance_common::library_marks::{kind, mark_key};
 
 use crate::compose::messages::LaneInspectorMsg;
-use crate::compose::vocal_svs::registry::library::{delete_user_bank, install_is_current};
-use crate::compose::vocal_svs::registry::{InstallErrorKind, InstallJob, PlokIndex, PlokVoicebank};
+use crate::compose::vocal_svs::registry::library::delete_user_bank;
+use crate::compose::vocal_svs::registry::{
+    InstallErrorKind, InstallJob, InstalledBank, PlokIndex, PlokVoicebank,
+};
 use crate::compose::ComposeMessage;
 use crate::message::Message;
 use crate::state::voicebank_library::{
@@ -97,6 +103,7 @@ pub fn handle(app: &mut Resonance, message: VoicebankLibraryMessage) -> Task<Mes
         } => {
             app.rescan_voicebanks();
             let lib = &app.voicebank_library.lib;
+            lib.sweep_leftovers(app.voicebanks.roots());
             let _ = lib.index(banks_dir.as_deref());
             lib.refresh_index(banks_dir, false);
             let mut overlay = LibraryOverlay::new(definition_id, track_id);
@@ -212,7 +219,7 @@ pub fn handle(app: &mut Resonance, message: VoicebankLibraryMessage) -> Task<Mes
             }));
         }
     }
-    refresh_rows(app, true);
+    refresh_rows(app, false);
     Task::none()
 }
 
@@ -245,6 +252,10 @@ fn delete_bank(app: &mut Resonance, id: &str) {
     let Some(banks) = app.voicebanks.roots().banks.clone() else {
         return;
     };
+    if !resonance_common::plok_download::is_safe_id(id) {
+        notice_error(app, format!("{id:?} is not a voicebank id"));
+        return;
+    }
     let Some(dir) = app
         .voicebanks
         .get(id)
@@ -320,14 +331,22 @@ impl Resonance {
     }
 }
 
-/// Rebuild the overlay's rows when the library, the marks or (with
-/// `force`) anything else changed, and keep the registry's copy of the
-/// index's ids current for the `vocal.set_params` typo guard.
+/// Bring the overlay's rows up to date — and the registry's copy of the
+/// index's ids, for the `vocal.set_params` typo guard:
+///
+/// - the library's structure (installs started or finished, the index),
+///   the registry or the marks moved, or `force`: rebuild every row;
+/// - only a running install's progress moved: patch that row's status;
+/// - neither: re-filter the browsers if the query or a filter changed.
 fn refresh_rows(app: &mut Resonance, force: bool) {
     let lib = app.voicebank_library.lib.clone();
-    let revision = lib.revision();
+    let (revision, progress) = {
+        let s = lib.state();
+        (s.revision, s.progress_revision)
+    };
     if app.voicebank_library.synced_revision != Some(revision) {
-        if let Some(index) = lib.state().index.clone() {
+        let index = lib.state().index.clone();
+        if let Some(index) = index {
             app.voicebanks.set_index(&index);
         }
         app.voicebank_library.synced_revision = Some(revision);
@@ -337,31 +356,89 @@ fn refresh_rows(app: &mut Resonance, force: bool) {
     }
     let marks = crate::plugin_preset_library::marks(app);
     marks.refresh();
-    let key = (revision, marks.generation(), 0);
-    let built = app
+    let key = (revision, marks.generation(), app.voicebanks.revision());
+    let (built, built_progress) = app
         .voicebank_library
         .overlay
         .as_ref()
-        .and_then(|o| o.built_from);
-    if !force && built == Some(key) {
-        return;
+        .map(|o| (o.built_from, o.built_progress))
+        .unwrap_or_default();
+    if force || built != Some(key) {
+        let index = lib.index(app.voicebanks.roots().banks.as_deref());
+        let (installed, plok) = build_rows(app, index.as_ref(), &marks);
+        let Some(o) = app.voicebank_library.overlay.as_mut() else {
+            return;
+        };
+        o.rows_generation += 1;
+        o.tab_labels = (
+            format!("Installed ({})", installed.rows.len()),
+            format!("plok.org ({})", plok.rows.len()),
+        );
+        o.installed_rows = Rc::new(installed);
+        o.plok_rows = Rc::new(plok);
+        o.built_from = Some(key);
+        o.built_progress = progress;
+    } else if built_progress != progress {
+        let statuses = live_statuses(&lib);
+        if let Some(o) = app.voicebank_library.overlay.as_mut() {
+            patch_statuses(o, &statuses);
+            o.built_progress = progress;
+        }
     }
-    let index = lib.index(app.voicebanks.roots().banks.as_deref());
-    let (installed, plok) = build_rows(app, index.as_ref(), &marks);
-    let Some(o) = app.voicebank_library.overlay.as_mut() else {
-        return;
-    };
-    o.rows_generation += 1;
-    let generation = o.rows_generation;
-    o.tab_labels = (
-        format!("Installed ({})", installed.rows.len()),
-        format!("plok.org ({})", plok.rows.len()),
-    );
-    o.installed_rows = Rc::new(installed);
-    o.plok_rows = Rc::new(plok);
-    o.installed.refresh(&*o.installed_rows, generation);
-    o.plok.refresh(&*o.plok_rows, generation);
-    o.built_from = Some(key);
+    if let Some(o) = app.voicebank_library.overlay.as_mut() {
+        let generation = o.rows_generation;
+        o.installed.refresh(&*o.installed_rows, generation);
+        o.plok.refresh(&*o.plok_rows, generation);
+    }
+}
+
+/// Each running install's row status, read under the lock and nothing
+/// else.
+fn live_statuses(
+    lib: &crate::compose::vocal_svs::registry::VoicebankLibrary,
+) -> Vec<(String, RowStatus)> {
+    lib.state()
+        .jobs
+        .iter()
+        .filter(|j| j.result.is_none())
+        .map(|j| {
+            let status = RowStatus::Installing {
+                label: j.phase.label(),
+                fraction: j.phase.fraction(),
+            };
+            (j.bank_id.clone(), status)
+        })
+        .collect()
+}
+
+/// Set the installing rows' status in place; the rows' generation (and so
+/// the browsers' filtered view) is untouched, only the list redraws.
+fn patch_statuses(o: &mut LibraryOverlay, statuses: &[(String, RowStatus)]) {
+    let mut changed = false;
+    for rows in [&mut o.installed_rows, &mut o.plok_rows] {
+        let touches = rows
+            .rows
+            .iter()
+            .any(|r| statuses.iter().any(|(id, s)| *id == r.id && *s != r.status));
+        if !touches {
+            continue;
+        }
+        for row in Rc::make_mut(rows).rows.iter_mut() {
+            if let Some((_, s)) = statuses.iter().find(|(id, _)| *id == row.id) {
+                row.status = s.clone();
+            }
+        }
+        changed = true;
+    }
+    if changed {
+        o.status_generation += 1;
+    }
+}
+
+/// Whether the user install `bank` is the index's `entry` as listed now
+/// (from the install record read with the bank, no disk access).
+fn update_available(bank: &InstalledBank, entry: &PlokVoicebank) -> bool {
+    bank.user && bank.plok.as_ref().is_some_and(|r| !r.matches(entry))
 }
 
 fn build_rows(
@@ -369,12 +446,11 @@ fn build_rows(
     index: Option<&PlokIndex>,
     marks: &resonance_common::library_marks::SharedMarks,
 ) -> (VoicebankRows, VoicebankRows) {
-    let lib = app.voicebank_library.lib.state();
+    let live = live_statuses(&app.voicebank_library.lib);
     let installing = |id: &str| {
-        lib.job(id).filter(|j| j.result.is_none()).map(|j| RowStatus::Installing {
-            label: j.phase.label(),
-            fraction: j.phase.fraction(),
-        })
+        live.iter()
+            .find(|(bank, _)| bank == id)
+            .map(|(_, status)| status.clone())
     };
     let marks_of = |key: &str| Some(marks.marks(key)).filter(|m| !m.is_default());
     let entry_of = |id: &str| index.and_then(|i| i.voicebank(id));
@@ -384,13 +460,11 @@ fn build_rows(
         let profile = app
             .voicebanks
             .profile(&resonance_music_theory::VoicebankId::new(&bank.id));
-        let builtin = profile.builtin();
         let plok = bank.plok.as_ref();
         let entry = entry_of(&bank.id);
+        let terms = app.voicebanks.terms(&bank.id);
         let status = installing(&bank.id).unwrap_or_else(|| match entry {
-            Some(e) if bank.user && plok.is_some() && !install_is_current(&bank.scanned_dir, e) => {
-                RowStatus::UpdateAvailable
-            }
+            Some(e) if update_available(bank, e) => RowStatus::UpdateAvailable,
             _ => RowStatus::Installed,
         });
         let version = bank
@@ -418,15 +492,9 @@ fn build_rows(
             version,
             languages,
             size: None,
-            credit: plok
-                .and_then(|p| p.credit.clone())
-                .or_else(|| builtin.and_then(|b| b.credit).map(str::to_owned)),
-            terms_url: plok
-                .and_then(|p| p.terms_url.clone())
-                .or_else(|| builtin.and_then(|b| b.terms_url).map(str::to_owned)),
-            commercial: plok
-                .and_then(|p| p.commercial.clone())
-                .or_else(|| builtin.and_then(|b| b.commercial).map(str::to_owned)),
+            credit: terms.credit,
+            terms_url: terms.terms_url,
+            commercial: terms.commercial,
             vocoder_line: match (&bank.vocoder_name, bank.vocoder_config.is_some()) {
                 (None, _) => "None named".to_owned(),
                 (Some(v), true) => v.clone(),
@@ -446,9 +514,7 @@ fn build_rows(
         let bank = app.voicebanks.get(&entry.id);
         let status = installing(&entry.id).unwrap_or_else(|| match bank {
             None => RowStatus::NotInstalled,
-            Some(b) if b.user && b.plok.is_some() && !install_is_current(&b.scanned_dir, entry) => {
-                RowStatus::UpdateAvailable
-            }
+            Some(b) if update_available(b, entry) => RowStatus::UpdateAvailable,
             Some(_) => RowStatus::Installed,
         });
         plok.push(plok_row(entry, status, bank.is_some_and(|b| b.user), &marks_of));

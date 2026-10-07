@@ -193,5 +193,7 @@ mod control_vocal_curves;
 mod control_vocal_render_state_edits;
 #[path = "control/control_voicebank_install.rs"]
 mod control_voicebank_install;
+#[path = "control/control_voicebank_install_safety.rs"]
+mod control_voicebank_install_safety;
 #[path = "control/control_voicebanks.rs"]
 mod control_voicebanks;

@@ -13,7 +13,11 @@
 //! 5. a bank that ships its own vocoder uses it; otherwise the vocoder its
 //!    `dsconfig.yaml` names (or the entry's `vocoder`) is looked up in the
 //!    vocoder library and, when missing, fetched from the index's
-//!    `vocoders[]` into `<vocoders>/<vocoder id>/`.
+//!    `vocoders[]` into `<vocoders>/<vocoder id>/` — by one install at a
+//!    time: another install that needs the same vocoder waits for it.
+//!
+//! Every id that becomes a folder (the bank's, the vocoder's) is a plain
+//! folder name ([`plok::is_safe_id`]); anything else is `not_found`.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,6 +44,8 @@ const VOCODER_MARKER_DEPTH: usize = 1;
 pub(super) struct Install<'a> {
     pub lib: &'a VoicebankLibrary,
     pub bank_id: &'a str,
+    /// Names this install's `.part` files: never shared with another.
+    pub nonce: &'a str,
     pub roots: &'a VoicebankRoots,
     pub cancel: &'a AtomicBool,
     /// The control job and the board its progress goes to.
@@ -48,6 +54,14 @@ pub(super) struct Install<'a> {
 
 fn failed(message: impl Into<String>) -> InstallError {
     InstallError::new(Kind::Failed, message)
+}
+
+/// An id that cannot be a folder name: nothing is installed under it.
+fn not_an_id(what: &str, id: &str) -> InstallError {
+    InstallError::new(
+        Kind::NotFound,
+        format!("{id:?} is not a {what} id (ids are plain folder names); vocal_voicebanks lists the available ids"),
+    )
 }
 
 impl Install<'_> {
@@ -67,6 +81,9 @@ impl Install<'_> {
     }
 
     pub fn run(&self) -> Result<InstallOutcome, InstallError> {
+        if !plok::is_safe_id(self.bank_id) {
+            return Err(not_an_id("voicebank", self.bank_id));
+        }
         let banks = self
             .roots
             .banks
@@ -76,7 +93,7 @@ impl Install<'_> {
         let index = self
             .lib
             .index_for_install(Some(&banks))
-            .map_err(|e| InstallError::new(Kind::NotFound, format!("the plok.org index: {e}")))?;
+            .map_err(|e| failed(format!("the plok.org index: {e}")))?;
         let entry = index.voicebank(self.bank_id).cloned().ok_or_else(|| {
             InstallError::new(
                 Kind::NotFound,
@@ -88,11 +105,14 @@ impl Install<'_> {
             )
         })?;
         self.check_cancel()?;
+        if !plok::is_safe_id(&entry.id) {
+            return Err(not_an_id("voicebank", &entry.id));
+        }
         let dir = banks.join(&entry.id);
 
         let current = dir.is_dir()
             && layout::looks_like_bank(&dir)
-            && PlokSidecar::read(&dir).is_some_and(|s| s.matches(&entry));
+            && PlokSidecar::read(&dir).is_some_and(|s| s.id == entry.id && s.matches(&entry));
         if !current {
             self.install_bank(&entry, &banks, &dir)?;
         }
@@ -155,7 +175,7 @@ impl Install<'_> {
             name: &target.name,
             free_space: config.free_space.as_deref(),
         };
-        let part = plok::download(&agent, target, part_dir, self.lib.nonce(), &ctl)
+        let part = plok::download(&agent, target, part_dir, self.nonce, &ctl)
             .map_err(|e| download_error(e, target))?;
         if let Err(e) = self.check_cancel() {
             part.remove();
@@ -217,6 +237,18 @@ impl Install<'_> {
             );
             return Ok((Some(name), false, false));
         };
+        // One install fetches a vocoder at a time; one that waited finds
+        // it installed by the other.
+        if self.lib.vocoder_claimed(&vocoder.id) {
+            self.phase(InstallPhase::WaitingFor(vocoder.name.clone()));
+        }
+        let _claim = self
+            .lib
+            .claim_vocoder(&vocoder.id, self.cancel)
+            .ok_or_else(|| InstallError::new(Kind::Cancelled, "cancelled"))?;
+        if self.library_has_vocoder(&name) {
+            return Ok((Some(name), true, false));
+        }
         self.install_vocoder(vocoder)?;
         Ok((Some(name), true, true))
     }
@@ -235,6 +267,9 @@ impl Install<'_> {
 
     fn install_vocoder(&self, vocoder: &PlokVocoder) -> Result<(), InstallError> {
         self.check_cancel()?;
+        if !plok::is_safe_id(&vocoder.id) {
+            return Err(not_an_id("vocoder", &vocoder.id));
+        }
         let lib = self
             .roots
             .vocoders

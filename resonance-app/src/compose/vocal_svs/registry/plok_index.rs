@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use resonance_common::plok_download::{lenient, lenient_tags, Target};
+use resonance_common::plok_download::{is_safe_id, lenient, lenient_tags, Target};
 use serde::{Deserialize, Serialize};
 
 /// The record an install writes into the bank (or vocoder) folder: what
@@ -30,17 +30,44 @@ pub struct PlokIndex {
     pub vocoders: Vec<PlokVocoder>,
 }
 
-/// Keep the entries of a list that parse; drop the rest (and a non-list).
+/// An index entry: its `id` names the folder it installs into.
+trait IndexEntry {
+    fn id(&self) -> &str;
+}
+
+impl IndexEntry for PlokVoicebank {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl IndexEntry for PlokVocoder {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// Keep the entries of a list that parse and whose id is a safe folder
+/// name ([`plok_download::is_safe_id`](resonance_common::plok_download::is_safe_id):
+/// `../x`, `/abs`, `a/b` or `.hidden` would install or delete outside the
+/// library); drop the rest (and a non-list).
 fn lenient_list<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
-    T: serde::de::DeserializeOwned,
+    T: serde::de::DeserializeOwned + IndexEntry,
 {
     let v = serde_json::Value::deserialize(d)?;
     Ok(match v {
         serde_json::Value::Array(items) => items
             .into_iter()
-            .filter_map(|i| serde_json::from_value(i).ok())
+            .filter_map(|i| serde_json::from_value::<T>(i).ok())
+            .filter(|e| {
+                let safe = is_safe_id(e.id());
+                if !safe {
+                    tracing::warn!("plok.org index: entry id {:?} is not a folder name; skipped", e.id());
+                }
+                safe
+            })
             .collect(),
         _ => Vec::new(),
     })

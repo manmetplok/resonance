@@ -5,7 +5,7 @@
       "id": "tiger",
       "name": "TIGER",
       "version": "v106",
-      "languages": ["en", "ja", "zh", "es", "fr"],
+      "languages": ["en", "ja", "zh", "es", "fr", "it", "pt-BR", "th", "ru", "ko", "pl", "de"],
       "speakers": ["Fresh", "Disco", "Electric", "Vinyl", "Mystic", "Glam", "Royal"],
       "size": "529.6 MB",
       "bytes": 555302285,
@@ -14,6 +14,7 @@
       "credit": "TIGER by tigermeat",
       "commercial": "paid",
       "added": "2026-10-07",
+      "_note": "languages per the DiffSinger Wiki (diffsinger_english_ecosystem.md §1): English, Japanese and Mandarin primary; Spanish and French secondary; Italian, PT-BR, Thai, Russian, Korean, Polish and German through XLS.",
       "_unverified": {
         "sha256": "GitHub publishes no digest for this 2024 asset; download and hash it before publishing (sha256sum TIGER_DS_v106_PACK.zip), or leave it out and the download is not verified",
         "credit": "the exact credit wording is in the TOS at tigermeat.xyz, which the research did not retrieve",
@@ -34,9 +35,7 @@
       "credit": "LIEE",
       "commercial": "free_with_credit",
       "added": "2026-10-07",
-      "_unverified": {
-        "terms": "the ToU forbids use 'in AI-generated music and other generative AI contexts' and asks porters to contact the creator; D9 accepts this while Resonance is not commercial — revisit before any commercial release"
-      }
+      "_note": "Terms, quoted from the LIEE ToU (licensing_and_integration.md, diffsinger_english_ecosystem.md): exported audio may be used commercially without permission, credited as 'LIEE'; 'You cannot use LIEE in AI-generated music and other generative AI contexts'; 'Please contact the Creator if you would like to port LIEE to another singing synthesizer program.' D9 accepts the generative-AI clause while Resonance is not commercial; ask julieraptor (liee.immortal.idol@gmail.com) before any commercial release."
     },
     {
       "id": "meiji",

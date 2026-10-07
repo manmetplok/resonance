@@ -16,19 +16,33 @@
 //!   [`VoicebankLibrary::take_finished`] (from the tick), rescans the
 //!   registry, and only then resolves a control job — so a client that
 //!   waited on `vocal.voicebank_install` finds the bank listed.
+//! - **Concurrent installs.** Each install names its `.part` files with a
+//!   nonce of its own, so two never share one. Two banks that need the
+//!   same missing vocoder do not both fetch it: the first claims the
+//!   vocoder id (`VoicebankLibrary::claim_vocoder`) and the second waits
+//!   for it, then finds it installed.
+//! - **Leftovers.** [`VoicebankLibrary::sweep_leftovers`] (at startup and
+//!   when the overlay opens) clears what interrupted downloads, installs
+//!   and deletes left in the voicebank and vocoder folders, and puts back
+//!   a bank whose replace was cut between its two renames.
+//! - **Ids.** An index entry whose id is not a plain folder name is
+//!   dropped when the index is read, and an install or a Delete of such an
+//!   id is refused ([`plok_download::is_safe_id`](resonance_common::plok_download::is_safe_id)).
 //!
 //! Nothing here touches the open project: no undo entry, no revision.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
+use resonance_common::plok_download::package;
 use resonance_common::plok_download::{self as plok, HttpConfig, INDEX_FETCH_TIMEOUT, INDEX_TTL};
 
 pub use resonance_common::plok_download::{INDEX_CACHE_FILE, INDEX_URL};
 
-use super::plok_index::{PlokIndex, PlokSidecar};
+use super::plok_index::PlokIndex;
 use super::VoicebankRoots;
 use crate::control_jobs::JobBoard;
 
@@ -79,6 +93,8 @@ impl LibraryConfig {
 pub enum InstallPhase {
     Starting,
     FetchingIndex,
+    /// Waiting for another install that is fetching the same vocoder.
+    WaitingFor(String),
     /// Downloading `what` (the bank's or the vocoder's name).
     Downloading {
         what: String,
@@ -115,6 +131,7 @@ impl InstallPhase {
         match self {
             InstallPhase::Starting => "Starting\u{2026}".into(),
             InstallPhase::FetchingIndex => "Reading the plok.org index\u{2026}".into(),
+            InstallPhase::WaitingFor(what) => format!("Waiting for {what}\u{2026}"),
             InstallPhase::Downloading { what, done, total } if *total > 0 => format!(
                 "Downloading {what}: {} of {}",
                 format_bytes(*done),
@@ -195,18 +212,34 @@ pub struct LibraryState {
     /// The last index fetch's error; `None` after one succeeds.
     pub index_error: Option<String>,
     pub fetching_index: bool,
+    /// Running installs, and finished ones the tick has not collected yet
+    /// (a bank can have one of each: a finished install whose control job
+    /// still waits to be resolved, and a new one started before the tick).
     pub jobs: Vec<InstallJob>,
-    /// Bumped on every change, so a view can cache what it derives.
+    /// Bumped on every change but an install's progress, so a view can
+    /// cache what it derives.
     pub revision: u64,
+    /// Bumped when a running install's phase or progress moves: a view
+    /// patches that row's status rather than rebuilding everything.
+    pub progress_revision: u64,
 }
 
 impl LibraryState {
+    /// Bank `bank_id`'s install: the running one, else the newest finished.
     pub fn job(&self, bank_id: &str) -> Option<&InstallJob> {
-        self.jobs.iter().find(|j| j.bank_id == bank_id)
+        self.live_job(bank_id)
+            .or_else(|| self.jobs.iter().rev().find(|j| j.bank_id == bank_id))
+    }
+
+    /// Bank `bank_id`'s running install.
+    pub fn live_job(&self, bank_id: &str) -> Option<&InstallJob> {
+        self.jobs
+            .iter()
+            .find(|j| j.bank_id == bank_id && j.result.is_none())
     }
 
     pub fn is_installing(&self, bank_id: &str) -> bool {
-        self.job(bank_id).is_some_and(|j| j.result.is_none())
+        self.live_job(bank_id).is_some()
     }
 
     fn index_is_fresh(&self) -> bool {
@@ -217,8 +250,14 @@ impl LibraryState {
 struct Inner {
     config: Mutex<LibraryConfig>,
     state: Mutex<LibraryState>,
-    /// Names this library's `.part` files.
-    nonce: String,
+    /// The shared vocoders an install is fetching right now, by id; an
+    /// install that needs one of them waits on `vocoder_free`.
+    vocoders: Mutex<BTreeSet<String>>,
+    vocoder_free: Condvar,
+    /// Held by a leftover sweep while it runs; an install thread passes
+    /// through it before it writes anything, so a sweep that found the
+    /// library idle never removes a new install's staging folder.
+    sweep_gate: Mutex<()>,
 }
 
 /// The voicebank library's downloads. Cheap to clone; every clone is the
@@ -246,7 +285,9 @@ impl VoicebankLibrary {
             inner: Arc::new(Inner {
                 config: Mutex::new(config),
                 state: Mutex::new(LibraryState::default()),
-                nonce: plok::new_nonce(),
+                vocoders: Mutex::new(BTreeSet::new()),
+                vocoder_free: Condvar::new(),
+                sweep_gate: Mutex::new(()),
             }),
         }
     }
@@ -266,8 +307,69 @@ impl VoicebankLibrary {
         s.revision += 1;
     }
 
-    pub(super) fn nonce(&self) -> &str {
-        &self.inner.nonce
+    /// Claim shared vocoder `id` for this install to fetch, waiting while
+    /// another install holds it. `None` when `cancel` is set while
+    /// waiting. The claim is released when dropped.
+    pub(super) fn claim_vocoder(&self, id: &str, cancel: &AtomicBool) -> Option<VocoderClaim> {
+        let mut held = lock(&self.inner.vocoders);
+        while held.contains(id) {
+            if cancel.load(Ordering::SeqCst) {
+                return None;
+            }
+            held = self
+                .inner
+                .vocoder_free
+                .wait_timeout(held, Duration::from_millis(100))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        held.insert(id.to_owned());
+        Some(VocoderClaim {
+            lib: self.clone(),
+            id: id.to_owned(),
+        })
+    }
+
+    /// Whether another install holds a claim on vocoder `id`.
+    pub(super) fn vocoder_claimed(&self, id: &str) -> bool {
+        lock(&self.inner.vocoders).contains(id)
+    }
+
+    /// Wait for any running leftover sweep to finish (an install thread
+    /// calls this before it writes anything).
+    pub(super) fn pass_sweep_gate(&self) {
+        drop(lock(&self.inner.sweep_gate));
+    }
+
+    /// Clear what interrupted downloads, installs and deletes left in the
+    /// user voicebank and vocoder folders of `roots`, on a thread of its
+    /// own (see [`Self::sweep_leftovers_now`]).
+    pub fn sweep_leftovers(&self, roots: &VoicebankRoots) {
+        let lib = self.clone();
+        let roots = roots.clone();
+        let spawned = std::thread::Builder::new()
+            .name("voicebank-sweep".into())
+            .spawn(move || lib.sweep_leftovers_now(&roots));
+        if let Err(e) = spawned {
+            tracing::warn!("start voicebank leftover sweep: {e}");
+        }
+    }
+
+    /// [`Self::sweep_leftovers`] on this thread: download parts nobody
+    /// holds ([`plok::sweep_stale_downloads`]), and staging / aside /
+    /// deleting folders ([`package::sweep_install_leftovers`]) — this
+    /// process's own only while no install runs, another process's once
+    /// it is gone — restoring a bank whose replace was cut short.
+    pub fn sweep_leftovers_now(&self, roots: &VoicebankRoots) {
+        let _gate = lock(&self.inner.sweep_gate);
+        let idle = !self.has_live_installs();
+        for dir in [roots.banks.as_deref(), roots.vocoders.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            plok::sweep_stale_downloads(dir);
+            package::sweep_install_leftovers(dir, idle);
+        }
     }
 
     /// The shared state, locked. Hold it briefly: the install threads
@@ -282,12 +384,16 @@ impl VoicebankLibrary {
 
     /// The index as last fetched, or as cached on disk under `banks`.
     pub fn index(&self, banks: Option<&Path>) -> Option<PlokIndex> {
+        if let Some(index) = &self.state().index {
+            return Some(index.clone());
+        }
+        // Read the cache with the lock released: the install threads
+        // write the state every chunk.
+        let cached = banks.and_then(plok::read_index_cache::<PlokIndex>)?;
         let mut s = self.state();
         if s.index.is_none() {
-            if let Some(cached) = banks.and_then(plok::read_index_cache::<PlokIndex>) {
-                s.index = Some(cached);
-                s.revision += 1;
-            }
+            s.index = Some(cached);
+            s.revision += 1;
         }
         s.index.clone()
     }
@@ -386,13 +492,19 @@ impl VoicebankLibrary {
         if roots.banks.is_none() {
             return Err("there is no user voicebank folder (no data directory)".into());
         }
+        if !plok::is_safe_id(id) {
+            return Err(format!("{id:?} is not a voicebank id"));
+        }
         let cancel = Arc::new(AtomicBool::new(false));
         {
             let mut s = self.state();
             if s.is_installing(id) {
                 return Err(format!("voicebank {id:?} is already being installed"));
             }
-            s.jobs.retain(|j| j.bank_id != id);
+            // A finished install the tick has not collected yet stays when
+            // a control job waits on it: the tick still resolves that job.
+            s.jobs
+                .retain(|j| j.bank_id != id || j.control_job.is_some());
             let name = s
                 .index
                 .as_ref()
@@ -415,9 +527,12 @@ impl VoicebankLibrary {
             .name("voicebank-install".into())
             .spawn(move || {
                 let board = control.as_ref().map(|(job, board)| (*job, board.clone()));
+                let nonce = plok::new_nonce();
+                lib.pass_sweep_gate();
                 let run = super::install::Install {
                     lib: &lib,
                     bank_id: &bank_id,
+                    nonce: &nonce,
                     roots: &roots,
                     cancel: &cancel,
                     board: board.as_ref().map(|(job, b)| (*job, b.as_ref())),
@@ -433,7 +548,7 @@ impl VoicebankLibrary {
             });
         if let Err(e) = spawned {
             let mut s = self.state();
-            s.jobs.retain(|j| j.bank_id != id);
+            s.jobs.retain(|j| j.bank_id != id || j.result.is_some());
             return Err(format!("start install: {e}"));
         }
         Ok(())
@@ -441,7 +556,11 @@ impl VoicebankLibrary {
 
     fn finish(&self, bank_id: &str, result: Result<InstallOutcome, InstallError>) {
         let mut s = self.state();
-        if let Some(job) = s.jobs.iter_mut().find(|j| j.bank_id == bank_id) {
+        if let Some(job) = s
+            .jobs
+            .iter_mut()
+            .find(|j| j.bank_id == bank_id && j.result.is_none())
+        {
             job.result = Some(result);
         }
         s.revision += 1;
@@ -455,8 +574,10 @@ impl VoicebankLibrary {
             .iter_mut()
             .find(|j| j.bank_id == bank_id && j.result.is_none())
         {
-            job.phase = phase;
-            s.revision += 1;
+            if job.phase != phase {
+                job.phase = phase;
+                s.progress_revision += 1;
+            }
         }
     }
 
@@ -464,7 +585,7 @@ impl VoicebankLibrary {
     /// leaves nothing behind.
     pub fn cancel(&self, bank_id: &str) {
         let s = self.state();
-        if let Some(job) = s.job(bank_id) {
+        if let Some(job) = s.live_job(bank_id) {
             job.cancel.store(true, Ordering::SeqCst);
         }
     }
@@ -493,28 +614,43 @@ impl VoicebankLibrary {
     }
 }
 
-/// Delete the installed user bank in `dir` (a folder directly under the
-/// user voicebank folder `banks`). Refuses anything else.
+/// A claim on a shared vocoder an install is fetching
+/// (`VoicebankLibrary::claim_vocoder`); released when dropped.
+pub(super) struct VocoderClaim {
+    lib: VoicebankLibrary,
+    id: String,
+}
+
+impl Drop for VocoderClaim {
+    fn drop(&mut self) {
+        lock(&self.lib.inner.vocoders).remove(&self.id);
+        self.lib.inner.vocoder_free.notify_all();
+    }
+}
+
+/// Delete the installed user bank in `dir`: a folder directly under the
+/// user voicebank folder `banks` whose name is a safe id
+/// ([`plok::is_safe_id`]). Refuses anything else.
 pub fn delete_user_bank(banks: &Path, dir: &Path) -> Result<(), String> {
     let inside = dir.parent().is_some_and(|p| p == banks);
-    if !inside || !dir.is_dir() {
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !inside || !plok::is_safe_id(&name) || !dir.is_dir() {
         return Err(format!(
             "{} is not a bank in the voicebank folder",
             dir.display()
         ));
     }
-    // Set it aside first, so a rescan mid-delete never half-sees it.
-    let name = dir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let trash = banks.join(format!(".{name}.deleting-{}", plok::new_nonce()));
+    // Set it aside first, so a rescan mid-delete never half-sees it (and
+    // a sweep finishes it if this process dies mid-delete).
+    let trash = banks.join(package::aside_name(&name, package::Aside::Deleting));
     std::fs::rename(dir, &trash).map_err(|e| format!("delete {}: {e}", dir.display()))?;
-    std::fs::remove_dir_all(&trash).map_err(|e| format!("delete {}: {e}", dir.display()))
-}
-
-/// Whether the bank installed in `dir` is the index's `entry` as it is
-/// listed now (no Update to offer).
-pub fn install_is_current(dir: &Path, entry: &super::plok_index::PlokVoicebank) -> bool {
-    PlokSidecar::read(dir).is_some_and(|s| s.matches(entry))
+    match std::fs::remove_dir_all(&trash) {
+        Ok(()) => Ok(()),
+        // A concurrent sweep took the rest.
+        Err(_) if !trash.exists() => Ok(()),
+        Err(e) => Err(format!("delete {}: {e}", dir.display())),
+    }
 }

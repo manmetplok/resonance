@@ -168,14 +168,13 @@ pub fn install_package(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "package".into());
-    let nonce = super::new_nonce();
-    let staging = parent.join(format!(".{name}.staging-{nonce}"));
+    let staging = parent.join(aside_name(&name, Aside::Staging));
     let result = extract(&mut archive, &files, &staging, &mut job);
     if let Err(e) = result {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(e.into());
     }
-    promote(&staging, dest, parent, &name, &nonce).inspect_err(|_| {
+    promote(&staging, dest, parent, &name).inspect_err(|_| {
         let _ = std::fs::remove_dir_all(&staging);
     })?;
     Ok(total)
@@ -214,14 +213,8 @@ fn extract(
 
 /// Move the whole `staging` folder to `dest`, setting an existing `dest`
 /// aside first and deleting it only once the new one is in place.
-fn promote(
-    staging: &Path,
-    dest: &Path,
-    parent: &Path,
-    name: &str,
-    nonce: &str,
-) -> Result<(), LibraryError> {
-    let old = parent.join(format!(".{name}.old-{nonce}"));
+fn promote(staging: &Path, dest: &Path, parent: &Path, name: &str) -> Result<(), LibraryError> {
+    let old = parent.join(aside_name(name, Aside::Old));
     let had_old = dest.exists();
     if had_old {
         std::fs::rename(dest, &old).map_err(io_err("move aside", dest))?;
@@ -238,4 +231,96 @@ fn promote(
         }
     }
     Ok(())
+}
+
+/// The hidden folders an install (or a Delete) sets beside the content
+/// folder `<name>`: `.<name>.<kind>-<pid>-<nonce>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aside {
+    /// What an install extracts into before it is renamed into place.
+    Staging,
+    /// The previous install, moved aside while its replacement lands.
+    Old,
+    /// A folder being deleted (renamed first, so a scan never half-sees it).
+    Deleting,
+}
+
+impl Aside {
+    fn tag(self) -> &'static str {
+        match self {
+            Aside::Staging => ".staging-",
+            Aside::Old => ".old-",
+            Aside::Deleting => ".deleting-",
+        }
+    }
+}
+
+/// A fresh aside name for content folder `name` (see [`Aside`]), owned by
+/// this process.
+pub fn aside_name(name: &str, kind: Aside) -> String {
+    format!(".{name}{}{}-{}", kind.tag(), std::process::id(), super::new_nonce())
+}
+
+/// What [`aside_name`] made `file_name` from: (the content folder's name,
+/// the kind, the owning process — `None` for a name without one).
+fn parse_aside(file_name: &str) -> Option<(&str, Aside, Option<u32>)> {
+    let rest = file_name.strip_prefix('.')?;
+    [Aside::Staging, Aside::Old, Aside::Deleting]
+        .into_iter()
+        .filter_map(|kind| {
+            let at = rest.rfind(kind.tag())?;
+            let name = &rest[..at];
+            let tail = &rest[at + kind.tag().len()..];
+            let pid = tail.split_once('-').and_then(|(pid, _)| pid.parse().ok());
+            (!name.is_empty() && !tail.is_empty()).then_some((name, kind, pid))
+        })
+        .next()
+}
+
+/// Clear what interrupted installs and deletes left in a library folder
+/// `dir` ([`Aside`] folders), and finish an interrupted replace:
+///
+/// - an aside folder of a process that is gone — or of this process when
+///   `own_idle` (the caller has no install or delete running) — is
+///   removed, except
+/// - an `Old` folder whose content folder is missing: the process died
+///   between [`promote`]'s two renames, so the old install is renamed back.
+///
+/// A folder of a live process is left alone. Never touches anything not in
+/// the aside shape.
+pub fn sweep_install_leftovers(dir: &Path, own_idle: bool) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let own = std::process::id();
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some((name, kind, pid)) = parse_aside(&file_name) else {
+            continue;
+        };
+        let owner_gone = match pid {
+            Some(pid) if pid == own => own_idle,
+            Some(pid) => !crate::drumkit_library::pid_alive(pid),
+            // Written before aside names carried a pid: nobody's now.
+            None => own_idle,
+        };
+        let path = entry.path();
+        if !owner_gone || !path.is_dir() {
+            continue;
+        }
+        let dest = dir.join(name);
+        if kind == Aside::Old && !dest.exists() && super::is_safe_id(name) {
+            match std::fs::rename(&path, &dest) {
+                Ok(()) => {
+                    tracing::info!("restored {} from an interrupted replace", dest.display());
+                    continue;
+                }
+                Err(e) => tracing::warn!("restore {}: {e}", dest.display()),
+            }
+        }
+        if let Err(e) = std::fs::remove_dir_all(&path) {
+            tracing::warn!("remove install leftover {}: {e}", path.display());
+        }
+    }
 }

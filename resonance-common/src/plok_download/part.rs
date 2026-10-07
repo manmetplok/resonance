@@ -40,8 +40,8 @@ const STAGING_SUFFIX: &str = ".extracting";
 /// around for.
 const STALE_DOWNLOAD_AGE: Duration = Duration::from_secs(60 * 60);
 
-/// A `.meta` with no part beside it is removed after this long (a part is
-/// created right after its meta).
+/// A `.meta` with no part beside it, or a part with no `.meta`, is removed
+/// after this long (a part is created and locked right before its meta).
 const ORPHAN_META_AGE: Duration = Duration::from_secs(60);
 
 /// A per-worker random tag: the hasher keys of `RandomState` are random
@@ -239,15 +239,17 @@ impl PartFile {
         let (file, mut meta) = match adopted {
             Some(found) => found,
             None => {
-                let meta = PartMeta::new(target, nonce);
-                // The record first: a sweep never takes a fresh part with
-                // a record for an abandoned one.
-                write_meta_file(&ours_meta, &meta)?;
+                // Open without truncating and empty the file only once the
+                // lock is ours: a part another download holds (the same
+                // nonce, or a racing adopt) is never cut under it. The
+                // record is written after the lock too (below), so it never
+                // describes a part somebody else is writing. A sweep leaves
+                // a fresh record-less part alone ([`ORPHAN_META_AGE`]).
                 let file = OpenOptions::new()
                     .read(true)
                     .write(true)
                     .create(true)
-                    .truncate(true)
+                    .truncate(false)
                     .open(&ours)
                     .map_err(|e| io_failure("create", &ours, e))?;
                 match try_lock(&file) {
@@ -260,7 +262,9 @@ impl PartFile {
                     }
                     Err(e) => return Err(io_failure("lock", &ours, e)),
                 }
-                (file, meta)
+                file.set_len(0)
+                    .map_err(|e| io_failure("truncate", &ours, e))?;
+                (file, PartMeta::new(target, nonce))
             }
         };
         meta.nonce = nonce.to_string();
@@ -352,9 +356,9 @@ fn age_of(meta: &std::fs::Metadata) -> Option<Duration> {
 
 /// Remove download leftovers in `dir` no running download can own:
 ///
-/// - a `.part` nobody holds the lock of, when it has no record (it cannot
-///   be resumed) or has not been written for an hour — never one that is
-///   locked (a live download, in any process);
+/// - a `.part` nobody holds the lock of, when it has had no record for a
+///   minute (it cannot be resumed) or has not been written for an hour —
+///   never one that is locked (a live download, in any process);
 /// - a record whose part is gone;
 /// - the pre-library drums worker's `.extracting` directories.
 pub fn sweep_stale_downloads(dir: &Path) {
@@ -379,12 +383,12 @@ pub fn sweep_stale_downloads(dir: &Path) {
                 continue;
             }
             let meta_path = meta_path_of(&path);
-            let stale = file
-                .metadata()
-                .ok()
-                .and_then(|m| age_of(&m))
-                .is_some_and(|age| age > STALE_DOWNLOAD_AGE);
-            if stale || !meta_path.exists() {
+            let age = file.metadata().ok().and_then(|m| age_of(&m));
+            let stale = age.is_some_and(|age| age > STALE_DOWNLOAD_AGE);
+            // A part is created (and locked) a moment before its record is
+            // written: only an older one without a record is abandoned.
+            let orphan = !meta_path.exists() && age.is_some_and(|age| age > ORPHAN_META_AGE);
+            if stale || orphan {
                 remove_logged(&path);
                 remove_logged(&meta_path);
             }

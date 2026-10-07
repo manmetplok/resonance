@@ -194,6 +194,7 @@ fn list(o: &LibraryOverlay) -> Element<'_, Message> {
     // Hashed rather than copied: the key is built every frame.
     let key = (
         o.rows_generation,
+        o.status_generation,
         o.tab == LibraryTab::Installed,
         hash_of(browser.view()),
         hash_of(&browser.selected()),

@@ -16,8 +16,17 @@ reports that plainly.
 This script is the part that makes it *blind*: it runs that test, then
 shuffles `manifest.json`'s entries behind random 8-character tokens, renames
 each WAV to `<token>.wav`, and writes `key.json` (token -> bank/speaker) —
-which only `--reveal` prints. Listen to the files named by token; once
+which only `--reveal` prints. Every token file gets the same modification
+time, so a directory listing sorted by time does not give the render order
+(and with it the bank order) away. Listen to the files named by token; once
 you've picked, run with `--reveal` to see what they were.
+
+The output directory is only ever cleared of what this script writes
+(`*.wav`, `manifest.json`, `key.json`); a non-empty directory holding
+neither a `key.json` nor a `manifest.json` is refused rather than touched.
+If the render fails part-way but wrote a `manifest.json`, the files it did
+write are still shuffled (so no plainly-named WAV is left behind) before
+the failure is reported.
 
 Usage:
     scripts/vocal-audition.py              # render, shuffle, list files to listen to
@@ -30,19 +39,46 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
+import secrets
 import string
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO_ROOT / "target" / "audition"
 
 
+# What this script writes into the output directory, and all it removes.
+OWN_NAMES = ("manifest.json", "key.json")
+
+
 def random_token(length: int = 8) -> str:
     alphabet = string.ascii_lowercase + string.digits
-    return "".join(random.choices(alphabet, k=length))
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def is_ours(path: Path) -> bool:
+    return path.is_file() and (path.suffix == ".wav" or path.name in OWN_NAMES)
+
+
+def clear_out_dir(out_dir: Path) -> bool:
+    """Remove a previous run's files from `out_dir`. Refuses (returns False)
+    a non-empty directory that no run of this script wrote."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    entries = list(out_dir.iterdir())
+    if entries and not any((out_dir / n).exists() for n in OWN_NAMES):
+        print(
+            f"{out_dir} is not empty and holds no key.json or manifest.json from an "
+            "earlier audition; pick an empty --out (nothing was deleted)",
+            file=sys.stderr,
+        )
+        return False
+    for stale in entries:
+        if is_ours(stale):
+            stale.unlink()
+    return True
 
 
 def reveal(out_dir: Path) -> int:
@@ -61,10 +97,6 @@ def reveal(out_dir: Path) -> int:
 
 
 def run_render(out_dir: Path) -> int:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for stale in out_dir.iterdir():
-        if stale.is_file():
-            stale.unlink()
     env = dict(os.environ)
     env["RESONANCE_AUDITION_OUT"] = str(out_dir)
     cmd = ["cargo", "test", "-p", "resonance-app", "--test", "vocal", "--",
@@ -91,7 +123,9 @@ def shuffle_into_key(out_dir: Path) -> int:
         print("manifest.json lists no bank x speaker combinations", file=sys.stderr)
         return 1
 
-    random.shuffle(entries)
+    secrets.SystemRandom().shuffle(entries)
+    # One timestamp for every file: the listing order by time says nothing.
+    stamp = time.time()
     used: set[str] = set()
     key: dict[str, dict] = {}
     for entry in entries:
@@ -100,8 +134,12 @@ def shuffle_into_key(out_dir: Path) -> int:
             token = random_token()
         used.add(token)
         src = out_dir / entry["file"]
+        if not src.exists():
+            # A render that failed part-way listed a file it never wrote.
+            continue
         dst = out_dir / f"{token}.wav"
         src.rename(dst)
+        os.utime(dst, (stamp, stamp))
         key[token] = {
             "bank": entry["bank"],
             "speaker": entry.get("speaker"),
@@ -135,8 +173,21 @@ def main() -> int:
     if args.reveal:
         return reveal(args.out)
 
+    if not clear_out_dir(args.out):
+        return 2
     rc = run_render(args.out)
+    # Shuffle whatever was written, even after a failure, so no file is
+    # left under its bank's name; then report the failure.
+    if (args.out / "manifest.json").exists():
+        shuffled = shuffle_into_key(args.out)
+        if rc == 0:
+            return shuffled
     if rc != 0:
+        # A render that died before its manifest: drop the plainly-named
+        # WAVs it wrote (`<bank>__<speaker>.wav`) rather than reveal them.
+        for plain in args.out.glob("*__*.wav"):
+            plain.unlink()
+        print(f"the audition render failed (exit {rc}); see the output above", file=sys.stderr)
         return rc
     return shuffle_into_key(args.out)
 

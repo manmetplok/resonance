@@ -121,3 +121,26 @@ pub fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
         .or_else(|| panic.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "internal error".to_string())
 }
+
+/// Whether an index entry's `id` may name a folder under a library root:
+/// one plain path component of ASCII letters, digits, `.`, `_` and `-`,
+/// not starting with `.` (no `..`, no hidden folder, no separator, no
+/// absolute path). An index is remote input, and the id becomes the
+/// folder an install writes and a Delete removes, so anything else is
+/// refused rather than sanitised.
+pub fn is_safe_id(id: &str) -> bool {
+    use std::path::{Component, Path};
+    if id.is_empty()
+        || id.starts_with('.')
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return false;
+    }
+    let mut components = Path::new(id).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    )
+}

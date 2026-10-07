@@ -46,6 +46,7 @@ impl VoicebankRegistry {
                 }
             }
         }
+        self.revision += 1;
         for models in self.roots.dev_models.clone() {
             for b in BUILTIN_BANKS {
                 let dir = models.join(b.dev_dir);
@@ -158,9 +159,7 @@ impl VoicebankRegistry {
             languages: manifest.languages.clone(),
             inventory: manifest.inventory().clone(),
             english_dict: manifest.details.english_dict.clone(),
-            plok: user
-                .then(|| super::plok_index::PlokSidecar::read(dir))
-                .flatten(),
+            plok: user.then(|| install_record(dir)).flatten(),
             builtin,
             dictionary: Default::default(),
         }
@@ -176,6 +175,24 @@ impl VoicebankRegistry {
             .chain(self.roots.dev_models.iter().map(|m| m.join("vocoder")))
             .find_map(|lib| layout::find_library_vocoder(&lib, name))
     }
+}
+
+/// The install record in user bank folder `dir`, when it is that folder's:
+/// its `id` is the folder name. A record copied in with another bank (or
+/// written by hand for another id) is ignored.
+fn install_record(dir: &Path) -> Option<super::PlokSidecar> {
+    let folder = dir.file_name()?.to_string_lossy();
+    super::PlokSidecar::read(dir).filter(|s| {
+        let ours = s.id == folder;
+        if !ours {
+            tracing::warn!(
+                "voicebank folder {}: its install record names {:?}; ignored",
+                dir.display(),
+                s.id
+            );
+        }
+        ours
+    })
 }
 
 /// Add `bank` unless an earlier folder already holds its id.

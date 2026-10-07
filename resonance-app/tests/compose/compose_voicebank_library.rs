@@ -251,6 +251,63 @@ fn cancel_stops_an_install() {
     assert!(s.job("aurora").unwrap().cancel.load(std::sync::atomic::Ordering::SeqCst));
 }
 
+/// A running install's progress patches its row's status in place: the
+/// rows are not rebuilt, the browsers do not re-filter, and no disk is
+/// read. Typing in the search field re-filters without a rebuild either.
+#[test]
+fn progress_and_typing_patch_rather_than_rebuild_the_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (server, _) = serve();
+    let (mut app, def) = demo_with_library(tmp.path(), &server);
+    open(&mut app, def);
+    send(&mut app, M::SetTab(LibraryTab::Plok));
+    app.test_show_voicebank_installing(
+        "aurora",
+        InstallPhase::Downloading {
+            what: "Aurora".into(),
+            done: 1,
+            total: 4,
+        },
+    );
+    let generations = |app: &Resonance| {
+        let o = app.test_voicebank_overlay().unwrap();
+        (o.rows_generation, o.status_generation)
+    };
+    let (rows, statuses) = generations(&app);
+    app.test_set_voicebank_install_phase(
+        "aurora",
+        InstallPhase::Downloading {
+            what: "Aurora".into(),
+            done: 3,
+            total: 4,
+        },
+    );
+    assert_eq!(generations(&app), (rows, statuses + 1));
+    let row = app
+        .test_voicebank_overlay()
+        .unwrap()
+        .plok_rows
+        .by_id("aurora")
+        .cloned()
+        .unwrap();
+    assert!(
+        matches!(row.status, RowStatus::Installing { fraction: Some(f), .. } if (f - 0.675).abs() < 1e-3),
+        "{:?}",
+        row.status
+    );
+    // A tick with nothing new does nothing.
+    app.test_poll_voicebank_library();
+    assert_eq!(generations(&app), (rows, statuses + 1));
+
+    // Typing filters the browser over the same rows.
+    send(&mut app, M::Search("aur".into()));
+    assert_eq!(generations(&app).0, rows);
+    let o = app.test_voicebank_overlay().unwrap();
+    assert_eq!(o.plok.view_len(), 1, "the query filtered the view");
+    send(&mut app, M::Select("voicebank:aurora".into()));
+    assert_eq!(generations(&app).0, rows);
+}
+
 // ---------------------------------------------------------------------------
 // Golden images
 // ---------------------------------------------------------------------------

@@ -62,10 +62,15 @@ pub struct LibraryOverlay {
     /// The bank whose Delete is waiting for a confirmation.
     pub confirm_delete: Option<String>,
     /// What the rows were built from: (library revision, marks
-    /// generation, registry fingerprint).
+    /// generation, registry revision).
     pub built_from: Option<(u64, u64, u64)>,
+    /// The library's progress revision the rows' statuses show.
+    pub built_progress: u64,
     /// Bumped on every rows rebuild: the browsers' cache key.
     pub rows_generation: u64,
+    /// Bumped when a running install's row status is patched in place
+    /// (the list's redraw key; the browsers do not re-filter).
+    pub status_generation: u64,
     /// The tab labels with their counts, built with the rows.
     pub tab_labels: (String, String),
 }
@@ -83,7 +88,9 @@ impl LibraryOverlay {
             accept: None,
             confirm_delete: None,
             built_from: None,
+            built_progress: 0,
             rows_generation: 0,
+            status_generation: 0,
             tab_labels: ("Installed".to_owned(), "plok.org".to_owned()),
         }
     }

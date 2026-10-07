@@ -26,6 +26,8 @@ pub struct Seen {
 pub enum Act {
     /// Close the connection after this many body bytes.
     CutAfter(usize),
+    /// Wait this many milliseconds before answering (a slow upstream).
+    DelayMs(u64),
 }
 
 /// Path → body.
@@ -198,11 +200,14 @@ fn serve_file(
             0,
         ),
     };
+    if let Some(Act::DelayMs(ms)) = act {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
     let _ = stream.write_all(head.as_bytes());
     let rest = &body[from..];
     let rest = match act {
         Some(Act::CutAfter(n)) => &rest[..n.min(rest.len())],
-        None => rest,
+        Some(Act::DelayMs(_)) | None => rest,
     };
     let _ = stream.write_all(rest);
     let _ = stream.flush();

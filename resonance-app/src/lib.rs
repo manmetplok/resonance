@@ -484,6 +484,11 @@ impl Resonance {
         // armed track and a record start need ids before any project load
         // (whose replay ends with a fresh grant of its own).
         app.send_clip_id_grant();
+        // What interrupted voicebank downloads, installs and deletes left
+        // behind (off the update loop; the overlay sweeps again on open).
+        app.voicebank_library
+            .lib
+            .sweep_leftovers(app.voicebanks.roots());
         // An untitled session that crashed leaves its autosave in the
         // scratch root: offer it over the startup screen (FU-M12a).
         crate::update::project_io::recovery::offer_orphaned_session(&mut app);

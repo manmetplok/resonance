@@ -5,7 +5,7 @@ use resonance_control::methods::vocal as wire;
 use resonance_music_theory::VoicebankId;
 
 use crate::compose::vocal_svs::registry::{
-    ComfortableRange, PlokIndex, PlokVoicebank, VoicebankRegistry,
+    BankTerms, ComfortableRange, PlokIndex, PlokVoicebank, VoicebankRegistry,
 };
 use crate::compose::vocal_svs::{BankProfile, CurveKind, PhonemeFate, VoicebankPhonemes};
 
@@ -36,7 +36,12 @@ pub(in crate::update::control) fn voicebank_list(
     wire::VoicebankList {
         installed: registry
             .installed()
-            .map(|bank| voicebank_entry(&registry.profile(&VoicebankId::new(&bank.id))))
+            .map(|bank| {
+                voicebank_entry(
+                    &registry.profile(&VoicebankId::new(&bank.id)),
+                    registry.terms(&bank.id),
+                )
+            })
             .collect(),
         available,
         index_status: Some(index.status.to_owned()),
@@ -60,10 +65,8 @@ fn available_entry(b: &PlokVoicebank) -> wire::AvailableVoicebank {
     }
 }
 
-fn voicebank_entry(profile: &BankProfile) -> wire::VoicebankEntry {
+fn voicebank_entry(profile: &BankProfile, terms: BankTerms) -> wire::VoicebankEntry {
     let bank = profile.installed();
-    let builtin = profile.builtin();
-    let plok = bank.and_then(|b| b.plok.as_ref());
     let phonemes = VoicebankPhonemes::new(profile);
     let missing = profile.missing_phonemes();
     let substitutions = missing
@@ -105,17 +108,11 @@ fn voicebank_entry(profile: &BankProfile) -> wire::VoicebankEntry {
             breathiness: profile.curve_supported(CurveKind::Breathiness),
             pitch_bend: profile.curve_supported(CurveKind::PitchBend),
         },
-        // What a plok.org install recorded wins over the built-in table:
-        // it is the terms the user accepted.
-        credit: plok
-            .and_then(|p| p.credit.clone())
-            .or_else(|| builtin.and_then(|b| b.credit).map(str::to_owned)),
-        terms_url: plok
-            .and_then(|p| p.terms_url.clone())
-            .or_else(|| builtin.and_then(|b| b.terms_url).map(str::to_owned)),
-        commercial: plok
-            .and_then(|p| p.commercial.clone())
-            .or_else(|| builtin.and_then(|b| b.commercial).map(str::to_owned)),
+        // What a plok.org install recorded (the terms the user accepted),
+        // trusted as `VoicebankRegistry::terms` says.
+        credit: terms.credit,
+        terms_url: terms.terms_url,
+        commercial: terms.commercial,
         vocoder: bank.and_then(|b| b.vocoder_name.clone()),
         vocoder_installed: bank.is_some_and(|b| b.vocoder_config.is_some()),
     }
