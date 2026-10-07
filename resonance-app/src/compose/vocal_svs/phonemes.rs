@@ -10,16 +10,19 @@
 //! their own table, the strip could display `v` while the model sang
 //! `f`. Both now go through [`VoicebankPhonemes`].
 //!
-//! Today the per-bank inventory is hardcoded (the historic enum
-//! behaviour: every bank covers the full ARPAbet set except Lilia, which
-//! lacks the voiced `v`). Epic #164's voicebank manifest scans the real
-//! on-disk phoneme dict; todo #492 notes wiring that scanned set in here
-//! as a follow-up so a freshly-dropped bank needs no code change. The
-//! substitution policy here intentionally mirrors
-//! `resonance_svs::voicebank`'s `nearest_substitutes` so the swap is a
-//! drop-in.
+//! The inventory is the bank's: an installed bank answers from its
+//! scanned phoneme dictionary, a known bank that is not installed from the
+//! built-in record of its shipped one ([`BankProfile::has_phoneme`]). A
+//! phone the bank lacks is mapped onto what it has
+//! (vocal-mcp-control-and-quality.md §4.4): the bank's own substitution
+//! hints first (Lilia `v` → `f`, `b`), then the voiced/voiceless partner,
+//! then the nearest phone of the same articulatory class
+//! ([`nearest_by_class`]). Only a phone none of those reach is
+//! unsupported.
 
-use resonance_music_theory::{g2p, VocalVoicebank};
+use resonance_music_theory::g2p;
+
+use super::registry::BankProfile;
 
 /// How a voicebank resolves one canonical ARPAbet symbol against its
 /// phoneme inventory.
@@ -30,10 +33,9 @@ pub enum PhonemeFate {
     /// The bank lacks this symbol; it is sung as the nearest available
     /// substitute instead (e.g. Lilia `v` → `f`).
     Substituted(&'static str),
-    /// The bank lacks this symbol and has no acceptable substitute. The
-    /// segment builder passes it through unchanged (matching the historic
-    /// behaviour); the strip can badge it so the user knows it won't sing
-    /// cleanly. No shipped bank currently hits this.
+    /// The bank lacks this symbol and nothing it has is close enough. The
+    /// pronunciation gate refuses the render, naming the word; the strip
+    /// shows the symbol as written. No shipped bank hits this.
     Unsupported,
 }
 
@@ -51,16 +53,16 @@ impl PhonemeFate {
 }
 
 /// The active voicebank's phoneme capabilities. Cheap to construct (it
-/// just wraps the enum); construct one per render / per strip-paint and
-/// query it for each phone.
+/// borrows the bank's profile); construct one per render / per strip-paint
+/// and query it for each phone.
 #[derive(Debug, Clone, Copy)]
-pub struct VoicebankPhonemes {
-    voicebank: VocalVoicebank,
+pub struct VoicebankPhonemes<'a> {
+    bank: &'a BankProfile,
 }
 
-impl VoicebankPhonemes {
-    pub fn new(voicebank: VocalVoicebank) -> Self {
-        Self { voicebank }
+impl<'a> VoicebankPhonemes<'a> {
+    pub fn new(bank: &'a BankProfile) -> Self {
+        Self { bank }
     }
 
     /// Resolve one canonical ARPAbet symbol (as the G2P emits it) to its
@@ -72,7 +74,13 @@ impl VoicebankPhonemes {
         if self.contains(ph) {
             return PhonemeFate::Direct;
         }
-        for &candidate in nearest_substitutes(ph) {
+        let candidates = self
+            .bank
+            .substitution_hints(ph)
+            .iter()
+            .chain(nearest_substitutes(ph))
+            .chain(nearest_by_class(ph));
+        for &candidate in candidates {
             if self.contains(candidate) {
                 return PhonemeFate::Substituted(candidate);
             }
@@ -111,29 +119,9 @@ impl VoicebankPhonemes {
             .collect()
     }
 
-    /// Is `ph` present in this bank's (hardcoded stand-in) inventory?
-    /// Silence/control tokens are always present. Replace the
-    /// [`missing_phonemes`] body with the scanned manifest set to make
-    /// this data-driven (todo #492 follow-up).
+    /// Is `ph` in this bank's inventory? Control tokens always are.
     fn contains(&self, ph: &str) -> bool {
-        !missing_phonemes(self.voicebank).contains(&ph)
-    }
-}
-
-/// ARPAbet symbols *absent* from a bank's phoneme dict. Everything not
-/// listed (including the `AP`/`SP`/`cl` control tokens) is treated as
-/// present. This is the hardcoded stand-in for epic #164's scanned
-/// inventory — see the module docs.
-fn missing_phonemes(voicebank: VocalVoicebank) -> &'static [&'static str] {
-    match voicebank {
-        // TIGER (v106) and Meiji (v160) both ship the full English
-        // ARPAbet set. Meiji namespaces it `en/…` on disk, but that's a
-        // naming convention handled by `paths::voicebank_phoneme_name`,
-        // not a missing symbol.
-        VocalVoicebank::Tiger | VocalVoicebank::Meiji => &[],
-        // Lilia's MM 2.8 set covers all of ARPAbet *except* the voiced
-        // labiodental fricative `v`.
-        VocalVoicebank::Lilia => &["v"],
+        self.bank.has_phoneme(ph)
     }
 }
 
@@ -262,8 +250,7 @@ pub fn min_articulation_sec(phonemes: &[&str]) -> f64 {
 /// never alters a bank with the full inventory. Pairs voiced phones with
 /// their voiceless counterpart (same place + manner) — the substitution
 /// least likely to be noticed — with the reverse direction covering the
-/// rarer voiceless-gap case. Mirrors `resonance_svs::voicebank`'s table
-/// so the manifest swap stays behaviour-preserving.
+/// rarer voiceless-gap case. Mirrors `resonance_svs::voicebank`'s table.
 fn nearest_substitutes(ph: &str) -> &'static [&'static str] {
     match ph {
         "v" => &["f", "b"],
@@ -276,6 +263,63 @@ fn nearest_substitutes(ph: &str) -> &'static [&'static str] {
         "sh" => &["zh"],
         "jh" => &["ch"],
         "ch" => &["jh"],
+        _ => &[],
+    }
+}
+
+/// The phones of the same articulatory class nearest to `ph`, most similar
+/// first: the last resort before a phone counts as unsupported. Vowels map
+/// to vowels by height and backness, consonants to consonants of the same
+/// manner (then place), so a substitution never changes a syllable's vowel
+/// count. Voicing partners come earlier, from [`nearest_substitutes`].
+pub fn nearest_by_class(ph: &str) -> &'static [&'static str] {
+    match ph {
+        // Vowels.
+        "aa" => &["ao", "ah", "ae"],
+        "ae" => &["eh", "aa", "ah"],
+        "ah" => &["ax", "aa", "uh"],
+        "ax" => &["ah", "ih", "eh"],
+        "ao" => &["aa", "ow", "ah"],
+        "aw" => &["ao", "aa", "ow"],
+        "ay" => &["aa", "ey", "ah"],
+        "eh" => &["ae", "ih", "ey"],
+        "er" => &["ah", "ax"],
+        "ey" => &["eh", "iy", "ih"],
+        "ih" => &["iy", "eh", "ax"],
+        "iy" => &["ih", "ey"],
+        "ow" => &["ao", "uw", "ah"],
+        "oy" => &["ow", "ao"],
+        "uh" => &["uw", "ah", "ax"],
+        "uw" => &["uh", "ow"],
+        // Stops.
+        "b" => &["p", "d"],
+        "p" => &["b", "t"],
+        "d" => &["t", "b"],
+        "t" => &["d", "k"],
+        "g" => &["k", "d"],
+        "k" => &["g", "t"],
+        // Affricates.
+        "ch" => &["sh", "t"],
+        "jh" => &["zh", "d"],
+        // Fricatives.
+        "f" => &["th", "p"],
+        "v" => &["dh", "w"],
+        "th" => &["f", "s"],
+        "dh" => &["z", "v"],
+        "s" => &["sh", "th"],
+        "z" => &["zh", "dh"],
+        "sh" => &["s", "ch"],
+        "zh" => &["z", "jh"],
+        "hh" => &["f", "th"],
+        // Nasals.
+        "m" => &["n"],
+        "n" => &["m", "ng"],
+        "ng" => &["n", "m"],
+        // Approximants.
+        "l" => &["r", "w"],
+        "r" => &["l", "w"],
+        "w" => &["l", "r"],
+        "y" => &["l", "r"],
         _ => &[],
     }
 }

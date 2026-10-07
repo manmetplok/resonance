@@ -18,17 +18,20 @@
 //! * [`VoicebankManifest`] — the thin descriptor joining the two, and the
 //!   validation entry point that re-exercises the [`crate::config`]
 //!   loaders so an unusable bank is rejected with a descriptive error
-//!   before the pipeline ever touches an ONNX session.
+//!   before the pipeline ever touches an ONNX session. Its per-bank quirk
+//!   answers live in `quirks`.
 
+pub mod dsdict;
 pub mod layout;
 pub mod phonetics;
+mod quirks;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-pub use layout::BankLayout;
+pub use layout::{BankDetails, BankLayout};
 pub use phonetics::{
     detect_phoneme_target, nearest_substitutes, CurveSupport, ExpressionCurve, PhonemeInventory,
     PhonemeTarget,
@@ -84,6 +87,8 @@ pub struct VoicebankManifest {
     pub phonemes: Vec<String>,
     /// `languages.json` contents (name -> language id), empty if absent.
     pub languages: BTreeMap<String, i64>,
+    /// Name, version, vocoder id and English dictionary.
+    pub details: BankDetails,
 
     /// Alphabet the dict is written in, detected from the inventory.
     pub phoneme_target: PhonemeTarget,
@@ -142,6 +147,7 @@ impl VoicebankManifest {
             singers,
             phonemes,
             languages,
+            details,
             accepts_language_id,
             accepts_energy,
             accepts_breathiness,
@@ -163,6 +169,7 @@ impl VoicebankManifest {
             singers,
             phonemes,
             languages,
+            details,
             phoneme_target,
             accepts_language_id,
             accepts_energy,
@@ -207,44 +214,5 @@ impl VoicebankManifest {
             &self.phoneme_dict,
             self.vocoder_config.as_deref(),
         )
-    }
-
-    // -----------------------------------------------------------------
-    // Data-driven per-bank quirks (doc #164)
-    //
-    // These reproduce — from the scanned inventory / languages / acoustic
-    // config — the behaviour previously hardcoded per `VocalVoicebank`
-    // enum arm in `resonance-app`'s `vocal_svs/paths.rs`. Working from the
-    // data means a freshly-dropped bank gets the right treatment without a
-    // code change. The answers themselves live in `phonetics`; the
-    // manifest only supplies this bank's data.
-    // -----------------------------------------------------------------
-
-    /// The dict key to feed the acoustic model for a G2P ARPAbet symbol.
-    /// See [`PhonemeInventory::phoneme_name`].
-    pub fn phoneme_name(&self, ph: &str) -> String {
-        self.inventory.phoneme_name(ph)
-    }
-
-    /// Per-token id for the acoustic model's `languages` input, or `None`
-    /// when this bank takes no language input (`use_lang_id` is off).
-    /// See [`PhonemeInventory::language_id`].
-    pub fn language_id(&self, ph: &str) -> Option<i64> {
-        if !self.accepts_language_id {
-            return None;
-        }
-        Some(self.inventory.language_id(ph, &self.languages))
-    }
-
-    /// Replace a G2P ARPAbet symbol the bank's dict lacks with its nearest
-    /// available substitute. See [`PhonemeInventory::substitute_phoneme`].
-    pub fn substitute_phoneme(&self, ph: &str) -> String {
-        self.inventory.substitute_phoneme(ph)
-    }
-
-    /// Whether this bank's pipeline accepts the given expression curve.
-    /// See [`CurveSupport::supports`].
-    pub fn supports_curve(&self, curve: ExpressionCurve) -> bool {
-        self.curve_support().supports(curve)
     }
 }

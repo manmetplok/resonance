@@ -14,8 +14,8 @@
 //!
 //! Change tracking is *content-addressed* rather than flag-based: each
 //! unit's cache key is a hash of everything that determines its rendered
-//! audio (phonemes, durations, f0/gender/tension curves, and the active
-//! voicebank/singer). An edit that changes a syllable changes that unit's
+//! audio (phonemes, durations, f0/gender/tension curves, and the model,
+//! speaker and bank version the lane's params resolve to). An edit that changes a syllable changes that unit's
 //! key and nothing else, so the cache lookup alone decides what to
 //! re-render — no separate per-syllable dirty bit to keep in sync. The
 //! "N of M segments changed" figure the UI overlay wants (design #173
@@ -32,6 +32,7 @@ use resonance_svs::ds::{DsSegment, SampleCurve};
 
 use crate::compose::expression::ExpressionCurves;
 
+use super::registry::BankProfile;
 use super::segment::build_segment_windowed;
 use super::SILENCE_GAP_SEC;
 
@@ -83,6 +84,7 @@ pub fn split_render_units(
     curves: &ExpressionCurves,
     ticks_per_quarter: u32,
     bpm: f32,
+    bank: &BankProfile,
 ) -> Vec<RenderUnit> {
     if notes.is_empty() {
         return Vec::new();
@@ -99,6 +101,7 @@ pub fn split_render_units(
         .max()
         .unwrap_or(base_tick);
     let clip_span = clip_end_tick.saturating_sub(base_tick) as f32;
+    let model = model_identity(params, bank);
 
     // Boundaries between consecutive notes: split where the duration
     // builder would insert a real rest.
@@ -139,10 +142,11 @@ pub fn split_render_units(
             window,
             ticks_per_quarter,
             bpm,
+            bank,
         );
         let start_sec = (notes[lo].start_tick.saturating_sub(base_tick)) as f64 * spt;
         let syllable_range = assigned[lo].syllable_index..assigned[hi - 1].syllable_index + 1;
-        let key = content_key(&segment, params);
+        let key = content_key(&segment, &model);
         units.push(RenderUnit {
             segment,
             start_sec,
@@ -154,20 +158,37 @@ pub fn split_render_units(
     units
 }
 
+/// What renders a unit, beyond the segment itself: the files the render
+/// loads (acoustic and vocoder config), the speaker key the lane's speaker
+/// resolves to, and the bank's version — so a rescan that resolves the
+/// same params to another model, speaker or release re-renders instead of
+/// reusing audio from the old one. A bank that is not installed cannot
+/// render; its id and speaker stand in (the render fails before the cache
+/// is consulted).
+fn model_identity(params: &VocalParams, bank: &BankProfile) -> String {
+    match bank.render_target(params.speaker.as_deref(), params.voice, None) {
+        Ok(target) => format!(
+            "{}|{}|{:?}|{:?}",
+            target.acoustic_config.display(),
+            target.vocoder_config.display(),
+            target.speaker,
+            bank.installed().and_then(|b| b.version.as_deref()),
+        ),
+        Err(_) => format!("{}|{:?}", params.voicebank, params.speaker),
+    }
+}
+
 /// FNV-1a hash of everything that determines a unit's rendered audio:
 /// the phoneme/note/duration arrays, every per-frame curve, and the
-/// active voicebank + singer (which select the acoustic/vocoder model and
-/// speaker embedding — not captured by the segment arrays themselves).
-/// Two units with the same key render bit-identical audio, so a cache hit
-/// is always safe to reuse.
-fn content_key(seg: &DsSegment, params: &VocalParams) -> u64 {
+/// [`model_identity`] that renders them (the acoustic/vocoder model, the
+/// speaker embedding and the bank version — not captured by the segment
+/// arrays themselves). Two units with the same key render bit-identical
+/// audio, so a cache hit is always safe to reuse.
+fn content_key(seg: &DsSegment, model: &str) -> u64 {
     let mut h = Fnv::new();
-    // Model + speaker identity. The segment arrays already fold in the
-    // voicebank's phoneme substitutions, but not which model renders them.
-    h.str(&format!(
-        "{:?}|{:?}|{:?}",
-        params.voicebank, params.singer, params.singer_meiji
-    ));
+    // The segment arrays already fold in the voicebank's phoneme
+    // substitutions, but not which model renders them.
+    h.str(model);
     for s in &seg.ph_seq {
         h.str(s);
     }

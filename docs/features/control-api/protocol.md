@@ -1,6 +1,6 @@
 # Control protocol and conventions
 
-> Verified against master @ `86e5c2af` + vocal-params work + vocal-phase1 fixes (`d1b5c284`) on 2026-10-07.
+> Verified against master @ `cb3b1d6a` + voicebank registry (vocal slices 4–5) on 2026-10-07.
 > Spec history: ba doc #265 (not in the repo). Code-review findings cited
 > below (CTL-01, CTL-03, ARCH2-06, …) are in
 > `docs/history/reviews/code-review-todo.md`.
@@ -38,6 +38,7 @@ describes it.
 | `needs_confirmation` | 1001 | A destructive call needs `confirm: true` (`overwrite: true` for a file); `detail` says what would be lost. |
 | `busy` | 1002 | The app cannot take this now (no project, load in progress, render running, GUI drag open). Retry. |
 | `unsupported` | 1003 (unknown method -32601) | Unknown method, a method not built yet, or an incompatible connection. |
+| `voicebank_missing` | 1004 | A vocal render names a voicebank, or the vocoder it needs, that is not installed; the message names it and where to get it. Also a job's `error.kind`. Added without a protocol bump: an older client reads it as `unknown`. |
 | `internal` | -32603 | Unexpected failure. |
 
 `unknown` exists only so an older client can parse a newer server's

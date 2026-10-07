@@ -36,7 +36,7 @@ pub(crate) use lyric_parse::note_units;
 // ── note_assign ───────────────────────────────────────────────────────────────
 pub use note_assign::{
     assign_syllables_to_notes, assign_syllables_to_notes_with, note_unit_count, phonemes_for_draft,
-    resolve_draft, resolve_draft_with_dict,
+    resolve_draft, resolve_draft_with_dict, resolve_draft_with_layers, DictionaryLayers,
 };
 pub use note_assign::{
     AssignedSyllable, PhonemeProvenance, PhonemeDictionary, ResolvedSyllable, SyllableOverrides,

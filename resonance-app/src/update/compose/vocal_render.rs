@@ -199,9 +199,6 @@ pub(super) fn roll_vocal_melody(
             params,
             placement_starts,
             clip_name: name,
-            // A fresh roll has no edited clip yet, so no per-syllable
-            // overrides apply — only the project dictionary + auto path.
-            clip_id: None,
         },
     )
 }
@@ -220,14 +217,12 @@ struct VocalRenderRequest {
     /// `(placement_id, section_start_sample)` for every placement.
     placement_starts: Vec<(u64, u64)>,
     clip_name: String,
-    /// The clip being re-rendered, if any — the source of per-syllable
-    /// pronunciation overrides.
-    clip_id: Option<resonance_audio::types::ClipId>,
 }
 
-/// Shared off-thread vocal render path: plan, tear down the prior audio,
-/// bump the in-flight epoch (stale-result protection against back-to-back
-/// presses), then spawn the SVS pipeline on a blocking thread. The two
+/// Shared off-thread vocal render path: plan, check the lane's bank is
+/// installed, tear down the prior audio, bump the in-flight epoch
+/// (stale-result protection against back-to-back presses), then spawn
+/// the SVS pipeline on a blocking thread. The two
 /// callers — `roll_vocal_melody` (full regenerate) and
 /// `rerender_vocal_audio` (notes-only) — differ only in how they produce
 /// `midi_notes` and `lyrics`; everything after that is identical, so it
@@ -237,13 +232,31 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
     // voicebank *before* touching the existing audio. A blocked phoneme
     // aborts the render with a report and leaves the current clip intact
     // rather than corrupting the segment. (#494)
-    let plan = match plan_render(r, &req) {
+    // The lane's bank, as the registry knows it now. A bank that is not
+    // installed still plans (the built-in table answers for it), so a
+    // blocked phoneme is reported first; the missing bank right after.
+    let bank = r.voicebanks.profile(&req.params.voicebank);
+    let plan = match plan_render(r, &req, &bank) {
         Ok(plan) => plan,
         Err(message) => {
             r.compose.last_error = Some(message);
             return Task::none();
         }
     };
+    // A bank (or vocoder) that is not installed fails here, before the
+    // tear-down, like a blocked phoneme: the render job would only find
+    // it missing after the old audio was gone, leaving the lane silent.
+    if let Err(missing) = render_target_or_missing(r, &req.params, &bank) {
+        let message = missing.to_string();
+        r.control.jobs.fail_vocal_lane(
+            req.definition_id,
+            req.track_id,
+            message.clone(),
+            Some(crate::compose::vocal_svs::VocalRenderErrorKind::VoicebankMissing),
+        );
+        r.compose.last_error = Some(message);
+        return Task::none();
+    }
 
     tear_down_old_vocal_audio(r, req.definition_id, req.track_id);
     let render_epoch = bump_render_epoch(r, req.definition_id, req.track_id);
@@ -267,7 +280,9 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
         dest_dir: vocal_audio_io::vocal_audio_dir(r.io.project_path.as_deref()),
         render_cache: render_cache_for(r, req.definition_id, req.track_id),
         midi_notes: req.midi_notes,
+        install_dir: r.voicebanks.user_bank_dir(bank.id().as_str()),
         params: req.params,
+        bank,
     };
     let bpm = job.bpm;
     spawn_render(
@@ -282,22 +297,62 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
     )
 }
 
+/// What a render of `params` with `bank` would load, or what is missing —
+/// with the user voicebank folder named, as the control pre-check and the
+/// render job name it.
+pub(crate) fn render_target_or_missing(
+    r: &crate::Resonance,
+    params: &resonance_music_theory::VocalParams,
+    bank: &crate::compose::vocal_svs::BankProfile,
+) -> Result<crate::compose::vocal_svs::RenderTarget, crate::compose::vocal_svs::VoicebankMissing> {
+    let install_dir = r.voicebanks.user_bank_dir(bank.id().as_str());
+    bank.render_target(params.speaker.as_deref(), params.voice, install_dir)
+}
+
+/// Whether the banner showing is the lane's missing-bank message, raised
+/// by a render skipped because its bank (or vocoder) is not installed.
+pub(super) fn banner_is_missing_bank(
+    r: &crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+) -> bool {
+    let Some(banner) = r.compose.last_error.as_deref() else {
+        return false;
+    };
+    let Some(LaneGeneratorKind::Vocal(params)) = r
+        .compose
+        .find_definition(definition_id)
+        .and_then(|d| d.lane_generators.get(&track_id))
+        .map(|c| &c.kind)
+    else {
+        return false;
+    };
+    let bank = r.voicebanks.profile(&params.voicebank);
+    render_target_or_missing(r, params, &bank).is_err_and(|m| m.to_string() == banner)
+}
+
 /// Adapter from app state to the pure planner: pulls the lane's
 /// pronunciation overrides and project dictionary, the tempo map and the
 /// engine rate out of `r` and hands them over.
 fn plan_render(
     r: &crate::Resonance,
     req: &VocalRenderRequest,
+    bank: &crate::compose::vocal_svs::BankProfile,
 ) -> Result<VocalRenderPlan, String> {
+    // Per-syllable overrides belong to the lane, not its clip, so a fresh
+    // roll keeps them too; one whose syllable's text changed is dropped
+    // by the resolver.
     let empty = std::collections::HashMap::new();
-    let overrides = req
-        .clip_id
-        .and_then(|c| r.compose.pronunciation.clip_overrides(c))
+    let overrides = r
+        .compose
+        .pronunciation
+        .lane_overrides(req.definition_id, req.track_id)
         .unwrap_or(&empty);
     plan::plan_vocal_render(plan::VocalRenderPlanInputs {
         tempo_map: &r.tempo_map,
         engine_sample_rate: r.sample_rate,
         params: &req.params,
+        bank,
         annotations: &req.lyrics,
         midi_notes: &req.midi_notes,
         placement_starts: &req.placement_starts,
@@ -373,7 +428,9 @@ fn spawn_render(
         async move {
             tokio::task::spawn_blocking(move || job.run())
                 .await
-                .unwrap_or_else(|join_err| Err(format!("vocal render task join: {join_err}")))
+                .unwrap_or_else(|join_err| {
+                    Err(format!("vocal render task join: {join_err}").into())
+                })
         },
         move |result| match result {
             Ok(Some((wav_path, trim_start, trim_end))) => Message::Compose(
@@ -399,7 +456,8 @@ fn spawn_render(
                 definition_id,
                 track_id,
                 render_epoch,
-                error,
+                kind: error.kind(),
+                error: error.to_string(),
             }),
         },
     )
@@ -486,9 +544,6 @@ pub(super) fn rerender_vocal_audio(
             params,
             placement_starts,
             clip_name,
-            // Re-rendering an existing clip: its per-syllable pronunciation
-            // overrides (if any) apply on top of the dictionary + auto path.
-            clip_id: Some(clip_id),
         },
     )
 }

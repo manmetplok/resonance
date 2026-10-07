@@ -222,3 +222,58 @@ fn vocal_rail_lyrics_and_draft_folded() {
         TALL_WINDOW,
     );
 }
+
+/// 4. **vocal rail, installed bank** — with a multi-speaker bank installed
+///    (a config-only TIGER stand-in) and picked, the Voice & delivery card
+///    shows the Voicebank picker on its name and a Speaker picker on the
+///    lane's default mode (Disco for an alto lane). The not-installed
+///    state is the folded-draft golden above (`lilia (not installed)`).
+#[test]
+fn vocal_rail_installed_bank_with_speakers() {
+    use resonance_app::compose::messages::LaneInspectorMsg;
+
+    let mut app = build_app();
+    app.test_install_voicebank("tiger", &resonance_app::VoicebankFixture::shipped("tiger"));
+    let vocal_track_id = app
+        .track_registry()
+        .tracks
+        .iter()
+        .find(|t| {
+            matches!(t.track_type, resonance_audio::types::TrackType::Vocal)
+                && t.sub_track.is_none()
+        })
+        .map(|t| t.id)
+        .expect("demo seeds a vocal track");
+    let _ = app.update(Message::Compose(ComposeMessage::SelectLane(
+        SelectedLane::Instrument(vocal_track_id),
+    )));
+    let definition_id = app
+        .compose_state()
+        .selected_placement()
+        .expect("demo selects a placement")
+        .definition_id;
+    let _ = app.update(Message::Compose(ComposeMessage::LaneInspector {
+        definition_id,
+        track_id: vocal_track_id,
+        msg: LaneInspectorMsg::SetVocalVoicebank(resonance_music_theory::VoicebankId::new(
+            "tiger",
+        )),
+    }));
+
+    fold(&mut app, RailPanelKey::VocalLyrics(vocal_track_id));
+    fold(&mut app, RailPanelKey::VocalDraft(vocal_track_id));
+    fold(&mut app, RailPanelKey::VocalMelody(vocal_track_id));
+
+    // The pickers draw their selection themselves (not as a findable text
+    // widget), so the state they show is asserted on the lane.
+    assert_eq!(
+        app.test_vocal_voicebank(definition_id, vocal_track_id),
+        Some(resonance_music_theory::VoicebankId::new("tiger"))
+    );
+
+    snapshot_to_window(
+        &app,
+        "tests/snapshots/compose_vocal_rail_installed_bank.png",
+        TALL_WINDOW,
+    );
+}

@@ -388,7 +388,9 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             track_id,
             seed,
             lyrics,
-        } => return control_generate_vocal(r, definition_id, track_id, seed, lyrics),
+        } => {
+            return vocal_control::control_generate_vocal(r, definition_id, track_id, seed, lyrics)
+        }
         ComposeMessage::ControlSetVocalLyrics {
             definition_id,
             track_id,
@@ -404,10 +406,10 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
                 vocal_control::control_set_line(r, definition_id, track_id, line_index, &text);
         }
         ComposeMessage::ControlSetPronunciation { word, phonemes } => {
-            control_set_pronunciation(r, word, phonemes);
+            vocal_control::control_set_pronunciation(r, word, phonemes);
         }
         ComposeMessage::ControlClearPronunciation { word } => {
-            control_clear_pronunciation(r, &word);
+            vocal_control::control_clear_pronunciation(r, &word);
         }
         ComposeMessage::ControlRenderVocal {
             definition_id,
@@ -585,6 +587,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             track_id,
             render_epoch,
             error,
+            kind,
         } => {
             // Same epoch gate as the success path: a failure from a
             // superseded render is moot — a newer render for the lane is
@@ -600,7 +603,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             if current {
                 r.control
                     .jobs
-                    .fail_vocal_lane(definition_id, track_id, error.clone());
+                    .fail_vocal_lane(definition_id, track_id, error.clone(), Some(kind));
                 r.compose.last_error = Some(error);
             }
             vocal_audio_install::settle_render_event(
@@ -616,19 +619,14 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             track_id,
             render_epoch,
         } => {
-            // No voicebank: the lane plays its MIDI, which is the silent
-            // fallback, so no `last_error` banner. A job waiting on the
-            // lane asked for audio that is not coming, so it fails with
-            // the reason; a stale epoch settles like any stale event.
+            // No notes, nothing sung: no banner. A job waiting on the lane
+            // asked for audio that is not coming, so it fails with the
+            // reason; a stale epoch settles like any stale event.
             let current = render_epoch
                 == vocal_audio_install::current_render_epoch(r, definition_id, track_id);
             if current {
-                r.control.jobs.fail_vocal_lane(
-                    definition_id,
-                    track_id,
-                    "no SVS voicebank is installed, so the vocal lane plays its MIDI \
-                     notes only; install a voicebank to render sung audio",
-                );
+                let reason = "the vocal lane has no notes to sing";
+                r.control.jobs.fail_vocal_lane(definition_id, track_id, reason, None);
             }
             vocal_audio_install::settle_render_event(
                 r,
@@ -742,90 +740,6 @@ pub(crate) fn control_set_lane_generator(
         }
         r.compose.last_error = None;
     }
-}
-
-/// `vocal.generate` (ba doc #269 FR-2): generate a vocal lane's melody
-/// into its derived clip, optionally rolling fresh lyrics first.
-///
-/// Reuses the exact paths the lane inspector's generate buttons drive,
-/// so material produced over the wire matches the GUI's:
-/// `roll_vocal_lyrics` + `roll_vocal_melody` for the full generate, and
-/// `roll_vocal_melody` alone for melody-only.
-///
-/// `lyrics = false` leaves an existing draft alone — generation writes
-/// both melody and lyrics from the lane's theme brief by default, which
-/// would silently discard lyrics a client had just written.
-///
-/// An explicit `seed` is installed on the lane config before generating
-/// (reproducible); `None` bumps it, as the GUI buttons do, so repeated
-/// calls give new material.
-pub(crate) fn control_generate_vocal(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: resonance_audio::types::TrackId,
-    seed: Option<u64>,
-    lyrics: bool,
-) -> Task<Message> {
-    if let Some(seed) = seed {
-        if let Some(cfg) = r
-            .compose
-            .find_definition_mut(definition_id)
-            .and_then(|d| d.lane_generators.get_mut(&track_id))
-        {
-            cfg.seed = seed;
-        }
-    }
-    if lyrics {
-        // Seed already pinned above when explicit: use it as given
-        // (VIEW-35 — `bump_seed` always moves, even with mix 0).
-        let mix = if seed.is_some() { None } else { Some(0xBF58476D1CE4E5B9) };
-        vocal_render::draft_vocal_lyrics(r, definition_id, track_id, mix);
-        vocal_lyrics::sync_bulk_lyrics_from_draft(r, definition_id, track_id);
-    }
-    if seed.is_none() {
-        if let Some(cfg) = r
-            .compose
-            .find_definition_mut(definition_id)
-            .and_then(|d| d.lane_generators.get_mut(&track_id))
-        {
-            cfg.seed = crate::util::bump_seed(cfg.seed, 0x94D049BB133111EB);
-        }
-    }
-    let task = vocal_render::roll_vocal_melody(r, definition_id, track_id);
-    r.compose.last_error = None;
-    task
-}
-
-/// `vocal.set_pronunciation`: set (or replace) a per-word override in
-/// the project pronunciation dictionary. Phonemes are already
-/// canonicalised. Word match is case-insensitive (the dictionary key is
-/// the cleaned, lowercased spelling).
-fn control_set_pronunciation(
-    r: &mut crate::Resonance,
-    word: String,
-    phonemes: Vec<&'static str>,
-) {
-    use crate::compose::vocal_svs::{clean_word, DictionaryEntry, DictionaryScope};
-    let key = clean_word(&word);
-    let dict = &mut r.compose.pronunciation.project_dictionary;
-    dict.retain(|e| e.word != key);
-    dict.push(DictionaryEntry::from_canonical(
-        &word,
-        phonemes,
-        DictionaryScope::Project,
-    ));
-    r.compose.last_error = None;
-}
-
-/// `vocal.clear_pronunciation`: remove a per-word project override.
-fn control_clear_pronunciation(r: &mut crate::Resonance, word: &str) {
-    use crate::compose::vocal_svs::clean_word;
-    let key = clean_word(word);
-    r.compose
-        .pronunciation
-        .project_dictionary
-        .retain(|e| e.word != key);
-    r.compose.last_error = None;
 }
 
 /// Ensure the bulk-lyrics text-editor buffer exists for the currently

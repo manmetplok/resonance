@@ -28,7 +28,11 @@ impl ResonanceMcp {
                        has chords. section_id picks the lane; seed makes the result \
                        reproducible. Pass lyrics: false to keep lyrics you wrote with \
                        vocal_set_lyrics — the default regenerates them. Returns the clip_id to \
-                       inspect with song_notes and edit with notes_*, then vocal_render.",
+                       inspect with song_notes and edit with notes_*, then vocal_render. When \
+                       the lane's voicebank is not installed the melody is still generated \
+                       and render_error {kind: voicebank_missing, message} says so; pick an \
+                       installed bank (vocal_voicebanks) with vocal_set_params, then \
+                       vocal_render.",
         annotations(destructive_hint = false, idempotent_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<vocal::GenerateResult>()
     )]
@@ -66,11 +70,14 @@ impl ResonanceMcp {
                        fields to change in params (the vocal_get_params field names, enums in \
                        snake_case, e.g. style \"pop_ballad\", pov \"first_singular\", voice \
                        \"mezzo_soprano\", range {low: 55, high: 77}); everything else is kept. \
-                       voicebank is \"tiger\", \"lilia\" (the default) or \"meiji\"; switching \
-                       it resets speaker to that bank's default unless the same patch sets \
-                       speaker (tiger: glam, fresh, disco, royal, electric, mystic, vinyl; \
-                       meiji: standard, hunter, lilith, phantom; lilia has one voice and \
-                       refuses a speaker). The merged result is validated before anything \
+                       voicebank is an id from vocal_voicebanks (an installed bank) or one of \
+                       \"tiger\", \"lilia\" (the default), \"meiji\"; any other id, or a bank \
+                       that cannot sing English, is refused. Switching it resets speaker to \
+                       that bank's default unless the same patch sets speaker (one of the \
+                       bank's speakers ids from vocal_voicebanks — tiger: glam, fresh, disco, \
+                       royal, electric, mystic, vinyl; meiji: standard, hunter, lilith, \
+                       phantom; lilia has one voice and refuses a speaker). The merged \
+                       result is validated before anything \
                        changes and a bad value is rejected naming the field (0..1 sliders, \
                        tension -1..1, vibrato_rate 1..20 Hz, portamento_ms 0..500, \
                        syllables_min <= syllables_max, range.low < range.high). One undo step; \
@@ -178,6 +185,27 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "List the voicebanks installed on this machine (the user's voicebank \
+                       folder, not part of the project, so no project needs to be open): per \
+                       bank its id (what vocal_set_params takes as voicebank), name, version, \
+                       english (false banks are refused — lyrics are English), speakers (the \
+                       ids speaker takes; empty for a single-voice bank) with default_speaker, \
+                       comfortable_range {low, high, range_source: builtin | default} per \
+                       bank and per speaker, missing_phonemes and the substitutions they are \
+                       sung as, curves (which of dynamics, tension, breathiness, pitch_bend \
+                       reach the model — a curve the bank lacks does nothing), credit, \
+                       terms_url and commercial (free_with_credit | paid | permission) — tell \
+                       the user the credit line when you use a bank — and vocoder with \
+                       vocoder_installed. available is empty for now. Rescans the folders on \
+                       every call, so a bank dropped in shows up. Read-only.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<vocal::VoicebankList>()
+    )]
+    async fn vocal_voicebanks(&self) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(vocal::VOICEBANKS, &()).await
+    }
+
+    #[tool(
         description = "Render the singing voice (SVS): it synthesises the notes currently in \
                        the target lane's MIDI clip and never changes them, so author with \
                        vocal_generate + notes_* first and render last. Scope widens as you \
@@ -188,8 +216,10 @@ impl ResonanceMcp {
                        enough — a per-lane loop is not needed. Lanes that cannot render (no \
                        notes or no lyrics) are skipped rather than failing the batch. \
                        Omit voicebank to render each lane with the bank it already has (set \
-                       it with vocal_set_params); passing one (tiger, lilia, meiji) stores it \
-                       on every lane the call covers. \
+                       it with vocal_set_params); passing one (an id from vocal_voicebanks) \
+                       stores it on every lane the call covers. A lane whose bank or vocoder \
+                       is not installed fails the whole call with voicebank_missing, naming \
+                       the bank, before anything renders. \
                        Caution: song_vocal's render_state reports `rendered` when ANY lane \
                        on the track has audio, so it is not proof that every lane is \
                        current. Runs as a job — this tool waits up \

@@ -7,6 +7,8 @@
 
 #[path = "g2p_apis/lyric_markers.rs"]
 mod lyric_markers;
+#[path = "g2p_apis/bank_dictionary.rs"]
+mod bank_dictionary;
 
 use std::collections::HashMap;
 

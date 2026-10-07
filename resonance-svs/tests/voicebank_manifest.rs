@@ -618,3 +618,70 @@ fn real_meiji_has_four_singers() {
     assert!(m.supports_curve(ExpressionCurve::Tension));
     assert!(m.supports_curve(ExpressionCurve::Breathiness));
 }
+
+// ---------------------------------------------------------------------------
+// Registry-facing layout facts (vocal-mcp-control-and-quality.md §4.2–4.4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn finds_an_acoustic_config_two_levels_down_with_its_named_languages_file() {
+    // Gahata Meiji's layout: configs/configs/dsconfig.yaml naming
+    // ../../files/languages.json, and a bundled dsvocoder next to it.
+    let dir = fresh_dir("two_levels");
+    write(
+        &dir,
+        "configs/configs/dsconfig.yaml",
+        "phonemes: ../../files/phonemes.txt\nacoustic: ../../files/acoustic.onnx\n\
+         languages: ../../files/languages.json\nvocoder: dsvocoder\nuse_lang_id: true\n",
+    );
+    write(&dir, "files/phonemes.txt", "AP\nSP\nen/ah\n");
+    write(&dir, "files/languages.json", r#"{"en": 3}"#);
+    write(&dir, "configs/configs/dsvocoder/vocoder.yaml", "name: v\nmodel: v.onnx\n");
+    write(&dir, "configs/configs/dsdur/dsdict-en.yaml", "entries: []\n");
+    write(&dir, "configs/configs/character.txt", "name=Two Levels\nversion=v170\n");
+
+    let m = scan(&dir).expect("found two levels down");
+    assert!(m.acoustic_config.ends_with("configs/configs/dsconfig.yaml"));
+    assert_eq!(m.languages.get("en"), Some(&3), "read from the config's path");
+    assert_eq!(m.language_id("ah"), Some(3));
+    assert!(m.vocoder_config.unwrap().ends_with("configs/configs/dsvocoder/vocoder.yaml"));
+    assert_eq!(m.details.vocoder_name, "dsvocoder");
+    assert_eq!(m.details.name.as_deref(), Some("Two Levels"));
+    assert_eq!(m.details.version.as_deref(), Some("v170"));
+    assert!(m.details.english_dict.unwrap().ends_with("dsdur/dsdict-en.yaml"));
+}
+
+#[test]
+fn a_shared_vocoder_is_found_by_folder_or_by_name() {
+    use resonance_svs::voicebank::layout::{find_library_vocoder, installed_vocoder_name};
+    let lib = fresh_dir("vocoder_library");
+    write(&lib, "nsf_2024/vocoder.yaml", "name: nsf_2024\nmodel: m.onnx\n");
+    write(&lib, "other-folder/vocoder.yaml", "name: pc_nsf_2025\nmodel: m.onnx\n");
+    write(&lib, "other-folder/m.onnx", "");
+    assert!(find_library_vocoder(&lib, "nsf_2024").is_some(), "by folder");
+    let by_name = find_library_vocoder(&lib, "pc_nsf_2025").expect("by its name");
+    assert_eq!(installed_vocoder_name(&by_name).as_deref(), Some("pc_nsf_2025"));
+    // A config whose model file is absent is not an installed vocoder.
+    let no_model = find_library_vocoder(&lib, "nsf_2024").unwrap();
+    assert_eq!(installed_vocoder_name(&no_model), None);
+    assert!(find_library_vocoder(&lib, "missing").is_none());
+}
+
+#[test]
+fn dsdict_entries_parse_tolerantly() {
+    use resonance_svs::voicebank::dsdict::parse_dsdict;
+    let entries = parse_dsdict(
+        "symbols:\n- {symbol: aa, type: vowel}\nentries:\n\
+         - {grapheme: the, phonemes: [dh, ax]}\n\
+         - {grapheme: no, phonemes: [n, ow]}\n\
+         - {grapheme: universe, phonemes: [j, uw, n, ih, w , er, s]}\n\
+         - {grapheme: broken}\n\
+         - {phonemes: [a]}\n\
+         replacements:\n- {from: a, to: b}\n",
+    )
+    .expect("parses");
+    let words: Vec<&str> = entries.iter().map(|e| e.grapheme.as_str()).collect();
+    assert_eq!(words, ["the", "no", "universe"], "malformed rows are skipped");
+    assert_eq!(entries[2].phonemes.len(), 7);
+    assert!(parse_dsdict("symbols: []\n").unwrap().is_empty());
+}

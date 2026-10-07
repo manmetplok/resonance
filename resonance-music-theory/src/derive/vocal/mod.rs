@@ -21,7 +21,7 @@ pub use lyrics::{generate_lyrics, lyric_corpus_lines, LyricLine};
 pub use melody::{count_syllables, vocal_phrase_spans};
 pub use params::{
     SyllableMode, VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov,
-    VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
+    VocalRhymeScheme, VocalStyle, VocalTimbre, VoicebankId,
     VoiceType,
 };
 

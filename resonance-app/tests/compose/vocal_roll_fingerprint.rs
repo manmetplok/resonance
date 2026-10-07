@@ -7,7 +7,7 @@ use resonance_app::compose::ChordState;
 use resonance_app::state::MidiClipState;
 use resonance_app::view::compose::vocal_roll::{VocalRollCanvas, VocalRollState};
 use resonance_audio::types::MidiNote;
-use resonance_music_theory::{Chord, ChordQuality, PitchClass, VocalParams, VocalVoicebank};
+use resonance_music_theory::{Chord, ChordQuality, PitchClass, VocalParams, VoicebankId};
 
 fn clip() -> MidiClipState {
     MidiClipState {
@@ -49,6 +49,9 @@ fn canvas<'a>(
         clip,
         track_id: 3,
         params,
+        bank: resonance_app::compose::vocal_svs::BankProfile::not_installed(
+            params.voicebank.as_str(),
+        ),
         chords,
         section_beats: 16,
         scroll_y: 0.0,
@@ -100,11 +103,11 @@ fn voicebank_change_invalidates() {
     let c = clip();
     let ch = chords(ChordQuality::Maj);
     let tiger = VocalParams {
-        voicebank: VocalVoicebank::Tiger,
+        voicebank: VoicebankId::new("tiger"),
         ..VocalParams::default()
     };
     let lilia = VocalParams {
-        voicebank: VocalVoicebank::Lilia,
+        voicebank: VoicebankId::new("lilia"),
         ..VocalParams::default()
     };
     let state = VocalRollState::default();
@@ -113,4 +116,42 @@ fn voicebank_change_invalidates() {
         canvas(&c, &lilia, &ch, "alto").fingerprint(&state),
         "switching voicebank must repaint the phoneme strip"
     );
+}
+
+/// A rescan that installs or changes the lane's bank changes what the
+/// phoneme strip reads (the bank's dictionary, its spellings) with the
+/// params untouched, so it must repaint; a rescan that changes nothing
+/// must not.
+#[test]
+fn a_rescan_that_changes_the_bank_invalidates() {
+    use resonance_app::VoicebankFixture;
+    let (c, ch) = (clip(), chords(ChordQuality::Maj));
+    let lilia = VocalParams {
+        voicebank: VoicebankId::new("lilia"),
+        ..VocalParams::default()
+    };
+    let state = VocalRollState::default();
+    let (mut app, _task) = resonance_app::Resonance::new_for_test();
+    let print = |app: &resonance_app::Resonance| {
+        let mut canvas = canvas(&c, &lilia, &ch, "alto");
+        canvas.bank = app.test_voicebank_profile("lilia");
+        canvas.fingerprint(&state)
+    };
+
+    let missing = print(&app);
+    app.test_install_voicebank("lilia", &VoicebankFixture::shipped("lilia"));
+    let installed = print(&app);
+    assert_ne!(missing, installed, "installing the bank repaints");
+
+    app.test_rescan_voicebanks();
+    assert_eq!(print(&app), installed, "an unchanged rescan does not");
+
+    app.test_install_voicebank(
+        "lilia",
+        &VoicebankFixture {
+            english_dict: vec![("sun".to_owned(), vec!["s".to_owned(), "aa".to_owned()])],
+            ..VoicebankFixture::shipped("lilia")
+        },
+    );
+    assert_ne!(print(&app), installed, "a bank that gained a dictionary repaints");
 }

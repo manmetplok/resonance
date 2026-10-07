@@ -80,6 +80,9 @@ impl Saved {
         app.test_set_active_project(true);
         app.test_replay_loaded_project_from(self.loaded());
         app.test_set_project_path(self.project_dir.clone());
+        // A render past the bank check is what tears the loaded clip down
+        // (a missing bank keeps it); the job itself never runs here.
+        app.test_install_shipped_voicebanks();
         app
     }
 }

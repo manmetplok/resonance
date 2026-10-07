@@ -807,7 +807,7 @@ fn build_beatmaking() -> BuiltinProject {
 /// a real Compose vocal line instead of an empty staff.
 fn build_vocal_songwriting() -> BuiltinProject {
     use resonance_music_theory::{
-        Chord, ChordQuality, Mode, PitchClass, Scale, TimedChord, VocalParams, VocalVoicebank,
+        Chord, ChordQuality, Mode, PitchClass, Scale, TimedChord, VocalParams, VoicebankId,
     };
 
     const VOCAL_TRACK: u64 = 1;
@@ -850,7 +850,7 @@ fn build_vocal_songwriting() -> BuiltinProject {
 
     // ---- Vocal lane generator on the Lilia voicebank ----
     let vocal_params = VocalParams {
-        voicebank: VocalVoicebank::Lilia,
+        voicebank: VoicebankId::new("lilia"),
         ..VocalParams::default()
     };
     let mut lane_generators = HashMap::new();

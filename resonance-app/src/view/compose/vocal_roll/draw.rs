@@ -52,7 +52,21 @@ impl VocalRollCanvas<'_> {
         // remaps the phoneme strip's symbols (VIEW-31).
         let mut mh = std::collections::hash_map::DefaultHasher::new();
         self.voice_label.hash(&mut mh);
-        <&'static str>::from(self.params.voicebank).hash(&mut mh);
+        self.params.voicebank.hash(&mut mh);
+        self.params.speaker.hash(&mut mh);
+        // Which bank answers for that id: a rescan that installs, replaces
+        // or removes it changes the strip's dictionary readings and
+        // spellings with the params unchanged. An unchanged bank keeps its
+        // `Arc` across rescans (and its stamp), so this only moves when
+        // the bank did.
+        match self.bank.installed() {
+            Some(bank) => {
+                std::ptr::from_ref(bank).hash(&mut mh);
+                bank.version.hash(&mut mh);
+                bank.stamp.hash(&mut mh);
+            }
+            None => "not installed".hash(&mut mh),
+        }
         let (lo, hi) = self.params.range;
         VocalRollFingerprint {
             clip_id: self.clip.id,
@@ -89,7 +103,12 @@ impl VocalRollCanvas<'_> {
         // helper drives the SVS pipeline, so the lyric labels on
         // note bodies and the phoneme strip are guaranteed to match
         // what the engine will sing.
-        let resolved = g2p::resolve_draft(self.params.draft.as_slice());
+        let bank_dictionary = self.bank.dictionary();
+        let layers = g2p::DictionaryLayers {
+            project: &g2p::PhonemeDictionary::new(),
+            bank: bank_dictionary.as_deref(),
+        };
+        let resolved = g2p::resolve_draft_with_layers(self.params.draft.as_slice(), layers);
         let assigned =
             g2p::assign_syllables_to_notes(&resolved, self.lyrics, self.clip.notes.len());
 

@@ -121,6 +121,7 @@ pub(super) fn settle_render_event(
             track_id,
             "the vocal render was discarded: the project changed under it \
              (undo, project load, or the lane was removed) before it finished",
+            None,
         );
     }
 }

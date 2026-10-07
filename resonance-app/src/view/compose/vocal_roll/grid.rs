@@ -198,7 +198,7 @@ impl VocalRollCanvas<'_> {
         // (unsupported) voiced `v`. Same source of truth `build_segment`
         // substitutes through, so the strip and the render never disagree
         // (design #173).
-        let voicebank = VoicebankPhonemes::new(self.params.voicebank);
+        let voicebank = VoicebankPhonemes::new(&self.bank);
         for (i, n) in self.clip.notes.iter().enumerate() {
             let Some(a) = assigned.get(i) else { break };
             if a.phonemes.is_empty() {

@@ -189,6 +189,11 @@ impl crate::Resonance {
                     }
                     _ => None,
                 };
+                let vocal = crate::state::ui_caches::VocalRailContext {
+                    tempo_warning: vocal_tempo_warning,
+                    voicebanks: self.ui.view_caches.voicebank_choices.clone(),
+                    missing_voicebanks: self.ui.view_caches.missing_voicebank_choices.clone(),
+                };
                 // The rail is `lazy` (UX-10): the Compose tab repaints at the
                 // 16 ms playback tick, and nothing in the rail moves with the
                 // playhead. Its key is a revision over an owned snapshot of
@@ -214,7 +219,7 @@ impl crate::Resonance {
                         &self.table_registry,
                         Some(content),
                         &self.compose.collapsed_rail_panels,
-                        vocal_tempo_warning,
+                        &vocal,
                     ),
                     None => {
                         let revision = self.ui.view_caches.compose_rail.revision(
@@ -232,7 +237,7 @@ impl crate::Resonance {
                                 drum_patterns: self.compose.drum_patterns.clone(),
                                 clip_id_for_drum,
                                 collapsed_panels: self.compose.collapsed_rail_panels.clone(),
-                                vocal_tempo_warning,
+                                vocal: vocal.clone(),
                             },
                         );
                         iced::widget::lazy(revision, move |_| -> Element<'static, Message> {
@@ -247,7 +252,7 @@ impl crate::Resonance {
                                 &self.table_registry,
                                 None,
                                 &self.compose.collapsed_rail_panels,
-                                vocal_tempo_warning,
+                                &vocal,
                             )
                         })
                         .into()

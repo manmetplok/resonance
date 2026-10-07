@@ -21,7 +21,7 @@ use resonance_audio::types::{InputDeviceInfo, ScannedPlugin};
 use crate::state::picks::{
     bank_choices, device_choices, input_channel_choices, midi_choices_base,
     output_channel_choices, output_choices_for, program_choices, BankChoice, DevicePresetChoice,
-    MidiChannelChoice, MidiPickerChoice, OutputChoice, ProgramChoice,
+    MidiChannelChoice, MidiPickerChoice, OutputChoice, ProgramChoice, VoicebankChoice,
 };
 use crate::state::BusState;
 
@@ -64,6 +64,13 @@ pub(crate) struct UiViewCaches {
     /// the External-Instrument inspector's device-preset picker (epic #40).
     /// Rebuilt only when the device registry changes (startup today).
     pub device_choices: Rc<[DevicePresetChoice]>,
+    /// The vocal inspector's Voicebank picker: the installed English
+    /// banks. Rebuilt whenever the voicebank registry is rescanned
+    /// (`Resonance::rescan_voicebanks`).
+    pub voicebank_choices: Rc<[VoicebankChoice]>,
+    /// The picker's selection for a lane on a built-in bank that is not
+    /// installed, one per such bank; rebuilt with `voicebank_choices`.
+    pub missing_voicebank_choices: Rc<[VoicebankChoice]>,
     /// Revision memo keying the Compose right rail's `lazy` (UX-10).
     pub compose_rail: RevisionMemo<ComposeRailInputs>,
 }
@@ -93,6 +100,8 @@ impl Default for UiViewCaches {
             // valid option before the registry is scanned; `Resonance::new`
             // rebuilds it from the bundled + user definitions at startup.
             device_choices: Rc::from(device_choices(&[])),
+            voicebank_choices: Rc::from(Vec::<VoicebankChoice>::new()),
+            missing_voicebank_choices: Rc::from(Vec::<VoicebankChoice>::new()),
             compose_rail: RevisionMemo::default(),
         }
     }
@@ -114,6 +123,23 @@ impl UiViewCaches {
     /// Rebuild the device-preset picker options off the device registry's
     /// current `list()`. Call after the registry is (re-)scanned; today the
     /// registry is built once at startup.
+    /// Rebuild the Voicebank picker's options from `registry`. An
+    /// unchanged list keeps its `Rc`, so the Compose rail's memo sees no
+    /// change.
+    pub fn rebuild_voicebank_choices(
+        &mut self,
+        registry: &crate::compose::vocal_svs::VoicebankRegistry,
+    ) {
+        let choices = crate::state::picks::voicebank_choices(registry);
+        if *self.voicebank_choices != *choices {
+            self.voicebank_choices = Rc::from(choices);
+        }
+        let missing = crate::state::picks::missing_voicebank_choices(registry);
+        if *self.missing_voicebank_choices != *missing {
+            self.missing_voicebank_choices = Rc::from(missing);
+        }
+    }
+
     pub fn rebuild_device_choices(&mut self, defs: &[&resonance_common::DeviceDefinition]) {
         self.device_choices = Rc::from(device_choices(defs));
     }
@@ -268,5 +294,17 @@ pub(crate) struct ComposeRailInputs {
     /// Set equality is order-independent, so iteration order can't fake
     /// a change.
     pub collapsed_panels: std::collections::HashSet<crate::compose::RailPanelKey>,
-    pub vocal_tempo_warning: Option<crate::compose::VocalTempoMismatch>,
+    pub vocal: VocalRailContext,
+}
+
+/// What a vocal lane's rail reads beyond the section definition: the
+/// tempo-mismatch warning (FU-M11b) and the Voicebank picker's options
+/// (compared by content, so an unchanged rescan keeps the rail cached).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct VocalRailContext {
+    pub tempo_warning: Option<crate::compose::VocalTempoMismatch>,
+    pub voicebanks: Rc<[VoicebankChoice]>,
+    /// The selection shown for a lane on a built-in bank that is not
+    /// installed ([`UiViewCaches::missing_voicebank_choices`]).
+    pub missing_voicebanks: Rc<[VoicebankChoice]>,
 }

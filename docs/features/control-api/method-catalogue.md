@@ -1,11 +1,11 @@
 # Control method catalogue
 
-> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
+> Verified against master @ `cb3b1d6a` + voicebank registry (vocal slices 4–5) on 2026-10-07.
 > Source of truth: `resonance_control::methods::capabilities()` and each
 > method constant's doc comment in `resonance-control/src/methods/*.rs`.
 
 Every control method the app implements, the MCP tool that exposes it,
-and the feature area that owns it. 184 methods, 184 tools. The MCP tool
+and the feature area that owns it. 185 methods, 185 tools. The MCP tool
 is always the method name with its first `.` replaced by `_`; in Claude
 Code it is `mcp__resonance__<tool>`.
 
@@ -189,6 +189,7 @@ area; the sibling areas may refine it.
 | `vocal.generate` | `vocal_generate` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | generate a vocal lane's melody (and lyrics) into its derived clip |
 | `vocal.get_params` | `vocal_get_params` | read | [compose](../compose/vocal-lyrics-and-melody.md) | read a vocal lane's full settings and seed |
 | `vocal.set_params` | `vocal_set_params` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | merge a partial patch into a vocal lane's settings |
+| `vocal.voicebanks` | `vocal_voicebanks` | read | [compose](../compose/vocal-rendering.md) | list the installed voicebanks and what each can do (no project needed) |
 | `render.mixdown` | `render_mixdown` | job | [audio-engine](../audio-engine/offline-render-and-export.md) | bounce the master mix to a WAV file |
 | `meter.measure` | `meter_measure` | job | [mixer](../mixer/meter-control-api.md) | measure one slice of the mix |
 | `meter.stems` | `meter_stems` | job | [mixer](../mixer/meter-control-api.md) | measure every track plus the master in one pass |

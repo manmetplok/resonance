@@ -163,6 +163,36 @@ impl Reconcile for ComposeSections {
     }
 }
 
+/// The project pronunciation dictionary and per-syllable overrides
+/// (BUG-50), replaced wholesale from the file — on a disk load and on
+/// every undo/redo alike, so a `vocal.set_pronunciation` survives both and
+/// undoing one takes it back. App-side only; the engine never sees it.
+///
+/// **Origin rule.** A disk load drops the overrides whose section
+/// definition or track the file no longer holds. Deleting a lane leaves
+/// its overrides in the live state (an undo of the delete must bring them
+/// back with it), so a save writes them out; reloaded as-is, they would
+/// wake up on whatever lane next reuses the freed id — a new vocal track
+/// takes the highest id back. Undo/redo keeps them for the same reason
+/// the live state does.
+pub(crate) struct Pronunciation;
+
+impl Reconcile for Pronunciation {
+    const NAME: &'static str = "pronunciation";
+
+    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+        let pronunciation = &mut r.compose.pronunciation;
+        pronunciation.restore_from_project(&new.pronunciation);
+        if !ctx.origin.after_clear_all() {
+            return;
+        }
+        pronunciation.overrides.retain(|&(definition_id, track_id), _| {
+            new.section_definitions.iter().any(|d| d.id == definition_id)
+                && new.tracks.iter().any(|t| t.id == track_id)
+        });
+    }
+}
+
 /// The drum-pattern bank, through [`restore_drum_patterns`] (legacy
 /// `drum_groups` promoted; after `ComposeSections`, whose definitions the
 /// promotion points at the new bank).

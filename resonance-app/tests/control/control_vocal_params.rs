@@ -13,7 +13,7 @@ use resonance_control::methods::section as section_proto;
 use resonance_control::methods::song::VocalView;
 use resonance_control::methods::vocal as proto;
 use resonance_control::{ErrorKind, KeyScale, Request, Response};
-use resonance_music_theory::VocalVoicebank;
+use resonance_music_theory::VoicebankId;
 use serde_json::{json, Value};
 
 use crate::common::roundtrip;
@@ -22,6 +22,7 @@ const TRACK: u64 = 60;
 
 fn app_with_project() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_install_shipped_voicebanks();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-vocal-params.rprj"));
     app.test_add_track(TRACK, TrackType::Vocal);
@@ -363,7 +364,7 @@ fn an_explicitly_chosen_tiger_survives_a_render_without_voicebank() {
     )
     .result::<JobStarted>()
     .expect("render returns a job");
-    assert_eq!(app.test_vocal_voicebank(def, TRACK), Some(VocalVoicebank::Tiger));
+    assert_eq!(app.test_vocal_voicebank(def, TRACK), Some(VoicebankId::new("tiger")));
 
     // The render's own voicebank takes the snake_case id too.
     call(
@@ -373,7 +374,7 @@ fn an_explicitly_chosen_tiger_survives_a_render_without_voicebank() {
     )
     .result::<JobStarted>()
     .expect("render returns a job");
-    assert_eq!(app.test_vocal_voicebank(def, TRACK), Some(VocalVoicebank::Meiji));
+    assert_eq!(app.test_vocal_voicebank(def, TRACK), Some(VoicebankId::new("meiji")));
 }
 
 #[test]

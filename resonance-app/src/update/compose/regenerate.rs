@@ -122,8 +122,26 @@ pub(super) fn propagate_chord_change(r: &mut crate::Resonance, definition_id: u6
         // inside `regenerate_lane`; we drop the off-thread vocal audio
         // render task here — the user re-renders audio on demand via
         // the right-rail "Generate vocal" button.
-        let _ = regenerate_lane(r, definition_id, tid);
+        let _ = regenerate_lane_as_side_effect(r, definition_id, tid);
     }
+}
+
+/// [`regenerate_lane`] as the side effect of another edit (a chord or
+/// section-length change). A vocal lane whose bank is not installed keeps
+/// its audio either way (the render is skipped before the tear-down), but
+/// the banner that skip raises is put back: the edit itself succeeded,
+/// and the missing bank is reported when the user renders.
+pub(super) fn regenerate_lane_as_side_effect(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+) -> iced::Task<crate::message::Message> {
+    let banner = r.compose.last_error.clone();
+    let task = regenerate_lane(r, definition_id, track_id);
+    if super::vocal_render::banner_is_missing_bank(r, definition_id, track_id) {
+        r.compose.last_error = banner;
+    }
+    task
 }
 
 /// Regenerate a single instrument lane, producing MIDI clips for all

@@ -29,6 +29,7 @@ fn canvas<'a>(clip: &'a MidiClipState, params: &'a VocalParams) -> VocalRollCanv
         clip,
         track_id: 3,
         params,
+        bank: resonance_app::compose::vocal_svs::BankProfile::not_installed("lilia"),
         chords: &[],
         section_beats: 16,
         scroll_y: 0.0,

@@ -21,6 +21,7 @@ const TRACK: u64 = 50;
 
 fn app_with_project() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_install_shipped_voicebanks();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-vocal-lanes.rprj"));
     app

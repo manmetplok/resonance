@@ -136,7 +136,7 @@ pub(in crate::view::compose::lane_inspector) fn vocal_controls<'a>(
     seed: u64,
     bulk_content: Option<&'a text_editor::Content>,
     collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
-    tempo_warning: Option<crate::update::compose::VocalTempoMismatch>,
+    vocal: &crate::state::ui_caches::VocalRailContext,
 ) -> Element<'a, Message> {
     use crate::compose::RailPanelKey;
 
@@ -165,11 +165,12 @@ pub(in crate::view::compose::lane_inspector) fn vocal_controls<'a>(
         definition_id,
         track_id,
         params,
+        vocal,
         collapsed_panels.contains(&RailPanelKey::VocalVoice(track_id)),
     );
     let generate_group = generate_group(definition_id, track_id, seed);
 
-    let warning: Element<'a, Message> = match tempo_warning {
+    let warning: Element<'a, Message> = match vocal.tempo_warning {
         Some(w) => column![tempo_warning_card(w), Space::new().height(18)].into(),
         None => Space::new().height(0).into(),
     };

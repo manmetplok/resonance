@@ -518,7 +518,7 @@ fn rederive_section_clips(r: &mut crate::Resonance, definition_id: u64) -> Task<
     // no-op for them; every other lane is rebuilt at the new length.
     let tasks: Vec<Task<Message>> = tracks
         .into_iter()
-        .map(|t| super::regenerate::regenerate_lane(r, definition_id, t))
+        .map(|t| super::regenerate::regenerate_lane_as_side_effect(r, definition_id, t))
         .collect();
     if has_drums {
         // Materializing replaced any Motif-mode drum voices; lay them back.

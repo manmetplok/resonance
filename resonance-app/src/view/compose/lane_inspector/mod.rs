@@ -120,7 +120,7 @@ pub const PANEL_WIDTH: f32 = theme::COMPOSE_RAIL_WIDTH as f32;
 // ===========================================================================
 
 #[allow(clippy::too_many_arguments)]
-pub fn view<'a>(
+pub(crate) fn view<'a>(
     definition: &SectionDefinitionState,
     selected_lane: &SelectedLane,
     tracks: &[TrackState],
@@ -135,7 +135,7 @@ pub fn view<'a>(
     // eagerly while it is `Some` and lazily otherwise (UX-10).
     bulk_content: Option<&'a iced::widget::text_editor::Content>,
     collapsed_panels: &HashSet<RailPanelKey>,
-    vocal_tempo_warning: Option<crate::update::compose::VocalTempoMismatch>,
+    vocal: &crate::state::ui_caches::VocalRailContext,
 ) -> Element<'a, Message> {
     // EDITING context header — large, unmistakable. Tells the user whether
     // they're editing the section (lavender) or a track (warm amber) and
@@ -167,7 +167,7 @@ pub fn view<'a>(
                     t,
                     bulk_content,
                     collapsed_panels,
-                    vocal_tempo_warning,
+                    vocal,
                 ),
                 None => text("Track not found")
                     .size(12)

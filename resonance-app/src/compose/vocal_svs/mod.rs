@@ -14,37 +14,38 @@
 //! non-zero.
 //!
 //! The implementation is split into:
-//! - [`paths`]: voicebank file resolution + per-bank phoneme/language conventions.
+//! - [`registry`]: the installed voicebanks and each bank's facts (speakers,
+//!   inventory, language ids, curve flags, its English dictionary).
+//! - [`pronunciation`]: the per-syllable overrides, the project dictionary
+//!   and the resolver that layers them over the bank dictionary and CMU.
 //! - [`segment`]: `DsSegment` construction (phoneme allocation, f0 + tension curves).
+//! - [`render`]: the off-thread render of one clip through the pipeline.
 //! - [`post`]: AP gating, safety gain, mono→stereo, resample, WAV writer.
 
-use std::path::PathBuf;
-
-use resonance_audio::types::MidiNote;
-use resonance_music_theory::g2p::AssignedSyllable;
-use resonance_music_theory::VocalParams;
-use resonance_svs::pipeline::{self, PipelineArgs};
-use resonance_svs::stages::common::ExecutionProvider;
-
-use crate::compose::expression::ExpressionCurves;
-
+mod error;
 mod paths;
 mod phonemes;
 mod post;
 mod pronunciation;
+pub mod registry;
+mod render;
 mod render_cache;
 mod segment;
 mod validate;
 
-pub use paths::{bank_curve_support, curve_supported, shipped_curve_support, svs_backend};
-pub use paths::{CurveKind, CurveSupport};
+pub use error::{VocalRenderError, VocalRenderErrorKind};
+pub use paths::{svs_backend, CurveKind, CurveSupport};
+pub use registry::{
+    BankProfile, RenderTarget, VoicebankMissing, VoicebankRegistry, VoicebankRoots,
+};
 pub use phonemes::{
-    articulation_class, floor_duration_sec, min_articulation_sec, target_duration_sec,
-    ArticulationClass, PhonemeFate, VoicebankPhonemes,
+    articulation_class, floor_duration_sec, min_articulation_sec, nearest_by_class,
+    target_duration_sec, ArticulationClass, PhonemeFate, VoicebankPhonemes,
 };
 pub use post::write_stereo_wav;
+pub use render::{render_vocal_clip, RenderedVocal};
 pub use pronunciation::{
-    canonicalize_phonemes, clean_word, resolve_clip as resolve_clip_pronunciation, DictionaryEntry,
+    canonicalize_phonemes, clean_word, resolve_clip, resolve_clip_with_bank, DictionaryEntry,
     DictionaryScope, PhonemeProvenance, PronunciationState, SyllableOverride,
 };
 pub use render_cache::{
@@ -52,26 +53,9 @@ pub use render_cache::{
 };
 pub use segment::build_segment;
 pub use validate::{
-    articulation_report, comfortable_pitch_range, validate_for_voicebank, InvalidPhonemeReason,
-    InvalidSyllable, NoteArticulation,
+    articulation_report, validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable,
+    NoteArticulation,
 };
-
-use paths::locate_voicebank;
-use post::{
-    apply_ap_gate, collect_ap_intervals, mono_to_stereo_with_gain, resample_to, safety_gain_factor,
-};
-
-/// Output of `render_vocal_clip` — stereo-interleaved f32 samples ready
-/// for `transcode_to_wav` / `write_stereo_f32_wav`, plus their rate
-/// and the number of leading/trailing frames that are silence pads
-/// (so the engine clip can trim past them via `trim_start_frames` /
-/// `trim_end_frames`).
-pub struct RenderedVocal {
-    pub samples_stereo: Vec<f32>,
-    pub sample_rate: u32,
-    pub trim_start_frames: u64,
-    pub trim_end_frames: u64,
-}
 
 /// Leading + trailing silence pad inserted into every rendered
 /// segment, in seconds. Matches the reference `.ds` fixtures'
@@ -111,98 +95,4 @@ pub fn vocal_audio_start(
         return section_start_sample;
     }
     tempo_map.tick_to_abs_sample(section_start_sample, lead_ticks, sample_rate)
-}
-
-/// Render a vocal MIDI clip + lyric draft to a singing waveform. Returns
-/// `None` when the SVS model files aren't installed (the PoC's download
-/// script hasn't been run, env var unset, etc.) so the caller can fall
-/// back to its existing MIDI-only behaviour silently.
-///
-/// `assigned` is the per-note resolved + voicebank-validated syllable
-/// stream (one entry per note), produced on the main thread by
-/// [`resolve_clip_pronunciation`] + [`validate_for_voicebank`] so
-/// per-syllable overrides, dictionary entries and the voicebank's
-/// substitutions are already folded into the phonemes the model sings.
-/// Slur notes hold the previous vowel (the last one also its coda); an empty
-/// `assigned` slice renders nothing.
-/// `cache` carries per-unit rendered audio across renders of the same
-/// clip so an edit only re-renders the segments it touched (see
-/// [`render_cache`]); pass a fresh [`SvsRenderCache`] for a clip that has
-/// never been rendered. After the call its [`SvsRenderCache::last_plan`]
-/// holds the "N of M segments changed" tally for the UI overlay.
-#[allow(clippy::too_many_arguments)]
-pub fn render_vocal_clip(
-    notes: &[MidiNote],
-    params: &VocalParams,
-    assigned: &[AssignedSyllable],
-    curves: &ExpressionCurves,
-    ticks_per_quarter: u32,
-    bpm: f32,
-    engine_sample_rate: u32,
-    cache: &mut SvsRenderCache,
-) -> Result<Option<RenderedVocal>, String> {
-    if notes.is_empty() {
-        return Ok(None);
-    }
-    let Some(paths) = locate_voicebank(params.voicebank, params) else {
-        return Ok(None);
-    };
-
-    // Split the clip into independently-renderable units at genuine
-    // silences. A continuous phrase yields a single unit whose segment
-    // matches the old whole-clip build.
-    let units = split_render_units(notes, params, assigned, curves, ticks_per_quarter, bpm);
-    if units.iter().all(|u| u.segment.ph_seq.is_empty()) {
-        return Ok(None);
-    }
-
-    let args = PipelineArgs {
-        ds_file: PathBuf::new(),
-        acoustic_config: paths.acoustic_config,
-        vocoder_config: paths.vocoder_config,
-        out: PathBuf::new(),
-        execution_provider: ExecutionProvider::Cpu,
-        device_index: 0,
-        speaker: paths.speaker,
-        // The TIGER voicebank's working CLI command uses speedup=20.
-        // (We previously thought 20 produced diffusion artifacts, but
-        // those artifacts were actually from feeding the mel into the
-        // wrong vocoder.)
-        speedup: 20,
-        depth: 1000,
-    };
-
-    // Render each missing unit through the acoustic + vocoder pipeline,
-    // gating its own AP/SP rests to silence; cache hits skip all of this.
-    let render_fn = |segment: &resonance_svs::ds::DsSegment| -> Result<(Vec<f32>, u32), String> {
-        let ap_intervals = collect_ap_intervals(&segment.ph_seq, &segment.ph_dur);
-        let rendered = pipeline::render_segments(std::slice::from_ref(segment), &args)
-            .map_err(|e| format!("svs render: {e:#}"))?;
-        let sr = rendered.sample_rate;
-        let mut mono = rendered.samples;
-        apply_ap_gate(&mut mono, &ap_intervals, sr);
-        Ok((mono, sr))
-    };
-
-    let stitched = render_units_cached(&units, cache, render_fn)?;
-    let model_sr = stitched.sample_rate;
-    let mono = stitched.mono;
-
-    let gain = safety_gain_factor(&mono);
-    let stereo = mono_to_stereo_with_gain(&mono, gain);
-    let (samples_stereo, out_sr) = resample_to(stereo, model_sr, engine_sample_rate);
-
-    // The segment was rendered with `SEGMENT_PAD_SEC` of AP on each
-    // end (matches the reference `.ds` fixtures so the model ramps in
-    // and out cleanly). Translate that pad into frame counts at the
-    // *final* sample rate so the engine's clip trim skips past it on
-    // playback — keeps the timeline alignment between MIDI and audio.
-    let pad_frames = (SEGMENT_PAD_SEC * out_sr as f64) as u64;
-
-    Ok(Some(RenderedVocal {
-        samples_stereo,
-        sample_rate: out_sr,
-        trim_start_frames: pad_frames,
-        trim_end_frames: pad_frames,
-    }))
 }

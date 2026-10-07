@@ -206,13 +206,10 @@ pub(super) fn handle(
             update_vocal(r, definition_id, track_id, |p| p.timbre = t)
         }
         LaneInspectorMsg::SetVocalVoicebank(v) => {
-            update_vocal(r, definition_id, track_id, |p| p.voicebank = v)
+            vocal_params::set_voicebank(r, definition_id, track_id, v)
         }
-        LaneInspectorMsg::SetVocalSinger(s) => {
-            update_vocal(r, definition_id, track_id, |p| p.singer = s)
-        }
-        LaneInspectorMsg::SetVocalSingerMeiji(s) => {
-            update_vocal(r, definition_id, track_id, |p| p.singer_meiji = s)
+        LaneInspectorMsg::SetVocalSpeaker(s) => {
+            update_vocal(r, definition_id, track_id, |p| p.speaker = Some(s))
         }
         LaneInspectorMsg::SetVocalVibrato(v) => {
             vocal_params::set_vibrato(r, definition_id, track_id, v)

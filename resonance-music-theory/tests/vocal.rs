@@ -5,7 +5,7 @@
 use resonance_music_theory::{
     derive_vocal, derive_vocal_with_meter, generate_lyrics, vocal_phrase_spans, Chord,
     ChordQuality, LyricLine, PitchClass, TimedChord, VocalContour, VocalMood, VocalParams,
-    VocalPov, VocalRhymeScheme, VocalSinger, VocalStyle, VocalTimbre, VoiceType,
+    VocalPov, VocalRhymeScheme, VocalStyle, VocalTimbre, VoiceType, VoicebankId,
 };
 
 fn b_minor_chords() -> Vec<TimedChord> {
@@ -537,51 +537,85 @@ fn vocal_style_round_trips_through_serde() {
 }
 
 #[test]
-fn vocal_singer_defaults_match_voice_type() {
-    // The Default impl wires `singer = voice.default_singer()`. Spot-
-    // check a couple of voice types so a regression in the mapping
-    // (e.g. swapping Soprano and Bass) trips the test.
+fn a_new_lane_sings_lilia_with_its_single_voice() {
+    let p = VocalParams::default();
+    assert_eq!(p.voicebank, VoicebankId::new("lilia"));
+    assert_eq!(p.speaker, None);
+}
+
+#[test]
+fn switching_bank_resets_the_speaker_and_reselecting_keeps_it() {
     let mut p = VocalParams::default();
-    assert_eq!(p.voice, VoiceType::Alto);
-    assert_eq!(p.singer, VocalSinger::Disco);
-
-    p.voice = VoiceType::Soprano;
-    let p2 = VocalParams {
-        voice: VoiceType::Soprano,
-        singer: VoiceType::Soprano.default_singer(),
-        ..VocalParams::default()
-    };
-    assert_eq!(p2.singer, VocalSinger::Glam);
+    p.switch_voicebank(VoicebankId::new("tiger"), Some("royal".into()));
+    assert_eq!(p.voicebank, "tiger");
+    assert_eq!(p.speaker.as_deref(), Some("royal"));
+    // Re-selecting the same bank keeps the chosen speaker.
+    p.speaker = Some("vinyl".into());
+    p.switch_voicebank(VoicebankId::new("TIGER"), Some("disco".into()));
+    assert_eq!(p.speaker.as_deref(), Some("vinyl"));
+    p.switch_voicebank(VoicebankId::new("lilia"), None);
+    assert_eq!(p.speaker, None);
 }
 
 #[test]
-fn vocal_singer_speaker_ids_are_unique_and_tiger_prefixed() {
-    let ids: std::collections::HashSet<&str> =
-        VocalSinger::ALL.iter().map(|s| s.speaker_id()).collect();
-    assert_eq!(ids.len(), VocalSinger::ALL.len(), "duplicate speaker_id");
-    for id in ids {
-        assert!(
-            id.starts_with("tiger_"),
-            "speaker_id `{}` should start with tiger_",
-            id
-        );
-    }
-}
-
-#[test]
-fn vibrato_rate_and_singer_round_trip_through_serde() {
+fn vibrato_rate_and_speaker_round_trip_through_serde() {
     let mut p = VocalParams::default();
     p.vibrato_rate = 6.5;
-    p.singer = VocalSinger::Vinyl;
+    p.voicebank = VoicebankId::new("tiger");
+    p.speaker = Some("vinyl".into());
     let json = serde_json::to_string(&p).expect("serialize");
+    assert!(json.contains(r#""voicebank":"tiger""#), "{json}");
+    assert!(json.contains(r#""speaker":"vinyl""#), "{json}");
+    assert!(!json.contains("singer"), "old fields are never written: {json}");
     let back: VocalParams = serde_json::from_str(&json).expect("deserialize");
     assert!((back.vibrato_rate - 6.5).abs() < 0.001);
-    assert_eq!(back.singer, VocalSinger::Vinyl);
+    assert_eq!(back, p);
+}
+
+/// A lane as the pre-registry builds wrote it: the bank as an enum name
+/// and both per-bank speaker fields, whatever the bank.
+fn legacy_lane_json(voicebank: &str, singer: &str, singer_meiji: &str) -> String {
+    format!(
+        r#"{{
+        "theme": "test", "mood": "Yearning", "pov": "FirstSingular", "rhyme": "Abab",
+        "lines": 4, "syllables_min": 7, "syllables_max": 11,
+        "match_syllables_to_melody": true, "avoid_cliches": true, "draft": [],
+        "voice": "Tenor", "range": [48, 72], "contour": "Arch", "syllable_mode": "Syllabic",
+        "chord_tone_anchor": 0.65, "leap_range": 0.15, "phrase_length_bars": 2,
+        "breath": 0.45, "stay_in_scale": true, "avoid_clashes": true, "timbre": "Warm",
+        "vibrato": 0.30, "articulation": 0.65, "consonant_emphasis": 0.40,
+        "singer": "{singer}", "singer_meiji": "{singer_meiji}", "voicebank": "{voicebank}"
+    }}"#
+    )
 }
 
 #[test]
-fn vibrato_rate_and_singer_default_when_missing_from_json() {
-    // Older saved projects don't carry vibrato_rate or singer; the
+fn legacy_enum_bank_and_singer_fields_map_onto_id_and_speaker() {
+    let tiger: VocalParams =
+        serde_json::from_str(&legacy_lane_json("Tiger", "Electric", "Phantom")).unwrap();
+    assert_eq!(tiger.voicebank, "tiger");
+    assert_eq!(tiger.speaker.as_deref(), Some("electric"), "TIGER takes `singer`");
+
+    let meiji: VocalParams =
+        serde_json::from_str(&legacy_lane_json("Meiji", "Electric", "Phantom")).unwrap();
+    assert_eq!(meiji.voicebank, "meiji");
+    assert_eq!(meiji.speaker.as_deref(), Some("phantom"), "Meiji takes `singer_meiji`");
+
+    let lilia: VocalParams =
+        serde_json::from_str(&legacy_lane_json("Lilia", "Electric", "Phantom")).unwrap();
+    assert_eq!(lilia.voicebank, "lilia");
+    assert_eq!(lilia.speaker, None, "Lilia has a single voice");
+
+    // Read back, the migrated lane writes the new shape only.
+    let json = serde_json::to_string(&tiger).unwrap();
+    assert!(!json.contains("singer"), "{json}");
+    let again: VocalParams = serde_json::from_str(&json).unwrap();
+    assert_eq!(again, tiger);
+}
+
+#[test]
+fn vibrato_rate_and_bank_default_when_missing_from_json() {
+    // Older saved projects don't carry vibrato_rate or a bank; the
     // `#[serde(default = …)]` attributes should fill them in.
     let json = r#"{
         "theme": "test",
@@ -612,10 +646,9 @@ fn vibrato_rate_and_singer_default_when_missing_from_json() {
     let p: VocalParams = serde_json::from_str(json).expect("deserialize legacy");
     // Vibrato rate falls back to the historic 5 Hz constant.
     assert!((p.vibrato_rate - 5.0).abs() < 0.001);
-    // Singer falls back to Alto's default singer (Disco) — *not* the
-    // file's own voice type, since we can't inspect the deserialized
-    // voice from inside a `#[serde(default)]` callback.
-    assert_eq!(p.singer, VocalSinger::Disco);
+    // No voicebank field: the default bank, Lilia, with its one voice.
+    assert_eq!(p.voicebank, "lilia");
+    assert_eq!(p.speaker, None);
 }
 
 #[test]

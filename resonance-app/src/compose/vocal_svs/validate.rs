@@ -26,9 +26,9 @@
 
 use resonance_audio::types::MidiNote;
 use resonance_music_theory::g2p::{self, AssignedSyllable};
-use resonance_music_theory::VocalVoicebank;
 
 use super::phonemes::{min_articulation_sec, PhonemeFate, VoicebankPhonemes};
+use super::registry::BankProfile;
 
 /// Why one phoneme failed the voicebank gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,8 +36,8 @@ pub enum InvalidPhonemeReason {
     /// Not a valid ARPAbet symbol (#491) — [`g2p::canonical_phoneme`]
     /// rejected it, so it would reach the model as an unknown token.
     NotArpabet,
-    /// Valid ARPAbet, but the active voicebank can neither sing nor
-    /// substitute it (#492 — [`PhonemeFate::Unsupported`]).
+    /// Valid ARPAbet, but the active voicebank can neither sing it nor map
+    /// it onto anything it has (#492 — [`PhonemeFate::Unsupported`]).
     UnsupportedByVoicebank,
 }
 
@@ -60,6 +60,9 @@ pub struct InvalidSyllable {
     pub note_index: usize,
     /// The syllable's surface label (glyphs to display).
     pub label: String,
+    /// The whole word the syllable belongs to (its labels joined), so an
+    /// error can name the word that cannot be sung.
+    pub word: String,
     /// The exact symbol that failed the gate.
     pub phoneme: String,
     /// Whether it failed the ARPAbet or the voicebank gate.
@@ -67,7 +70,7 @@ pub struct InvalidSyllable {
 }
 
 /// Validate and substitute every phoneme in the resolved per-note stream
-/// against `voicebank`. Returns the syllables with their *effective*
+/// against `bank`. Returns the syllables with their *effective*
 /// (substituted) phonemes on success — every other field carried through
 /// unchanged so provenance survives — or every blocking syllable on
 /// failure.
@@ -79,40 +82,40 @@ pub struct InvalidSyllable {
 /// its own vowel fallback.
 pub fn validate_for_voicebank(
     assigned: &[AssignedSyllable],
-    voicebank: VocalVoicebank,
+    bank: &BankProfile,
 ) -> Result<Vec<AssignedSyllable>, Vec<InvalidSyllable>> {
-    let bank = VoicebankPhonemes::new(voicebank);
+    let phonemes = VoicebankPhonemes::new(bank);
+    let words = word_labels(assigned);
     let mut out = Vec::with_capacity(assigned.len());
     let mut invalid = Vec::new();
 
     for (note_index, syl) in assigned.iter().enumerate() {
         let mut effective = Vec::with_capacity(syl.phonemes.len());
+        let mut fail = |ph: &str, reason| {
+            invalid.push(InvalidSyllable {
+                note_index,
+                label: syl.label.clone(),
+                word: words[note_index].clone(),
+                phoneme: ph.to_string(),
+                reason,
+            })
+        };
         for &ph in &syl.phonemes {
             // Gate 1: must be a real ARPAbet symbol. `canonical_phoneme`
             // also accepts the `AP`/`SP` silence markers, but those are
             // never part of a syllable's phoneme list (the builder inserts
             // them separately), so a hit here means a genuine phone.
             if g2p::canonical_phoneme(ph).is_none() {
-                invalid.push(InvalidSyllable {
-                    note_index,
-                    label: syl.label.clone(),
-                    phoneme: ph.to_string(),
-                    reason: InvalidPhonemeReason::NotArpabet,
-                });
+                fail(ph, InvalidPhonemeReason::NotArpabet);
                 continue;
             }
-            // Gate 2: the active voicebank must sing it directly or have a
-            // substitute. `Substituted` rewrites to the singable form;
-            // `Unsupported` blocks.
-            match bank.resolve(ph) {
+            // Gate 2: the active voicebank must sing it directly or map it
+            // onto a phone it has. `Substituted` rewrites to the singable
+            // form; `Unsupported` blocks.
+            match phonemes.resolve(ph) {
                 PhonemeFate::Direct => effective.push(ph),
                 PhonemeFate::Substituted(sub) => effective.push(sub),
-                PhonemeFate::Unsupported => invalid.push(InvalidSyllable {
-                    note_index,
-                    label: syl.label.clone(),
-                    phoneme: ph.to_string(),
-                    reason: InvalidPhonemeReason::UnsupportedByVoicebank,
-                }),
+                PhonemeFate::Unsupported => fail(ph, InvalidPhonemeReason::UnsupportedByVoicebank),
             }
         }
         let mut s = syl.clone();
@@ -125,6 +128,28 @@ pub fn validate_for_voicebank(
     } else {
         Err(invalid)
     }
+}
+
+/// The word each note's syllable belongs to: the labels of the notes from
+/// the word's first syllable to its `is_word_end`, joined. Slur notes
+/// (`+`) are left out of the spelling.
+fn word_labels(assigned: &[AssignedSyllable]) -> Vec<String> {
+    let mut out = vec![String::new(); assigned.len()];
+    let mut start = 0;
+    for (i, syl) in assigned.iter().enumerate() {
+        if syl.is_word_end || i + 1 == assigned.len() {
+            let word: String = assigned[start..=i]
+                .iter()
+                .filter(|s| !s.is_slur)
+                .map(|s| s.label.as_str())
+                .collect();
+            for slot in &mut out[start..=i] {
+                slot.clone_from(&word);
+            }
+            start = i + 1;
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -165,31 +190,9 @@ pub struct NoteArticulation {
     /// MIDI pitch (60 = C4).
     pub pitch: u8,
     /// Outside the voicebank's comfortable range
-    /// ([`comfortable_pitch_range`]) — the model extrapolates formants
+    /// ([`BankProfile::comfortable_range`]) — the model extrapolates formants
     /// there and consonants blur even on a long note.
     pub out_of_range: bool,
-}
-
-/// The MIDI range a voicebank sings clearly, as an inclusive
-/// `(low, high)` pair.
-///
-/// **These are conservative estimates, not measured envelopes.** No
-/// shipped bank declares a range on disk (`character.yaml` carries only
-/// speaker colours), and DiffSinger acoustic models degrade gradually
-/// rather than cutting off, so treat the bounds as "past here, expect the
-/// timbre to thin out and diction to blur" rather than a hard limit. They
-/// are deliberately wide: the point is to catch a melody written an
-/// octave off, not to police tasteful high notes.
-pub fn comfortable_pitch_range(voicebank: VocalVoicebank) -> (u8, u8) {
-    match voicebank {
-        // TIGER v106 — English, mixed community speakers, the widest of
-        // the three. C3..E5.
-        VocalVoicebank::Tiger => (48, 76),
-        // LIEE Lilia MM 2.8 — a bright idol voice recorded high. D3..G5.
-        VocalVoicebank::Lilia => (50, 79),
-        // Gahata Meiji v160 — Japanese-native, sits lower. A2..D5.
-        VocalVoicebank::Meiji => (45, 74),
-    }
 }
 
 /// Per-note articulation report for one clip.
@@ -211,10 +214,11 @@ pub fn articulation_report(
     assigned: &[AssignedSyllable],
     ticks_per_quarter: u32,
     bpm: f32,
-    voicebank: VocalVoicebank,
+    bank: &BankProfile,
 ) -> Vec<NoteArticulation> {
     let seconds_per_tick = 60.0 / (bpm.max(1.0) as f64 * ticks_per_quarter.max(1) as f64);
-    let (lo, hi) = comfortable_pitch_range(voicebank);
+    let range = bank.comfortable_range(None);
+    let (lo, hi) = (range.low, range.high);
     let mut out = Vec::with_capacity(notes.len().min(assigned.len()));
     for (i, n) in notes.iter().enumerate() {
         let Some(syl) = assigned.get(i) else { break };

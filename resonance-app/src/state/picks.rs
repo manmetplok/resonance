@@ -403,3 +403,89 @@ pub(crate) fn add_send_choices(
     choices.push(AddSendChoice::NewReturn);
     choices
 }
+
+/// One entry of the vocal lane inspector's Voicebank picker: an installed
+/// English-capable bank, with its speakers pre-built for the Speaker
+/// picker (vocal-mcp-control-and-quality.md §4; view-performance rules).
+/// Every field is shared, so the clone `pick_list` takes of the selection
+/// each frame allocates nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VoicebankChoice {
+    pub id: std::rc::Rc<str>,
+    pub label: std::rc::Rc<str>,
+    pub speakers: std::rc::Rc<[SpeakerChoice]>,
+}
+
+impl std::fmt::Display for VoicebankChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// One entry of the Speaker picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpeakerChoice {
+    pub id: String,
+    pub label: String,
+}
+
+impl std::fmt::Display for SpeakerChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+impl VoicebankChoice {
+    /// The choice for a bank as `profile` describes it, labelled `label`.
+    pub fn from_profile(profile: &crate::compose::vocal_svs::BankProfile, label: String) -> Self {
+        let speakers: Vec<SpeakerChoice> = profile
+            .speakers()
+            .into_iter()
+            .map(|s| SpeakerChoice {
+                id: s.id,
+                label: s.name,
+            })
+            .collect();
+        Self {
+            id: profile.id().as_str().into(),
+            label: label.into(),
+            speakers: speakers.into(),
+        }
+    }
+
+    /// The picker's selection for a lane whose bank is not installed:
+    /// `"<id> (not installed)"`, with the built-in speakers if any.
+    pub fn not_installed(id: &resonance_music_theory::VoicebankId) -> Self {
+        let profile = crate::compose::vocal_svs::BankProfile::not_installed(id.as_str());
+        Self::from_profile(&profile, format!("{id} (not installed)"))
+    }
+}
+
+/// The Voicebank picker's options: every installed bank that can sing
+/// English, in id order.
+pub(crate) fn voicebank_choices(
+    registry: &crate::compose::vocal_svs::VoicebankRegistry,
+) -> Vec<VoicebankChoice> {
+    registry
+        .installed()
+        .map(|bank| registry.profile(&resonance_music_theory::VoicebankId::new(&bank.id)))
+        .filter(|profile| profile.english())
+        .map(|profile| {
+            let label = profile.name();
+            VoicebankChoice::from_profile(&profile, label)
+        })
+        .collect()
+}
+
+/// The Voicebank picker's selection for a lane on a built-in bank that is
+/// not installed (`"lilia (not installed)"`), one per such bank — built
+/// with the options, so the picker never builds one per frame.
+pub(crate) fn missing_voicebank_choices(
+    registry: &crate::compose::vocal_svs::VoicebankRegistry,
+) -> Vec<VoicebankChoice> {
+    crate::compose::vocal_svs::registry::BUILTIN_BANKS
+        .iter()
+        .filter(|b| registry.get(b.id).is_none())
+        .map(|b| VoicebankChoice::not_installed(&resonance_music_theory::VoicebankId::new(b.id)))
+        .collect()
+}

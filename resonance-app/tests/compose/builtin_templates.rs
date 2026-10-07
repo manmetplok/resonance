@@ -11,7 +11,7 @@ use resonance_app::state::InstrumentType;
 use resonance_app::update::project_io::{
     builtin_templates, compute_summary, BuiltinTemplateId,
 };
-use resonance_music_theory::VocalVoicebank;
+
 
 /// Every builder's `ProjectFile` must survive a JSON round-trip — the
 /// strongest proxy for "valid ProjectFile" without booting the engine,
@@ -194,7 +194,7 @@ fn vocal_songwriting_contents() {
     let cfg = section.lane_generators.get(&vocal.id).expect("vocal lane generator");
     match &cfg.kind {
         LaneGeneratorKind::Vocal(params) => {
-            assert_eq!(params.voicebank, VocalVoicebank::Lilia);
+            assert_eq!(params.voicebank, "lilia");
         }
         other => panic!("expected a Vocal lane generator, got {other:?}"),
     }

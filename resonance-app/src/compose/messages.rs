@@ -2,8 +2,7 @@ use resonance_audio::types::TrackId;
 use resonance_music_theory::{
     BassMotifMode, BassMotifPhrase, BassStyle, Chord, ChordQuality, ContourPreference, Degree,
     MelodyStyle, PitchClass, Scale, SchemaKind, SyllableMode, VocalContour, VocalMood, VocalPov,
-    VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
-    VoiceType,
+    VocalRhymeScheme, VocalStyle, VocalTimbre, VoiceType, VoicebankId,
 };
 
 use crate::compose::vocal_svs::CurveKind;
@@ -291,7 +290,7 @@ pub enum ComposeMessage {
     ControlRenderVocal {
         definition_id: u64,
         track_id: TrackId,
-        voicebank: VocalVoicebank,
+        voicebank: VoicebankId,
     },
 
     // ---- Chord lane inspector ----
@@ -336,13 +335,16 @@ pub enum ComposeMessage {
         /// nothing.
         render_epoch: u64,
         error: String,
+        /// What kind of failure, so a `vocal.render` job can report a
+        /// missing bank as `voicebank_missing` (spec §4.6).
+        kind: crate::compose::vocal_svs::VocalRenderErrorKind,
     },
-    /// SVS render finished with nothing to install: no voicebank is
-    /// installed, so the lane falls back to playing its MIDI. Not an
-    /// error for the GUI (no banner), but a `vocal.render` job waiting on
-    /// the lane must still resolve and the lane's in-flight entry clear
-    /// (code review FU-M11a). Same lane identity + epoch as
-    /// [`Self::VocalAudioFailed`].
+    /// SVS render finished with nothing to install: the lane's clip has
+    /// no notes. Not an error for the GUI (no banner), but a
+    /// `vocal.render` job waiting on the lane must still resolve and the
+    /// lane's in-flight entry clear (code review FU-M11a). A missing bank
+    /// is a [`Self::VocalAudioFailed`], not this. Same lane identity +
+    /// epoch as [`Self::VocalAudioFailed`].
     VocalAudioUnavailable {
         definition_id: u64,
         track_id: TrackId,
@@ -792,9 +794,10 @@ pub enum LaneInspectorMsg {
 
     // Vocal — voice & delivery
     SetVocalTimbre(VocalTimbre),
-    SetVocalVoicebank(VocalVoicebank),
-    SetVocalSinger(VocalSinger),
-    SetVocalSingerMeiji(VocalSingerMeiji),
+    /// Switch the lane's bank (its speaker resets to the bank's default).
+    SetVocalVoicebank(VoicebankId),
+    /// Pick one of the bank's speakers (voice modes), by id.
+    SetVocalSpeaker(String),
     SetVocalVibrato(f32),
     SetVocalVibratoRate(f32),
     SetVocalTension(f32),
@@ -1001,8 +1004,7 @@ impl LaneInspectorMsg {
             | Self::ToggleVocalUseSectionMotif
             | Self::SetVocalTimbre(..)
             | Self::SetVocalVoicebank(..)
-            | Self::SetVocalSinger(..)
-            | Self::SetVocalSingerMeiji(..)
+            | Self::SetVocalSpeaker(..)
             | Self::GenerateVocalAll
             | Self::GenerateVocalLyricsOnly
             | Self::GenerateVocalMelodyOnly

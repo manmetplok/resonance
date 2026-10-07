@@ -180,8 +180,8 @@ pub enum G2pSource {
     /// win), so the resolver cannot tell them apart; the wire name stays
     /// `project_dict`.
     ProjectDict,
-    /// The voicebank's own dictionary. Not produced yet — bank
-    /// dictionaries arrive with any-bank phonemisation (spec §4.4).
+    /// The voicebank's own English dictionary (`dsdict-en.yaml`), mapped
+    /// to ARPAbet ([`DictionaryLayers::bank`](super::DictionaryLayers::bank)).
     BankDict,
     /// The bundled CMU Pronouncing Dictionary.
     #[default]

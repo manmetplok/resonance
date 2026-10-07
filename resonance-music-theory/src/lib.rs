@@ -24,7 +24,7 @@ pub use derive::{
     MotifSource, MotifTransform, PadParams,
     PhraseGrammarRole, RhythmHit, SequenceKind,
     SyllableMode, TimedChord, VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov,
-    VocalRhymeScheme, VocalSinger, VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank,
+    VocalRhymeScheme, VocalStyle, VocalTimbre, VoicebankId,
     VoiceType,
 };
 pub use generator::{

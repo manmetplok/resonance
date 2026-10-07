@@ -6,6 +6,8 @@ use thiserror::Error;
 
 use super::lyrics::LyricLine;
 
+mod legacy;
+
 /// Lyrical mood preset. Drives the lyric generator's word choice and
 /// chord-mood pairing.
 #[derive(
@@ -112,21 +114,6 @@ impl VoiceType {
             VoiceType::Bass => (40, 64),          // E2..E4
         }
     }
-
-    /// Singer this voice type historically mapped to. Used as the
-    /// initial `VocalSinger` when a vocal lane is created so the default
-    /// project sounds the way it always has — but the singer is
-    /// independently editable afterward.
-    pub fn default_singer(self) -> VocalSinger {
-        match self {
-            VoiceType::Soprano => VocalSinger::Glam,
-            VoiceType::MezzoSoprano => VocalSinger::Fresh,
-            VoiceType::Alto => VocalSinger::Disco,
-            VoiceType::Tenor => VocalSinger::Royal,
-            VoiceType::Baritone => VocalSinger::Electric,
-            VoiceType::Bass => VocalSinger::Mystic,
-        }
-    }
 }
 
 /// Note → syllable mapping mode.
@@ -217,118 +204,57 @@ impl VocalStyle {
     }
 }
 
-/// Top-level voicebank — the trained DiffSinger model that produces
-/// the singing audio. Different voicebanks have completely different
-/// vocal characters and own their own singer presets, so this is the
-/// "outer" pick the user makes; `VocalSinger`/`VocalSingerMeiji` is the
-/// per-voicebank inner pick.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
-)]
-pub enum VocalVoicebank {
-    /// TIGER (English DiffSinger v106) — 7 community speakers, the
-    /// first bank of the SVS PoC.
-    #[strum(serialize = "TIGER")]
-    Tiger,
-    /// LIEE Lilia (multi-language MM 2.8) — the default; single-speaker voicebank
-    /// with native English / Japanese / Tagalog / Korean / Spanish
-    /// support. Sings in English through the same ARPAbet G2P we use
-    /// for TIGER.
-    Lilia,
-    /// Gahata Meiji v160 (multi-language) — 4-mode voicebank with
-    /// per-token language ids and `en/`-prefixed phonemes. Modes pick
-    /// between standard / hunter / lilith / phantom character voices.
-    Meiji,
-}
+/// A voicebank's string id — `tiger`, `lilia`, `meiji`, or the folder id
+/// of any bank installed in the user's voicebank directory
+/// (vocal-mcp-control-and-quality.md §4.1). Serialised as a plain string.
+/// Ids are lowercase; [`VoicebankId::new`] trims and lowercases, so the
+/// old enum names a project file may still carry (`Tiger`, `Lilia`,
+/// `Meiji`) read back as the ids they became.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct VoicebankId(String);
 
-impl VocalVoicebank {
-    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
+impl VoicebankId {
+    /// Lilia, the default bank (spec D9).
+    pub const DEFAULT: &'static str = "lilia";
 
-    pub fn as_str(self) -> &'static str {
-        self.into()
+    /// An id from any spelling of it: trimmed and lowercased.
+    pub fn new(id: impl AsRef<str>) -> Self {
+        Self(id.as_ref().trim().to_ascii_lowercase())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-/// Voicebank speaker preset. Picks which TIGER `tiger_*` singer drives
-/// the SVS render. Decoupled from `VoiceType` so the user can have a
-/// soprano-range melody sung by the disco speaker, etc. The default for
-/// a new params block matches `VoiceType::default_singer` so projects
-/// that never touch this field still get the historic mapping.
-///
-/// Singers are TIGER-specific. Lilia is single-speaker so the chip row
-/// is hidden when Lilia is selected.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
-)]
-pub enum VocalSinger {
-    Glam,
-    Fresh,
-    Disco,
-    Royal,
-    Electric,
-    Mystic,
-    Vinyl,
-}
-
-impl VocalSinger {
-    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
-
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// TIGER speaker id this preset selects in the voicebank's `.emb`
-    /// table. The pipeline looks the id up directly so renaming the
-    /// presets here without touching the strings is safe.
-    pub fn speaker_id(self) -> &'static str {
-        match self {
-            VocalSinger::Glam => "tiger_glam",
-            VocalSinger::Fresh => "tiger_fresh",
-            VocalSinger::Disco => "tiger_disco",
-            VocalSinger::Royal => "tiger_royal",
-            VocalSinger::Electric => "tiger_electric",
-            VocalSinger::Mystic => "tiger_mystic",
-            VocalSinger::Vinyl => "tiger_vinyl",
-        }
+impl Default for VoicebankId {
+    fn default() -> Self {
+        Self(Self::DEFAULT.to_owned())
     }
 }
 
-/// Meiji voicebank's singer modes. Distinct from `VocalSinger` because
-/// the two voicebanks ship completely different presets: TIGER's
-/// `tiger_*` are seven separate community singers, while Meiji's four
-/// modes are character variants of the same base voice (Standard is
-/// neutral, Hunter is strong, Lilith is mature, Phantom is whisper).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-    strum::Display, strum::IntoStaticStr, strum::EnumString, strum::VariantArray,
-)]
-pub enum VocalSingerMeiji {
-    Standard,
-    Hunter,
-    Lilith,
-    Phantom,
+impl std::fmt::Display for VoicebankId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
-impl VocalSingerMeiji {
-    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
-
-    pub fn as_str(self) -> &'static str {
-        self.into()
+impl<'de> Deserialize<'de> for VoicebankId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        String::deserialize(d).map(Self::new)
     }
+}
 
-    /// Speaker id this preset selects in Meiji's `embeds/*.emb` table.
-    /// Meiji's `dsconfig.yaml` lists speakers with the `embeds/` path
-    /// prefix (e.g. `embeds/standard`); the pipeline matches on that
-    /// exact string, so we include it here.
-    pub fn speaker_id(self) -> &'static str {
-        match self {
-            VocalSingerMeiji::Standard => "embeds/standard",
-            VocalSingerMeiji::Hunter => "embeds/hunter",
-            VocalSingerMeiji::Lilith => "embeds/lilith",
-            VocalSingerMeiji::Phantom => "embeds/phantom",
-        }
+impl PartialEq<str> for VoicebankId {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for VoicebankId {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
     }
 }
 
@@ -355,6 +281,7 @@ impl VocalTimbre {
 /// All vocal-generator parameters surfaced in the right rail. Persists
 /// alongside the rest of the lane generator configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "legacy::VocalParamsRepr")]
 pub struct VocalParams {
     // ---- Lyrics ----
     pub theme: String,
@@ -368,7 +295,6 @@ pub struct VocalParams {
     pub avoid_cliches: bool,
 
     // ---- Lyric draft preview (in-state, regenerated on demand) ----
-    #[serde(default)]
     pub draft: Vec<LyricLine>,
 
     // ---- Melody ----
@@ -377,7 +303,6 @@ pub struct VocalParams {
     /// Melodic style preset. Picks the per-syllable generator used by
     /// `derive_vocal`. Defaults to `PopBallad` (the legacy behavior) so
     /// older project files round-trip unchanged.
-    #[serde(default = "default_vocal_style")]
     pub style: VocalStyle,
     pub contour: VocalContour,
     pub syllable_mode: SyllableMode,
@@ -399,7 +324,6 @@ pub struct VocalParams {
     /// the chord root in range, snapped to scale). The final syllable
     /// of each line keeps the style's `cadence_pitch` landing so phrases
     /// still resolve, even with a non-resolving motif.
-    #[serde(default)]
     pub use_section_motif: bool,
 
     // ---- Voice & delivery ----
@@ -408,7 +332,6 @@ pub struct VocalParams {
     /// Vibrato rate in Hz. Real singers run between roughly 4 Hz
     /// (slow / classical) and 7 Hz (operatic / pop pressure). Defaults
     /// to 5 Hz, the historic hardcoded value.
-    #[serde(default = "default_vibrato_rate")]
     pub vibrato_rate: f32,
     /// Baseline voice tension in [-1.0, +1.0]. -1 = relaxed /
     /// breathy delivery, 0 = neutral, +1 = compressed / belted.
@@ -418,21 +341,18 @@ pub struct VocalParams {
     /// `tension_velocity_amount`, `tension_contour_amount`) add to
     /// this baseline so the actual tension can vary throughout the
     /// section.
-    #[serde(default = "default_tension")]
     pub tension: f32,
     /// How much the per-syllable note velocity modulates tension
     /// dynamically. 0 = constant tension equal to the slider; 1 =
     /// strong syllables (accented beats) push tension up by ~+0.5,
     /// weak syllables push it down by ~-0.3 — re-creating the way
     /// real singers tense up on accents.
-    #[serde(default = "default_tension_velocity_amount")]
     pub tension_velocity_amount: f32,
     /// How much the section's pitch contour modulates tension
     /// dynamically. 0 = no contour modulation; 1 = the highest notes
     /// of the section push tension up by ~+0.5 (singers belt at the
     /// top of their range), the lowest notes push it down by ~-0.5
     /// (more relaxed delivery on low notes).
-    #[serde(default = "default_tension_contour_amount")]
     pub tension_contour_amount: f32,
     /// Pitch portamento (note-to-note glide) duration in milliseconds.
     /// Range ~10–200 ms. Lower = harder note transitions (tighter,
@@ -440,27 +360,19 @@ pub struct VocalParams {
     /// SVS pipeline applies this as a linear ramp inserted before each
     /// pitch change. Defaults to 40 ms — the historic hardcoded value
     /// that matches the reference singing fixtures.
-    #[serde(default = "default_portamento_ms")]
     pub portamento_ms: f32,
     pub articulation: f32,
     pub consonant_emphasis: f32,
-    /// TIGER speaker preset. Decoupled from `voice` so the user can mix
-    /// range and singer character. Defaults to `voice.default_singer()`
-    /// when absent in older project files. Only meaningful when
-    /// `voicebank == VocalVoicebank::Tiger`.
-    #[serde(default = "default_singer")]
-    pub singer: VocalSinger,
-    /// Meiji singer mode. Only meaningful when
-    /// `voicebank == VocalVoicebank::Meiji`. Stored alongside `singer`
-    /// (rather than as part of an enum) so switching voicebanks
-    /// preserves each side's last-chosen singer.
-    #[serde(default = "default_singer_meiji")]
-    pub singer_meiji: VocalSingerMeiji,
-    /// Trained DiffSinger model used for the SVS render. Defaults to
-    /// `Lilia`, also for older JSON without the field (via
-    /// `#[serde(default)]`).
-    #[serde(default = "default_voicebank")]
-    pub voicebank: VocalVoicebank,
+    /// The voicebank's speaker (voice mode), as the bank's speaker id
+    /// (`disco` on TIGER, `phantom` on Meiji, ...); `None` sings with the
+    /// bank's default speaker, and is all a single-voice bank (Lilia)
+    /// ever holds. Replaces the old per-bank `singer` (TIGER) and
+    /// `singer_meiji` (Meiji) fields, which loading maps onto it
+    /// (`legacy`).
+    pub speaker: Option<String>,
+    /// Trained DiffSinger model used for the SVS render, by id. Defaults
+    /// to `lilia`, also for older JSON without the field.
+    pub voicebank: VoicebankId,
 }
 
 impl Default for VocalParams {
@@ -511,9 +423,8 @@ impl Default for VocalParams {
             // similar-sounding endings. Default to the middle for a
             // safety margin from either cliff.
             consonant_emphasis: 0.50,
-            singer: voice.default_singer(),
-            singer_meiji: default_singer_meiji(),
-            voicebank: default_voicebank(),
+            speaker: None,
+            voicebank: VoicebankId::default(),
         }
     }
 }
@@ -545,19 +456,15 @@ impl VocalParams {
     /// to it; the control API refuses longer text.
     pub const THEME_MAX_CHARS: usize = 240;
 
-    /// Switch to `voicebank`, resetting the speaker to the new bank's
-    /// default when the bank actually changes (TIGER: the voice type's
-    /// historic singer; Meiji: `Standard`; Lilia has a single voice).
-    /// Re-selecting the current bank changes nothing. The one rule every
-    /// bank switch outside the GUI picker goes through (`vocal.set_params`,
-    /// `vocal.render {voicebank}`).
-    pub fn switch_voicebank(&mut self, voicebank: VocalVoicebank) {
+    /// Switch to `voicebank`, resetting the speaker to `default_speaker`
+    /// (the new bank's default, which the caller looks up: the app's
+    /// voicebank registry knows each bank's speakers) when the bank
+    /// actually changes. Re-selecting the current bank changes nothing.
+    /// The one rule every bank switch goes through (`vocal.set_params`,
+    /// `vocal.render {voicebank}`, the lane inspector's picker).
+    pub fn switch_voicebank(&mut self, voicebank: VoicebankId, default_speaker: Option<String>) {
         if voicebank != self.voicebank {
-            match voicebank {
-                VocalVoicebank::Tiger => self.singer = self.voice.default_singer(),
-                VocalVoicebank::Meiji => self.singer_meiji = VocalSingerMeiji::Standard,
-                VocalVoicebank::Lilia => {}
-            }
+            self.speaker = default_speaker;
         }
         self.voicebank = voicebank;
     }
@@ -670,23 +577,6 @@ fn default_tension_contour_amount() -> f32 {
 
 fn default_portamento_ms() -> f32 {
     40.0
-}
-
-fn default_singer() -> VocalSinger {
-    VoiceType::Alto.default_singer()
-}
-
-fn default_singer_meiji() -> VocalSingerMeiji {
-    VocalSingerMeiji::Standard
-}
-
-/// Lilia is the default bank (vocal-mcp-control-and-quality.md D9): the
-/// maintained multi-language bank, and what the control API has always
-/// rendered a fresh lane with. Its generative-AI clause and NC-SA vocoder
-/// are accepted while Resonance is not commercial; revisit before any
-/// commercial release.
-fn default_voicebank() -> VocalVoicebank {
-    VocalVoicebank::Lilia
 }
 
 /// Seeded preview lines that mirror the prototype's draft.

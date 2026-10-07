@@ -38,12 +38,11 @@
 //! established tension convention ([`super::tension`] emits `[-1, +1]`).
 //! Pitch bend is already in cents, fed straight through.
 
-use resonance_music_theory::VocalVoicebank;
 use resonance_svs::ds::SampleCurve;
 
 use crate::compose::expression::ExpressionCurve;
 
-use super::super::paths::curve_supported;
+use super::super::registry::BankProfile;
 use super::f0::F0_TIMESTEP;
 
 /// Per-frame envelope (Dynamics → energy, Tension → tension, Breathiness →
@@ -51,7 +50,7 @@ use super::f0::F0_TIMESTEP;
 /// acoustic model's signed input units.
 ///
 /// Returns `None` — leaving the caller on its auto-derived path — when the
-/// curve has no overlay breakpoints, the active `voicebank` doesn't accept
+/// curve has no overlay breakpoints, the active `bank` doesn't accept
 /// the curve, or there are no frames to sample.
 ///
 /// `window` maps the segment's local frame span onto the clip-normalised
@@ -61,13 +60,13 @@ use super::f0::F0_TIMESTEP;
 /// fraction so the overlay isn't re-stretched onto each unit.
 pub(super) fn overlay_envelope(
     curve: &ExpressionCurve,
-    voicebank: VocalVoicebank,
+    bank: &BankProfile,
     n_frames: usize,
     window: (f32, f32),
 ) -> Option<SampleCurve> {
     if curve.overlay().is_empty()
         || n_frames == 0
-        || !curve_supported(voicebank, curve.kind())
+        || !bank.curve_supported(curve.kind())
     {
         return None;
     }

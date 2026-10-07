@@ -13,13 +13,14 @@
 
 use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
-    articulation_report, build_segment, comfortable_pitch_range, floor_duration_sec,
-    min_articulation_sec, resolve_clip_pronunciation, validate_for_voicebank,
+    articulation_report, build_segment, floor_duration_sec,
+    min_articulation_sec, resolve_clip, validate_for_voicebank,
 };
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::derive::LyricLine;
 use resonance_music_theory::g2p::{self, AssignedSyllable};
-use resonance_music_theory::{VocalParams, VocalVoicebank};
+use resonance_app::compose::vocal_svs::BankProfile;
+use resonance_music_theory::{VocalParams, VoicebankId};
 
 const TPQ: u32 = TICKS_PER_QUARTER_NOTE as u32;
 /// The tempo the song under investigation was written at.
@@ -51,13 +52,16 @@ fn notes(count: usize, beats: f64, pitch: u8) -> Vec<MidiNote> {
 /// Resolve `text` onto `n` notes the way the render path does.
 fn assign(text: &str, n: usize) -> Vec<AssignedSyllable> {
     let resolved =
-        resolve_clip_pronunciation(&draft(text), &[], n, &Default::default(), &[], &[]);
-    validate_for_voicebank(&resolved, VocalVoicebank::Lilia).expect("plain English resolves")
+        resolve_clip(&draft(text), &[], n, &Default::default(), &[], &[]);
+    validate_for_voicebank(
+        &resolved,
+        &BankProfile::not_installed("lilia"),
+    ).expect("plain English resolves")
 }
 
 fn params() -> VocalParams {
     VocalParams {
-        voicebank: VocalVoicebank::Lilia,
+        voicebank: VoicebankId::new("lilia"),
         ..VocalParams::default()
     }
 }
@@ -79,7 +83,7 @@ fn crammed_word_on_one_short_note_is_flagged() {
         &assigned,
         TPQ,
         BPM,
-        VocalVoicebank::Lilia,
+        &BankProfile::not_installed("lilia"),
     );
     assert_eq!(report.len(), 1);
     assert_eq!(report[0].phonemes.len(), 9);
@@ -110,7 +114,7 @@ fn the_same_word_split_across_notes_is_not_flagged() {
         &assigned,
         TPQ,
         BPM,
-        VocalVoicebank::Lilia,
+        &BankProfile::not_installed("lilia"),
     );
     assert_eq!(report.len(), 4);
     for n in &report {
@@ -127,14 +131,21 @@ fn the_same_word_split_across_notes_is_not_flagged() {
 
 #[test]
 fn out_of_range_notes_are_flagged_against_the_voicebank() {
-    let (lo, hi) = comfortable_pitch_range(VocalVoicebank::Lilia);
+    let range = BankProfile::not_installed("lilia").comfortable_range(None);
+    let (lo, hi) = (range.low, range.high);
     assert!(lo < hi);
     let assigned = assign("la la la", 3);
     let mut ns = notes(3, 1.0, lo + 6);
     ns[1].note = lo - 12;
     ns[2].note = hi + 12;
 
-    let report = articulation_report(&ns, &assigned, TPQ, BPM, VocalVoicebank::Lilia);
+    let report = articulation_report(
+        &ns,
+        &assigned,
+        TPQ,
+        BPM,
+        &BankProfile::not_installed("lilia"),
+    );
     assert!(!report[0].out_of_range, "mid-range note flagged");
     assert!(report[1].out_of_range, "an octave below the range");
     assert!(report[2].out_of_range, "an octave above the range");
@@ -151,7 +162,7 @@ fn report_durations_follow_the_note_grid() {
         &assigned,
         TPQ,
         BPM,
-        VocalVoicebank::Lilia,
+        &BankProfile::not_installed("lilia"),
     );
     let expected = 60.0 / BPM as f64 * 0.5;
     assert!(
@@ -188,6 +199,7 @@ fn a_roomy_note_gives_every_phoneme_its_floor() {
         &ExpressionCurves::default(),
         TPQ,
         BPM,
+        &BankProfile::not_installed("lilia"),
     );
     for (ph, d) in lexical_durations(&segment.ph_seq, &segment.ph_dur) {
         let floor = floor_duration_sec(&ph);
@@ -213,6 +225,7 @@ fn fricatives_get_more_time_than_stops() {
         &ExpressionCurves::default(),
         TPQ,
         BPM,
+        &BankProfile::not_installed("lilia"),
     );
     let lex = lexical_durations(&segment.ph_seq, &segment.ph_dur);
     let s = lex.iter().find(|(p, _)| p == "s").expect("`s` in {lex:?}").1;
@@ -230,7 +243,15 @@ fn phoneme_durations_fill_the_note_exactly() {
         let assigned = assign("resolution", 1);
         let ns = notes(1, beats, 64);
         let segment =
-            build_segment(&ns, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
+            build_segment(
+                &ns,
+                &params(),
+                &assigned,
+                &ExpressionCurves::default(),
+                TPQ,
+                BPM,
+                &BankProfile::not_installed("lilia"),
+            );
         let total: f64 = segment.ph_dur.iter().sum();
         // Leading + trailing 0.3 s pads around the note's own slot.
         let slot = (60.0 / BPM as f64 * beats).max(0.05);
@@ -251,7 +272,15 @@ fn onset_lead_in_moves_the_boundary_without_changing_the_total() {
     let text = g2p::auto_syllabify_text("resolution");
     let assigned = assign(&text, 4);
     let ns = notes(4, 1.0, 64);
-    let segment = build_segment(&ns, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
+    let segment = build_segment(
+        &ns,
+        &params(),
+        &assigned,
+        &ExpressionCurves::default(),
+        TPQ,
+        BPM,
+        &BankProfile::not_installed("lilia"),
+    );
     let total: f64 = segment.ph_dur.iter().sum();
     let expected = 0.3 + 4.0 * (60.0 / BPM as f64) + 0.3;
     assert!(

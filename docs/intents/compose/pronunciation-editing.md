@@ -7,16 +7,15 @@
 ## Why
 
 When the CMU dictionary or the rules mispronounce a word, the only fix
-today is `vocal.set_pronunciation` from an agent — and that entry is lost
-on project reload **and on any undo**, because `PronunciationState` is
-runtime-only and `ComposeState::load_from_project` clears it. Users have
-no GUI at all: the vocal roll's phoneme strip is read-only. Per-syllable
-overrides and the global (user-wide) dictionary exist as types but nothing
-creates or loads them.
+today is `vocal.set_pronunciation` from an agent (saved with the project
+and undoable since slice 11 of
+[vocal MCP control and quality](vocal-mcp-control-and-quality.md)). Users
+have no GUI at all: the vocal roll's phoneme strip is read-only.
+Per-syllable overrides are persisted but nothing creates them, and the
+global (user-wide) dictionary exists as a type but nothing loads it.
 
 ## What it would do
 
-- Project dictionary saved in the project file and kept across undo.
 - Interactive phoneme strip: click a syllable, remove/reorder/add
   phonemes, pick a CMU variant, split a syllable across two notes or merge
   with the next, revert to auto, add to dictionary.
@@ -28,8 +27,12 @@ creates or loads them.
 ## What exists to build on
 
 - `resonance-app/src/compose/vocal_svs/pronunciation.rs`
-  (`PronunciationState`, `SyllableOverride`, `DictionaryScope`,
-  `resolve_clip` with full precedence), `g2p::cmu_variants`.
+  (`PronunciationState` with per-lane, per-syllable overrides that check
+  the syllable text, `SyllableOverride`, `DictionaryScope`, `resolve_clip`
+  with full precedence), `g2p::cmu_variants`.
+- Persistence: `ProjectFile::pronunciation`
+  (`resonance-app/src/project/pronunciation.rs`), restored by the
+  `pronunciation` reconcile domain.
 - `update/compose/vocal_render_plan.rs::resolve_and_validate` (passes an
   empty global dictionary today).
 - Render cache: `compose/vocal_svs/render_cache.rs`.
@@ -39,24 +42,18 @@ creates or loads them.
 
 ## Open decisions
 
-1. Where overrides are keyed: `(ClipId, note_index)` as now breaks when a
-   regenerate reuses the clip id with different notes. Recommended: key by
-   `(definition, track, syllable index)` and drop overrides whose syllable
-   text changed.
-2. Global dictionary file location: the app config dir, as
+1. Global dictionary file location: the app config dir, as
    `pronunciation.json` (recommended).
 
 ## Slices
 
-1. Persist project dictionary (+ overrides) in `ProjectFile`; undo
-   round-trip test. **Moved** to
-   [vocal MCP control and quality](vocal-mcp-control-and-quality.md)
-   slice 11 (overrides keyed by `(definition, track, syllable index)`).
-2. Global dictionary load/save + scope in `vocal.set_pronunciation`.
-3. Phoneme-strip editing in the vocal roll with goldens.
-4. Dictionary editor modal, import/export.
+1. Global dictionary load/save + scope in `vocal.set_pronunciation`.
+2. Phoneme-strip editing in the vocal roll with goldens (creates
+   per-syllable overrides through `PronunciationState::set_override`).
+3. Dictionary editor modal, import/export.
 
 ## How we'd know it works
 
-`vocal.set_pronunciation`, save, reopen, undo something else, render:
-`song.vocal` still lists the entry and the segment uses its phonemes.
+A word added to the global dictionary is used in a second project; a
+phoneme edited in the strip is sung on the next render and survives a
+reopen.
