@@ -15,7 +15,7 @@ use super::LibraryError;
 
 /// Copy/extract chunk: the cancel flag is checked and progress reported
 /// once per chunk.
-const CHUNK: usize = 1024 * 1024;
+pub(crate) const CHUNK: usize = 1024 * 1024;
 
 /// How deep a folder walk goes before it gives up (a symlink loop the
 /// visited set did not catch, or an absurd tree).
@@ -68,11 +68,11 @@ impl<'a> ImportJob<'a> {
         self
     }
 
-    pub(super) fn is_cancelled(&self) -> bool {
+    pub(crate) fn is_cancelled(&self) -> bool {
         self.cancel.is_some_and(|c| c.load(Ordering::Relaxed))
     }
 
-    fn check_cancel(&self) -> Result<(), LibraryError> {
+    pub(crate) fn check_cancel(&self) -> Result<(), LibraryError> {
         if self.is_cancelled() {
             Err(LibraryError::Cancelled)
         } else {
@@ -80,14 +80,14 @@ impl<'a> ImportJob<'a> {
         }
     }
 
-    fn report(&mut self, p: ImportProgress) {
+    pub(crate) fn report(&mut self, p: ImportProgress) {
         if let Some(f) = self.progress.as_mut() {
             f(p);
         }
     }
 
     /// Refuse unless the disk under `at` has `needed` bytes free.
-    pub(super) fn check_space(&self, at: &Path, needed: u64) -> Result<(), LibraryError> {
+    pub(crate) fn check_space(&self, at: &Path, needed: u64) -> Result<(), LibraryError> {
         let available = match &self.free_space {
             Some(f) => f(at),
             None => free_space(at),
@@ -256,8 +256,9 @@ fn io_err<'a>(
 
 /// Stream `src` into a new file at `dest` in chunks of `buf`, and fsync it
 /// before it is closed (a promoted kit must not turn out empty after a
-/// crash). Returns the bytes written.
-fn copy_stream(
+/// crash). Returns the bytes written. Shared with the plok.org package
+/// install (`plok_download::package`).
+pub(crate) fn copy_stream(
     src: &mut dyn Read,
     dest: &Path,
     buf: &mut [u8],
@@ -311,6 +312,8 @@ pub(super) fn copy_tree(
 
 #[cfg(feature = "drumkit-zip")]
 pub(super) use zip_impl::{extract, read_entry, zip_plan, ZipPlan};
+#[cfg(feature = "drumkit-zip")]
+pub(crate) use zip_impl::is_litter;
 
 #[cfg(feature = "drumkit-zip")]
 mod zip_impl {
@@ -351,7 +354,7 @@ mod zip_impl {
     /// macOS resource forks (`__MACOSX/…`) and dotfiles (`.DS_Store`,
     /// `._x`), at any depth: never kit content, and they would otherwise
     /// count as top-level entries.
-    fn is_litter(path: &Path) -> bool {
+    pub(crate) fn is_litter(path: &Path) -> bool {
         path.components().any(|c| match c {
             Component::Normal(s) => s == "__MACOSX" || s.to_string_lossy().starts_with('.'),
             _ => false,
