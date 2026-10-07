@@ -120,12 +120,14 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "A vocal track's lyric lines with per-syllable phonemes, the project's \
-                       pronunciation overrides, and the SVS render state \
-                       (not_rendered/rendering/rendered/stale/error). Omit track_id for the \
-                       first vocal track. `lanes` lists the track's vocal lanes — one per \
-                       (section, track) — with the section's definition_id and name, its \
-                       start_bar, and the render pre-flight. SVS sings ONE SYLLABLE PER NOTE, \
+        description = "A vocal track's lanes, the project's pronunciation overrides, and the \
+                       SVS render state (not_rendered/rendering/rendered/stale/error). Omit \
+                       track_id for the first vocal track. `lanes` lists the track's vocal \
+                       lanes — one per (section, track) — each with the section's \
+                       definition_id and name, its start_bar, its full params (the \
+                       vocal_get_params shape), its lyric lines with per-syllable phonemes \
+                       (line index is 0-based WITHIN the lane, as vocal_set_line takes it), and \
+                       the render pre-flight. SVS sings ONE SYLLABLE PER NOTE, \
                        and syllable_count is the app's own count of the syllables it will \
                        consume — trust it over counting words or syllables in the text yourself. \
                        counts_mismatch (syllable_count > 0 and != note_count) is the first check \
@@ -142,8 +144,8 @@ impl ResonanceMcp {
                        synthesis setting. Check all of this BEFORE vocal_render, which is the \
                        most expensive operation on this surface. \
                        Pass a lane's definition_id as section_id to vocal_set_lyrics / \
-                       vocal_set_line to write that specific lane. The top-level lines/ \
-                       render_state describe the FIRST lane. Read-only.",
+                       vocal_set_line / vocal_set_params to write that specific lane. \
+                       Read-only.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<song::VocalView>()
     )]

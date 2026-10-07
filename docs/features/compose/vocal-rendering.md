@@ -1,6 +1,6 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
 > Spec history: crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -12,7 +12,7 @@ installed, the lane quietly keeps playing its MIDI.
 
 ## Behaviour
 
-- **Voicebanks.** `VocalVoicebank::{Tiger, Lilia, Meiji}`. Looked up under
+- **Voicebanks.** `VocalVoicebank::{Tiger, Lilia, Meiji}`; Lilia is the default. Looked up under
   `$RESONANCE_SVS_MODELS_DIR`, then `resonance-svs/models/` resolved from
   the app crate's compile-time `CARGO_MANIFEST_DIR` (`locate_voicebank`):
   TIGER at `singer/extracted/dsacoustic/` (bundled vocoder preferred over
@@ -93,10 +93,12 @@ It depends only on `resonance-music-theory`.
   a job (`job_status` / `job_wait`). `section_id` renders one lane;
   `track_id` alone renders **all** that track's lanes; neither renders
   every vocal lane. Lanes with no notes or no lyrics are skipped (the call
-  fails only if none can render). `voicebank` omitted keeps the lane's
-  choice, except that a lane still on the code default (TIGER) renders
-  with Lilia. Payload: `track_ids`, `revision`. `song.vocal` reports
-  render state.
+  fails only if none can render). `voicebank` omitted renders each lane
+  with the bank it holds (a new lane holds Lilia, the code default); a
+  given one (`tiger`, `lilia`, `meiji`, case-insensitive) is stored on
+  every lane the call covers. Payload: `track_ids`, `revision`.
+  `song.vocal` reports render state; banks and speakers are better set
+  with `vocal.set_params` ([vocal lanes](vocal-lyrics-and-melody.md)).
 - **Agent skills:** `mixing`, `spatial` read `song_vocal`; external
   `singer-songwriter` and `resonance-studio` skills drive renders.
 

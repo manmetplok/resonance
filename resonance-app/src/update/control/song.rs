@@ -238,8 +238,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
 
     // Lyrics live per (section definition, track) vocal lane. Walk the
     // arrangement in placement order (each definition once) so the
-    // lines read in song order.
-    let mut lines = Vec::new();
+    // lanes read in song order.
     let mut lanes = Vec::new();
     for definition in view_model::definitions_in_placement_order(app) {
         let Some(config) = definition.lane_generators.get(&track.id) else {
@@ -290,7 +289,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             // false confidence right before a render (ba doc #271).
             // "Not generated yet" stays legible as `note_count == 0`.
             counts_mismatch: syllable_count > 0 && note_count != syllable_count,
-            voicebank: Some(vocal_params.voicebank.as_str().to_owned()),
+            voicebank: Some(view_model::voicebank_id(vocal_params.voicebank)),
             comfortable_range: Some(song::PitchRangeView {
                 low: range_lo,
                 high: range_hi,
@@ -314,31 +313,35 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
                 .collect(),
             short_note_count,
             out_of_range_note_count,
-        });
-        for line in &vocal_params.draft {
-            let syllables =
-                resonance_music_theory::g2p::resolve_draft_with_dict(
-                    std::slice::from_ref(line),
-                    &dictionary,
-                )
-                .into_iter()
-                .map(|s| SyllableView {
-                    text: s.label,
-                    phonemes: s.phonemes.iter().map(|p| (*p).to_owned()).collect(),
+            params: view_model::vocal_params_view(vocal_params),
+            // Indexed per lane, the way `vocal.set_line` addresses them
+            // (spec D8); one song-wide list with a global index could not
+            // be written back without working out which lane it was.
+            lines: vocal_params
+                .draft
+                .iter()
+                .enumerate()
+                .map(|(index, line)| LyricLineView {
+                    index,
+                    text: line.text.clone(),
+                    syllables: resonance_music_theory::g2p::resolve_draft_with_dict(
+                        std::slice::from_ref(line),
+                        &dictionary,
+                    )
+                    .into_iter()
+                    .map(|s| SyllableView {
+                        text: s.label,
+                        phonemes: s.phonemes.iter().map(|p| (*p).to_owned()).collect(),
+                    })
+                    .collect(),
                 })
-                .collect();
-            lines.push(LyricLineView {
-                index: lines.len(),
-                text: line.text.clone(),
-                syllables,
-            });
-        }
+                .collect(),
+        });
     }
 
     let result = VocalView {
         track_id: resonance_control::ids::TrackId(track.id),
         lanes,
-        lines,
         pronunciation_overrides,
         render_state: view_model::vocal_render_state(app, track.id),
         revision: app.revision(),

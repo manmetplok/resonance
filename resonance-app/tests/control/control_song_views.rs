@@ -453,8 +453,10 @@ fn vocal_reports_lines_phonemes_and_dictionary() {
     let view: VocalView = response.result().expect("vocal succeeds");
     assert_eq!(u64::from(view.track_id), VOCAL);
 
-    assert_eq!(view.lines.len(), 1);
-    let line = &view.lines[0];
+    assert_eq!(view.lanes.len(), 1);
+    let lines = &view.lanes[0].lines;
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
     assert_eq!(line.index, 0);
     assert_eq!(line.text, "hello");
     assert!(!line.syllables.is_empty());

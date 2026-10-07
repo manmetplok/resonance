@@ -21,7 +21,7 @@ fn request_serializes_to_documented_shape() {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "control.hello",
-            "params": {"protocol_version": 1}
+            "params": {"protocol_version": 2}
         })
     );
 }

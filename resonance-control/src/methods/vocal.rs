@@ -31,6 +31,12 @@ pub const RENDER: &str = "vocal.render";
 /// `vocal.generate` — generate a vocal lane's melody (and lyrics) into
 /// its derived clip ([`GenerateParams`] -> [`GenerateResult`]).
 pub const GENERATE: &str = "vocal.generate";
+/// `vocal.get_params` — read a vocal lane's full settings
+/// ([`GetParamsParams`] -> [`ParamsResult`]).
+pub const GET_PARAMS: &str = "vocal.get_params";
+/// `vocal.set_params` — merge a partial patch into a vocal lane's
+/// settings ([`SetParamsParams`] -> [`ParamsResult`]).
+pub const SET_PARAMS: &str = "vocal.set_params";
 
 /// All `vocal.*` method names.
 pub const METHODS: &[&str] = &[
@@ -40,6 +46,8 @@ pub const METHODS: &[&str] = &[
     CLEAR_PRONUNCIATION,
     RENDER,
     GENERATE,
+    GET_PARAMS,
+    SET_PARAMS,
 ];
 
 /// Params for `vocal.set_lyrics`: bulk text, one line per lyric line.
@@ -144,9 +152,11 @@ pub struct RenderParams {
     /// lane, while the call still reported success.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section_id: Option<SectionDefinitionId>,
-    /// Voicebank name. Omitted keeps the lane's current voicebank
-    /// (falling back to the app default, Lilia, for a lane that has
-    /// never chosen one) — so a plain re-render never resets it.
+    /// Voicebank id (`tiger`, `lilia` or `meiji`; matched
+    /// case-insensitively), stored on every lane the render covers.
+    /// Omitted renders each lane with the bank it already has — a plain
+    /// re-render never changes it. Prefer `vocal.set_params` to choose a
+    /// bank; this is a shortcut for "switch and render".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voicebank: Option<String>,
 }
@@ -203,4 +213,325 @@ pub struct RenderJobResult {
     /// Tracks that were (re)rendered.
     pub track_ids: Vec<TrackId>,
     pub revision: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Lane params (`vocal.get_params` / `vocal.set_params`)
+// ---------------------------------------------------------------------------
+
+/// Params for `vocal.get_params`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GetParamsParams {
+    pub track_id: TrackId,
+    /// Which of the track's vocal lanes to read (`definition_id` from
+    /// `song.vocal`'s `lanes`). Omitted resolves the track's first
+    /// vocal lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
+}
+
+/// Params for `vocal.set_params`.
+///
+/// `params` is a **partial** patch: every field is optional, the fields
+/// present merge into the lane's current settings and the rest are kept.
+/// The merged result is validated before anything changes, so one bad
+/// field rejects the whole call (`invalid_params` naming the field). One
+/// call is one undo entry. The call never renders and never regenerates:
+/// follow it with `vocal.generate` (melody/lyric generator fields) or
+/// `vocal.render` (voice fields) to hear the change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SetParamsParams {
+    pub track_id: TrackId,
+    /// Which of the track's vocal lanes to write (`definition_id` from
+    /// `song.vocal`'s `lanes`). Omitted resolves the track's first
+    /// vocal lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
+    pub params: VocalParamsPatch,
+}
+
+/// Result of `vocal.get_params` and `vocal.set_params`: the lane's full
+/// settings after the call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ParamsResult {
+    pub track_id: TrackId,
+    /// The lane's section definition (pass as `section_id` to address it).
+    pub section_id: SectionDefinitionId,
+    pub params: VocalParamsView,
+    /// The lane's generator seed (`vocal.generate` advances it).
+    pub seed: u64,
+    pub revision: u64,
+}
+
+/// Vocal tessitura preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalVoice {
+    Soprano,
+    MezzoSoprano,
+    Alto,
+    Tenor,
+    Baritone,
+    Bass,
+}
+
+/// Melodic style of the melody generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalStyle {
+    PopBallad,
+    Conversational,
+    Hymnal,
+    Folk,
+    Anthemic,
+    Chant,
+}
+
+/// Phrase contour of the melody generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalContour {
+    Arch,
+    Rise,
+    Fall,
+    Wave,
+    Flat,
+}
+
+/// Note-to-syllable mapping of the melody generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalSyllableMode {
+    Syllabic,
+    Mixed,
+    Melismatic,
+}
+
+/// Mood of the lyric generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalMood {
+    Yearning,
+    Defiant,
+    Hopeful,
+    Reflective,
+    Joyful,
+    Melancholy,
+}
+
+/// Point of view of the lyric generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalPov {
+    FirstSingular,
+    FirstPlural,
+    SecondPerson,
+    ThirdPerson,
+    Narrator,
+}
+
+/// End-rhyme scheme of the lyric generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalRhyme {
+    Aabb,
+    Abab,
+    Abcb,
+    Abba,
+    Free,
+}
+
+/// Timbre preset of the voice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalTimbre {
+    Airy,
+    Warm,
+    Edged,
+    Bright,
+}
+
+/// A melody range in MIDI notes (60 = C4), as sent in a patch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct VocalRangePatch {
+    pub low: u8,
+    pub high: u8,
+}
+
+/// A melody range in MIDI notes (60 = C4), as reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VocalRange {
+    pub low: u8,
+    pub high: u8,
+}
+
+/// A partial update of a vocal lane's settings. Every field is optional;
+/// absent fields keep the lane's current value. Lyrics are not here (use
+/// `vocal.set_lyrics` / `vocal.set_line`).
+///
+/// Ranges are checked on the merged result: the 0..1 fields
+/// (`chord_tone_anchor`, `leap_range`, `breath`, `vibrato`,
+/// `articulation`, `consonant_emphasis`, `tension_velocity_amount`,
+/// `tension_contour_amount`), `tension` -1..1, `vibrato_rate` 1..20 Hz,
+/// `portamento_ms` 0..500, `lines` >= 1, `phrase_length_bars` >= 1,
+/// `1 <= syllables_min <= syllables_max`, `range.low < range.high <= 127`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct VocalParamsPatch {
+    // ---- Voice / render ----
+    /// Voicebank id: `tiger`, `lilia` (the default) or `meiji`. Changing
+    /// it resets `speaker` to that bank's default unless the same patch
+    /// sets `speaker` too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voicebank: Option<String>,
+    /// The bank's singer: on `tiger` one of `glam`, `fresh`, `disco`,
+    /// `royal`, `electric`, `mystic`, `vinyl`; on `meiji` one of
+    /// `standard`, `hunter`, `lilith`, `phantom`. `lilia` has a single
+    /// voice and refuses a speaker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timbre: Option<VocalTimbre>,
+    /// Vibrato depth, 0..1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vibrato: Option<f32>,
+    /// Vibrato rate in Hz, 1..20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vibrato_rate: Option<f32>,
+    /// Baseline tension, -1 (breathy) .. +1 (belted). Not heard on `tiger`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tension: Option<f32>,
+    /// How much note velocity modulates tension, 0..1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tension_velocity_amount: Option<f32>,
+    /// How much the pitch contour modulates tension, 0..1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tension_contour_amount: Option<f32>,
+    /// Note-to-note glide in milliseconds, 0..500.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portamento_ms: Option<f32>,
+    /// 0..1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub articulation: Option<f32>,
+    /// Consonant length, 0..1; 0.4..0.6 is the intelligible band.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consonant_emphasis: Option<f32>,
+
+    // ---- Melody generator ----
+    /// Voice type. Changing it does not move `range`; set both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VocalVoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<VocalRangePatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<VocalStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contour: Option<VocalContour>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syllable_mode: Option<VocalSyllableMode>,
+    /// Probability a strong-beat syllable lands on a chord tone, 0..1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chord_tone_anchor: Option<f32>,
+    /// Leap-vs-step bias, 0 (always step) .. 1 (always leap).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leap_range: Option<f32>,
+    /// Bars per melodic phrase, >= 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phrase_length_bars: Option<u8>,
+    /// Breath gap between phrases, 0..1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breath: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stay_in_scale: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoid_clashes: Option<bool>,
+    /// Reuse the section's shared motif intervals for the melody.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_section_motif: Option<bool>,
+
+    // ---- Lyric generator ----
+    /// Theme brief the lyric generator writes from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mood: Option<VocalMood>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pov: Option<VocalPov>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhyme: Option<VocalRhyme>,
+    /// Number of lyric lines to generate, >= 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syllables_min: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syllables_max: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub match_syllables_to_melody: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoid_cliches: Option<bool>,
+}
+
+/// A vocal lane's full settings — the shape [`VocalParamsPatch`] edits,
+/// with every field present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VocalParamsView {
+    // ---- Voice / render ----
+    /// Voicebank id: `tiger`, `lilia` or `meiji`.
+    pub voicebank: String,
+    /// The bank's singer; absent on a single-voice bank (`lilia`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    pub timbre: VocalTimbre,
+    pub vibrato: f32,
+    pub vibrato_rate: f32,
+    pub tension: f32,
+    pub tension_velocity_amount: f32,
+    pub tension_contour_amount: f32,
+    pub portamento_ms: f32,
+    pub articulation: f32,
+    pub consonant_emphasis: f32,
+
+    // ---- Melody generator ----
+    pub voice: VocalVoice,
+    pub range: VocalRange,
+    pub style: VocalStyle,
+    pub contour: VocalContour,
+    pub syllable_mode: VocalSyllableMode,
+    pub chord_tone_anchor: f32,
+    pub leap_range: f32,
+    pub phrase_length_bars: u8,
+    pub breath: f32,
+    pub stay_in_scale: bool,
+    pub avoid_clashes: bool,
+    pub use_section_motif: bool,
+
+    // ---- Lyric generator ----
+    pub theme: String,
+    pub mood: VocalMood,
+    pub pov: VocalPov,
+    pub rhyme: VocalRhyme,
+    pub lines: u8,
+    pub syllables_min: u8,
+    pub syllables_max: u8,
+    pub match_syllables_to_melody: bool,
+    pub avoid_cliches: bool,
 }

@@ -1,6 +1,6 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
 > Spec history: `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -15,7 +15,7 @@ line, re-rolled from a small template corpus, or set by an agent.
 - **One lane per (section, track).** A vocal lane only exists after the
   Vocal generator is installed on it (GUI pick list or
   `section.set_lane_generator kind=vocal`). A track that sings in four
-  sections needs one lane per section; control calls that omit
+  sections needs one lane per section on the same track; control calls that omit
   `section_id` hit the track's first vocal lane in placement order
   (`first_vocal_definition`), except `vocal.render` (see rendering).
 - **Lyric draft.** `VocalParams::draft: Vec<LyricLine>` — each line has a
@@ -46,9 +46,25 @@ line, re-rolled from a small template corpus, or set by an agent.
 - **Seeds.** GUI generate buttons and `vocal.generate` without a seed bump
   the lane seed; an explicit seed is installed first (reproducible).
 - **Default voicebank.** A lane's `VocalParams::voicebank` defaults to
-  TIGER in code (`default_voicebank`); the built-in project template sets
-  Lilia; `vocal.render` without a voicebank renders a lane still on the code
-  default with Lilia.
+  Lilia (`default_voicebank`; spec D9 — Lilia's licence terms are accepted
+  while Resonance is not commercial). `vocal.render` without a voicebank
+  renders every lane with the bank it holds, so an explicitly chosen TIGER
+  is honoured (BUG-52 fixed).
+- **Settings over the wire.** `vocal.get_params` / `vocal.set_params`
+  read and patch a lane's settings (everything but the draft) through
+  snake_case wire types (`VocalParamsPatch`, `VocalParamsView` in
+  `resonance-control/src/methods/vocal.rs`); `VocalParams`' own serde —
+  the project format — is untouched. A patch merges into the lane, the
+  merged result is validated with `VocalParams::validate()` before any
+  change (`invalid_params` naming the field), and the write is one
+  `SetLaneGenerator` carrying the lane's seed and draft — one undo entry.
+  It never renders or regenerates. `voicebank` is an id string (`tiger`,
+  `lilia`, `meiji`) and `speaker` one string that maps to `singer`
+  (TIGER), `singer_meiji` (Meiji) or nothing (Lilia, which refuses one);
+  a bank switch without `speaker` resets it to the bank's default.
+  `section.set_lane_generator` vocal `options` take the same patch and
+  merge into an existing lane (lyrics and seed kept; an explicit `seed`
+  wins), or into the defaults for a new one.
 - **Persistence.** `VocalParams` (draft included) persists inside the lane
   config; per-note lyric annotations of the derived clip persist through
   the `ClipLyrics` side table.
@@ -64,7 +80,7 @@ line, re-rolled from a small template corpus, or set by an agent.
 | Generate orchestration | `resonance-app/src/update/compose/vocal_render.rs` | `roll_vocal_lyrics`, `draft_vocal_lyrics`, `roll_vocal_melody` |
 | Lane lookup for control | `resonance-app/src/update/compose/vocal_control.rs` | `first_vocal_definition`, `vocal_definitions_for_track`, `control_set_lyrics`, `control_set_line` |
 | Views | `resonance-app/src/view/compose/lane_inspector/vocal/` (`lyrics_group`, `draft_group`, `melody_group`, `voice_group`, `generate_group`), `vocal_lane/`, `vocal_roll/` | right rail, lane row (lyrics + contour), vocal roll editor |
-| Control | `resonance-app/src/update/control/vocal.rs`, `song.rs` | `normalize_lyric_text`, `song.vocal` view model |
+| Control | `resonance-app/src/update/control/vocal.rs`, `song.rs`, `section.rs`, `view_model/vocal_params.rs` | `normalize_lyric_text`, `apply_params_patch`, `vocal_params_view`, `build_vocal_lane_config`, `song.vocal` view model |
 
 ## Surfaces
 
@@ -76,12 +92,17 @@ line, re-rolled from a small template corpus, or set by an agent.
 - **Control API / MCP:**
   - `vocal.set_lyrics` → `mcp__resonance__vocal_set_lyrics` (`text`, one
     line per `\n`, `syllabify` default true, optional `section_id`).
-  - `vocal.set_line` → `vocal_set_line` (`line_index` 0-based).
+  - `vocal.set_line` → `vocal_set_line` (`line_index` 0-based within the
+    lane, as `song.vocal` lists it).
+  - `vocal.get_params` / `vocal.set_params` → `vocal_get_params` /
+    `vocal_set_params` (partial snake_case patch; see Behaviour).
   - `vocal.generate` → `vocal_generate` (`seed`, `lyrics` default true —
     pass `false` to keep lyrics you set); returns the derived `clip_id`.
     Also queues a render.
-  - `song.vocal` → `song_vocal`: per-lane syllables, notes, out-of-range
-    notes, comfortable range, voicebank, render state.
+  - `song.vocal` → `song_vocal`: per lane its `params` (the
+    `vocal.get_params` shape), its `lines` (indexed within the lane) with
+    syllables and phonemes, notes, out-of-range notes, comfortable range
+    and voicebank id; the track's render state.
 - **Agent skills:** `arranging` (vocal_generate); external skill
   `singer-songwriter` drives the full lyric flow.
 
@@ -90,6 +111,8 @@ line, re-rolled from a small template corpus, or set by an agent.
 | What | Where | Run |
 |---|---|---|
 | Control lyrics/lines/lanes | `resonance-app/tests/control/control_vocal.rs`, `control_vocal_lanes.rs`, `control_vocal_generate.rs` | `./scripts/run-tests.py -p resonance-app` |
+| Params API, lane-generator merge, per-lane lines, BUG-52 | `resonance-app/tests/control/control_vocal_params.rs` | same |
+| Wire shapes | `resonance-control/tests/{methods,views}.rs` | `./scripts/run-tests.py -p resonance-control` |
 | Vocal roll | `tests/compose/vocal_roll_keys.rs`, `vocal_roll_key_focus.rs`, `vocal_roll_fingerprint.rs` | same |
 | Placeholder rows | `tests/compose/compose_vocal_placeholder.rs` | same |
 | Theory | `resonance-music-theory/tests/{vocal,vocal_climax,vocal_syncopation,vocal_melody_golden,vocal_params_validate,vocal_enum_labels,g2p,g2p_apis}.rs` | `./scripts/run-tests.py -p resonance-music-theory` |

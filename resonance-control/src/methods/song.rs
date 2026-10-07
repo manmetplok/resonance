@@ -9,6 +9,7 @@ use crate::ids::{
     ChordId, ClipId, NoteId, SectionDefinitionId, SectionPlacementId, SendId, TrackId,
 };
 use crate::methods::global::{SignatureEventView, TempoEventView};
+use crate::methods::vocal::VocalParamsView;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -327,14 +328,12 @@ pub struct NoteView {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct VocalView {
     pub track_id: TrackId,
-    /// Every vocal lane on this track, in placement order. Lyrics live
-    /// per `(section definition, track)` lane, and the top-level fields
-    /// below describe only the **first** one — the lane the `vocal.*`
-    /// mutations resolve to when they are given no `section_id`. Without
-    /// this list a client could not tell which lane a write had hit.
+    /// Every vocal lane on this track, in placement order. Lyrics, lines
+    /// and settings live per `(section definition, track)` lane; the
+    /// first entry is the lane the `vocal.*` mutations resolve to when
+    /// they are given no `section_id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lanes: Vec<VocalLaneView>,
-    pub lines: Vec<LyricLineView>,
     /// Project-wide pronunciation overrides: word -> phoneme list
     /// (lowercase ARPAbet-style phonemes).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -378,9 +377,18 @@ pub struct VocalLaneView {
     /// reported as `false`. Distinguish "not generated yet" by
     /// `note_count == 0` rather than by this flag.
     pub counts_mismatch: bool,
-    /// Voicebank this lane will render with, e.g. `"Lilia"`.
+    /// Voicebank id this lane will render with, e.g. `"lilia"` (the
+    /// same id as `params.voicebank`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voicebank: Option<String>,
+    /// The lane's full settings — the `vocal.get_params` shape.
+    pub params: VocalParamsView,
+    /// The lane's lyric lines with per-syllable phonemes. `index` is
+    /// 0-based **within this lane** — the `line_index` that
+    /// `vocal.set_line` takes together with this lane's `definition_id`
+    /// as `section_id`.
+    #[serde(default)]
+    pub lines: Vec<LyricLineView>,
     /// The voicebank's comfortable MIDI pitch range. Notes outside it are
     /// flagged in [`Self::notes`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -453,7 +461,8 @@ pub struct VocalNoteView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LyricLineView {
-    /// 0-based line index (`vocal.set_line` addresses lines by this).
+    /// 0-based line index within its lane (`vocal.set_line` addresses
+    /// lines by this, with the lane's `definition_id` as `section_id`).
     pub index: usize,
     pub text: String,
     pub syllables: Vec<SyllableView>,

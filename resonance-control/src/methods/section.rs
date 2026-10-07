@@ -170,11 +170,19 @@ pub enum LaneKind {
 ///
 /// Lyrics and the SVS voice live per **(section definition, track)**
 /// vocal lane — a vocal generator installed here only covers this one
-/// section on this one track. `vocal.set_lyrics` resolves a track's
-/// **first** vocal lane in placement order, so a song that sings in four
-/// sections needs **four vocal tracks**: configure one `vocal` lane per
-/// `(section, track)`, then target each with `vocal.set_lyrics` /
-/// `vocal.render`.
+/// section on this one track. A song that sings in four sections needs
+/// **one vocal lane per section** on the same vocal track: call this
+/// once per section, then address each lane by passing its section as
+/// `section_id` to the `vocal.*` methods (omitted, they resolve the
+/// track's first lane in placement order).
+///
+/// # Vocal options merge
+///
+/// For `kind = vocal`, `options` is a `vocal::VocalParamsPatch` (the
+/// `vocal.set_params` patch, snake_case). On a section that already has
+/// a vocal lane on this track the patch merges into it and the lane's
+/// lyrics and seed are kept (an explicit `seed` still wins); on a new
+/// lane, absent fields take their defaults.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -184,12 +192,15 @@ pub struct SetLaneGeneratorParams {
     /// The generator to install; `manual` removes any existing generator.
     pub kind: LaneKind,
     /// RNG seed for reproducible output; omitted derives a deterministic
-    /// per-kind seed from the section id (matching the GUI default).
+    /// per-kind seed from the section id (matching the GUI default), or
+    /// for an existing vocal lane keeps the lane's seed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
     /// Per-kind generator params, deserialized into the app's
-    /// `BassParams` / `MelodyParams` / `PadParams` / `VocalParams`.
-    /// Absent uses generator defaults; ignored for `manual`.
+    /// `BassParams` / `MelodyParams` / `PadParams`, or for `vocal` a
+    /// partial `vocal::VocalParamsPatch` merged into the lane (see
+    /// above). Absent uses generator defaults (vocal: keeps an existing
+    /// lane as it is); ignored for `manual`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Value>,
 }

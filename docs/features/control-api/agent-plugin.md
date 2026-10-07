@@ -1,6 +1,6 @@
 # Agent plugin (`resonance-agent-plugin`)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
 > Spec history: `docs/history/specs/warmth-width-depth.md` §8 (keys
 > blocks, the `spatial` skill); the plugin's own `README.md` is the
 > maintained guide and stays in place.

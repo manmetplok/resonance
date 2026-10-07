@@ -20,6 +20,7 @@ use crate::message::Message;
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::section as proto;
+use resonance_control::methods::vocal::VocalParamsPatch;
 use resonance_control::{KeyScale, Request, Response, RpcError};
 
 use super::reply::{ack_or_compose_error, no_section_definition, no_section_placement, reject};
@@ -309,7 +310,7 @@ fn set_lane_generator(app: &mut Resonance, request: &Request) -> (Response, Task
         return reject(request, e);
     }
 
-    let config = match build_lane_config(definition_id, &params) {
+    let config = match build_lane_config(app, definition_id, track_id, &params) {
         Ok(c) => c,
         Err(e) => return reject(request, e),
     };
@@ -337,8 +338,15 @@ fn set_lane_generator(app: &mut Resonance, request: &Request) -> (Response, Task
 /// deterministic per-kind default derived from the section id — the same
 /// multipliers `lane_inspector::set_generator` uses, so a lane installed
 /// over the wire regenerates identically to one installed by hand.
+///
+/// `vocal` is the exception to "replace": its options are the
+/// `vocal.set_params` patch, merged into the lane that is already there
+/// (keeping its lyrics and seed), or into the defaults for a new lane
+/// (vocal-mcp-control-and-quality.md D2).
 fn build_lane_config(
+    app: &Resonance,
     definition_id: u64,
+    track_id: u64,
     params: &proto::SetLaneGeneratorParams,
 ) -> Result<Option<LaneGeneratorConfig>, RpcError> {
     use crate::util::seed_from_id;
@@ -357,15 +365,45 @@ fn build_lane_config(
             LaneGeneratorKind::Pad(parse_options::<PadParams>(params.kind, options)?),
             definition_id.wrapping_mul(0x6C62272E07BB0142),
         ),
-        proto::LaneKind::Vocal => (
-            LaneGeneratorKind::Vocal(parse_options::<VocalParams>(params.kind, options)?),
-            definition_id.wrapping_mul(0xBF58476D1CE4E5B9),
-        ),
+        proto::LaneKind::Vocal => {
+            return build_vocal_lane_config(app, definition_id, track_id, params).map(Some)
+        }
     };
     Ok(Some(LaneGeneratorConfig {
         kind,
         seed: params.seed.unwrap_or(default_seed),
     }))
+}
+
+/// The vocal arm of [`build_lane_config`]: merge the options patch into
+/// the existing vocal lane (lyrics and seed kept; an explicit `seed`
+/// wins) or into `VocalParams::default()` for a new one, then validate.
+fn build_vocal_lane_config(
+    app: &Resonance,
+    definition_id: u64,
+    track_id: u64,
+    params: &proto::SetLaneGeneratorParams,
+) -> Result<LaneGeneratorConfig, RpcError> {
+    let patch: VocalParamsPatch = parse_options(params.kind, params.options.as_ref())?;
+    let existing = app
+        .compose
+        .find_definition(definition_id)
+        .and_then(|d| d.lane_generators.get(&track_id))
+        .and_then(|c| match &c.kind {
+            LaneGeneratorKind::Vocal(p) => Some((p.clone(), c.seed)),
+            _ => None,
+        });
+    let (mut vocal, seed) = existing.unwrap_or_else(|| {
+        (
+            VocalParams::default(),
+            definition_id.wrapping_mul(0xBF58476D1CE4E5B9),
+        )
+    });
+    super::vocal::apply_params_patch(&mut vocal, &patch)?;
+    Ok(LaneGeneratorConfig {
+        kind: LaneGeneratorKind::Vocal(vocal),
+        seed: params.seed.unwrap_or(seed),
+    })
 }
 
 /// Deserialize the optional per-kind `options` object into the matching

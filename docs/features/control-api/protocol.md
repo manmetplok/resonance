@@ -1,6 +1,6 @@
 # Control protocol and conventions
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
 > Spec history: ba doc #265 (not in the repo). Code-review findings cited
 > below (CTL-01, CTL-03, ARCH2-06, …) are in
 > `docs/history/reviews/code-review-todo.md`.
@@ -45,11 +45,11 @@ kinds; it is never sent.
 
 ### Versioning and capabilities
 
-- `PROTOCOL_VERSION` is `1`. `control.hello {protocol_version}` returns
+- `PROTOCOL_VERSION` is `2` (bumped from 1 for the vocal params wire: snake_case vocal enums, per-lane `song.vocal` lines and params, voicebank ids). `control.hello {protocol_version}` returns
   `{app_version, protocol_version, capabilities}`. The app compares
   versions with `!=`: a mismatch marks the connection incompatible.
 - `capabilities` is `methods::capabilities()`: every method this build
-  answers, in namespace order (182 today). It is a contract. A name that
+  answers, in namespace order (184 today). It is a contract. A name that
   would always answer `unsupported` is kept out of it — that is why
   `render.stems` is defined but not listed.
 - What bumps the version: removing or renaming a method or field, or
