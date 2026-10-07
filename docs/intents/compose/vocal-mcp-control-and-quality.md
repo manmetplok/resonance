@@ -1,6 +1,6 @@
 # Vocals: MCP control, voicebank library, correctness and expression
 
-> Status: **designed**
+> Status: **partly built** (progress per slice in §12)
 > Area: compose (vocals) + control-api + plugins-instruments (library)
 > Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
 > (every decision below was put to him as a multiple-choice question; §11
@@ -429,7 +429,7 @@ handler, MCP tool, GUI, tests, and the feature doc with its
 `Verified against master @` line (see
 [control-API conventions](../../guides/control-api-conventions.md)).
 
-1. **Default and description fixes.**
+1. **Default and description fixes.** ✅ built (phase 1)
    - Lilia becomes the code default (`params.rs:663`, `VoiceType::default_singer`).
    - The Lilia remap in `vocal.render` goes (`update/control/vocal.rs:428-432`,
      `:633`), which fixes BUG-52.
@@ -437,7 +437,7 @@ handler, MCP tool, GUI, tests, and the feature doc with its
      `section.rs:169-177`), along with every description that names a
      default bank.
    - `lines[]` moves to per lane.
-2. **`resonance-svs` honesty.**
+2. **`resonance-svs` honesty.** ✅ built (phase 1). Measured: the shipped acoustic models take `steps`, so `speedup` 50 is 1.7× *slower*; default stays 20.
    - `curve_supported` reads the `use_*_embed` flags.
    - The `rocm` feature is replaced by MIGraphX (ONNX Runtime 1.23 removed
      ROCm).
@@ -445,7 +445,7 @@ handler, MCP tool, GUI, tests, and the feature doc with its
      is logged and reported in `control.hello`.
    - Measure `speedup` 20 against 50 (render time and a listen) with
      `examples/render_resonance_vocal.rs`, then decide.
-3. **Params API.** The wire patch and view types, `vocal.get_params`,
+3. **Params API.** ✅ built (phase 1). The wire patch and view types, `vocal.get_params`,
    `vocal.set_params`, the `set_lane_generator` merge, `song.vocal` params,
    snake_case, and `PROTOCOL_VERSION` 2 with the lockstep update.
 4. **Bank registry.**
@@ -467,13 +467,13 @@ handler, MCP tool, GUI, tests, and the feature doc with its
 7. **plok.org install.** Index entries, shared `plok_download`, the library
    overlay, `vocal.voicebank_install`, and the available list in
    `vocal.voicebanks`.
-8. **Melisma.** The `_` token, counts, the `s` key editing the draft,
+8. **Melisma.** Library side (`_`/`+` holds, coda on the last hold, counts) built in phase 1; The `_` token, counts, the `s` key editing the draft,
    `SyllableMode`, and `slur: user | auto`.
 9. **Render state.**
    - Per-lane state from plan hashes, with keys saved with the audio.
    - The debounced GUI re-render and the stale badge.
    - The chord-edit Task fix.
-10. **Syllables and pronunciation source.** Exact user breaks, `g2p` per
+10. **Syllables and pronunciation source.** Library side built in phase 1 (exact breaks, `G2pSource`, corpus); Exact user breaks, `g2p` per
     note, and the corpus fix and test.
 11. **Pronunciation persistence.** The project dictionary and overrides in
     `ProjectFile`; reconcile restores them instead of clearing them
