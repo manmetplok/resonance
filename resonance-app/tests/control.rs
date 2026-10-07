@@ -189,5 +189,7 @@ mod control_vocal_render_all_lanes;
 mod control_vocal_render_state;
 #[path = "control/control_vocal_render_state_edits.rs"]
 mod control_vocal_render_state_edits;
+#[path = "control/control_voicebank_install.rs"]
+mod control_voicebank_install;
 #[path = "control/control_voicebanks.rs"]
 mod control_voicebanks;

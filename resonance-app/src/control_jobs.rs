@@ -127,6 +127,10 @@ pub enum JobToken {
     /// for this clip, fails when the detector finds no tempo or the clip
     /// is deleted first (`engine_events::clips`).
     DetectTempo { clip_id: u64 },
+    /// A `vocal.voicebank_install` (vocal-mcp-control-and-quality.md §5):
+    /// resolved by id from the tick once the install thread finished and
+    /// the registry was rescanned (`update::voicebank_library::poll`).
+    VoicebankInstall { id: String },
     /// A `meter.probe` (warmth-width-depth.md §7.3): completes on
     /// `AudioEvent::ChainProbed`, fails on `ChainProbeError`, both of
     /// which echo the job id as their `probe_id`. It renders nothing

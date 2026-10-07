@@ -22,8 +22,13 @@
 //! whose bank (or its vocoder) is not installed fails the call with
 //! `voicebank_missing` before anything starts (spec §4.6).
 //!
-//! `vocal.voicebanks` lists the installed banks; it reads the machine,
-//! not the project, so it bypasses the mutation gate.
+//! `vocal.voicebanks` lists the installed banks and the plok.org index's
+//! others; it reads the machine, not the project, so it bypasses the
+//! mutation gate. `vocal.voicebank_install` is a job that downloads a bank
+//! (and its vocoder) into the user voicebank folder
+//! (`compose::vocal_svs::registry::library`); it bypasses the gate too and
+//! resolves from the tick once the install finished and the registry was
+//! rescanned (`update::voicebank_library::poll`).
 //!
 //! `vocal.get_params` / `vocal.set_params` read and patch a lane's
 //! settings through the snake_case wire types in
@@ -66,6 +71,7 @@ pub(super) fn try_handle(
         proto::GET_PARAMS => get_params(app, request),
         proto::SET_PARAMS => set_params(app, request),
         proto::VOICEBANKS => voicebanks(app, request),
+        proto::VOICEBANK_INSTALL => voicebank_install(app, conn, request),
         _ => return None,
     };
     Some(handled)
@@ -511,11 +517,13 @@ fn set<T>(field: &mut T, value: Option<T>) {
     }
 }
 
-/// A wire voicebank id the registry accepts: installed, or one of the
-/// built-in banks (spec §4.6 typo guard), and able to sing English.
+/// A wire voicebank id the registry accepts: installed, one of the
+/// built-in banks, or listed in the plok.org index (spec §4.6 typo
+/// guard), and able to sing English.
 fn checked_voicebank(banks: &VoicebankRegistry, name: &str) -> Result<VoicebankId, RpcError> {
     let id = VoicebankId::new(name);
-    if !banks.is_known(id.as_str()) {
+    let index_english = banks.in_index(id.as_str());
+    if !banks.is_known(id.as_str()) && index_english.is_none() {
         let mut ids: Vec<String> = banks.installed().map(|b| b.id.clone()).collect();
         for b in crate::compose::vocal_svs::registry::BUILTIN_BANKS {
             if !ids.iter().any(|i| i == b.id) {
@@ -523,11 +531,18 @@ fn checked_voicebank(banks: &VoicebankRegistry, name: &str) -> Result<VoicebankI
             }
         }
         return Err(RpcError::invalid_params(format!(
-            "unknown voicebank {name:?} (one of: {}; vocal_voicebanks lists the installed ones)",
+            "unknown voicebank {name:?} (one of: {}; vocal_voicebanks lists the installed ones \
+             and the downloadable ones)",
             ids.join(", ")
         )));
     }
-    if !banks.profile(&id).english() {
+    // A bank known only from the index has no files to ask yet: its
+    // listed languages decide.
+    let english = match index_english {
+        Some(english) if !banks.is_known(id.as_str()) => english,
+        _ => banks.profile(&id).english(),
+    };
+    if !english {
         return Err(RpcError::invalid_params(format!(
             "voicebank {id:?} cannot sing English (it lacks most English phonemes), and lyrics \
              are English; pick a bank vocal_voicebanks lists with english: true"
@@ -537,12 +552,130 @@ fn checked_voicebank(banks: &VoicebankRegistry, name: &str) -> Result<VoicebankI
 }
 
 /// `vocal.voicebanks`: rescan the voicebank folders and list what is
-/// installed. Reads the machine, not the project: no undo entry, no
-/// revision bump.
+/// installed, plus the index's banks that are not. The index is read from
+/// memory or its on-disk cache — never fetched on the update loop; a stale
+/// or missing one starts a background fetch (`index_status` says which).
+/// Reads the machine, not the project: no undo entry, no revision bump.
 fn voicebanks(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     app.rescan_voicebanks();
-    let list = view_model::voicebank_list(&app.voicebanks);
+    let lib = &app.voicebank_library.lib;
+    let banks_dir = app.voicebanks.roots().banks.clone();
+    let index = lib.index(banks_dir.as_deref());
+    lib.refresh_index(banks_dir, false);
+    let (status, error) = {
+        let s = lib.state();
+        let fresh = s
+            .index_fetched_at
+            .is_some_and(|at| at.elapsed() < resonance_common::plok_download::INDEX_TTL);
+        let status = match (&index, fresh, s.fetching_index) {
+            (Some(_), true, _) => "fresh",
+            (Some(_), false, _) => "cached",
+            (None, _, true) => "fetching",
+            (None, _, false) => "unavailable",
+        };
+        (status, s.index_error.clone())
+    };
+    let list = view_model::voicebank_list(
+        &app.voicebanks,
+        view_model::IndexView {
+            index: index.as_ref(),
+            status,
+            error,
+        },
+    );
     (super::success(request, &list), Task::none())
+}
+
+/// Resolve a `vocal.voicebank_install` job from its finished install
+/// (called from the tick, after the registry was rescanned).
+pub(crate) fn voicebank_install_settled(
+    app: &Resonance,
+    job_id: u64,
+    result: Result<
+        crate::compose::vocal_svs::registry::InstallOutcome,
+        crate::compose::vocal_svs::registry::InstallError,
+    >,
+) {
+    use crate::compose::vocal_svs::registry::InstallErrorKind as Kind;
+    let board = app.control_jobs();
+    match result {
+        Ok(o) => {
+            let wire = proto::VoicebankInstallResult {
+                id: o.id,
+                name: o.name,
+                version: o.version,
+                terms_url: o.terms_url,
+                credit: o.credit,
+                commercial: o.commercial,
+                vocoder: o.vocoder,
+                vocoder_installed: o.vocoder_installed,
+                vocoder_fetched: o.vocoder_fetched,
+                already_installed: o.already_installed,
+            };
+            board.complete(
+                job_id,
+                serde_json::to_value(wire).unwrap_or(serde_json::Value::Null),
+            );
+        }
+        Err(e) => {
+            let kind = match e.kind {
+                Kind::NotFound => Some(resonance_control::ErrorKind::NotFound),
+                Kind::UpstreamChanged | Kind::Cancelled | Kind::Failed => None,
+            };
+            board.fail_with_kind(job_id, e.message, kind);
+        }
+    }
+}
+
+/// `vocal.voicebank_install`: start the install job. Refused up front when
+/// the index (as known now) does not list the id, or the bank is already
+/// installing; the job itself fetches a stale index first. Running it
+/// accepts the bank's terms for the user — the result carries them.
+fn voicebank_install(
+    app: &mut Resonance,
+    conn: crate::control_socket::ConnId,
+    request: &Request,
+) -> (Response, Task<Message>) {
+    let params: proto::VoicebankInstallParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let id = params.id.trim().to_owned();
+    if id.is_empty() {
+        return reject(request, RpcError::invalid_params("id cannot be empty"));
+    }
+    let roots = app.voicebanks.roots().clone();
+    let lib = app.voicebank_library.lib.clone();
+    if let Some(index) = lib.index(roots.banks.as_deref()) {
+        if index.voicebank(&id).is_none() {
+            let ids: Vec<&str> = index.voicebanks.iter().map(|b| b.id.as_str()).collect();
+            return reject(
+                request,
+                RpcError::not_found(format!(
+                    "the plok.org index lists no voicebank {id:?} (it lists: {})",
+                    if ids.is_empty() { "none".to_owned() } else { ids.join(", ") }
+                )),
+            );
+        }
+    }
+    if lib.state().is_installing(&id) {
+        return reject(
+            request,
+            RpcError::busy(format!("voicebank {id:?} is already being installed")),
+        );
+    }
+    let started = app.start_control_job(
+        proto::VOICEBANK_INSTALL,
+        &format!("install voicebank {id}"),
+        JobToken::VoicebankInstall { id: id.clone() },
+        Some(conn),
+    );
+    let board = app.control_jobs().clone();
+    if let Err(e) = lib.start_install(&id, roots, Some((started.job_id.0, board.clone()))) {
+        board.fail(started.job_id.0, e);
+    }
+    app.voicebank_library_changed();
+    (super::success(request, &started), Task::none())
 }
 
 // ---------------------------------------------------------------------------

@@ -158,6 +158,9 @@ impl VoicebankRegistry {
             languages: manifest.languages.clone(),
             inventory: manifest.inventory().clone(),
             english_dict: manifest.details.english_dict.clone(),
+            plok: user
+                .then(|| super::plok_index::PlokSidecar::read(dir))
+                .flatten(),
             builtin,
             dictionary: Default::default(),
         }
@@ -208,10 +211,13 @@ fn scan_manifest(dir: &Path, id: &str) -> Option<VoicebankManifest> {
     }
 }
 
+/// The folders under `dir`, sorted, skipping hidden ones: an install's
+/// staging folder or a bank being deleted is never half-seen as a bank.
 fn subdirs(dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| {
             rd.flatten()
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
                 .map(|e| e.path())
                 .filter(|p| p.is_dir())
                 .collect()

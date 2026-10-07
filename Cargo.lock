@@ -4733,11 +4733,13 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]

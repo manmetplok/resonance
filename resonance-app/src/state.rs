@@ -64,6 +64,7 @@ pub mod tracks;
 pub mod transport;
 pub mod ui_transient;
 pub mod viewport;
+pub mod voicebank_library;
 
 pub use arrangement_shift::*;
 pub use automation::*;

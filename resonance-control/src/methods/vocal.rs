@@ -37,9 +37,16 @@ pub const GET_PARAMS: &str = "vocal.get_params";
 /// `vocal.set_params` — merge a partial patch into a vocal lane's
 /// settings ([`SetParamsParams`] -> [`ParamsResult`]).
 pub const SET_PARAMS: &str = "vocal.set_params";
-/// `vocal.voicebanks` — the installed voicebanks and what each can do
-/// (no params -> [`VoicebankList`]). Read-only, needs no project.
+/// `vocal.voicebanks` — the installed voicebanks and what each can do,
+/// and the plok.org index's banks that are not installed (no params ->
+/// [`VoicebankList`]). Read-only, needs no project.
 pub const VOICEBANKS: &str = "vocal.voicebanks";
+/// `vocal.voicebank_install` — download a voicebank from the plok.org
+/// index (the creator's own URL) and its vocoder when it needs one, as a
+/// job ([`VoicebankInstallParams`] -> [`crate::job::JobStarted`]; the
+/// job's result is a [`VoicebankInstallResult`]). Needs no project; no
+/// undo entry, no revision bump.
+pub const VOICEBANK_INSTALL: &str = "vocal.voicebank_install";
 
 /// All `vocal.*` method names.
 pub const METHODS: &[&str] = &[
@@ -52,6 +59,7 @@ pub const METHODS: &[&str] = &[
     GET_PARAMS,
     SET_PARAMS,
     VOICEBANKS,
+    VOICEBANK_INSTALL,
 ];
 
 /// Params for `vocal.set_lyrics`: bulk text, one line per lyric line.
@@ -586,10 +594,18 @@ pub struct VocalParamsView {
 pub struct VoicebankList {
     /// The banks installed on this machine, by id.
     pub installed: Vec<VoicebankEntry>,
-    /// Banks the plok.org index offers that are not installed. Empty
-    /// until the index lists voicebanks.
+    /// Banks the plok.org index offers that are not installed (install
+    /// one with `vocal.voicebank_install`).
     #[serde(default)]
     pub available: Vec<AvailableVoicebank>,
+    /// Where `available` comes from: `fresh` (fetched in the last 10
+    /// minutes), `cached` (an older or on-disk copy; a refresh is under
+    /// way), `fetching` (none yet; call again shortly) or `unavailable`
+    /// (no index could be read; `index_error` says why).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_error: Option<String>,
 }
 
 /// One installed voicebank.
@@ -678,6 +694,8 @@ pub struct VoicebankCurves {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AvailableVoicebank {
+    /// The id `vocal.voicebank_install` takes (and the bank's id once
+    /// installed).
     pub id: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -688,4 +706,63 @@ pub struct AvailableVoicebank {
     pub credit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commercial: Option<String>,
+    /// Language codes the bank sings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub languages: Vec<String>,
+    /// Its voice modes, for display.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speakers: Vec<String>,
+    /// Download size ("609.3 MB").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// The shared vocoder it needs (fetched with it) when it ships none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocoder: Option<String>,
+    /// The creator's download URL the install fetches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// Params for `vocal.voicebank_install`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct VoicebankInstallParams {
+    /// The bank's id from `vocal.voicebanks`' `available` (or an installed
+    /// bank's id, to update it to the index's version).
+    pub id: String,
+}
+
+/// The result of a finished `vocal.voicebank_install` job. Running the
+/// install accepts the bank's terms on the user's behalf: tell the user
+/// the credit line, the terms URL and the commercial-use summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicebankInstallResult {
+    /// The installed bank's id (`vocal.set_params` takes it as
+    /// `voicebank`).
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit: Option<String>,
+    /// `free_with_credit`, `paid` or `permission`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commercial: Option<String>,
+    /// The vocoder the bank renders with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocoder: Option<String>,
+    /// `false`: the bank names a vocoder that is neither installed nor in
+    /// the index, so rendering it fails with `voicebank_missing`.
+    pub vocoder_installed: bool,
+    /// This install downloaded the shared vocoder too.
+    #[serde(default)]
+    pub vocoder_fetched: bool,
+    /// The bank was already installed as the index lists it; nothing was
+    /// downloaded.
+    #[serde(default)]
+    pub already_installed: bool,
 }

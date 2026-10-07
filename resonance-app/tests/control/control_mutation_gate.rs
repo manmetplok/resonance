@@ -94,9 +94,15 @@ fn mutating_methods() -> Vec<&'static str> {
     // query served by the `song::try_handle` block above the gate.
     // Everything else in `track::*` is a mutation. (`plugins.catalog`
     // moved out of this namespace entirely in todo #1236.)
-    // `vocal.voicebanks` lists the machine's installed voicebanks, not
-    // project state (vocal spec §4.5); the rest of `vocal.*` is gated.
-    methods.retain(|m| *m != methods::track::PLUGIN_PARAMS && *m != methods::vocal::VOICEBANKS);
+    // `vocal.voicebanks` lists the machine's installed voicebanks, and
+    // `vocal.voicebank_install` downloads into the same per-user folder —
+    // not project state (vocal spec §4.5, §5); the rest of `vocal.*` is
+    // gated.
+    methods.retain(|m| {
+        *m != methods::track::PLUGIN_PARAMS
+            && *m != methods::vocal::VOICEBANKS
+            && *m != methods::vocal::VOICEBANK_INSTALL
+    });
     methods
 }
 
@@ -112,6 +118,7 @@ fn allowlisted_methods() -> Vec<&'static str> {
         "control.hello",
         methods::track::PLUGIN_PARAMS,
         methods::vocal::VOICEBANKS,
+        methods::vocal::VOICEBANK_INSTALL,
     ];
     for namespace in [
         methods::song::METHODS,
