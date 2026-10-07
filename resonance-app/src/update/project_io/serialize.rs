@@ -580,8 +580,16 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         // for a stable on-disk order (the mirror is a HashMap). DeviceParam
         // lanes ride along here and are re-applied on load after the owning
         // track's `SetTrackDeviceParams`.
+        // Vocal expression curves are not lanes on disk: they are saved in
+        // their sections' vocal lane config (§10).
         automation_lanes: {
-            let mut lanes: Vec<_> = r.automation.lanes.values().cloned().collect();
+            let mut lanes: Vec<_> = r
+                .automation
+                .lanes
+                .values()
+                .filter(|l| l.target.is_engine_lane())
+                .cloned()
+                .collect();
             lanes.sort_by_key(|l| l.id);
             lanes
         },

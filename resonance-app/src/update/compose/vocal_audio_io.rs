@@ -19,7 +19,6 @@ use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::VocalParams;
 
 use crate::compose::vocal_svs::{self, SvsRenderCache};
-use crate::compose::ExpressionCurves;
 
 /// Destination directory for rendered vocal WAVs. Prefers the loaded
 /// project's `audio/` subdirectory so saves capture the clip; falls
@@ -160,7 +159,6 @@ pub(crate) struct VocalRenderJob {
     pub midi_notes: Vec<MidiNote>,
     pub params: VocalParams,
     pub assigned: Vec<AssignedSyllable>,
-    pub curves: ExpressionCurves,
     pub bpm: f32,
     pub engine_sample_rate: u32,
     pub dest_dir: PathBuf,
@@ -190,7 +188,6 @@ impl VocalRenderJob {
             &self.midi_notes,
             &self.params,
             &self.assigned,
-            &self.curves,
             TICKS_PER_QUARTER_NOTE as u32,
             self.bpm,
             self.engine_sample_rate,

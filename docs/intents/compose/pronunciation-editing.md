@@ -9,7 +9,7 @@
 When the CMU dictionary or the rules mispronounce a word, the only fix
 today is `vocal.set_pronunciation` from an agent (saved with the project
 and undoable since slice 11 of
-[vocal MCP control and quality](vocal-mcp-control-and-quality.md)). Users
+[vocal MCP control and quality](../../history/specs/vocal-mcp-control-and-quality.md)). Users
 have no GUI at all: the vocal roll's phoneme strip is read-only.
 Per-syllable overrides are persisted but nothing creates them, and the
 global (user-wide) dictionary exists as a type but nothing loads it.

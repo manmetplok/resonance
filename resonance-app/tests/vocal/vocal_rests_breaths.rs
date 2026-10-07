@@ -10,7 +10,6 @@
 //!
 //! Every scenario pins its tempo, notes and params; none renders audio.
 
-use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
     articulation_report_for, build_segment, resolve_clip, split_render_units,
     validate_for_voicebank, BankProfile,
@@ -67,7 +66,6 @@ fn segment(notes: &[MidiNote], text: &str, rest_threshold_beats: f32) -> DsSegme
         notes,
         &params(rest_threshold_beats),
         &assign(text, notes.len()),
-        &ExpressionCurves::default(),
         TPQ,
         BPM,
         &bank(),
@@ -138,7 +136,6 @@ fn an_eighth_rest_at_the_default_threshold_is_a_silent_gap() {
         &notes,
         &params(0.5),
         &assign("la la", 2),
-        &ExpressionCurves::default(),
         TPQ,
         BPM,
         &bank(),
@@ -157,7 +154,6 @@ fn raising_the_threshold_sings_the_same_gap_legato() {
         &notes,
         &params(1.0),
         &assign("la la", 2),
-        &ExpressionCurves::default(),
         TPQ,
         BPM,
         &bank(),
@@ -213,7 +209,6 @@ fn a_breath_fills_the_end_of_the_gap_before_its_note() {
         &notes,
         &params(0.5),
         &assign("la AP la", 2),
-        &ExpressionCurves::default(),
         TPQ,
         BPM,
         &bank(),

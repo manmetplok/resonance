@@ -21,6 +21,18 @@ pub mod tracks;
 pub mod vocal_lane;
 pub(crate) mod vocal_render_badge;
 pub mod vocal_roll;
+pub(crate) mod voicebank_library;
+
+/// The Compose tab's root overlays: the drum-groups manager, and the
+/// voicebank library a vocal lane's Library… button opens.
+pub(crate) fn view_overlay(r: &crate::Resonance) -> iced::Element<'_, crate::message::Message> {
+    match r.root_overlay() {
+        Some(crate::state::overlay::Overlay::VoicebankLibrary) => {
+            voicebank_library::view_voicebank_library_overlay(r)
+        }
+        _ => drum_groups_manager::view(r),
+    }
+}
 
 pub use layout::{
     bar_to_section_tick, bars_span, sample_to_section_tick, section_bars_in_range,

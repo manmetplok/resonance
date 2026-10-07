@@ -106,8 +106,12 @@ the track's render state the worst lane's) until one `vocal_render` after
 your last edit brings it back to `rendered`. `vocal_voicebanks`
 lists the installed voicebanks with their speaker ids, comfortable ranges and
 which expression curves they take; a lane on a bank that is not installed
-renders nothing (`voicebank_missing`), so pick one from that list. When you
-use a bank, pass its `credit` line on to the user.
+renders nothing (`voicebank_missing`), so pick one from that list. Its
+`available` list holds the plok.org banks that are not installed yet:
+`vocal_voicebank_install` with one of those ids downloads it (and the vocoder
+it needs) as a job. Installing accepts the bank's terms for the user, so tell
+them what the result says (`credit`, `terms_url`, `commercial`) before you
+render with it. When you use a bank, pass its `credit` line on to the user.
 
 ## Reproducibility
 

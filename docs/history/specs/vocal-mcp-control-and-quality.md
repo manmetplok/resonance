@@ -1,13 +1,15 @@
 # Vocals: MCP control, voicebank library, correctness and expression
 
-> Status: **partly built** (slices 1–5 and 8–13 built; progress per slice in §12)
+> **Archived 2026-10-07.** Historical record; the current truth is [`features/compose/vocal-lyrics-and-melody.md`](../../features/compose/vocal-lyrics-and-melody.md), [`features/compose/vocal-rendering.md`](../../features/compose/vocal-rendering.md), [`features/compose/voicebank-library.md`](../../features/compose/voicebank-library.md), [`features/compose/pronunciation.md`](../../features/compose/pronunciation.md), [`features/timeline/automation-lanes.md`](../../features/timeline/automation-lanes.md), [`features/timeline/automation-control-api.md`](../../features/timeline/automation-control-api.md). All 14 slices are built; each slice's deviations are in those docs' "Decisions and deviations". Open items moved to [`intents/compose/vocal-followups.md`](../../intents/compose/vocal-followups.md). Code comments cite this file by name (`vocal-mcp-control-and-quality.md §N`).
+
+> Status: **partly built** (slices 1–13 built; progress per slice in §12)
 > Area: compose (vocals) + control-api + plugins-instruments (library)
 > Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
 > (every decision below was put to him as a multiple-choice question; §11
 > lists the answers); research report
 > [singing-voicebank-options-2026](../../history/research/singing-voicebank-options-2026.md).
 > Absorbs: the former `vocal-expression-curves.md` intent (deleted), slice 1
-> of [pronunciation editing](pronunciation-editing.md), BUG-50 and BUG-52.
+> of [pronunciation editing](../../intents/compose/pronunciation-editing.md), BUG-50 and BUG-52.
 
 ## 1. Why
 
@@ -414,7 +416,7 @@ The render-unit key already hashes velocity.
 | D28 | Expression curves | Automation sub-rows with a render-only target, section-relative |
 | D29 | Absorbed into this spec | Pronunciation persistence, expression curves, `resonance-svs` fixes, `curve_supported` fix |
 | D30 | Bank audition | A blind render script |
-| D31 | SoulX-Singer | A separate intent ([soulx-singer-backend](soulx-singer-backend.md)) |
+| D31 | SoulX-Singer | A separate intent ([soulx-singer-backend](../../intents/compose/soulx-singer-backend.md)) |
 | D32 | Spec home and landing | This document; each slice lands on master separately |
 
 Pronunciation persistence (slice 11) keys per-syllable overrides by
@@ -465,16 +467,31 @@ handler, MCP tool, GUI, tests, and the feature doc with its
    skipped, so those words fall back to CMU. The bank dictionary, then CMU mapped onto
    the inventory; generalised substitutions and language ids; the
    `english` flag.
-6. **Bank audition script.**
-   - A `resonance-svs` example renders one committed test song on every
-     installed bank and speaker into `target/audition/`, with names hidden
-     behind a key file.
+6. **Bank audition script.** ✅ built (see
+   [vocal rendering § bank audition](../../features/compose/vocal-rendering.md#bank-audition)).
+   Deviation: an `#[ignore]`d test module
+   (`resonance-app/tests/vocal/bank_audition.rs`) through the app's real
+   registry → resolver → segment → render path, not a `resonance-svs`
+   example — it reuses the real app's `VoicebankRoots::for_machine` and
+   needs no example-only phonemiser copy (the known gap that the example
+   can't drive Meiji does not apply here). `scripts/vocal-audition.py`
+   runs it, shuffles the result behind random tokens into
+   `target/audition/`, and `--reveal` prints the key.
    - Jorrit listens blind, and the results pick which banks go in the index:
      Peiton, LUNAI Katyusha / Keiro / Liam and Meiji v170 against the
-     current three.
-7. **plok.org install.** Index entries, shared `plok_download`, the library
-   overlay, `vocal.voicebank_install`, and the available list in
-   `vocal.voicebanks`.
+     current three. That listen and the index decision are still open —
+     only the render-and-blind tooling is built.
+7. **plok.org install.** ✅ built (phase 4; see
+   [vocal rendering](../../features/compose/vocal-rendering.md) and
+   [`plok-voicebank-index.json`](../../features/compose/plok-voicebank-index.json),
+   which the server still has to publish). Deviations: `vocal.voicebanks`
+   never waits on the network (`index_status` says whether `available` is
+   fresh, cached or still fetching); the install record
+   `.resonance-plok.json` in the bank folder carries the accepted terms
+   and drives UPDATE; the index entries name vocoders by their dsconfig
+   name; Delete is GUI-only and user-folder-only. Index entries, shared
+   `plok_download`, the library overlay, `vocal.voicebank_install`, and
+   the available list in `vocal.voicebanks`.
 8. **Melisma.** ✅ built (phase 1 library, phase 3 app; see
    [lyrics and melody](../../features/compose/vocal-lyrics-and-melody.md)).
    The `_` token, counts, the `s` key editing the draft, `SyllableMode`,
@@ -533,9 +550,24 @@ handler, MCP tool, GUI, tests, and the feature doc with its
     stress-weighted one), while the unit content key still hashes both
     new params as asked, so changing `velocity_dynamics` re-runs the
     models; energy uses the overlay's signed ±1 units.
-14. **Expression curves as automation.** The curves in the lane config,
-    section-relative storage, Arrange sub-rows, `AutomationTarget::VocalCurve`,
-    and `automation.*`. This fixes BUG-50's curve part.
+14. **Expression curves as automation.** ✅ built (phase 4; see
+    [automation lanes](../../features/timeline/automation-lanes.md) and
+    [vocal rendering](../../features/compose/vocal-rendering.md)). The
+    curves in the lane config, section-relative storage, Arrange sub-rows,
+    `AutomationTarget::VocalCurve`, and `automation.*`. This fixes BUG-50's
+    curve part. Deviations: the rows are a projection
+    (`AutomationState::vocal`, rebuilt after every update) with derived
+    lane ids, not stored automation lanes; the old model's baseline /
+    depth / smoothing are dropped (a curve is its points); the
+    envelopes stay `0..=1` (`0.5` neutral) and pitch bend `±50` cents as
+    in `expression.rs`, Dynamics on a bank without energy is ±12 dB; a
+    whole-lane replace keeps a section point while any copy of it
+    survives, so `delete_points` / `shape` remove every copy; two values
+    for one section beat are refused; `set_enabled` refuses vocal lanes;
+    `song.tracks` lane summaries leave them out (`song.vocal` lists
+    `curves` per lane); a placement whose bank does not take the curve is
+    greyed and ignores pointer input, but the control API still writes
+    it.
 
 Slices 1–3 come first, because they unblock the field report's P1. Slice 4
 must land before 5–7, and 8–14 are independent of each other.

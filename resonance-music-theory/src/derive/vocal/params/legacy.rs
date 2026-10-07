@@ -22,7 +22,7 @@ use super::{
     default_tension_contour_amount, default_tension_velocity_amount, default_velocity_dynamics,
     default_vibrato_rate, default_vocal_style, SyllableMode,
     VocalContour, VocalMood, VocalParams, VocalPov, VocalRhymeScheme, VocalStyle, VocalTimbre,
-    VoiceType, VoicebankId,
+    VocalCurves, VoiceType, VoicebankId,
 };
 
 #[derive(Deserialize)]
@@ -74,6 +74,8 @@ pub(super) struct VocalParamsRepr {
     speaker: Option<String>,
     #[serde(default)]
     voicebank: VoicebankId,
+    #[serde(default)]
+    curves: VocalCurves,
     /// Pre-registry TIGER speaker (`"Glam"` …). Read, never written.
     #[serde(default)]
     singer: Option<String>,
@@ -138,6 +140,7 @@ impl From<VocalParamsRepr> for VocalParams {
             velocity_dynamics: r.velocity_dynamics,
             speaker,
             voicebank: r.voicebank,
+            curves: r.curves,
         }
     }
 }

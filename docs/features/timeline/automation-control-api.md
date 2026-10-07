@@ -1,6 +1,6 @@
 # Automation control API (`automation.*`)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
 > Spec history: `docs/history/specs/automation-control-api.md` (built 2026-09-28, merged @ `4c6ef5fb`).
 
 An agent can read, write and shape parameter-automation lanes on a running
@@ -26,6 +26,37 @@ instrument is used (on a bus or master: the first plugin in the chain).
 write target. `delete_points` and `remove_lane` also accept `lane_id`. That
 is the only way to reach an orphaned lane, whose plugin instance is gone.
 
+**Vocal expression curves** ([vocal spec](../../history/specs/vocal-mcp-control-and-quality.md) §10, slice 14). Instead
+of owner + control/param, `vocal: {track_id, curve: "dynamics" | "tension" |
+"breathiness" | "pitch_bend"}` (alone) addresses one of a vocal track's four
+curve lanes. The track needs a vocal lane in at least one section, else
+`invalid_params`.
+- A curve is stored once per **section**, in its vocal lane config,
+  section-relative. `automation.lanes` lists it at every placement of every
+  section with a vocal lane on the track, with `section_relative: true`; a
+  section point appears once per placement (in time order, all with
+  whole-lane indices).
+- Writes take song positions. Each new point is mapped to the placement it
+  falls in, then that section and a beat offset, and upserted into the
+  section's curve, so every placement follows. A point outside every such
+  placement is refused (`invalid_params`, naming its bar and beat), and so
+  are two different values for one beat of one section (two placements of
+  it). A whole-lane replace keeps a section point while any copy of it is
+  still in the list; `delete_points` and `shape` remove every copy of a point
+  they remove (`deleted` counts copies). `remove_lane` clears the curve in
+  every section with a vocal lane on the track, placed or not
+  (confirm-gated when it has points). A section beat is an `f64`; a GUI
+  edit can land on any tick (control positions are coarser), and a saved
+  beat reads back exactly (the workspace's `serde_json` has
+  `float_roundtrip`).
+- Vocal lanes always play: `set_enabled` refuses them, and `set_lane` with
+  `enabled: false` is refused. They never reach the engine; the curve is
+  rendered into the take, so a write leaves `song.vocal` `stale` until
+  `vocal.render`. `song.tracks` lane summaries leave them out; `song.vocal`
+  lists each lane's `curves: [{curve, points, supported}]`.
+- `vocal.set_params` has no `curves` field: the curves are edited only here
+  and on the Arrange rows.
+
 **Values.** Values are in real units unless `normalized: true`, which applies
 to the whole call:
 
@@ -35,6 +66,8 @@ to the whole call:
 | pan | −1..=1 | number |
 | mute | bool | `true`/`false` or 0/1; curve defaults to `stepped` |
 | plugin | the plugin's `min..=max` | number or a choice label; stepped params default to `stepped` and round to their steps |
+| vocal `dynamics` / `tension` / `breathiness` | `0..=1`, `0.5` = unchanged | number (unit `""`) |
+| vocal `pitch_bend` | cents, `-50..=50` | number (unit `"cents"`) |
 
 Out-of-range values are refused, and the error names the range (and the
 choices, if any). A parameter without CLAP `IS_AUTOMATABLE` is refused.
@@ -102,6 +135,7 @@ a count and `TrackDetail.automation` is a `LaneSummary` list with no points.
 | Shared write path | `…/automation/edit.rs` | `resolve_points`, `current_lane`, `commit_points`, `commit_removal`, `resolve_point_position`, `resolve_range` |
 | Views / summaries | `…/automation/view.rs` | `lane_view_for`, `lane_count`, `lane_summaries` |
 | Per-method handlers | `…/automation/{lanes,set_lane,add_points,delete_points,set_enabled,remove_lane,shape}.rs` | one fn each |
+| Vocal curve target | `…/automation/vocal.rs`, `compose/expression_lanes.rs` | `resolve`, `check_set_lane` (runs `plan_set_lane` before dispatch), `curve_summaries` (`song.vocal`), `VocalCurveTarget`, `VocalCurve`, `LaneView::section_relative`, `VocalCurveSummary` |
 | MCP tools | `resonance-mcp/src/tools/automation.rs` | `router_automation` (7 tools), server `INSTRUCTIONS` paragraph in `resonance-mcp/src/server.rs` |
 
 Invariant: each handler computes the lane's complete new point list as a pure
@@ -137,6 +171,7 @@ add a domain message per wire method.
 | `add_points` / `delete_points` / `set_enabled` / `remove_lane`: upsert, confirm gating, `lane_id` for orphans, undo/redo, no-op ack | `resonance-app/tests/control/control_automation_edit.rs` | same |
 | `shape` through the app: 7/8 density, worked cutoff example, limits, one revision | `resonance-app/tests/control/control_automation_shape.rs` | same |
 | Render: the lane `set_lane` sends is the one the engine renders louder; measure/stems windows | `resonance-app/tests/control/control_automation_render.rs` + `resonance-audio/tests/bounce/automation_render.rs` | `-p resonance-app`, `-p resonance-audio` |
+| Vocal curves: listing, placement mapping, outside / conflict refusals, copy deletion, set/remove, no Read flag, `set_params` refuses `curves`, stale without render, GUI debounce, engine never sent, save/reopen + unrelated undo, one undo entry | `resonance-app/tests/control/control_vocal_curves.rs` | same |
 | Every method has a tool; schemas and descriptions | `resonance-mcp/tests/schema_hygiene.rs`, `doc_hygiene.rs`, `translation.rs`; skills naming tools: `agent_plugin_lockstep.rs` | `./scripts/run-tests.py -p resonance-mcp` |
 
 Not covered: no test drives the MCP tools against a live app end to end. The
@@ -164,7 +199,14 @@ From the spec, as merged (`4c6ef5fb`):
   automation, like `render.mixdown` (`resonance-audio/src/engine/bounce/stem.rs`
   module doc).
 - Adding the namespace did not bump `PROTOCOL_VERSION`, because the methods
-  were added only.
+  were added only. The vocal target (`vocal`, `section_relative`, the
+  `song.vocal` `curves` list) is additive too: no bump.
+- Vocal target, against the vocal spec's §10 (slice 14): a whole-lane
+  replace keeps a section point while any copy of it survives, so
+  `delete_points` / `shape` remove every copy; two values for one section
+  beat are refused; `set_enabled` refuses vocal lanes; `song.tracks` lane
+  summaries leave them out (`song.vocal` lists `curves` per lane); a
+  placement whose bank does not take the curve is still written.
 
 ## Known gaps
 

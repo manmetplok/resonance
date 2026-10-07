@@ -10,8 +10,6 @@
 //! file resolves against that file's own directory (`tests/`), not against
 //! a `tests/<group>/` subdirectory.
 
-#[path = "vocal/expression_curve_edits.rs"]
-mod expression_curve_edits;
 #[path = "vocal/expression_curves_model.rs"]
 mod expression_curves_model;
 #[path = "vocal/pronunciation_resolution.rs"]
@@ -48,3 +46,5 @@ mod vocal_rests_breaths;
 mod vocal_velocity_dynamics;
 #[path = "vocal/vocal_dynamics_render.rs"]
 mod vocal_dynamics_render;
+#[path = "vocal/bank_audition.rs"]
+mod bank_audition;

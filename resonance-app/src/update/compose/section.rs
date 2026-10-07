@@ -641,7 +641,6 @@ fn purge_definition_side_tables(r: &mut crate::Resonance, definition_id: u64) {
     }
     compose.vocal_audio.render_cache.retain(|(d, _), _| *d != definition_id);
     compose.vocal_bulk_lyrics.retain(|(d, _), _| *d != definition_id);
-    compose.expression_curves.retain(|(d, _), _| *d != definition_id);
 }
 
 pub(super) fn handle_delete_definition(r: &mut crate::Resonance, definition_id: u64) {

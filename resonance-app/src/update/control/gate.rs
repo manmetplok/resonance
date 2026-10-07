@@ -56,6 +56,9 @@ pub(crate) fn bypasses_mutation_gate(method: &str) -> bool {
         // (vocal-mcp-control-and-quality.md §4.5); the rest of `vocal.*`
         // edits the project and stays gated.
         || method == methods::vocal::VOICEBANKS
+        // `vocal.voicebank_install` downloads into the same per-user
+        // folder; no project needs to be open, nothing is undoable.
+        || method == methods::vocal::VOICEBANK_INSTALL
         || resonance_control::job::METHODS.contains(&method)
 }
 

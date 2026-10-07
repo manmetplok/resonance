@@ -209,19 +209,30 @@ pub(crate) fn view_track_header(
     // mirrors the overlay chip's "N lanes" discoverability hint. Laneless
     // tracks collapse the cluster to a zero-size spacer, leaving the
     // pre-#1098 layout (and its alignment snapshots) untouched.
+    // A vocal track's expression-curve rows (§10) always exist, so they
+    // count only once they hold a point; a vocal track with no curve
+    // still gets the caret, labelled plain "auto", so its four rows stay
+    // reachable.
+    let vocal_rows = r.automation.vocal.track_lanes(track.id);
     let lane_count =
-        crate::view::timeline::automation::track_lanes_sorted(&r.automation, track).len();
+        crate::view::timeline::automation::track_lanes_sorted(&r.automation, track).len()
+            + vocal_rows.iter().filter(|v| !v.lane.points.is_empty()).count();
     let automation_expanded = r
         .ui
         .interaction
         .automation_expanded_tracks
         .contains(&track_id);
-    let automation_caret: Element<'static, Message> = if lane_count > 0 {
+    let automation_caret: Element<'static, Message> = if lane_count > 0 || !vocal_rows.is_empty() {
+        let label = if lane_count > 0 {
+            format!("{lane_count} auto")
+        } else {
+            "auto".to_owned()
+        };
         mouse_area(
             row![
                 crate::view::controls::collapse_caret(automation_expanded),
                 Space::new().width(2),
-                text(format!("{lane_count} auto"))
+                text(label)
                     .size(9)
                     .font(theme::MONO_FONT)
                     .color(theme::TEXT_3),

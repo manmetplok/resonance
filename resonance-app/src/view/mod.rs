@@ -222,7 +222,7 @@ impl crate::Resonance {
             Overlay::PresetBrowser => preset_browser::view_preset_browser_overlay(self),
             Overlay::AddTrackMenu => menus::view_add_track_menu(self),
             Overlay::MarkersOverview => markers_overview::view_markers_overview_overlay(self),
-            Overlay::DrumGroupsManager => compose::drum_groups_manager::view(self),
+            Overlay::DrumGroupsManager | Overlay::VoicebankLibrary => compose::view_overlay(self),
             // Marker context menu / inline rename, over the timeline (todo #369).
             Overlay::MarkerMenu => menus::view_marker_overlay(self),
             Overlay::MidiMenu => midi_learn::view_midi_menu_overlay(self),

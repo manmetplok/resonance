@@ -41,6 +41,9 @@ pub enum Overlay {
     AddTrackMenu,
     MarkersOverview,
     DrumGroupsManager,
+    /// The voicebank library a vocal lane's Library… button opens
+    /// (vocal-mcp-control-and-quality.md §5).
+    VoicebankLibrary,
     MarkerMenu,
     /// The right-click MIDI menu on a learnable control (MIDI Learn,
     /// doc #167): window coordinates, drawn in the root stack.
@@ -118,6 +121,9 @@ impl Overlay {
                     crate::compose::messages::DrumGroupsMessage::CloseManager,
                 ),
             ),
+            Overlay::VoicebankLibrary => Message::VoicebankLibrary(
+                crate::message::VoicebankLibraryMessage::Close,
+            ),
             Overlay::MarkerMenu if r.ui.interaction.marker_rename.is_some() => {
                 Message::MarkerUi(MarkerUiMessage::CancelRename)
             }
@@ -178,6 +184,8 @@ impl Resonance {
             && matches!(self.ui.view_mode, ViewMode::Compose)
         {
             Overlay::DrumGroupsManager
+        } else if self.voicebank_library.overlay.is_some() {
+            Overlay::VoicebankLibrary
         } else if self.ui.interaction.marker_menu.is_some()
             || self.ui.interaction.marker_rename.is_some()
         {

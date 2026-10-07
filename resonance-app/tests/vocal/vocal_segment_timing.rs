@@ -4,7 +4,6 @@
 //! time that doesn't exist — every later phoneme in the render unit then
 //! sang late, drifting further behind the MIDI until the next silence.
 
-use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
     build_segment, resolve_clip, split_render_units, validate_for_voicebank,
 };
@@ -62,7 +61,6 @@ fn segment_sec(notes: &[MidiNote], bpm: f32) -> f64 {
         notes,
         &params(),
         &assign(notes.len()),
-        &ExpressionCurves::default(),
         TPQ,
         bpm,
         &BankProfile::not_installed("lilia"),
@@ -105,7 +103,6 @@ fn render_units_span_their_notes() {
         &notes,
         &params(),
         &assign(notes.len()),
-        &ExpressionCurves::default(),
         TPQ,
         bpm,
         &BankProfile::not_installed("lilia"),

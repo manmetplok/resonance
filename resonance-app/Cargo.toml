@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 resonance-audio = { path = "../resonance-audio" }
-resonance-common = { path = "../resonance-common" }
+resonance-common = { path = "../resonance-common", features = ["plok-download", "drumkit-zip"] }
 resonance-control = { path = "../resonance-control" }
 # The mastering assistant's analysis and decision engine, for
 # `master.assist` (warmth-width-depth.md §7.4). A library crate the
@@ -47,4 +47,7 @@ resonance-app = { path = ".", features = ["test-support"] }
 resonance-audio = { path = "../resonance-audio", features = ["test-internals"] }
 iced_test = "0.14"
 tempfile = "3"
+# The voicebank install tests serve zipped fixture banks and pin their hash.
+zip.workspace = true
+sha2.workspace = true
 hound.workspace = true

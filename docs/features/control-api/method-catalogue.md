@@ -1,6 +1,6 @@
 # Control method catalogue
 
-> Verified against master @ `ce484ad3` + vocal phase 3 on 2026-10-07.
+> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
 > Source of truth: `resonance_control::methods::capabilities()` and each
 > method constant's doc comment in `resonance-control/src/methods/*.rs`.
 
@@ -40,7 +40,7 @@ area; the sibling areas may refine it.
 | `song.sections` | `song_sections` | read | [control-api](../compose/sections-and-placements.md) | section definitions + placements |
 | `song.tracks` | `song_tracks` | read | [control-api](overview.md) | per-track detail, including clips |
 | `song.notes` | `song_notes` | read | [control-api](../timeline/midi-editor.md) | notes of one MIDI clip |
-| `song.vocal` | `song_vocal` | read | [compose](../compose/vocal-lyrics-and-melody.md) | a vocal track's lanes: params, per-lane lyric lines with phonemes, render pre-flight, per-lane render state (`stale_units`, `error`) and the track's worst |
+| `song.vocal` | `song_vocal` | read | [compose](../compose/vocal-lyrics-and-melody.md) | a vocal track's lanes: params, per-lane lyric lines with phonemes, render pre-flight, per-lane render state (`stale_units`, `error`), per-lane expression `curves`, and the track's worst |
 | `project.new` | `project_new` | job | [project-core](../project-core/save-open-new.md) | start a fresh project |
 | `project.open` | `project_open` | job | [project-core](../project-core/save-open-new.md) | open a project from disk |
 | `project.save` | `project_save` | job | [project-core](../project-core/save-open-new.md) | save in place, or to `path` on first save |
@@ -189,14 +189,15 @@ area; the sibling areas may refine it.
 | `vocal.generate` | `vocal_generate` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | generate a vocal lane's melody (and lyrics) into its derived clip |
 | `vocal.get_params` | `vocal_get_params` | read | [compose](../compose/vocal-lyrics-and-melody.md) | read a vocal lane's full settings and seed |
 | `vocal.set_params` | `vocal_set_params` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | merge a partial patch into a vocal lane's settings (incl. `rest_threshold_beats`, `velocity_dynamics`) |
-| `vocal.voicebanks` | `vocal_voicebanks` | read | [compose](../compose/vocal-rendering.md) | list the installed voicebanks and what each can do (no project needed) |
+| `vocal.voicebanks` | `vocal_voicebanks` | read | [compose](../compose/voicebank-library.md) | list the installed voicebanks and what each can do, and the plok.org index's others (`available`) (no project needed) |
+| `vocal.voicebank_install` | `vocal_voicebank_install` | job | [compose](../compose/voicebank-library.md) | install a voicebank from the plok.org index, and the vocoder it needs; result carries its terms (no project needed, no undo) |
 | `render.mixdown` | `render_mixdown` | job | [audio-engine](../audio-engine/offline-render-and-export.md) | bounce the master mix to a WAV file |
 | `meter.measure` | `meter_measure` | job | [mixer](../mixer/meter-control-api.md) | measure one slice of the mix |
 | `meter.stems` | `meter_stems` | job | [mixer](../mixer/meter-control-api.md) | measure every track plus the master in one pass |
 | `meter.snapshot` | `meter_snapshot` | job | [mixer](../mixer/meter-control-api.md) | measure one slice and keep the numbers for a later `meter.compare` |
 | `meter.compare` | `meter_compare` | job | [mixer](../mixer/meter-control-api.md) | loudness-matched deltas between two measurements |
 | `meter.probe` | `meter_probe` | job | [mixer](../mixer/meter-control-api.md) | harmonic signature of an insert chain |
-| `automation.lanes` | `automation_lanes` | read | [timeline](../timeline/automation-control-api.md) | read every lane, or a filtered subset |
+| `automation.lanes` | `automation_lanes` | read | [timeline](../timeline/automation-control-api.md) | read every lane (vocal expression curves too, `{vocal: {track_id, curve}}`), or a filtered subset |
 | `automation.set_lane` | `automation_set_lane` | edit | [timeline](../timeline/automation-control-api.md) | create a lane or replace ALL of its points |
 | `automation.add_points` | `automation_add_points` | edit | [timeline](../timeline/automation-control-api.md) | insert points, upserting an occupied frame |
 | `automation.delete_points` | `automation_delete_points` | edit | [timeline](../timeline/automation-control-api.md) | delete by index or by range |

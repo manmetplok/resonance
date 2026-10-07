@@ -1492,6 +1492,17 @@ fn a_starting_worker_sweeps_stale_download_leftovers() {
             .set_modified(two_hours_ago)
             .unwrap();
     }
+    // A record-less part is swept once it is past the moment between a
+    // part's creation and its record; a fresh one may be a download that
+    // is about to write its record.
+    let fresh_no_record = root.join(".Fresh-0123456789ab.eeee.zip.part");
+    std::fs::write(&fresh_no_record, b"x").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&no_record)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(5 * 60))
+        .unwrap();
     let holder = std::fs::File::options().write(true).open(&locked).unwrap();
     holder.lock().unwrap();
     std::fs::File::options()
@@ -1511,6 +1522,7 @@ fn a_starting_worker_sweeps_stale_download_leftovers() {
     assert!(resumable.exists(), "a fresh resumable .part was swept");
     assert!(!old.exists(), "an hour-old unlocked .part survived");
     assert!(!no_record.exists(), "a .part without a record survived");
+    assert!(fresh_no_record.exists(), "a just-created .part was swept before its record");
     assert!(!orphan_meta.exists(), "a record without a part survived");
     assert!(!staging.exists(), "an old staging dir survived");
     assert!(unrelated.exists());

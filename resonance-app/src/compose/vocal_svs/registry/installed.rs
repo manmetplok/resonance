@@ -43,6 +43,9 @@ pub struct InstalledBank {
     /// The bank's `dsdict-en.yaml`, if it ships one.
     pub english_dict: Option<PathBuf>,
     pub builtin: Option<&'static BuiltinBank>,
+    /// What a plok.org install recorded (version, hash, terms, credit);
+    /// `None` for a bank dropped in by hand or a development bank.
+    pub plok: Option<super::PlokSidecar>,
     /// The English dictionary, read on first use (TIGER's has ~11k
     /// entries; most lanes never need it parsed twice).
     pub(super) dictionary: OnceLock<Option<Arc<PhonemeDictionary>>>,

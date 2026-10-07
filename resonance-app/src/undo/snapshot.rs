@@ -634,8 +634,11 @@ impl crate::Resonance {
     /// whole-lane. Transient live-value tints for dropped targets are
     /// discarded so a stale fader/knob tint can't outlive its lane.
     pub(crate) fn restore_automation_lanes(&mut self, lanes: &[AutomationLane]) {
+        // Only engine lanes: a render-only target (a vocal curve, saved in
+        // its section) never reaches the engine, even from a hand-edited file.
         let target: HashMap<AutomationTarget, AutomationLane> = lanes
             .iter()
+            .filter(|lane| lane.target.is_engine_lane())
             .map(|lane| (lane.target.clone(), lane.clone()))
             .collect();
         let stale: Vec<AutomationTarget> = self

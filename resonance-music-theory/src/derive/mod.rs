@@ -40,7 +40,7 @@ pub use vocal::{
     derive_vocal_with_motif, VocalDerivation,
     generate_lyrics, lyric_corpus_lines, vocal_phrase_spans, LyricLine, SyllableMode,
     VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov, VocalRhymeScheme,
-    VocalStyle, VocalTimbre, VoicebankId, VoiceType,
+    VocalStyle, VocalTimbre, VoicebankId, VoiceType, VocalCurvePoint, VocalCurves,
 };
 
 /// A chord positioned on the section's beat grid. Mirrors the app's

@@ -1,7 +1,7 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `ce484ad3` + vocal phase 3 on 2026-10-07.
-> Spec history: `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
+> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
+> Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §3, §6 (slices 1, 3, 8); `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
 It holds a lyric **draft** (lines of syllables), melody settings and voice
@@ -165,9 +165,11 @@ line, re-rolled from a small template corpus, or set by an agent.
   change (`invalid_params` naming the field), and the write is one
   `SetLaneGenerator` carrying the lane's seed and draft — one undo entry.
   It never renders or regenerates. `voicebank` is a bank id: any
-  installed bank (`vocal.voicebanks` lists them) or one of the built-in
-  `tiger`, `lilia`, `meiji`; any other id is `invalid_params` (a typo
-  guard), and so is a bank that cannot sing English. `speaker` is one of
+  installed bank (`vocal.voicebanks` lists them), one of the built-in
+  `tiger`, `lilia`, `meiji`, or one the plok.org index lists (see
+  [voicebank library](voicebank-library.md)); any other id is
+  `invalid_params` (a typo guard), and so is a bank that cannot sing
+  English. `speaker` is one of
   that bank's speaker ids (a single-voice bank refuses one); a bank switch
   without `speaker` resets it to the bank's default
   (`VocalParams::switch_voicebank` with `BankProfile::default_speaker`,
@@ -230,8 +232,9 @@ line, re-rolled from a small template corpus, or set by an agent.
     lane, as `song.vocal` lists it).
   - `vocal.get_params` / `vocal.set_params` → `vocal_get_params` /
     `vocal_set_params` (partial snake_case patch; see Behaviour).
-  - `vocal.voicebanks` → `vocal_voicebanks`: the installed banks
-    ([vocal rendering](vocal-rendering.md)).
+  - `vocal.voicebanks` → `vocal_voicebanks` and `vocal.voicebank_install`
+    → `vocal_voicebank_install`: the installed and downloadable banks
+    ([voicebank library](voicebank-library.md)).
   - `vocal.generate` → `vocal_generate` (`seed`, `lyrics` default true —
     pass `false` to keep lyrics you set); returns the derived `clip_id`.
     Also queues a render; when the lane's bank (or its vocoder) is not
@@ -280,6 +283,21 @@ Not covered: theme/POV/clichés (they have no effect).
 
 ## Decisions and deviations
 
+- **Params API** (spec §3, D1–D4, D8). One `vocal.get_params` /
+  `vocal.set_params` pair with partial patches; a `set_lane_generator`
+  re-issue merges into the existing lane and keeps lyrics and seed; wire
+  enums are snake_case and `range` is `{low, high}`; `song.vocal` carries
+  each lane's full params and its own `lines[]`, indexed the way
+  `vocal.set_line` indexes them. The wire types are separate from
+  `VocalParams`' serde, so the project format did not change; the change
+  of enum names, `song.vocal` shape and string bank ids took
+  `PROTOCOL_VERSION` to 2, with the agent plugin's lockstep re-read.
+  The patch never carries `draft` or the expression curves (those are
+  `automation.*`, see [automation control API](../timeline/automation-control-api.md)).
+- **Default bank** (slice 1, D9): Lilia, accepted while Resonance is not
+  commercial (its ToU bans generative-AI use; see
+  [vocal follow-ups](../../intents/compose/vocal-followups.md)). The
+  `vocal.render` Lilia remap went with it (BUG-52).
 - Lyrics are template-based (no language model); the corpus is small, so
   re-rolls repeat lines quickly.
 - `lane_generator.rs` still says vocal generation is "stubbed in

@@ -23,6 +23,15 @@ pub(super) fn set_enabled(app: &mut Resonance, request: &Request) -> (Response, 
         Ok(resolved) => resolved,
         Err(e) => return reject(request, e),
     };
+    if !resolved.target.is_engine_lane() {
+        return reject(
+            request,
+            RpcError::invalid_params(
+                "a vocal curve lane always plays; it has no Read flag (remove its points with \
+                 automation.delete_points or automation.remove_lane instead)",
+            ),
+        );
+    }
     let Some(lane) = current_lane(app, &resolved.target) else {
         return reject(
             request,

@@ -65,6 +65,85 @@ pub enum AutomationTarget {
         track: TrackId,
         param_id: String,
     },
+    /// One of a vocal track's expression curves (Dynamics, Tension,
+    /// Breathiness, Pitch bend). **Render-only**: the curve lives in each
+    /// section's vocal lane config (section-relative, in beats) and is read
+    /// by the vocal renderer, never by the mixer — a lane on this target is
+    /// a projection of those curves onto the timeline and is never sent to
+    /// the engine (see [`AutomationTarget::is_engine_lane`]). Its normalized
+    /// value maps to [`VocalCurveKind::value_range`].
+    VocalCurve {
+        track: TrackId,
+        curve: VocalCurveKind,
+    },
+}
+
+impl AutomationTarget {
+    /// Whether the audio engine plays this target. Everything but
+    /// [`AutomationTarget::VocalCurve`], which the vocal renderer reads from
+    /// the section's lane config instead; every place that publishes lanes
+    /// to the engine filters on this.
+    pub fn is_engine_lane(&self) -> bool {
+        !matches!(self, AutomationTarget::VocalCurve { .. })
+    }
+}
+
+/// Which vocal expression curve an [`AutomationTarget::VocalCurve`] lane
+/// drives. The order of [`VocalCurveKind::ALL`] is the display order of the
+/// Arrange sub-rows (`Vocal: Dynamics | Tension | Breathiness | Pitch bend`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum VocalCurveKind {
+    /// Loudness: the bank's energy curve where it has one, else a
+    /// post-render gain. `0..=1`, `0.5` neutral.
+    Dynamics,
+    /// Vocal tension (relaxed ↔ belted), on banks with a tension input.
+    /// `0..=1`, `0.5` neutral.
+    Tension,
+    /// Added air, on banks with a breathiness input. `0..=1`, `0.5` neutral.
+    Breathiness,
+    /// f0 offset in cents, `-50..=50`; every bank.
+    PitchBend,
+}
+
+impl VocalCurveKind {
+    /// All four kinds, in display order.
+    pub const ALL: [VocalCurveKind; 4] = [
+        VocalCurveKind::Dynamics,
+        VocalCurveKind::Tension,
+        VocalCurveKind::Breathiness,
+        VocalCurveKind::PitchBend,
+    ];
+
+    /// Inclusive `(min, max)` real range: the `0..=1` envelopes, or pitch
+    /// bend in cents. Normalized `0` maps to `min`, `1` to `max`.
+    pub fn value_range(self) -> (f32, f32) {
+        match self {
+            VocalCurveKind::Dynamics | VocalCurveKind::Tension | VocalCurveKind::Breathiness => {
+                (0.0, 1.0)
+            }
+            VocalCurveKind::PitchBend => (-50.0, 50.0),
+        }
+    }
+
+    /// Position in [`Self::ALL`].
+    pub fn index(self) -> usize {
+        match self {
+            VocalCurveKind::Dynamics => 0,
+            VocalCurveKind::Tension => 1,
+            VocalCurveKind::Breathiness => 2,
+            VocalCurveKind::PitchBend => 3,
+        }
+    }
+
+    /// Display name: `Dynamics`, `Tension`, `Breathiness`, `Pitch bend`.
+    pub fn label(self) -> &'static str {
+        match self {
+            VocalCurveKind::Dynamics => "Dynamics",
+            VocalCurveKind::Tension => "Tension",
+            VocalCurveKind::Breathiness => "Breathiness",
+            VocalCurveKind::PitchBend => "Pitch bend",
+        }
+    }
 }
 
 /// How the value travels from one breakpoint to the next.
@@ -207,7 +286,8 @@ pub fn sample_lane(points: &[Breakpoint], frame: u64) -> f32 {
 ///   own range via [`lane_value_to_plugin_param`]),
 /// - `DeviceParam` ⇒ the value unchanged (the engine maps it to the binding's
 ///   integer domain via the device definition's `lane_value_to_binding_value`;
-///   `automation.rs` has no access to the definition).
+///   `automation.rs` has no access to the definition),
+/// - `VocalCurve` ⇒ linear in [`VocalCurveKind::value_range`].
 pub fn lane_value_to_real(target: &AutomationTarget, value: f32) -> f32 {
     let v = value.clamp(0.0, 1.0);
     match target {
@@ -223,6 +303,10 @@ pub fn lane_value_to_real(target: &AutomationTarget, value: f32) -> f32 {
             }
         }
         AutomationTarget::PluginParam { .. } | AutomationTarget::DeviceParam { .. } => v,
+        AutomationTarget::VocalCurve { curve, .. } => {
+            let (lo, hi) = curve.value_range();
+            lo + v * (hi - lo)
+        }
     }
 }
 
@@ -247,6 +331,10 @@ pub fn real_to_lane_value(target: &AutomationTarget, real: f32) -> f32 {
             }
         }
         AutomationTarget::PluginParam { .. } | AutomationTarget::DeviceParam { .. } => real,
+        AutomationTarget::VocalCurve { curve, .. } => {
+            let (lo, hi) = curve.value_range();
+            (real - lo) / (hi - lo)
+        }
     };
     v.clamp(0.0, 1.0)
 }

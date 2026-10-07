@@ -17,6 +17,7 @@ use resonance_audio::types::{
 pub use crate::update::arrangement::ArrangementMessage;
 pub use crate::update::automation::AutomationMessage;
 pub use crate::update::browser::BrowserMessage;
+pub use crate::update::voicebank_library::VoicebankLibraryMessage;
 pub use crate::update::bus::BusMessage;
 pub use crate::update::chord_track::ChordTrackMessage;
 pub use crate::update::clip_warp::ClipWarpMessage;
@@ -100,6 +101,11 @@ pub enum Message {
     /// persisted in the project (same rule as collapse state, doc #175).
     /// Handled by `update::browser::handle`.
     Browser(BrowserMessage),
+    /// The voicebank library overlay and its plok.org downloads
+    /// (vocal-mcp-control-and-quality.md §5). Machine state, never the
+    /// project: no undo, no revision. Handled by
+    /// `update::voicebank_library::handle`.
+    VoicebankLibrary(VoicebankLibraryMessage),
     /// Drag-to-timeline placement gesture (doc #175, todo #605): dragging a
     /// media-browser row over the arrangement to preview and drop a clip.
     /// Transient preview — none of it is undoable or persisted; the drop

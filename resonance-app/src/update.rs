@@ -52,6 +52,7 @@ pub mod transport;
 pub mod transport_nav;
 pub mod ui;
 pub mod viewport;
+pub mod voicebank_library;
 pub mod vocal_tuning;
 
 pub(crate) use project_io::{
@@ -106,6 +107,9 @@ impl crate::Resonance {
             let vocal = if quiet_tick {
                 Task::none()
             } else {
+                // The vocal curve rows the timeline draws follow the
+                // compose model (sections, placements, params, tempo).
+                crate::update::compose::expression::refresh_vocal_lanes(self);
                 crate::update::compose::vocal_render_state::settle(self, grants)
             };
             Task::batch([task, settled, vocal])
@@ -255,6 +259,7 @@ impl crate::Resonance {
             Message::Relink(m) => relink::handle(self, m),
             Message::Ui(m) => ui::handle(self, m),
             Message::Browser(m) => browser::handle(self, m),
+            Message::VoicebankLibrary(m) => voicebank_library::handle(self, m),
             Message::Drag(m) => drag::handle(self, m),
             Message::Control(m) => control::handle(self, m),
             Message::Tick => tick::handle_tick(self),

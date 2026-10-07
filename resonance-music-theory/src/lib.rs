@@ -26,7 +26,7 @@ pub use derive::{
     PhraseGrammarRole, RhythmHit, SequenceKind,
     SyllableMode, TimedChord, VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov,
     VocalRhymeScheme, VocalStyle, VocalTimbre, VoicebankId,
-    VoiceType,
+    VocalCurvePoint, VocalCurves, VoiceType,
 };
 pub use generator::{
     Degree, GenContext, GenerateError, GeneratedChord, GeneratedMaterial, Generator, GeneratorSpec,

@@ -24,6 +24,7 @@ in place.
 - [realtime-multithreading.md](specs/realtime-multithreading.md) — parallel graph rendering on a realtime worker pool (P0–P4).
 - [reverb-algorithms.md](specs/reverb-algorithms.md) — the nine reverb algorithms and the decay meter (R0–R9).
 - [todo.md](specs/todo.md) — the melody/harmony improvement todo derived from the research notes.
+- [vocal-mcp-control-and-quality.md](specs/vocal-mcp-control-and-quality.md) — vocals: MCP lane params, voicebank registry and plok.org install, melisma, render state, rests and breaths, velocity dynamics, expression curves (14 slices, built 2026-10-07); its §11 holds the decision table D1–D32.
 - [warmth-width-depth.md](specs/warmth-width-depth.md) — mix-character tools for warmth, width and depth (W0–W12).
 
 ## research/ — research reports and their source notes

@@ -42,9 +42,37 @@ pub struct AutomationState {
     /// allocation. Never reused — a fresh id per `AddLane` keeps ids unique
     /// across a session even after undo re-creates a lane.
     next_lane_id: LaneId,
+    /// The vocal expression curves projected onto the timeline: one
+    /// render-only `VocalCurve` row per curve kind for every vocal track
+    /// (vocal-mcp-control-and-quality.md §10). Derived from the compose
+    /// model after every update (`update::compose::expression::
+    /// refresh_vocal_lanes`) — never persisted, never undone, never sent to
+    /// the engine, and kept out of [`Self::lanes`] so nothing that
+    /// publishes lanes can leak one.
+    pub vocal: crate::compose::VocalLanes,
+    /// The fingerprint of the compose inputs [`Self::vocal`] was projected
+    /// from; `refresh_vocal_lanes` skips the rebuild while it holds.
+    pub(crate) vocal_fingerprint: Option<u64>,
 }
 
 impl AutomationState {
+    /// The lane on `target`: an engine lane, or a projected vocal curve
+    /// row.
+    pub fn lane_for(&self, target: &AutomationTarget) -> Option<&AutomationLane> {
+        match target {
+            AutomationTarget::VocalCurve { .. } => self.vocal.get(target).map(|v| &v.lane),
+            _ => self.lanes.get(target),
+        }
+    }
+
+    /// The lane with id `id`, engine lane or vocal curve row.
+    pub fn lane_by_id(&self, id: LaneId) -> Option<&AutomationLane> {
+        self.lanes
+            .values()
+            .find(|l| l.id == id)
+            .or_else(|| self.vocal.by_id(id).map(|v| &v.lane))
+    }
+
     /// Allocate the next unique lane id (1-based; `0` means "none
     /// allocated yet", matching the `Default` value).
     pub fn alloc_lane_id(&mut self) -> LaneId {
@@ -124,7 +152,8 @@ pub fn target_belongs_to_track(target: &AutomationTarget, track: &TrackState) ->
         AutomationTarget::PluginParam { instance, .. } => {
             track.plugins.iter().any(|p| p.instance_id == *instance)
         }
-        AutomationTarget::DeviceParam { track: id, .. } => *id == track.id,
+        AutomationTarget::DeviceParam { track: id, .. }
+        | AutomationTarget::VocalCurve { track: id, .. } => *id == track.id,
         _ => false,
     }
 }
