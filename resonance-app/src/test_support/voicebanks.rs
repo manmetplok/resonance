@@ -193,17 +193,21 @@ impl Resonance {
         self.rescan_voicebanks();
     }
 
-    /// Test-only: forget the development models root a developer may
-    /// have opted into with `RESONANCE_SVS_MODELS_DIR`, so the test sees
-    /// only its own (initially empty) voicebank folder whatever the
-    /// environment.
+    /// Test-only: opt in to the development banks a developer pointed
+    /// `RESONANCE_SVS_MODELS_DIR` at (a test app never scans them on its
+    /// own). Returns whether the variable is set; when it is not, the
+    /// app's banks are unchanged.
     #[doc(hidden)]
-    pub fn test_without_dev_voicebanks(&mut self) {
+    pub fn test_install_dev_voicebanks_from_env(&mut self) -> bool {
+        let Some(models) = VoicebankRoots::dev_models_from_env() else {
+            return false;
+        };
         let roots = VoicebankRoots {
-            dev_models: Vec::new(),
+            dev_models: vec![models],
             ..self.test_voicebank_roots()
         };
         self.test_set_voicebank_roots(roots);
+        true
     }
 
     /// Test-only: rescan the voicebank folders.

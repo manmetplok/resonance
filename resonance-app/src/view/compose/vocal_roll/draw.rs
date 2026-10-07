@@ -54,6 +54,19 @@ impl VocalRollCanvas<'_> {
         self.voice_label.hash(&mut mh);
         self.params.voicebank.hash(&mut mh);
         self.params.speaker.hash(&mut mh);
+        // Which bank answers for that id: a rescan that installs, replaces
+        // or removes it changes the strip's dictionary readings and
+        // spellings with the params unchanged. An unchanged bank keeps its
+        // `Arc` across rescans (and its stamp), so this only moves when
+        // the bank did.
+        match self.bank.installed() {
+            Some(bank) => {
+                std::ptr::from_ref(bank).hash(&mut mh);
+                bank.version.hash(&mut mh);
+                bank.stamp.hash(&mut mh);
+            }
+            None => "not installed".hash(&mut mh),
+        }
         let (lo, hi) = self.params.range;
         VocalRollFingerprint {
             clip_id: self.clip.id,

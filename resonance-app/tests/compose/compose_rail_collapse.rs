@@ -55,7 +55,6 @@ fn sim_settings() -> iced::Settings {
 /// on the Lead Vocal lane; tests below re-select the lane they need.
 fn build_app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Compose);
-    app.test_without_dev_voicebanks();
     demo::seed_demo_content(&mut app);
     app
 }

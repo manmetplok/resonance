@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use resonance_music_theory::g2p::PhonemeDictionary;
 use resonance_svs::voicebank::{CurveSupport, PhonemeInventory};
 
-use super::{dict, BuiltinBank, SpeakerInfo};
+use super::{dict, BankStamp, BuiltinBank, SpeakerInfo};
 
 /// One installed voicebank, as scanned.
 #[derive(Debug)]
@@ -19,6 +19,12 @@ pub struct InstalledBank {
     pub version: Option<String>,
     /// The bank folder.
     pub root: PathBuf,
+    /// The folder the scan found the bank in (`root` as listed, before
+    /// any normalisation) — what a rescan matches it by.
+    pub scanned_dir: PathBuf,
+    /// The files the scan read, as they were; a rescan keeps this bank
+    /// while they are unchanged.
+    pub stamp: BankStamp,
     /// Whether the bank came from the user folder or a development root.
     pub user: bool,
     pub acoustic_config: PathBuf,

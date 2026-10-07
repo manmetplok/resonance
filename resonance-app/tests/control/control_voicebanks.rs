@@ -19,7 +19,6 @@ const TRACK: u64 = 61;
 
 fn app_with_project() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
-    app.test_without_dev_voicebanks();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-voicebanks.rprj"));
     app.test_add_track(TRACK, TrackType::Vocal);
@@ -103,14 +102,111 @@ fn a_test_app_sees_only_its_own_voicebank_folder() {
         "{banks:?} is under {hermetic:?}"
     );
     assert!(roots.vocoders.unwrap().starts_with(hermetic));
-    // Development models only by explicit opt-in: the source tree's
-    // `resonance-svs/models/` is never scanned implicitly.
-    let opted_in: Vec<std::path::PathBuf> = std::env::var_os("RESONANCE_SVS_MODELS_DIR")
-        .filter(|v| !v.is_empty())
-        .map(Into::into)
-        .into_iter()
-        .collect();
-    assert_eq!(roots.dev_models, opted_in);
+    // No development root, whatever the environment: neither the source
+    // tree's `resonance-svs/models/` nor `$RESONANCE_SVS_MODELS_DIR`.
+    assert!(roots.dev_models.is_empty(), "{:?}", roots.dev_models);
+}
+
+/// A test opts in to the developer's real banks explicitly; without the
+/// variable the opt-in changes nothing.
+#[test]
+fn a_test_opts_in_to_the_dev_banks_explicitly() {
+    let (mut app, _task) = Resonance::new_for_test();
+    let opted = app.test_install_dev_voicebanks_from_env();
+    let env = resonance_app::compose::vocal_svs::VoicebankRoots::dev_models_from_env();
+    assert_eq!(opted, env.is_some());
+    assert_eq!(app.test_voicebank_roots().dev_models, env.into_iter().collect::<Vec<_>>());
+}
+
+/// `$RESONANCE_VOICEBANK_DIR` alone moves the vocoders with it, into the
+/// `vocoders/` folder beside it (§4.2); `$RESONANCE_VOCODER_DIR` still
+/// wins, and with neither both sit in the data dir.
+#[test]
+fn the_vocoder_folder_follows_the_voicebank_override() {
+    use resonance_app::compose::vocal_svs::VoicebankRoots;
+    use std::path::{Path, PathBuf};
+    let data = Path::new("/data/resonance");
+    let banks = PathBuf::from("/elsewhere/voicebanks");
+
+    let roots = VoicebankRoots::from_dirs(Some(banks.clone()), None, Some(data), Vec::new());
+    assert_eq!(roots.banks.as_deref(), Some(banks.as_path()));
+    assert_eq!(roots.vocoders.as_deref(), Some(Path::new("/elsewhere/vocoders")));
+
+    let own = PathBuf::from("/vocoders/here");
+    let roots = VoicebankRoots::from_dirs(Some(banks), Some(own.clone()), Some(data), Vec::new());
+    assert_eq!(roots.vocoders, Some(own));
+
+    let roots = VoicebankRoots::from_dirs(None, None, Some(data), Vec::new());
+    assert_eq!(roots.banks.as_deref(), Some(Path::new("/data/resonance/voicebanks")));
+    assert_eq!(roots.vocoders.as_deref(), Some(Path::new("/data/resonance/vocoders")));
+}
+
+/// A folder whose name slugs to nothing takes its id from the character
+/// file; two folders with one id keep the first (sorted); a user bank
+/// beats a development root's bank of the same id.
+#[test]
+fn bank_ids_fall_back_to_the_character_name_and_duplicates_keep_the_first() {
+    let mut app = app_with_project();
+    let user = app.test_voicebank_roots().banks.expect("a user folder");
+    let named = |name: &str| VoicebankFixture {
+        name: Some(name.to_owned()),
+        ..VoicebankFixture::default()
+    };
+    resonance_app::write_voicebank_fixture(&user.join("日本語"), &named("Kiyo Voice"));
+    resonance_app::write_voicebank_fixture(&user.join("___"), &VoicebankFixture::default());
+    resonance_app::write_voicebank_fixture(&user.join("Duo!"), &named("First"));
+    resonance_app::write_voicebank_fixture(&user.join("duo"), &named("Second"));
+
+    let list = voicebanks(&mut app);
+    let ids: Vec<&str> = list.installed.iter().map(|b| b.id.as_str()).collect();
+    assert_eq!(ids, ["duo", "kiyo-voice"], "the nameless folder is skipped");
+    let duo = list.installed.iter().find(|b| b.id == "duo").unwrap();
+    assert_eq!(duo.name, "First", "`Duo!` sorts before `duo`");
+
+    // A development root's Lilia is shadowed by the user's.
+    let dev = std::env::temp_dir().join(format!("resonance-dev-models-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dev);
+    resonance_app::write_voicebank_fixture(&dev.join("voicebanks/lilia"), &named("Dev Lilia"));
+    app.test_install_voicebank("lilia", &VoicebankFixture::shipped("lilia"));
+    let roots = resonance_app::compose::vocal_svs::VoicebankRoots {
+        dev_models: vec![dev.clone()],
+        ..app.test_voicebank_roots()
+    };
+    app.test_set_voicebank_roots(roots);
+    let lilia = app.test_voicebank_profile("lilia");
+    assert!(
+        lilia.installed().unwrap().root.starts_with(&user),
+        "the user's copy wins"
+    );
+    std::fs::remove_dir_all(&dev).unwrap();
+}
+
+/// A rescan keeps an unchanged bank's `Arc` (and so its parsed
+/// dictionary) and re-reads one whose files changed.
+#[test]
+fn a_rescan_reuses_an_unchanged_bank() {
+    let mut app = app_with_project();
+    let dir = app.test_install_voicebank("keiro", &VoicebankFixture::default());
+    let first = app.test_voicebank_profile("keiro");
+    app.test_rescan_voicebanks();
+    let again = app.test_voicebank_profile("keiro");
+    assert!(
+        std::ptr::eq(first.installed().unwrap(), again.installed().unwrap()),
+        "unchanged: the same bank"
+    );
+
+    // A dictionary dropped in later changes the bank.
+    resonance_app::write_voicebank_fixture(
+        &dir,
+        &VoicebankFixture {
+            english_dict: vec![("keiro".to_owned(), vec!["k".to_owned(), "ey".to_owned()])],
+            ..VoicebankFixture::default()
+        },
+    );
+    app.test_rescan_voicebanks();
+    let changed = app.test_voicebank_profile("keiro");
+    assert!(!std::ptr::eq(first.installed().unwrap(), changed.installed().unwrap()));
+    assert!(changed.dictionary().is_some(), "the new dictionary is read");
 }
 
 #[test]

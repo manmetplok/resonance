@@ -294,3 +294,53 @@ fn units_are_stitched_at_their_sample_offsets() {
     assert!((out.mono[20] - 0.2).abs() < 1e-6, "unit 1 at offset 20");
     assert!((out.mono[24] - 0.2).abs() < 1e-6);
 }
+
+/// The key hashes what renders the unit, not just the lane's params: the
+/// same params (no explicit speaker) on a bank that now lists its
+/// speakers the other way round resolve to another speaker embedding, so
+/// the cached take must not be reused. Rescanning an unchanged bank keeps
+/// the key.
+#[test]
+fn the_key_follows_the_resolved_speaker_not_the_params() {
+    use resonance_app::compose::vocal_svs::{VoicebankRegistry, VoicebankRoots};
+    use resonance_app::{write_voicebank_fixture, VoicebankFixture};
+
+    let root = std::env::temp_dir().join(format!("resonance-cache-key-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let fixture = |speakers: [&str; 2]| VoicebankFixture {
+        speakers: speakers.iter().map(|s| format!("embeds/{s}")).collect(),
+        ..VoicebankFixture::default()
+    };
+    let key_now = || {
+        let registry = VoicebankRegistry::scan(VoicebankRoots {
+            banks: Some(root.clone()),
+            ..VoicebankRoots::default()
+        });
+        let params = VocalParams {
+            voicebank: VoicebankId::new("duo"),
+            speaker: None,
+            ..VocalParams::default()
+        };
+        let bank = registry.profile(&params.voicebank);
+        assert!(bank.is_installed());
+        let notes = vec![note(0)];
+        let assigned = vec![syl(&["s", "ow"], 0)];
+        let units = split_render_units(
+            &notes,
+            &params,
+            &assigned,
+            &ExpressionCurves::default(),
+            TPQ,
+            BPM,
+            &bank,
+        );
+        units[0].key
+    };
+
+    write_voicebank_fixture(&root.join("duo"), &fixture(["soft", "power"]));
+    let soft = key_now();
+    assert_eq!(key_now(), soft, "an unchanged bank keeps the key");
+    write_voicebank_fixture(&root.join("duo"), &fixture(["power", "soft"]));
+    assert_ne!(key_now(), soft, "the default speaker is `power` now");
+    std::fs::remove_dir_all(&root).unwrap();
+}
