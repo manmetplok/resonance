@@ -1,6 +1,6 @@
 # Lyric pronunciation (G2P and dictionary)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `86e5c2af` on 2026-10-07.
 > Spec history: prototype `docs/intents/prototypes/svs-pronunciation-control/index.html` (design #173, notes #174).
 
 Every sung syllable becomes a list of ARPAbet phonemes before it reaches
@@ -19,6 +19,22 @@ global user dictionary, but nothing sets those yet.
 - **Precedence.** `override > project dictionary > global dictionary > CMU
   auto` (`resolve_clip`). Provenance (`auto` / `EDIT` / `DICT`) is kept per
   syllable for display.
+- **Pronunciation source.** Alongside `PhonemeProvenance`, every
+  `ResolvedSyllable` and `AssignedSyllable` carries a finer
+  `source: g2p::G2pSource` — `Edited` (override or `[..]` block),
+  `ProjectDict` (the caller's `PhonemeDictionary`), `BankDict` (reserved
+  for voicebank dictionaries, never produced yet), `Cmu` or `Rules` (the
+  spelling fallback). Serde writes it snake_case (`"project_dict"`), and
+  `G2pSource::as_str` gives the same string. Slur notes inherit the held
+  syllable's source. `g2p::word_g2p_source(word)` answers CMU-or-rules for
+  a single word. Nothing in the app reads `source` yet (`song.vocal`'s
+  `g2p` field is slice 10 of
+  [vocal-mcp-control-and-quality](../../intents/compose/vocal-mcp-control-and-quality.md)).
+- **Syllable split.** A word's phonemes are split at the user's `·`
+  breaks exactly (see
+  [lyrics and melody](vocal-lyrics-and-melody.md#behaviour)); a mismatch
+  between pieces and vowels falls back to the automatic split and sets
+  `syllable_warning`.
 - **Project dictionary.** `vocal.set_pronunciation` stores a word →
   phonemes entry (word cleaned and lower-cased by `clean_word`; phonemes
   canonicalized, unknown symbols rejected, empty list rejected);
@@ -44,7 +60,7 @@ global user dictionary, but nothing sets those yet.
 
 | Concern | Location | Key items |
 |---|---|---|
-| G2P | `resonance-music-theory/src/g2p/{phonemes,syllabify,lyric_parse,note_assign}.rs` | `canonical_phoneme`, `cmu_variants`, `auto_syllabify_text`, `resolve_draft_with_dict`, `assign_syllables_to_notes_with`, `PhonemeProvenance` |
+| G2P | `resonance-music-theory/src/g2p/{phonemes,syllabify,lyric_parse,note_assign}.rs` | `canonical_phoneme`, `cmu_variants`, `auto_syllabify_text`, `resolve_draft_with_dict`, `assign_syllables_to_notes_with`, `PhonemeProvenance`, `G2pSource`, `word_g2p_source` |
 | App model + resolver | `resonance-app/src/compose/vocal_svs/pronunciation.rs` | `PronunciationState`, `DictionaryEntry`, `DictionaryScope`, `SyllableOverride`, `resolve_clip`, `clean_word`, `canonicalize_phonemes` |
 | Control mutation | `resonance-app/src/update/compose/mod.rs` | `control_set_pronunciation`, `control_clear_pronunciation` |
 | Control validation | `resonance-app/src/update/control/vocal.rs` | `set_pronunciation` param checks |
@@ -68,6 +84,7 @@ global user dictionary, but nothing sets those yet.
 | Resolved phonemes in the segment | `tests/vocal/vocal_segment_pronunciation.rs` | same |
 | Control set/clear | `tests/control/control_vocal.rs` | same |
 | G2P | `resonance-music-theory/tests/g2p.rs`, `g2p_apis.rs` | `./scripts/run-tests.py -p resonance-music-theory` |
+| `G2pSource`, exact breaks, corpus all-CMU | `resonance-music-theory/tests/g2p_apis/lyric_markers.rs` | same |
 
 Not covered: survival across save/load or undo (it does not survive).
 

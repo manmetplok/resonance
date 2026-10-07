@@ -9,7 +9,9 @@
 use resonance_app::compose::vocal_svs::{build_segment, CurveKind};
 use resonance_app::compose::ExpressionCurves;
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
-use resonance_music_theory::g2p::{AssignedSyllable, PhonemeProvenance, SyllableStress};
+use resonance_music_theory::g2p::{
+    AssignedSyllable, G2pSource, PhonemeProvenance, SyllableStress,
+};
 use resonance_music_theory::{VocalParams, VocalVoicebank};
 
 const TPQ: u32 = TICKS_PER_QUARTER_NOTE as u32;
@@ -34,6 +36,9 @@ fn syl(phonemes: &[&'static str], syllable_index: usize) -> AssignedSyllable {
         syllable_index,
         stress: SyllableStress::None,
         provenance: PhonemeProvenance::Auto,
+        source: G2pSource::Cmu,
+        breath_before: false,
+        syllable_warning: false,
     }
 }
 

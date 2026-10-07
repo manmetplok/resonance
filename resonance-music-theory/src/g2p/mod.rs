@@ -18,10 +18,10 @@ mod syllabify;
 
 // ── phonemes ──────────────────────────────────────────────────────────────────
 pub use phonemes::{
-    canonical_phoneme, cmu_variant_count, cmu_variants, is_consonant, ARPABET_PHONEMES,
-    ARPABET_SYMBOLS, CONSONANTS,
+    canonical_phoneme, cmu_variant_count, cmu_variants, is_consonant, word_g2p_source,
+    ARPABET_PHONEMES, ARPABET_SYMBOLS, CONSONANTS,
 };
-pub use phonemes::{PronunciationVariant, SyllableStress};
+pub use phonemes::{G2pSource, PronunciationVariant, SyllableStress};
 
 // ── syllabify ─────────────────────────────────────────────────────────────────
 pub use syllabify::{
@@ -30,12 +30,12 @@ pub use syllabify::{
 };
 
 // ── lyric_parse ───────────────────────────────────────────────────────────────
-pub use lyric_parse::{is_slur_lyric, SLUR_MARKER};
+pub use lyric_parse::{is_breath_token, is_slur_lyric, is_slur_token, SLUR_MARKER};
 
 // ── note_assign ───────────────────────────────────────────────────────────────
 pub use note_assign::{
-    assign_syllables_to_notes, assign_syllables_to_notes_with, phonemes_for_draft, resolve_draft,
-    resolve_draft_with_dict,
+    assign_syllables_to_notes, assign_syllables_to_notes_with, note_unit_count, phonemes_for_draft,
+    resolve_draft, resolve_draft_with_dict,
 };
 pub use note_assign::{
     AssignedSyllable, PhonemeProvenance, PhonemeDictionary, ResolvedSyllable, SyllableOverrides,

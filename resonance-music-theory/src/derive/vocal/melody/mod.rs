@@ -34,6 +34,7 @@ mod syllables;
 
 pub use spans::vocal_phrase_spans;
 pub use syllables::count_syllables;
+pub(in crate::derive::vocal) use syllables::line_note_stresses;
 
 pub(in crate::derive::vocal) use cadence::apply_line_cadence_formulas;
 pub(in crate::derive::vocal) use cleanup::enforce_no_overlap;

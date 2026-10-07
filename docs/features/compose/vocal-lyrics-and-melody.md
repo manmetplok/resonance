@@ -1,6 +1,6 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `86e5c2af` on 2026-10-07.
 > Spec history: `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -23,6 +23,39 @@ line, re-rolled from a small template corpus, or set by an agent.
   `locked` flag. Breaks may be typed as `-` or `·`; `[..]` blocks are raw
   phonemes. Auto-syllabify (`g2p::auto_syllabify_text`) inserts the missing
   breaks so each syllable gets its own note.
+- **Draft markers** (resolved in `resonance-music-theory`; the app does not
+  render them yet beyond what is noted):
+  - **Melisma `_`** (aliases `+`, standalone `-`): holds the previous
+    syllable onto one more note — `love _ _` is one syllable over three
+    notes. It is not a syllable: `ResolvedSyllable::slurs_after` counts the
+    holds after a syllable, `g2p::note_unit_count` gives syllables + holds,
+    and `assign_syllables_to_notes_with` turns each hold into a slur note
+    (`is_slur`, label `+`, the held vowel, the held syllable's
+    `syllable_index`, stress, provenance and source). Holds therefore never
+    shift later syllables' indices. A `_` before a line's first sung token
+    has nothing to hold and is dropped. A per-note slur annotation on a note
+    the draft already holds is the same hold, not an extra one. The final
+    consonant is still sung on the first note (the spec's "consonant at the
+    end of the last note" is not built).
+  - **Breath `AP`** (standalone, uppercase): takes no note and sets
+    `breath_before` on the next sung syllable / its note (also across a
+    line break; a trailing `AP` at the end of the draft is dropped). The
+    app never sings it as a word but does not yet render a breath.
+    Lowercase `ap` is a word; `[AP]` is still an inline phoneme block that
+    occupies its own note.
+  - `count_syllables` (and so the melody generator's per-line note count)
+    agrees: a hold counts one note, a leading hold and an `AP` count none.
+    The generator's per-note stress table gives holds no stress.
+- **Exact user breaks.** A word's `·` pieces are its note labels verbatim,
+  and its phonemes split at the matching consonant: each piece gets one
+  vowel nucleus, and the next piece's onset takes one consonant phoneme per
+  leading consonant letter (`th sh ch ng ph wh ck` count as one, `qu` as
+  two, `y` is a consonant only piece-initially before a vowel), clamped to
+  the cluster — `func·tion` → `f ah ng k | sh ax n`, `fun·ction` →
+  `f ah ng | k sh ax n`. When the piece count differs from the vowel count
+  the phonemes fall back to the automatic onset-maximising split (labels
+  stay the user's pieces, note count unchanged) and those syllables carry
+  `syllable_warning`.
 - **Editing.** Bulk text editor for the whole lane (`vocal_bulk_lyrics`,
   synced both ways with the draft), per-line text, lock per line,
   "re-roll unlocked", auto-syllabify. Editing lyrics does not change the
@@ -31,9 +64,10 @@ line, re-rolled from a small template corpus, or set by an agent.
   pre-syllabified template lines filtered by `VocalMood` (Yearning,
   Defiant, Hopeful, Reflective, Joyful, Melancholy) and arranged by
   `VocalRhymeScheme` (AABB, ABAB, ABCB, ABBA, Free) within the syllable
-  range; locked lines stay and anchor their rhyme. The theme text (≤240
-  chars), point of view and "avoid clichés" are stored and shown but the
-  generator ignores them.
+  range; locked lines stay and anchor their rhyme. Every corpus word is in
+  the CMU dictionary (`lyric_corpus_lines`, guarded by a test). The theme
+  text (≤240 chars), point of view and "avoid clichés" are stored and
+  shown but the generator ignores them.
 - **Melody generator.** `derive_vocal_with_motif` walks the section's
   chords once per syllable. Inputs: `VoiceType` (Soprano … Bass, sets the
   default range), range, `VocalStyle` (PopBallad, Conversational, Hymnal,
@@ -93,6 +127,7 @@ line, re-rolled from a small template corpus, or set by an agent.
 | Vocal roll | `tests/compose/vocal_roll_keys.rs`, `vocal_roll_key_focus.rs`, `vocal_roll_fingerprint.rs` | same |
 | Placeholder rows | `tests/compose/compose_vocal_placeholder.rs` | same |
 | Theory | `resonance-music-theory/tests/{vocal,vocal_climax,vocal_syncopation,vocal_melody_golden,vocal_params_validate,vocal_enum_labels,g2p,g2p_apis}.rs` | `./scripts/run-tests.py -p resonance-music-theory` |
+| Draft markers, exact breaks, corpus all-CMU | `resonance-music-theory/tests/g2p_apis/lyric_markers.rs` (module of `g2p_apis`) | same |
 | Goldens | `tests/snapshots/compose_vocal_*-wgpu.png` (placeholder, wired up, lyrics draft folded) | `RESONANCE_BLESS=1` |
 
 Not covered: theme/POV/clichés (they have no effect).
@@ -106,7 +141,18 @@ Not covered: theme/POV/clichés (they have no effect).
 - Vocal lanes regenerate MIDI on chord edits but do not re-render audio
   then; audio is re-rendered on demand.
 
+- Corpus fixes: `fore·get` → `for·get`; `ev·ry` (not a CMU word) →
+  `an·y` and `ev·ery·thing`. Two corpus words still flag
+  `syllable_warning` because their pieces do not match CMU's vowel count:
+  `ev·ery` (CMU variant 1 has three vowels) and `word·s`; fixing them
+  would change line note counts, so they were left.
+
 ## Known gaps
+
+- `song.vocal`, the GUI and the counts check do not yet show `_` holds,
+  breaths, `syllable_warning` or the `g2p` source, and breaths are not
+  rendered — [vocal-mcp-control-and-quality](../../intents/compose/vocal-mcp-control-and-quality.md)
+  slices 8, 10 and 12.
 
 - Theme, POV and "avoid clichés" are ignored —
   [lyric-theme-generation](../../intents/compose/lyric-theme-generation.md).

@@ -375,6 +375,94 @@ pub(crate) fn split_into_syllables(
     out
 }
 
+/// Split a word's phonemes exactly where the user broke its spelling
+/// (`for·get`, `be·cause`) — spec `vocal-mcp-control-and-quality.md` §8,
+/// D23. Each piece gets one vowel nucleus; the consonant cluster between
+/// nuclei `k` and `k+1` is cut so piece `k+1`'s onset holds one consonant
+/// phoneme per leading consonant letter of that piece (see
+/// [`leading_consonant_units`]), clamped to the cluster. The rest of the
+/// cluster stays as piece `k`'s coda.
+///
+/// Returns `None` when the piece count differs from the number of vowel
+/// nuclei — the caller falls back to [`split_into_syllables`] and flags
+/// the syllables. A single piece is always one group.
+pub(crate) fn split_at_user_breaks(
+    phonemes: &[(&'static str, SyllableStress)],
+    pieces: &[String],
+) -> Option<Vec<Vec<(&'static str, SyllableStress)>>> {
+    let n = pieces.len();
+    if n <= 1 {
+        return Some(vec![phonemes.to_vec()]);
+    }
+    let vowels: Vec<usize> = phonemes
+        .iter()
+        .enumerate()
+        .filter(|(_, (p, _))| !is_consonant(p))
+        .map(|(i, _)| i)
+        .collect();
+    if vowels.len() != n {
+        return None;
+    }
+    // Start index of each piece's phonemes; piece 0 starts at 0.
+    let mut starts: Vec<usize> = Vec::with_capacity(n);
+    starts.push(0);
+    for k in 1..n {
+        let cluster = vowels[k] - vowels[k - 1] - 1;
+        let onset = leading_consonant_units(&pieces[k]).min(cluster);
+        starts.push(vowels[k] - onset);
+    }
+    let mut out = Vec::with_capacity(n);
+    for k in 0..n {
+        let end = if k + 1 < n { starts[k + 1] } else { phonemes.len() };
+        out.push(phonemes[starts[k]..end].to_vec());
+    }
+    Some(out)
+}
+
+/// How many consonant sounds a spelling piece starts with, counted from
+/// its letters: each consonant letter before the first vowel letter is
+/// one, except the digraphs `th sh ch ng ph wh ck`, which are one
+/// together, and `qu`, which is two (`k w`). `y` is a consonant only as
+/// the piece's first letter in front of a vowel letter (`yel·low`), a
+/// vowel otherwise (`ev·ry`).
+fn leading_consonant_units(piece: &str) -> usize {
+    let chars: Vec<char> = piece
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let is_vowel_letter = |c: char| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u');
+    let mut units = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == 'y' {
+            let consonant_y = i == 0 && chars.get(1).is_some_and(|&n| is_vowel_letter(n));
+            if !consonant_y {
+                break;
+            }
+            units += 1;
+            i += 1;
+            continue;
+        }
+        if c == 'q' && chars.get(i + 1) == Some(&'u') {
+            // `qu` reads /k w/ and the `u` is not the nucleus.
+            units += 2;
+            i += 2;
+            continue;
+        }
+        if is_vowel_letter(c) {
+            break;
+        }
+        let digraph = chars.get(i + 1).is_some_and(|&n| {
+            matches!((c, n), ('t' | 's' | 'c' | 'p' | 'w', 'h') | ('n', 'g') | ('c', 'k'))
+        });
+        units += 1;
+        i += if digraph { 2 } else { 1 };
+    }
+    units
+}
+
 /// Where to cut the consonant run between two vowel nuclei.
 ///
 /// Maximal onset, *constrained by English phonotactics*. Handing the

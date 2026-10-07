@@ -54,13 +54,13 @@ const CORPUS: &[CorpusLine] = &[
     CorpusLine { mood: VocalMood::Yearning, rhyme: 1, syllables: 10, text: "the morn·ing leaves us no·thing to weigh" },
     CorpusLine { mood: VocalMood::Yearning, rhyme: 1, syllables: 8, text: "ev·ery·thing I meant to say" },
     CorpusLine { mood: VocalMood::Yearning, rhyme: 1, syllables: 9, text: "an emp·ty house an emp·ty day" },
-    CorpusLine { mood: VocalMood::Yearning, rhyme: 2, syllables: 9, text: "ev·ry stone we threw on the way" },
+    CorpusLine { mood: VocalMood::Yearning, rhyme: 2, syllables: 9, text: "an·y stone we threw on the way" },
     CorpusLine { mood: VocalMood::Yearning, rhyme: 2, syllables: 10, text: "we walk the hall·ways all a·lone" },
     CorpusLine { mood: VocalMood::Yearning, rhyme: 2, syllables: 9, text: "a qui·et house that feels like home" },
     CorpusLine { mood: VocalMood::Yearning, rhyme: 2, syllables: 9, text: "I made a bed of glass and stone" },
     CorpusLine { mood: VocalMood::Yearning, rhyme: 3, syllables: 11, text: "Glass hou·ses don't break, they just re·mem·ber" },
     CorpusLine { mood: VocalMood::Yearning, rhyme: 3, syllables: 11, text: "the way the light bends as you en·ter the room" },
-    CorpusLine { mood: VocalMood::Yearning, rhyme: 3, syllables: 10, text: "a name I have not learned to fore·get" },
+    CorpusLine { mood: VocalMood::Yearning, rhyme: 3, syllables: 10, text: "a name I have not learned to for·get" },
 
     // ---- Defiant (1: -own, 2: -ire/-ind, 3: -ash/-ack) ----
     CorpusLine { mood: VocalMood::Defiant, rhyme: 1, syllables: 8, text: "I won't lay this an·ger down" },
@@ -80,7 +80,7 @@ const CORPUS: &[CorpusLine] = &[
     CorpusLine { mood: VocalMood::Hopeful, rhyme: 2, syllables: 9, text: "I'll meet you in the qui·et morn·ing" },
     CorpusLine { mood: VocalMood::Hopeful, rhyme: 2, syllables: 9, text: "the world is gen·tle when it's born" },
     CorpusLine { mood: VocalMood::Hopeful, rhyme: 2, syllables: 10, text: "a low and stead·y wind across the lawn" },
-    CorpusLine { mood: VocalMood::Hopeful, rhyme: 3, syllables: 8, text: "ev·ry·thing I lost is found" },
+    CorpusLine { mood: VocalMood::Hopeful, rhyme: 3, syllables: 8, text: "ev·ery·thing I lost is found" },
     CorpusLine { mood: VocalMood::Hopeful, rhyme: 3, syllables: 9, text: "I press my ear against the ground" },
     CorpusLine { mood: VocalMood::Hopeful, rhyme: 3, syllables: 9, text: "the soft and pa·tient turn·ing sound" },
 
@@ -117,6 +117,13 @@ const CORPUS: &[CorpusLine] = &[
     CorpusLine { mood: VocalMood::Melancholy, rhyme: 3, syllables: 9, text: "I leave the house and I am gone" },
     CorpusLine { mood: VocalMood::Melancholy, rhyme: 3, syllables: 9, text: "the long, the qui·et, the un·done" },
 ];
+
+/// Every line of the bundled lyric corpus, in corpus order — the full
+/// set `generate_lyrics` draws from. Exposed so tests can hold the whole
+/// corpus to standards (every word in CMU, say) without sampling seeds.
+pub fn lyric_corpus_lines() -> Vec<&'static str> {
+    CORPUS.iter().map(|l| l.text).collect()
+}
 
 /// Pattern of rhyme keys for a given scheme. Letters share keys; "free"
 /// returns an empty pattern (no rhyme constraint).

@@ -2,6 +2,11 @@
 //! add-phoneme palette and dictionary need: CMU variant enumeration, the
 //! ARPAbet inventory list, public phoneme validation, and the
 //! dictionary / per-syllable override resolution hooks (with provenance).
+//! The lyric-draft markers (`_`, `AP`, exact `·` breaks, `G2pSource`)
+//! live in the `lyric_markers` module.
+
+#[path = "g2p_apis/lyric_markers.rs"]
+mod lyric_markers;
 
 use std::collections::HashMap;
 
