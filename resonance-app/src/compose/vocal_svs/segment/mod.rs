@@ -8,6 +8,8 @@
 //!   applies portamento + vibrato.
 //! - [`tension`] derives the optional per-frame tension curve from
 //!   the same f0 metadata for voicebanks that accept it.
+//! - [`energy`] derives the velocity-driven energy curve for voicebanks
+//!   that take one.
 //!
 //! The orchestrator below stitches the stages together and assembles
 //! the final `DsSegment` the pipeline consumes.
@@ -25,11 +27,13 @@ use resonance_svs::ds::{DsSegment, SampleCurve};
 use crate::compose::expression::ExpressionCurves;
 
 mod duration;
+mod energy;
 mod f0;
 mod overlay;
 mod tension;
 
 use duration::build_phoneme_track;
+use energy::build_energy_curve;
 use f0::{build_f0_curve, F0_TIMESTEP};
 use tension::build_tension_curve;
 
@@ -82,11 +86,11 @@ pub(super) fn build_segment_windowed(
     let n_frames = f0_curve.samples.len();
 
     // Dynamics → energy. Only a bank whose acoustic model takes `energy`
-    // (`curve_supported`; no shipped bank does) gets it, and only when the
-    // user has shaped an overlay — otherwise a clean no-op.
+    // (`curve_supported`; no shipped bank does) gets it: the user's
+    // overlay when shaped, else velocity scaled by `velocity_dynamics`.
     let energy =
         overlay::overlay_envelope(&curves.dynamics, bank, n_frames, window)
-            .unwrap_or_default();
+            .unwrap_or_else(|| build_energy_curve(&f0_curve, params, bank));
     // Breathiness → breathiness. Same gate: no shipped bank takes it, so
     // today this is a no-op on every bank, not just TIGER.
     let breathiness =

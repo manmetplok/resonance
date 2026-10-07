@@ -12,8 +12,10 @@ use resonance_svs::stages::common::ExecutionProvider;
 
 use crate::compose::expression::ExpressionCurves;
 
+use super::dynamics::{apply_dynamics_gain, velocity_gain_spans};
 use super::post::{
-    apply_ap_gate, collect_ap_intervals, mono_to_stereo_with_gain, resample_to, safety_gain_factor,
+    apply_ap_gate, collect_rest_intervals, mono_to_stereo_with_gain, resample_to,
+    safety_gain_factor,
 };
 use super::{
     render_units_cached, split_render_units, BankProfile, SvsRenderCache, VocalRenderError,
@@ -99,9 +101,10 @@ pub fn render_vocal_clip(
     };
 
     // Render each missing unit through the acoustic + vocoder pipeline,
-    // gating its own AP/SP rests to silence; cache hits skip all of this.
+    // gating its own rests to silence (breaths stay); cache hits skip all
+    // of this.
     let render_fn = |segment: &resonance_svs::ds::DsSegment| -> Result<(Vec<f32>, u32), String> {
-        let ap_intervals = collect_ap_intervals(&segment.ph_seq, &segment.ph_dur);
+        let ap_intervals = collect_rest_intervals(&segment.ph_seq, &segment.ph_dur);
         let rendered = pipeline::render_segments(std::slice::from_ref(segment), &args)
             .map_err(|e| format!("svs render: {e:#}"))?;
         let sr = rendered.sample_rate;
@@ -112,7 +115,19 @@ pub fn render_vocal_clip(
 
     let stitched = render_units_cached(&units, cache, render_fn)?;
     let model_sr = stitched.sample_rate;
-    let mono = stitched.mono;
+    let mut mono = stitched.mono;
+
+    // Velocity → loudness on every bank (§9): one gain per note, on the
+    // stitched take (the first note sits `SEGMENT_PAD_SEC` in), before the
+    // safety gain so a +6 dB note cannot clip.
+    let spans = velocity_gain_spans(
+        notes,
+        ticks_per_quarter,
+        bpm,
+        params.velocity_dynamics,
+        SEGMENT_PAD_SEC,
+    );
+    apply_dynamics_gain(&mut mono, &spans, model_sr);
 
     let gain = safety_gain_factor(&mono);
     let stereo = mono_to_stereo_with_gain(&mono, gain);

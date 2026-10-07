@@ -806,6 +806,10 @@ pub enum LaneInspectorMsg {
     SetVocalPortamentoMs(f32),
     SetVocalArticulation(f32),
     SetVocalConsonantEmphasis(f32),
+    /// Shortest gap (beats) sung as a rest.
+    SetVocalRestThresholdBeats(f32),
+    /// How much note velocity drives loudness, 0..1.
+    SetVocalVelocityDynamics(f32),
 
     // Vocal — actions
     GenerateVocalAll,
@@ -962,6 +966,20 @@ impl LaneInspectorMsg {
                     definition_id,
                     track_id,
                     LaneParamKnob::VocalConsonantEmphasis,
+                ))
+            }
+            Self::SetVocalRestThresholdBeats(..) => {
+                UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                    definition_id,
+                    track_id,
+                    LaneParamKnob::VocalRestThresholdBeats,
+                ))
+            }
+            Self::SetVocalVelocityDynamics(..) => {
+                UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                    definition_id,
+                    track_id,
+                    LaneParamKnob::VocalVelocityDynamics,
                 ))
             }
             // Every other lane-inspector edit is a discrete pick, toggle

@@ -6,7 +6,7 @@
 //! to the acoustic + vocoder pipeline wholesale — so editing a single
 //! syllable re-ran the model over every note. This module splits the
 //! clip into independently-renderable [`RenderUnit`]s at the same genuine
-//! silences (`AP` rests) the duration builder already inserts, renders
+//! silences (`SP` rests) the duration builder already inserts, renders
 //! only the units whose content changed, reuses cached audio for the
 //! rest, and stitches everything back onto one timeline by sample
 //! offset. Because units only ever abut at silence, concatenating their
@@ -33,8 +33,8 @@ use resonance_svs::ds::{DsSegment, SampleCurve};
 use crate::compose::expression::ExpressionCurves;
 
 use super::registry::BankProfile;
+use super::rests::RestRule;
 use super::segment::build_segment_windowed;
-use super::SILENCE_GAP_SEC;
 
 /// One independently-renderable slice of a vocal clip: a contiguous run
 /// of notes delimited by genuine silences. Carries its own `DsSegment`
@@ -69,9 +69,11 @@ fn seconds_per_tick(ticks_per_quarter: u32, bpm: f32) -> f64 {
 /// Split a vocal clip into render units at genuine silences.
 ///
 /// A boundary is placed between note `i` and `i+1` whenever the gap to
-/// the next note exceeds the note's own sing duration by more than
-/// [`SILENCE_GAP_SEC`] — exactly the condition under which
-/// [`super::segment`]'s duration builder emits a trailing `AP` rest. Each
+/// the next note is at least the lane's rest threshold
+/// ([`RestRule`], `rest_threshold_beats`) — exactly the condition under
+/// which [`super::segment`]'s duration builder emits a trailing rest —
+/// unless the next note's syllable asks for a breath, which then fills
+/// the end of that rest inside the same unit. Each
 /// resulting unit is a self-contained `DsSegment` built from its slice of
 /// notes/syllables. A clip with no internal silence yields a single unit
 /// whose segment is identical to the old whole-clip build, so the
@@ -102,17 +104,23 @@ pub fn split_render_units(
         .unwrap_or(base_tick);
     let clip_span = clip_end_tick.saturating_sub(base_tick) as f32;
     let model = model_identity(params, bank);
+    let lane = lane_identity(params);
+    let rest_rule = RestRule::new(params, bpm);
 
     // Boundaries between consecutive notes: split where the duration
     // builder would insert a real rest.
     let mut starts = vec![0usize];
     for i in 0..notes.len().saturating_sub(1) {
         // Unfloored, like the duration builder (VIEW-34); a slot under
-        // the floor can never exceed `sing_cap + SILENCE_GAP_SEC` anyway.
+        // the floor can never hold a rest anyway.
         let slot_sec =
             (notes[i + 1].start_tick.saturating_sub(notes[i].start_tick)) as f64 * spt;
         let sing_cap = (notes[i].duration_ticks as f64 * spt).max(0.05);
-        if slot_sec > sing_cap + SILENCE_GAP_SEC {
+        // A rest ending in a written breath stays inside one unit, so the
+        // breath can take the end of the gap (up to 0.35 s) rather than
+        // only the next unit's leading pad.
+        let breath_next = assigned.get(i + 1).is_some_and(|a| a.breath_before);
+        if rest_rule.is_rest(slot_sec, sing_cap) && !breath_next {
             starts.push(i + 1);
         }
     }
@@ -146,7 +154,7 @@ pub fn split_render_units(
         );
         let start_sec = (notes[lo].start_tick.saturating_sub(base_tick)) as f64 * spt;
         let syllable_range = assigned[lo].syllable_index..assigned[hi - 1].syllable_index + 1;
-        let key = content_key(&segment, &model);
+        let key = content_key(&segment, &model, &lane);
         units.push(RenderUnit {
             segment,
             start_sec,
@@ -178,17 +186,31 @@ fn model_identity(params: &VocalParams, bank: &BankProfile) -> String {
     }
 }
 
+/// The lane params a unit's audio depends on beyond what its segment
+/// arrays show: `rest_threshold_beats` (where the unit's rests fall) and
+/// `velocity_dynamics` (the post-vocoder gain and, on a bank with energy,
+/// the energy curve). Hashed into every unit's key, so changing either
+/// re-renders the lane and its plan hash moves.
+fn lane_identity(params: &VocalParams) -> String {
+    format!(
+        "rest={}|vel_dyn={}",
+        params.rest_threshold_beats.to_bits(),
+        params.velocity_dynamics.to_bits()
+    )
+}
+
 /// FNV-1a hash of everything that determines a unit's rendered audio:
 /// the phoneme/note/duration arrays, every per-frame curve, and the
 /// [`model_identity`] that renders them (the acoustic/vocoder model, the
 /// speaker embedding and the bank version — not captured by the segment
 /// arrays themselves). Two units with the same key render bit-identical
 /// audio, so a cache hit is always safe to reuse.
-fn content_key(seg: &DsSegment, model: &str) -> u64 {
+fn content_key(seg: &DsSegment, model: &str, lane: &str) -> u64 {
     let mut h = Fnv::new();
     // The segment arrays already fold in the voicebank's phoneme
     // substitutions, but not which model renders them.
     h.str(model);
+    h.str(lane);
     for s in &seg.ph_seq {
         h.str(s);
     }

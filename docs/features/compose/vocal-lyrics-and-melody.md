@@ -1,6 +1,6 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `cb3b1d6a` + voicebank registry (vocal slices 4–5) on 2026-10-07.
+> Verified against master @ `ce484ad3` + vocal phase 3 on 2026-10-07.
 > Spec history: `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -46,7 +46,8 @@ line, re-rolled from a small template corpus, or set by an agent.
   - **Breath `AP`** (standalone, uppercase): takes no note and sets
     `breath_before` on the next sung syllable / its note (also across a
     line break; a trailing `AP` at the end of the draft is dropped). The
-    app never sings it as a word but does not yet render a breath.
+    renderer sings it as an `AP` breath at the end of the gap before that
+    note ([vocal rendering](vocal-rendering.md) → Rests and breaths).
     Lowercase `ap` is a word; `[AP]` is still an inline phoneme block that
     occupies its own note.
   - `count_syllables` (and so the melody generator's per-line note count)
@@ -121,7 +122,12 @@ line, re-rolled from a small template corpus, or set by an agent.
   (`VocalParams::switch_voicebank` with `BankProfile::default_speaker`,
   which `vocal.render {voicebank}` and the inspector's picker use too). A `theme` over 240 characters (`THEME_MAX_CHARS`, the
   GUI's truncation limit) is refused rather than cut. `vocal.get_params`
-  stays answerable while a GUI drag is open.
+  stays answerable while a GUI drag is open. Two render fields live only
+  on the lane, outside the generators: `rest_threshold_beats` (0.125–4,
+  default 0.5; shortest gap sung as silence) and `velocity_dynamics`
+  (0–1, default 0.5; velocity → loudness) — see
+  [vocal rendering](vocal-rendering.md). Both read at their defaults
+  from projects written before they existed.
   `section.set_lane_generator` vocal `options` take the same patch and
   merge into an existing lane (lyrics and seed kept; an explicit `seed`
   wins), or into the defaults for a new one.
@@ -213,9 +219,9 @@ Not covered: theme/POV/clichés (they have no effect).
 ## Known gaps
 
 - `song.vocal` and the GUI do not yet show `_` holds,
-  breaths, `syllable_warning` or the `g2p` source, and breaths are not
-  rendered — [vocal-mcp-control-and-quality](../../intents/compose/vocal-mcp-control-and-quality.md)
-  slices 8, 10 and 12.
+  breaths, `syllable_warning` or the `g2p` source —
+  [vocal-mcp-control-and-quality](../../intents/compose/vocal-mcp-control-and-quality.md)
+  slices 8 and 10. Breaths are rendered (slice 12).
 
 - Theme, POV and "avoid clichés" are ignored —
   [lyric-theme-generation](../../intents/compose/lyric-theme-generation.md).

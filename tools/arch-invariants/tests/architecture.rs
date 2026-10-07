@@ -2236,7 +2236,7 @@ const MOD_RS_ALLOWANCE: &[(&str, usize)] = &[
     ("resonance-app/src/view/midi_editor/mod.rs", 332),
     ("resonance-app/src/undo/mod.rs", 328),
     ("resonance-app/src/view/compose/lane_inspector/instrument/mod.rs", 322),
-    ("resonance-app/src/update/compose/lane_inspector/mod.rs", 319),
+    ("resonance-app/src/update/compose/lane_inspector/mod.rs", 272),
     ("resonance-music-theory/src/generator/markov/mod.rs", 306),
     ("resonance-music-theory/src/derive/vocal/mod.rs", 302),
     ("resonance-app/src/view/compose/lane_inspector/mod.rs", 302),

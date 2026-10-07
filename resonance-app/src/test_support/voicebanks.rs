@@ -20,6 +20,8 @@ pub struct VoicebankFixture {
     /// Write a bundled `dsvocoder/` (config + empty model file)?
     pub vocoder: bool,
     pub use_tension_embed: bool,
+    /// `use_energy_embed: true` (no shipped bank has it).
+    pub use_energy_embed: bool,
     /// `use_lang_id: true` plus this `languages.json` body.
     pub languages: Option<String>,
     /// `character.txt` name.
@@ -42,6 +44,7 @@ impl Default for VoicebankFixture {
             english_dict: Vec::new(),
             vocoder: true,
             use_tension_embed: false,
+            use_energy_embed: false,
             languages: None,
             name: None,
         }
@@ -116,6 +119,9 @@ pub fn write_voicebank_fixture(dir: &Path, spec: &VoicebankFixture) {
     };
     let mut cfg = String::from("phonemes: phonemes.txt\nacoustic: acoustic.onnx\n");
     cfg.push_str("vocoder: dsvocoder\n");
+    if spec.use_energy_embed {
+        cfg.push_str("use_energy_embed: true\n");
+    }
     if spec.use_tension_embed {
         cfg.push_str("use_tension_embed: true\n");
     }

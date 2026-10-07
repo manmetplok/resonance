@@ -46,7 +46,8 @@ impl ResonanceMcp {
     #[tool(
         description = "Read a vocal lane's full settings: voicebank and speaker, timbre, \
                        vibrato, vibrato_rate, tension, tension_velocity_amount, \
-                       tension_contour_amount, portamento_ms, articulation, consonant_emphasis; \
+                       tension_contour_amount, portamento_ms, articulation, consonant_emphasis, \
+                       rest_threshold_beats, velocity_dynamics; \
                        the melody generator's voice, range {low, high}, style, contour, \
                        syllable_mode, chord_tone_anchor, leap_range, phrase_length_bars, breath, \
                        stay_in_scale, avoid_clashes, use_section_motif; and the lyric \
@@ -80,6 +81,9 @@ impl ResonanceMcp {
                        result is validated before anything \
                        changes and a bad value is rejected naming the field (0..1 sliders, \
                        tension -1..1, vibrato_rate 1..20 Hz, portamento_ms 0..500, \
+                       rest_threshold_beats 0.125..4 — a gap between notes of at least that \
+                       many beats is sung as silence, a shorter one legato; velocity_dynamics \
+                       0..1 — how much note velocity changes loudness, \
                        syllables_min <= syllables_max, range.low < range.high). One undo step; \
                        returns the full params. Lyrics are NOT here (vocal_set_lyrics / \
                        vocal_set_line). It never renders or regenerates: call vocal_generate \

@@ -411,8 +411,9 @@ pub struct VocalRange {
 /// Ranges are checked on the merged result: the 0..1 fields
 /// (`chord_tone_anchor`, `leap_range`, `breath`, `vibrato`,
 /// `articulation`, `consonant_emphasis`, `tension_velocity_amount`,
-/// `tension_contour_amount`), `tension` -1..1, `vibrato_rate` 1..20 Hz,
-/// `portamento_ms` 0..500, `lines` >= 1, `phrase_length_bars` >= 1,
+/// `tension_contour_amount`, `velocity_dynamics`), `tension` -1..1,
+/// `vibrato_rate` 1..20 Hz, `portamento_ms` 0..500,
+/// `rest_threshold_beats` 0.125..4, `lines` >= 1, `phrase_length_bars` >= 1,
 /// `1 <= syllables_min <= syllables_max`, `range.low < range.high <= 127`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -458,6 +459,16 @@ pub struct VocalParamsPatch {
     /// Consonant length, 0..1; 0.4..0.6 is the intelligible band.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consonant_emphasis: Option<f32>,
+    /// Shortest gap between two notes, in beats at the lane's tempo, that
+    /// is sung as a rest (silence); a shorter gap is sung legato.
+    /// 0.125..4, default 0.5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rest_threshold_beats: Option<f32>,
+    /// How much note velocity drives loudness, 0..1 (default 0.5): the
+    /// bank's energy curve where it has one, and a per-note gain of up to
+    /// +/-6 dB after the vocoder on every bank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub velocity_dynamics: Option<f32>,
 
     // ---- Melody generator ----
     /// Voice type. Changing it does not move `range`; set both.
@@ -534,6 +545,10 @@ pub struct VocalParamsView {
     pub portamento_ms: f32,
     pub articulation: f32,
     pub consonant_emphasis: f32,
+    /// Shortest gap, in beats, sung as a rest.
+    pub rest_threshold_beats: f32,
+    /// Velocity -> loudness amount, 0..1.
+    pub velocity_dynamics: f32,
 
     // ---- Melody generator ----
     pub voice: VocalVoice,

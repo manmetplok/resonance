@@ -15,22 +15,22 @@
 //! - [`common`]        — shared `update_lane_gen` / `update_vocal` /
 //!   `bump_lane_seed` helpers used by every per-generator file.
 //!
-//! `SetGenerator` and `Regenerate` (the cross-cutting arms) stay in this
-//! dispatcher because they touch state outside any single generator family.
+//! - [`generator`]     — `SetGenerator`, switching a lane's generator kind.
+//!
+//! `Regenerate` (the cross-cutting arm) stays in this dispatcher because it
+//! touches state outside any single generator family.
 
 use iced::Task;
 
 use resonance_audio::types::TrackId;
-use resonance_music_theory::{BassParams, MelodyParams, PadParams, VocalParams};
-
 use super::regenerate::regenerate_lane;
 use crate::compose::messages::LaneInspectorMsg;
-use crate::compose::{LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag};
 use crate::message::Message;
-use crate::util::{seed_from_id, GOLDEN_RATIO_SEED};
+use crate::util::GOLDEN_RATIO_SEED;
 
 mod bass_params;
 mod common;
+mod generator;
 mod melody_params;
 mod pad_params;
 mod vocal_params;
@@ -44,7 +44,9 @@ pub(super) fn handle(
     msg: LaneInspectorMsg,
 ) -> Task<Message> {
     match msg {
-        LaneInspectorMsg::SetGenerator(tag) => set_generator(r, definition_id, track_id, tag),
+        LaneInspectorMsg::SetGenerator(tag) => {
+            generator::set_generator(r, definition_id, track_id, tag)
+        }
 
         // Bass parameter updates
         LaneInspectorMsg::SetBassStyle(style) => {
@@ -235,6 +237,12 @@ pub(super) fn handle(
         LaneInspectorMsg::SetVocalConsonantEmphasis(v) => {
             vocal_params::set_consonant_emphasis(r, definition_id, track_id, v)
         }
+        LaneInspectorMsg::SetVocalRestThresholdBeats(v) => {
+            vocal_params::set_rest_threshold_beats(r, definition_id, track_id, v)
+        }
+        LaneInspectorMsg::SetVocalVelocityDynamics(v) => {
+            vocal_params::set_velocity_dynamics(r, definition_id, track_id, v)
+        }
 
         // Vocal generate actions
         LaneInspectorMsg::GenerateVocalLyricsOnly => {
@@ -261,59 +269,4 @@ pub(super) fn handle(
         }
     }
     Task::none()
-}
-
-/// Switch the generator type for a lane. Manual removes the entry; the
-/// other tags install a default-params generator with a deterministic
-/// per-tag seed derived from the section's definition id.
-fn set_generator(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-    tag: LaneGeneratorKindTag,
-) {
-    if let Some(def) = r.compose.find_definition_mut(definition_id) {
-        match tag {
-            LaneGeneratorKindTag::Manual => {
-                def.lane_generators.remove(&track_id);
-            }
-            LaneGeneratorKindTag::Bass => {
-                def.lane_generators.insert(
-                    track_id,
-                    LaneGeneratorConfig {
-                        kind: LaneGeneratorKind::Bass(BassParams::default()),
-                        seed: seed_from_id(definition_id),
-                    },
-                );
-            }
-            LaneGeneratorKindTag::Melody => {
-                def.lane_generators.insert(
-                    track_id,
-                    LaneGeneratorConfig {
-                        kind: LaneGeneratorKind::Melody(MelodyParams::default()),
-                        seed: definition_id.wrapping_mul(0x517CC1B727220A95),
-                    },
-                );
-            }
-            LaneGeneratorKindTag::Pad => {
-                def.lane_generators.insert(
-                    track_id,
-                    LaneGeneratorConfig {
-                        kind: LaneGeneratorKind::Pad(PadParams::default()),
-                        seed: definition_id.wrapping_mul(0x6C62272E07BB0142),
-                    },
-                );
-            }
-            LaneGeneratorKindTag::Vocal => {
-                def.lane_generators.insert(
-                    track_id,
-                    LaneGeneratorConfig {
-                        kind: LaneGeneratorKind::Vocal(VocalParams::default()),
-                        seed: definition_id.wrapping_mul(0xBF58476D1CE4E5B9),
-                    },
-                );
-            }
-        }
-        r.compose.last_error = None;
-    }
 }

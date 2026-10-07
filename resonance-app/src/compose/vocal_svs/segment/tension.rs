@@ -18,6 +18,7 @@
 use resonance_music_theory::VocalParams;
 use resonance_svs::ds::SampleCurve;
 
+use super::super::dynamics::velocity_modulation;
 use super::super::paths::CurveKind;
 use super::super::registry::BankProfile;
 use super::f0::{F0Curve, F0_TIMESTEP};
@@ -61,7 +62,7 @@ pub(super) fn build_tension_curve(
         // contribute up to ±0.5.
         let vel = curve.frame_velocity.get(i).copied().unwrap_or(0.0) as f64;
         let vel_mod = if vel > 0.0 {
-            ((vel - 0.78) / 0.22).clamp(-1.0, 1.0)
+            velocity_modulation(vel as f32) as f64
         } else {
             0.0
         };

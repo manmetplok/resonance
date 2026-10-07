@@ -324,6 +324,29 @@ pub(super) fn set_consonant_emphasis(
     });
 }
 
+pub(super) fn set_rest_threshold_beats(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    v: f32,
+) {
+    let (lo, hi) = resonance_music_theory::VocalParams::REST_THRESHOLD_BEATS;
+    update_vocal(r, definition_id, track_id, |p| {
+        p.rest_threshold_beats = v.clamp(lo, hi);
+    });
+}
+
+pub(super) fn set_velocity_dynamics(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    v: f32,
+) {
+    update_vocal(r, definition_id, track_id, |p| {
+        p.velocity_dynamics = v.clamp(0.0, 1.0);
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Vocal generate actions
 // ---------------------------------------------------------------------------

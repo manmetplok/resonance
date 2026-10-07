@@ -94,3 +94,59 @@ fn vibrato_rate_lower_bound() {
         Err(VocalParamsError::OutOfRange { field: "vibrato_rate", .. })
     ));
 }
+
+/// `rest_threshold_beats` is 0.125..=4 beats (default ½), and
+/// `velocity_dynamics` 0..=1 (default 0.5) — spec §8, §9.
+#[test]
+fn rest_threshold_and_velocity_dynamics_ranges() {
+    let d = VocalParams::default();
+    assert_eq!(d.rest_threshold_beats, 0.5);
+    assert_eq!(d.velocity_dynamics, 0.5);
+    for (rest, ok) in [(0.125, true), (4.0, true), (0.1, false), (4.01, false), (f32::NAN, false)] {
+        let p = VocalParams {
+            rest_threshold_beats: rest,
+            ..VocalParams::default()
+        };
+        assert_eq!(p.validate().is_ok(), ok, "rest_threshold_beats {rest}");
+        if !ok {
+            assert!(matches!(
+                p.validate(),
+                Err(VocalParamsError::OutOfRange { field: "rest_threshold_beats", .. })
+            ));
+        }
+    }
+    for (amount, ok) in [(0.0, true), (1.0, true), (-0.01, false), (1.01, false)] {
+        let p = VocalParams {
+            velocity_dynamics: amount,
+            ..VocalParams::default()
+        };
+        assert_eq!(p.validate().is_ok(), ok, "velocity_dynamics {amount}");
+        if !ok {
+            assert!(matches!(
+                p.validate(),
+                Err(VocalParamsError::OutOfRange { field: "velocity_dynamics", .. })
+            ));
+        }
+    }
+}
+
+/// A project written before the two fields existed reads them at their
+/// defaults; written values round-trip.
+#[test]
+fn rest_threshold_and_velocity_dynamics_serde() {
+    let mut json = serde_json::to_value(VocalParams::default()).unwrap();
+    let obj = json.as_object_mut().unwrap();
+    obj.remove("rest_threshold_beats").expect("written");
+    obj.remove("velocity_dynamics").expect("written");
+    let old: VocalParams = serde_json::from_value(json).unwrap();
+    assert_eq!(old.rest_threshold_beats, 0.5);
+    assert_eq!(old.velocity_dynamics, 0.5);
+
+    let p = VocalParams {
+        rest_threshold_beats: 1.25,
+        velocity_dynamics: 0.9,
+        ..VocalParams::default()
+    };
+    let back: VocalParams = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+    assert_eq!(back, p);
+}

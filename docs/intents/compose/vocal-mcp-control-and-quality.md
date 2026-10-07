@@ -489,10 +489,27 @@ handler, MCP tool, GUI, tests, and the feature doc with its
     keyed by `(definition, track, syllable index)` with the syllable text,
     and ignored when the text changes. This fixes BUG-50's pronunciation
     part. See [pronunciation](../../features/compose/pronunciation.md).
-12. **Rests and breaths.** `rest_threshold_beats`, the `AP` token, the AP/SP
-    check, and re-blessed goldens.
-13. **Velocity dynamics.** `velocity_dynamics`, the bank curve, and the
-    post-render gain.
+12. **Rests and breaths.** ✅ built (phase 3; see
+    [vocal rendering](../../features/compose/vocal-rendering.md)).
+    `rest_threshold_beats`, the `AP` token, the AP/SP check, and
+    re-blessed goldens. Measured: an `AP` rest renders as breath noise
+    (Lilia −51 dBFS vs −85 for `SP`, before the gate), so rests and pads
+    are `SP` and only `AP` breaths escape the gate. Deviations: a gap of
+    *at least* the threshold is a rest (so a written eighth rest at ½ beat
+    rests); a breath on a phrase's first note takes 0.25 s of the 0.3 s
+    leading pad; a short gap lends the breath its whole length and the
+    rest comes from the previous note's tail; a rest ending in a breath
+    no longer splits render units; `song.vocal`'s articulation report
+    still uses the default threshold until `view_model/lane.rs` calls
+    `articulation_report_for`.
+13. **Velocity dynamics.** ✅ built (phase 3). `velocity_dynamics`, the
+    bank curve, and the post-render gain. Deviations: on a bank without
+    energy, tension keeps its own `tension_velocity_amount` rather than
+    being scaled by `velocity_dynamics`; the post gain is applied to the
+    stitched take after the render cache (raw note velocity, not the
+    stress-weighted one), while the unit content key still hashes both
+    new params as asked, so changing `velocity_dynamics` re-runs the
+    models; energy uses the overlay's signed ±1 units.
 14. **Expression curves as automation.** The curves in the lane config,
     section-relative storage, Arrange sub-rows, `AutomationTarget::VocalCurve`,
     and `automation.*`. This fixes BUG-50's curve part.

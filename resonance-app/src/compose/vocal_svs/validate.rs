@@ -26,8 +26,10 @@
 
 use resonance_audio::types::MidiNote;
 use resonance_music_theory::g2p::{self, AssignedSyllable};
+use resonance_music_theory::VocalParams;
 
 use super::phonemes::{min_articulation_sec, PhonemeFate, VoicebankPhonemes};
+use super::rests::RestRule;
 use super::registry::BankProfile;
 
 /// Why one phoneme failed the voicebank gate.
@@ -209,6 +211,9 @@ pub struct NoteArticulation {
 /// across the previous boundary; that moves time between neighbours
 /// without changing either note's phoneme budget materially, so it is not
 /// modelled here.)
+///
+/// Uses the default rest threshold; [`articulation_report_for`] takes the
+/// lane's.
 pub fn articulation_report(
     notes: &[MidiNote],
     assigned: &[AssignedSyllable],
@@ -216,6 +221,27 @@ pub fn articulation_report(
     bpm: f32,
     bank: &BankProfile,
 ) -> Vec<NoteArticulation> {
+    articulation_report_for(
+        notes,
+        assigned,
+        ticks_per_quarter,
+        bpm,
+        bank,
+        VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
+    )
+}
+
+/// [`articulation_report`] with the lane's `rest_threshold_beats`, so the
+/// report bridges exactly the gaps the segment builder sings legato.
+pub fn articulation_report_for(
+    notes: &[MidiNote],
+    assigned: &[AssignedSyllable],
+    ticks_per_quarter: u32,
+    bpm: f32,
+    bank: &BankProfile,
+    rest_threshold_beats: f32,
+) -> Vec<NoteArticulation> {
+    let rest_rule = RestRule::from_beats(rest_threshold_beats, bpm);
     let seconds_per_tick = 60.0 / (bpm.max(1.0) as f64 * ticks_per_quarter.max(1) as f64);
     let range = bank.comfortable_range(None);
     let (lo, hi) = (range.low, range.high);
@@ -229,7 +255,7 @@ pub fn articulation_report(
         let slot_sec =
             (next_start_tick.saturating_sub(n.start_tick) as f64 * seconds_per_tick).max(0.05);
         let own_sec = (n.duration_ticks as f64 * seconds_per_tick).max(0.05);
-        let duration_sec = if slot_sec > own_sec + super::SILENCE_GAP_SEC {
+        let duration_sec = if rest_rule.is_rest(slot_sec, own_sec) {
             own_sec
         } else {
             slot_sec

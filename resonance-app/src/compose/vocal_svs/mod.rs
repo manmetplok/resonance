@@ -20,8 +20,11 @@
 //!   and the resolver that layers them over the bank dictionary and CMU.
 //! - [`segment`]: `DsSegment` construction (phoneme allocation, f0 + tension curves).
 //! - [`render`]: the off-thread render of one clip through the pipeline.
-//! - [`post`]: AP gating, safety gain, mono→stereo, resample, WAV writer.
+//! - [`rests`]: where a line rests (`rest_threshold_beats`) and breathes.
+//! - [`dynamics`]: the post-vocoder dynamics gain envelope (velocity).
+//! - [`post`]: rest gating, safety gain, mono→stereo, resample, WAV writer.
 
+mod dynamics;
 mod error;
 mod paths;
 mod phonemes;
@@ -30,9 +33,14 @@ mod pronunciation;
 pub mod registry;
 mod render;
 mod render_cache;
+mod rests;
 mod segment;
 mod validate;
 
+pub use dynamics::{
+    apply_dynamics_gain, dynamics_gain_envelope, velocity_gain_db, velocity_gain_spans,
+    velocity_modulation, GainSpan, DYNAMICS_SMOOTH_SEC, NEUTRAL_VELOCITY, VELOCITY_GAIN_MAX_DB,
+};
 pub use error::{VocalRenderError, VocalRenderErrorKind};
 pub use paths::{svs_backend, CurveKind, CurveSupport};
 pub use registry::{
@@ -53,7 +61,7 @@ pub use render_cache::{
 };
 pub use segment::build_segment;
 pub use validate::{
-    articulation_report, validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable,
+    articulation_report, articulation_report_for, validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable,
     NoteArticulation,
 };
 
@@ -62,13 +70,6 @@ pub use validate::{
 /// convention; the engine clip trims past it so timeline alignment
 /// stays correct.
 const SEGMENT_PAD_SEC: f64 = 0.3;
-
-/// A gap to the next note longer than its sing duration by more than this
-/// many seconds is treated as a genuine silence (breath / rest): the
-/// duration builder inserts a trailing `AP` there, and
-/// [`render_cache::split_render_units`] cuts a render-unit boundary at the
-/// same point. Shared so the two never disagree about where silences are.
-pub(crate) const SILENCE_GAP_SEC: f64 = 0.4;
 
 /// Where a lane's rendered audio belongs on the timeline: the section's
 /// start, advanced by the lane's first note.
