@@ -39,6 +39,18 @@ fn execution_provider_names_round_trip_and_rocm_means_migraphx() {
     assert_eq!(ExecutionProvider::parse("bogus"), ExecutionProvider::Cpu);
 }
 
+/// A GPU fallback is remembered so later renders go straight to CPU — but
+/// only when the model itself loads on CPU. A missing model fails on
+/// every provider and must not switch the GPU off for the process.
+#[test]
+fn a_missing_model_does_not_mark_the_gpu_provider_failed() {
+    use resonance_svs::stages::common::{build_session_reporting, provider_failed};
+    use resonance_svs::ExecutionProvider;
+    let missing = std::path::Path::new("/nonexistent/resonance-svs-test/acoustic.onnx");
+    assert!(build_session_reporting(missing, ExecutionProvider::Cuda, 7).is_err());
+    assert!(!provider_failed(ExecutionProvider::Cuda, 7));
+}
+
 #[test]
 fn sample_curve_resamples_to_target_length() {
     use resonance_svs::ds::SampleCurve;

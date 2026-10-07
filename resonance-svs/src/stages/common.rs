@@ -84,7 +84,9 @@ pub fn build_session(model_path: &Path, ep: ExecutionProvider, device_index: i32
 /// Runtime build without the provider, driver missing), the session is
 /// rebuilt on CPU, a warning names the provider and the reason, and the
 /// returned backend is `Cpu`. CPU stays the fail-soft path so a render
-/// still happens on a machine without the GPU stack.
+/// still happens on a machine without the GPU stack. A provider that
+/// failed while the model itself loaded fine on CPU is remembered for the
+/// rest of the process ([`provider_failed`]) and not tried again.
 pub fn build_session_reporting(
     model_path: &Path,
     ep: ExecutionProvider,
@@ -106,18 +108,49 @@ pub fn build_session_reporting(
         ),
     };
 
+    // A provider that already failed in this process is not retried:
+    // sessions are rebuilt for every render, and re-probing a missing GPU
+    // stack each time cost a failed provider registration (and a warning)
+    // per render for nothing.
+    let gpu = gpu.filter(|_| !provider_failed(ep, device_index));
+    let mut gpu_failed = false;
     if let Some(gpu) = gpu {
         match commit_session(model_path, vec![gpu]) {
             Ok(session) => return Ok((session, ep)),
-            Err(e) => tracing::warn!(
-                "{} execution provider unavailable for {} ({e:#}); running on CPU instead",
-                ep.as_str(),
-                model_path.display()
-            ),
+            Err(e) => {
+                tracing::warn!(
+                    "{} execution provider unavailable for {} ({e:#}); running on CPU \
+                     instead (not retried in this process)",
+                    ep.as_str(),
+                    model_path.display()
+                );
+                gpu_failed = true;
+            }
         }
     }
     let session = commit_session(model_path, vec![CPUExecutionProvider::default().build()])?;
+    // Only blame the provider once the same model loads on CPU: a missing
+    // or broken model file fails both, and must not turn the GPU off.
+    if gpu_failed {
+        FAILED_PROVIDERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((ep, device_index));
+    }
     Ok((session, ExecutionProvider::Cpu))
+}
+
+/// GPU providers (with their device index) whose session creation failed
+/// in this process. [`build_session_reporting`] goes straight to CPU for
+/// them, so the fallback warning is logged once, not once per render.
+static FAILED_PROVIDERS: Mutex<Vec<(ExecutionProvider, i32)>> = Mutex::new(Vec::new());
+
+/// Has `ep` on `device_index` already failed in this process?
+pub fn provider_failed(ep: ExecutionProvider, device_index: i32) -> bool {
+    FAILED_PROVIDERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&(ep, device_index))
 }
 
 fn commit_session(
