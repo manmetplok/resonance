@@ -50,6 +50,9 @@ pub struct AutomationState {
     /// the engine, and kept out of [`Self::lanes`] so nothing that
     /// publishes lanes can leak one.
     pub vocal: crate::compose::VocalLanes,
+    /// The fingerprint of the compose inputs [`Self::vocal`] was projected
+    /// from; `refresh_vocal_lanes` skips the rebuild while it holds.
+    pub(crate) vocal_fingerprint: Option<u64>,
 }
 
 impl AutomationState {

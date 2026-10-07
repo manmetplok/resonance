@@ -88,9 +88,11 @@ clip does not move automation: lanes belong to the track, not to clips.
   suppressed. Expansion is transient and not saved.
 - Only lanes that belong to an Arrange track show here. Bus and master lanes
   are edited only in the mixer.
-- A vocal track (one with a vocal lane in some section) counts its four
-  curve rows in "N auto"; expanded, it gets `Vocal: Dynamics | Tension |
-  Breathiness | Pitch bend` sub-rows after its engine lanes (same
+- A vocal track (one with a vocal lane in some section) counts a curve row
+  in "N auto" only once it holds a point; with no point on any curve (and
+  no engine lane) the caret still shows, labelled plain "auto", so the rows
+  stay reachable. Expanded, it always gets all four `Vocal: Dynamics |
+  Tension | Breathiness | Pitch bend` sub-rows after its engine lanes (same
   `ArrangeRowKind::AutomationLane`, derived lane ids). The row is dimmed
   except at placements of sections with a vocal lane, which are raised
   bands carrying that section's curve; editing at any placement edits the

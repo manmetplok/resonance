@@ -13,6 +13,10 @@
 //! arms the debounced re-render (§7); undo snapshots the params like any
 //! other compose edit.
 
+use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use iced::Task;
 
 use resonance_audio::types::TrackId;
@@ -30,15 +34,88 @@ use crate::compose::LaneGeneratorKind;
 use crate::message::{AutomationMessage, Message};
 use crate::Resonance;
 
-/// The vocal curve rows as the compose model has them now.
-pub(crate) fn vocal_lanes(r: &Resonance) -> VocalLanes {
-    let bank = |params: &VocalParams| {
-        let profile = r.voicebanks.profile(&params.voicebank);
-        let mut support = [false; 4];
-        for kind in CurveKind::ALL {
-            support[kind.index()] = curve_audible(kind, &profile);
+/// What the projection needs from each bank a vocal lane sings with:
+/// which curves it renders and its display name. Read once per distinct
+/// bank, not once per placement.
+type BankInfo = ([bool; 4], Arc<str>);
+
+fn bank_infos(r: &Resonance) -> BTreeMap<&str, BankInfo> {
+    let mut out: BTreeMap<&str, BankInfo> = BTreeMap::new();
+    for def in &r.compose.definitions {
+        for cfg in def.lane_generators.values() {
+            let LaneGeneratorKind::Vocal(params) = &cfg.kind else {
+                continue;
+            };
+            out.entry(params.voicebank.as_str()).or_insert_with(|| {
+                let profile = r.voicebanks.profile(&params.voicebank);
+                let mut support = [false; 4];
+                for kind in CurveKind::ALL {
+                    support[kind.index()] = curve_audible(kind, &profile);
+                }
+                (support, Arc::from(profile.name()))
+            });
         }
-        (support, profile.name())
+    }
+    out
+}
+
+/// A hash of everything [`project_vocal_lanes`] reads: each section's
+/// length and vocal lanes (track, bank, curves), the placements, the
+/// tempo and signature map, the sample rate, and what each bank renders
+/// (which follows the registry). Equal fingerprints project equal rows.
+fn projection_fingerprint(r: &Resonance, banks: &BTreeMap<&str, BankInfo>) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    r.sample_rate.hash(&mut h);
+    let tm = &r.tempo_map;
+    (tm.bpm.to_bits(), tm.numerator, tm.denominator).hash(&mut h);
+    for p in &tm.tempo_points {
+        (p.bar, p.bpm.to_bits()).hash(&mut h);
+    }
+    u32::MAX.hash(&mut h);
+    for p in &tm.signature_points {
+        (p.bar, p.numerator, p.denominator).hash(&mut h);
+    }
+    u32::MAX.hash(&mut h);
+    for p in &r.compose.placements {
+        (p.id, p.definition_id, p.start_bar).hash(&mut h);
+    }
+    u64::MAX.hash(&mut h);
+    for def in &r.compose.definitions {
+        (def.id, def.length_bars).hash(&mut h);
+        let mut tracks: Vec<(TrackId, &VocalParams)> = def
+            .lane_generators
+            .iter()
+            .filter_map(|(&t, cfg)| match &cfg.kind {
+                LaneGeneratorKind::Vocal(p) => Some((t, p)),
+                _ => None,
+            })
+            .collect();
+        tracks.sort_unstable_by_key(|(t, _)| *t);
+        for (track, params) in tracks {
+            track.hash(&mut h);
+            params.voicebank.as_str().hash(&mut h);
+            for kind in CurveKind::ALL {
+                let points = crate::compose::expression::curve(&params.curves, kind);
+                points.len().hash(&mut h);
+                for p in points {
+                    (p.beat.to_bits(), p.value.to_bits(), p.stepped).hash(&mut h);
+                }
+            }
+        }
+        u64::MAX.hash(&mut h);
+    }
+    for (id, (support, name)) in banks {
+        (id, support, &**name).hash(&mut h);
+    }
+    h.finish()
+}
+
+fn project(r: &Resonance, banks: &BTreeMap<&str, BankInfo>) -> VocalLanes {
+    let bank = |params: &VocalParams| {
+        banks
+            .get(params.voicebank.as_str())
+            .cloned()
+            .unwrap_or_else(|| ([false; 4], Arc::from(params.voicebank.as_str())))
     };
     project_vocal_lanes(&ProjectionInputs {
         definitions: &r.compose.definitions,
@@ -49,10 +126,24 @@ pub(crate) fn vocal_lanes(r: &Resonance) -> VocalLanes {
     })
 }
 
+/// The vocal curve rows as the compose model has them now.
+pub(crate) fn vocal_lanes(r: &Resonance) -> VocalLanes {
+    project(r, &bank_infos(r))
+}
+
 /// Rebuild the projected rows the timeline draws from. Run after every
-/// outermost update and after each curve edit.
+/// outermost non-quiet update and after each curve edit; memoised on
+/// [`projection_fingerprint`], so an update that touched none of the
+/// projection's inputs costs one hash pass and no allocation per window.
 pub(crate) fn refresh_vocal_lanes(r: &mut Resonance) {
-    let lanes = vocal_lanes(r);
+    let banks = bank_infos(r);
+    let fingerprint = projection_fingerprint(r, &banks);
+    if r.automation.vocal_fingerprint == Some(fingerprint) {
+        return;
+    }
+    let lanes = project(r, &banks);
+    drop(banks);
+    r.automation.vocal_fingerprint = Some(fingerprint);
     if r.automation.vocal != lanes {
         r.automation.vocal = lanes;
     }
@@ -76,9 +167,14 @@ pub(crate) fn handle(r: &mut Resonance, m: AutomationMessage) -> Task<Message> {
         | AutomationMessage::ToggleRead(_)
         | AutomationMessage::StartBreakpointDrag { .. } => {}
         AutomationMessage::RemoveLane(_) => {
-            for window in &lane.windows {
-                if let Some(points) = section_curve(r, window.definition_id, track, curve) {
-                    points.clear();
+            // Every section with a vocal lane on the track, placed or not:
+            // an unplaced section's curve is part of the row too, and would
+            // reappear the moment the section is placed.
+            for def in r.compose.definitions.iter_mut() {
+                if let Some(LaneGeneratorKind::Vocal(params)) =
+                    def.lane_generators.get_mut(&track).map(|c| &mut c.kind)
+                {
+                    curve_mut(&mut params.curves, curve).clear();
                 }
             }
         }

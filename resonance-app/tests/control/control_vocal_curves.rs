@@ -8,6 +8,7 @@
 
 use resonance_app::message::{AutomationMessage, Message};
 use resonance_app::project::{load_project, save_project};
+use resonance_app::state::ClipState;
 use resonance_app::Resonance;
 use resonance_audio::types::AudioCommand;
 use resonance_common::{AutomationTarget, CurveKind, VocalCurveKind};
@@ -452,4 +453,140 @@ fn a_curve_survives_save_reopen_and_an_unrelated_undo() {
     assert_eq!(listed(&one.lanes[0]), vec![(2, 2.0, 25.0), (6, 2.0, 25.0)]);
     // No engine lane was saved for it.
     assert!(reopened.test_build_project_file().automation_lanes.is_empty());
+}
+
+/// `automation.remove_lane` clears the curve in every section with a
+/// vocal lane on the track — an unplaced section's too, or it would come
+/// back the moment the section is placed again.
+#[test]
+fn remove_lane_clears_unplaced_sections_too() {
+    let mut app = app_with_project();
+    let def = twice_placed_lane(&mut app);
+    add_points(&mut app, "dynamics", json!([at(1, 1.0, 0.4)])).expect("written");
+    let placements: Vec<u64> = app
+        .compose_state()
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == def)
+        .map(|p| p.id)
+        .collect();
+    for placement_id in placements {
+        call(
+            &mut app,
+            "section.remove_placement",
+            &json!({ "placement_id": placement_id }),
+        )
+        .result::<Value>()
+        .expect("section.remove_placement succeeds");
+    }
+    assert_eq!(stored(&app, def, VocalCurveKind::Dynamics), vec![(0.0, 0.4)]);
+    call(
+        &mut app,
+        "automation.remove_lane",
+        &json!({ "vocal": target("dynamics"), "confirm": true }),
+    )
+    .result::<Value>()
+    .expect("remove_lane succeeds");
+    assert!(
+        stored(&app, def, VocalCurveKind::Dynamics).is_empty(),
+        "the unplaced section's curve is cleared"
+    );
+}
+
+/// A lane rendered with a curve on it reads `rendered` after the project
+/// is saved to disk and reopened. The point sits 49 ticks into the
+/// section (beat 49/480), a value whose shortest decimal form only parses
+/// back to the same `f64` with serde_json's `float_roundtrip` — without
+/// it the reopened curve is one ULP off, its unit keys move, and the lane
+/// reads `stale`.
+#[test]
+fn a_rendered_lane_with_a_curve_reads_rendered_after_save_and_reopen() {
+    let mut app = app_with_project();
+    let verse = rendered_lane(&mut app, "Verse", 1);
+    // A GUI click lands on any tick (the control API's positions are
+    // coarser): halfway between ticks 49 and 50.
+    let placement = app.compose_state().placements[0].start_bar;
+    let tm = app.test_tempo_map();
+    let start = tm.bar_to_sample(placement);
+    let frame = (tm.tick_to_abs_sample(start, 49, 48_000) + tm.tick_to_abs_sample(start, 50, 48_000)) / 2;
+    let _ = app.update(Message::Automation(AutomationMessage::AddBreakpoint {
+        target: AutomationTarget::VocalCurve {
+            track: TRACK,
+            curve: VocalCurveKind::Dynamics,
+        },
+        time_frames: frame,
+        value: 0.7,
+        curve: CurveKind::Linear,
+    }));
+    let beat = stored(&app, verse, VocalCurveKind::Dynamics)[0].0;
+    assert_eq!(beat, 49.0 / 480.0, "49 ticks in");
+    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Stale);
+
+    call(
+        &mut app,
+        "vocal.render",
+        &json!({ "track_id": TRACK, "section_id": verse }),
+    )
+    .result::<Value>()
+    .expect("vocal.render starts");
+    assert!(app.test_finish_vocal_render(verse, TRACK), "the render was queued");
+    // The engine's echo of the installed take (no engine runs here).
+    let (_, clip_id) = *app
+        .test_vocal_audio_clips(TRACK)
+        .last()
+        .expect("a take is installed");
+    app.test_push_clip(ClipState {
+        id: clip_id,
+        track_id: TRACK,
+        start_sample: start,
+        duration_samples: 48_000,
+        name: "Verse · Vocal".into(),
+        total_frames: 48_000,
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: Default::default(),
+        fade_out_frames: 0,
+        fade_out_curve: Default::default(),
+        gain_db: 0.0,
+        waveform_peaks: Vec::new(),
+        vocal_tuning: None,
+        asset_ref: None,
+        warp: Default::default(),
+    });
+    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
+
+    let dir = std::env::temp_dir().join(format!(
+        "resonance-vocal-curves-rendered-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create project dir");
+    let file = app.test_build_project_file();
+    let midi: Vec<_> = app
+        .test_midi_clips()
+        .iter()
+        .map(|c| (c.id, c.notes.to_vec()))
+        .collect();
+    save_project(&dir, &file, &[], &midi).expect("save project");
+    let mut loaded = load_project(&dir).expect("load project");
+    let _ = std::fs::remove_dir_all(&dir);
+    // The takes' WAVs stay where the render wrote them, beside the
+    // project path the test app was given.
+    loaded.project_dir = std::path::PathBuf::from("/tmp/control-vocal-render-state.rprj");
+    // Replayed into the same app: no engine runs here to echo the audio
+    // clips into a fresh one, and the clips are not what this checks —
+    // the section params (and so the curve) come from the file on disk.
+    let mut reopened = app;
+    reopened.test_replay_loaded_project_from(loaded);
+
+    assert_eq!(
+        stored(&reopened, verse, VocalCurveKind::Dynamics)[0].0.to_bits(),
+        beat.to_bits(),
+        "the beat reads back bit-exact"
+    );
+    assert_eq!(
+        lane_state(&vocal_view(&mut reopened), verse),
+        VocalRenderState::Rendered
+    );
 }
