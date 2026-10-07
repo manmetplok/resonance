@@ -28,10 +28,15 @@ pub enum Act {
     CutAfter(usize),
 }
 
+/// Path → body.
+type Files = Vec<(String, Vec<u8>)>;
+/// Path → what to do for its next requests.
+type Script = Vec<(String, VecDeque<Act>)>;
+
 #[derive(Clone, Default)]
 pub struct PlokServer {
-    files: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
-    script: Arc<Mutex<Vec<(String, VecDeque<Act>)>>>,
+    files: Arc<Mutex<Files>>,
+    script: Arc<Mutex<Script>>,
     log: Arc<Mutex<Vec<Seen>>>,
     base: String,
 }

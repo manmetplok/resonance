@@ -9,7 +9,7 @@
 //! not installed shows it as `<id> (not installed)`, from the cached
 //! `UiViewCaches::missing_voicebank_choices`.
 
-use iced::widget::{column, pick_list, row, slider, text, Space};
+use iced::widget::{button, column, pick_list, row, slider, text, Space};
 use iced::{Element, Length};
 
 use resonance_audio::types::TrackId;
@@ -331,6 +331,17 @@ fn voicebank_pickers<'a>(
     .text_size(12)
     .padding([4, 6])
     .width(Length::Fill);
+    // The voicebank library (installed banks, plok.org downloads).
+    let library = button(text("Library\u{2026}").size(11).color(theme::TEXT))
+        .on_press(Message::VoicebankLibrary(VoicebankLibraryMessage::Open {
+            definition_id,
+            track_id,
+        }))
+        .style(|_theme, status| theme::ghost_button_style(status))
+        .padding([4, 8]);
+    let bank_picker = row![bank_picker, library]
+        .spacing(4)
+        .align_y(iced::alignment::Vertical::Center);
 
     let Some(speakers) = speakers.filter(|s| s.len() > 1) else {
         return (bank_picker.into(), None);

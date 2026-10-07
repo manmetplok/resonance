@@ -66,6 +66,8 @@ pub struct LibraryOverlay {
     pub built_from: Option<(u64, u64, u64)>,
     /// Bumped on every rows rebuild: the browsers' cache key.
     pub rows_generation: u64,
+    /// The tab labels with their counts, built with the rows.
+    pub tab_labels: (String, String),
 }
 
 impl LibraryOverlay {
@@ -82,6 +84,7 @@ impl LibraryOverlay {
             confirm_delete: None,
             built_from: None,
             rows_generation: 0,
+            tab_labels: ("Installed".to_owned(), "plok.org".to_owned()),
         }
     }
 
@@ -131,6 +134,8 @@ pub struct VoicebankRow {
     pub commercial: Option<String>,
     pub vocoder: Option<String>,
     pub vocoder_installed: bool,
+    /// The detail pane's vocoder line, built with the row.
+    pub vocoder_line: String,
     /// `user` (the user folder), `dev` (a development root) or `plok` (an
     /// index entry not installed).
     pub source: &'static str,

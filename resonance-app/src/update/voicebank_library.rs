@@ -353,6 +353,10 @@ fn refresh_rows(app: &mut Resonance, force: bool) {
     };
     o.rows_generation += 1;
     let generation = o.rows_generation;
+    o.tab_labels = (
+        format!("Installed ({})", installed.rows.len()),
+        format!("plok.org ({})", plok.rows.len()),
+    );
     o.installed_rows = Rc::new(installed);
     o.plok_rows = Rc::new(plok);
     o.installed.refresh(&*o.installed_rows, generation);
@@ -423,6 +427,11 @@ fn build_rows(
             commercial: plok
                 .and_then(|p| p.commercial.clone())
                 .or_else(|| builtin.and_then(|b| b.commercial).map(str::to_owned)),
+            vocoder_line: match (&bank.vocoder_name, bank.vocoder_config.is_some()) {
+                (None, _) => "None named".to_owned(),
+                (Some(v), true) => v.clone(),
+                (Some(v), false) => format!("{v} \u{2014} not installed"),
+            },
             vocoder: bank.vocoder_name.clone(),
             vocoder_installed: bank.vocoder_config.is_some(),
             source,
@@ -476,6 +485,10 @@ fn plok_row(
         credit: entry.credit.clone(),
         terms_url: entry.terms_url.clone(),
         commercial: entry.commercial.clone(),
+        vocoder_line: match &entry.vocoder {
+            None => "Its own".to_owned(),
+            Some(v) => format!("{v} (fetched with it when missing)"),
+        },
         vocoder: entry.vocoder.clone(),
         vocoder_installed: true,
         source: if user_install { "user" } else { "plok" },

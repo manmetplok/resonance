@@ -1,6 +1,6 @@
 # Vocals: MCP control, voicebank library, correctness and expression
 
-> Status: **partly built** (slices 1–5 and 8–13 built; progress per slice in §12)
+> Status: **partly built** (slices 1–5 and 7–13 built; progress per slice in §12)
 > Area: compose (vocals) + control-api + plugins-instruments (library)
 > Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
 > (every decision below was put to him as a multiple-choice question; §11
@@ -472,9 +472,17 @@ handler, MCP tool, GUI, tests, and the feature doc with its
    - Jorrit listens blind, and the results pick which banks go in the index:
      Peiton, LUNAI Katyusha / Keiro / Liam and Meiji v170 against the
      current three.
-7. **plok.org install.** Index entries, shared `plok_download`, the library
-   overlay, `vocal.voicebank_install`, and the available list in
-   `vocal.voicebanks`.
+7. **plok.org install.** ✅ built (phase 4; see
+   [vocal rendering](../../features/compose/vocal-rendering.md) and
+   [`plok-voicebank-index.json`](../../features/compose/plok-voicebank-index.json),
+   which the server still has to publish). Deviations: `vocal.voicebanks`
+   never waits on the network (`index_status` says whether `available` is
+   fresh, cached or still fetching); the install record
+   `.resonance-plok.json` in the bank folder carries the accepted terms
+   and drives UPDATE; the index entries name vocoders by their dsconfig
+   name; Delete is GUI-only and user-folder-only. Index entries, shared
+   `plok_download`, the library overlay, `vocal.voicebank_install`, and
+   the available list in `vocal.voicebanks`.
 8. **Melisma.** ✅ built (phase 1 library, phase 3 app; see
    [lyrics and melody](../../features/compose/vocal-lyrics-and-melody.md)).
    The `_` token, counts, the `s` key editing the draft, `SyllableMode`,

@@ -287,6 +287,30 @@ impl Resonance {
         crate::update::voicebank_library::poll(self);
     }
 
+    /// Test-only: show bank `id` as installing at `phase` without running
+    /// anything (a frozen progress state for a golden image).
+    #[doc(hidden)]
+    pub fn test_show_voicebank_installing(
+        &mut self,
+        id: &str,
+        phase: crate::compose::vocal_svs::registry::InstallPhase,
+    ) {
+        {
+            let mut s = self.voicebank_library.lib.state();
+            s.jobs.retain(|j| j.bank_id != id);
+            s.jobs.push(crate::compose::vocal_svs::registry::InstallJob {
+                bank_id: id.to_owned(),
+                name: id.to_owned(),
+                phase,
+                cancel: Default::default(),
+                control_job: None,
+                result: None,
+            });
+            s.revision += 1;
+        }
+        self.voicebank_library_changed();
+    }
+
     /// Test-only: poll the library until no install runs, none waits to
     /// be collected and no index fetch runs, or `timeout` passes. Returns
     /// whether it settled.

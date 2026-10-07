@@ -288,3 +288,24 @@ fn install_needs_no_open_project() {
     let result = result_of(&install(&mut app, "fixbank"));
     assert_eq!(result.id, "fixbank");
 }
+
+/// The proposed index entries the server publishes parse as the app reads
+/// them, with every bank's terms and a creator URL.
+#[test]
+fn the_committed_index_proposal_parses() {
+    use resonance_app::compose::vocal_svs::registry::PlokIndex;
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../docs/features/compose/plok-voicebank-index.json"
+    );
+    let index: PlokIndex =
+        serde_json::from_slice(&std::fs::read(path).expect("read the proposal")).expect("parses");
+    for id in ["tiger", "lilia", "meiji"] {
+        let bank = index.voicebank(id).unwrap_or_else(|| panic!("{id} is listed"));
+        assert!(bank.url.starts_with("https://github.com/"), "{id}: {}", bank.url);
+        assert!(bank.terms_url.is_some() && bank.credit.is_some() && bank.commercial.is_some());
+    }
+    assert!(index
+        .vocoder("pc_nsf_hifigan_44.1k_hop512_128bin_2025.02")
+        .is_some_and(|v| v.sha256.is_some()));
+}

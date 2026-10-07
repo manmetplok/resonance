@@ -1,0 +1,97 @@
+{
+  "_about": "Proposed voicebanks[] and vocoders[] for https://resonance.plok.org/index.json (vocal-mcp-control-and-quality.md §5). Merge into the served index next to drumkits[]; the server copy is the live one. url is always the creator's own download — never rehost. Verified 2026-10-07 with the GitHub releases API (gh api repos/<repo>/releases/tags/<tag>): url, bytes and, where GitHub publishes an asset digest, sha256. Terms, credit and commercial come from docs/history/research/singing-voicebank-options-2026-notes/. Fields under _unverified were not checked against a primary source. Keys starting with _ are ignored by the app.",
+  "voicebanks": [
+    {
+      "id": "tiger",
+      "name": "TIGER",
+      "version": "v106",
+      "languages": ["en", "ja", "zh", "es", "fr"],
+      "speakers": ["Fresh", "Disco", "Electric", "Vinyl", "Mystic", "Glam", "Royal"],
+      "size": "529.6 MB",
+      "bytes": 555302285,
+      "url": "https://github.com/spicytigermeat/tiger_diffsinger/releases/download/v106/TIGER_DS_v106_PACK.zip",
+      "terms_url": "https://github.com/spicytigermeat/tiger_diffsinger",
+      "credit": "TIGER by tigermeat",
+      "commercial": "paid",
+      "added": "2026-10-07",
+      "_unverified": {
+        "sha256": "GitHub publishes no digest for this 2024 asset; download and hash it before publishing (sha256sum TIGER_DS_v106_PACK.zip), or leave it out and the download is not verified",
+        "credit": "the exact credit wording is in the TOS at tigermeat.xyz, which the research did not retrieve",
+        "layout": "whether the PACK zip holds the bank folder alone (the installer strips one wrapper and drops files outside the dsconfig.yaml branch) was not checked"
+      }
+    },
+    {
+      "id": "lilia",
+      "name": "LIEE Lilia (MM 2.8 JubiLIEE)",
+      "version": "MM2.8 JubiLIEE 2025 1.1",
+      "languages": ["en", "ja", "pl", "fr", "vi", "zh", "es", "fil"],
+      "speakers": [],
+      "size": "581.0 MB",
+      "bytes": 609269753,
+      "sha256": "d9fd90e61186f6397c148e3817832bd547d1f13b2ba7ba3d812efe020328fa12",
+      "url": "https://github.com/julieraptor/DIFFSINGER-LIEE-Immortal-Idol/releases/download/MM2.8/Diffsinger.LIEE.Immortal.Idol.MM.2.8.JubiLIEE.2025.1.1.zip",
+      "terms_url": "https://docs.google.com/document/d/1t13WKc7VA2Q3G_MppznbAwhl3vLIL2MNPyjVN3kWDDg/edit",
+      "credit": "LIEE",
+      "commercial": "free_with_credit",
+      "added": "2026-10-07",
+      "_unverified": {
+        "terms": "the ToU forbids use 'in AI-generated music and other generative AI contexts' and asks porters to contact the creator; D9 accepts this while Resonance is not commercial — revisit before any commercial release"
+      }
+    },
+    {
+      "id": "meiji",
+      "name": "Gahata Meiji (LUNAI)",
+      "version": "v170",
+      "languages": ["ja", "en", "ru", "fr", "ko", "th", "zh", "es", "it", "pt", "de", "pl"],
+      "speakers": ["Standard", "Phantom", "Lilith", "Hunter"],
+      "size": "412.0 MB",
+      "bytes": 432066177,
+      "sha256": "79d7cbad5174ffb1aebfe18a3d12c8448b0b30c331c01209e4248d235b7f9531",
+      "url": "https://github.com/lunaiproject/lunai_singers/releases/download/170/Gahata_Meiji_v170.zip",
+      "terms_url": "https://lunaiproject.github.io/termsofuse/",
+      "credit": "Gahata Meiji from LUNAI Project",
+      "commercial": "permission",
+      "added": "2026-10-07",
+      "_unverified": {
+        "changes": "the v170 release notes are empty; what changed from the v160 Resonance shipped (sound, phonemes, layout) is unknown"
+      }
+    }
+  ],
+  "vocoders": [
+    {
+      "id": "pc_nsf_hifigan_44.1k_hop512_128bin_2025.02",
+      "name": "PC-NSF-HiFiGAN 2025.02 (openvpi)",
+      "version": "2025.02",
+      "size": "50.3 MB",
+      "bytes": 52760610,
+      "sha256": "ba7d43142d41f6900c8264b5662ca7125a50feb8760bb8b9615c61a8f5e6902e",
+      "url": "https://github.com/openvpi/vocoders/releases/download/pc-nsf-hifigan-44.1k-hop512-128bin-2025.02/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.oudep",
+      "terms_url": "https://github.com/openvpi/vocoders/releases",
+      "credit": "PC-NSF-HiFiGAN by openvpi (CC BY-NC-SA 4.0)",
+      "commercial": "permission",
+      "added": "2026-10-07",
+      "_unverified": {
+        "package": "the .oudep is OpenUtau's dependency package (a zip holding vocoder.yaml and the ONNX model); its inner layout was not inspected — the installer accepts vocoder.yaml at the top or one folder down"
+      }
+    },
+    {
+      "id": "nsf_hifigan_44.1k_hop512_128bin_2024.02",
+      "name": "NSF-HiFiGAN 2024.02 (openvpi)",
+      "version": "2024.02",
+      "size": "50.4 MB",
+      "bytes": 52893206,
+      "url": "https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-44.1k-hop512-128bin-2024.02/nsf_hifigan_44.1k_hop512_128bin_2024.02.oudep",
+      "terms_url": "https://github.com/openvpi/vocoders/releases",
+      "credit": "NSF-HiFiGAN by openvpi (CC BY-NC-SA 4.0)",
+      "commercial": "permission",
+      "added": "2026-10-07",
+      "_unverified": {
+        "sha256": "GitHub publishes no digest for this asset; hash it before publishing",
+        "package": "inner layout of the .oudep not inspected"
+      }
+    }
+  ],
+  "_not_listed": {
+    "tgm_hifigan": "tigermeat's vocoder (TIGER bundles r03, Meiji bundles v110). No standalone download URL or terms were found; all three banks above ship their own vocoder, so none needs it from the index."
+  }
+}

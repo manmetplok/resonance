@@ -1,6 +1,6 @@
 # Drum kit library and plok.org downloads
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
 > Spec history: `docs/history/specs/drums-plugin-rework.md` §3–§4, slices
 > K1–K3 and K9 (merged in `0984dfc6`).
 
@@ -31,7 +31,12 @@ the user imports.
   with a free-space check, progress and cancel; stale staging is swept after
   24 h. The source must already contain a `drum_samples.json`.
 - **plok.org downloads** (`plugins/resonance-drums/src/download.rs`): one
-  process-wide worker. The index is cached 10 minutes in
+  process-wide worker. Its transport — HTTP agent and timeouts, index
+  fetch and cache, the resumable `.part` protocol, the free-space check
+  and the sha256 verify — is `resonance_common::plok_download` (feature
+  `plok-download`), shared with the app's voicebank library; the worker
+  keeps its queue, threads, status, lifetime rules and the kit-library
+  install. The index is cached 10 minutes in
   `<root>/.plok-index.json` and fetched on its own thread so it never waits
   behind a download. Entries carry `name` and `file`, and optionally `size`,
   `bytes`, `sha256`, `pieces`, `mic_setups`, `description`, `tags`, `added`,
@@ -60,7 +65,8 @@ the user imports.
 | Shared slot core | `resonance-common/src/content_index.rs` | `MAX_SLOT` |
 | Marks | `resonance-common/src/library_marks.rs` | `Marks`, `SharedMarks`, `kind::DRUMKIT` |
 | Browser rows | `resonance-plugin/src/kit_rows.rs`, `library_view.rs` | `KitRows`, `BrowserModel`, `parse_search` |
-| Plugin-side handle | `plugins/resonance-drums/src/library.rs`, `download.rs` | `SharedKitLibrary`, `INDEX_URL` |
+| Plugin-side handle | `plugins/resonance-drums/src/library.rs`, `download.rs` | `SharedKitLibrary`, `WorkerHandle`, `ServerKit::target` |
+| Shared transport | `resonance-common/src/plok_download.rs`, `plok_download/{http,index,part,transfer,package,read_timeout}.rs` | `INDEX_URL`, `HttpConfig`, `fetch_index`, `download` + `Control` + `Target`, `PartFile`, `sweep_stale_downloads`, `DownloadError` (`ChecksumMismatch`), `package::install_package` (used by voicebanks, not kits) |
 | Overlay UI | `plugins/resonance-drums/src/editor/{library_panel,plok_panel,jobs,missing_kit}.rs` | Installed / plok.org tabs |
 | App cache + handlers | `resonance-app/src/state/library_cache.rs` (`DrumKitLibraryCache`), `resonance-app/src/update/control/drum_kits.rs` | list, set_marks |
 
@@ -89,6 +95,7 @@ takes its lock; the app never imports, downloads or deletes kits.
 |---|---|---|
 | Library core | `resonance-common/tests/{drumkit_library,library_marks,content_index_conformance}.rs` | `./scripts/run-tests.py -p resonance-common` |
 | Plugin library + downloads (local HTTP server) | `plugins/resonance-drums/tests/{kit_library,shared_library,download,library_overlay}.rs` | `./scripts/run-tests.py -p resonance-drums` |
+| The shared transport with voicebanks (resume, sha mismatch, wrapper strip) | `resonance-app/tests/control/control_voicebank_install.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Browser rows | `resonance-plugin/tests/kit_rows.rs` | `./scripts/run-tests.py -p resonance-plugin` |
 | Control methods | `resonance-app/tests/control/control_drum_kits.rs` | `./scripts/run-tests.py -p resonance-app` |
 
