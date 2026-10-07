@@ -1,6 +1,6 @@
 # MCP server (`resonance-mcp`)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
 > Spec history: ba doc #266 (MCP server design), epic #200 (not in the
 > repo). Lead: `resonance-mcp/README.md`, which is partly stale (see
 > Decisions and deviations).
@@ -33,7 +33,7 @@ claude mcp add --transport stdio resonance -- /absolute/path/to/target/release/r
 
 - Tool name = method name with its **first** `.` turned into `_`:
   `transport.seek` → `transport_seek`, `midi_map.learn` →
-  `midi_map_learn`. 182 tools for 182 methods today; the full table is in
+  `midi_map_learn`. 184 tools for 184 methods today; the full table is in
   [method-catalogue.md](method-catalogue.md).
 - One module per area in `src/tools/`, not always one per namespace:
   `trackmix.rs` holds `track.*`, `mixer.*` and `plugins.*`; `arrange.rs`
@@ -121,7 +121,7 @@ name real plugin ids and real fields (checked by `doc_hygiene.rs`).
 
 ## Surfaces
 
-- **Control API / MCP:** all 182 tools; see the catalogue.
+- **Control API / MCP:** all 184 tools; see the catalogue.
 - **Agent skills:** `resonance-agent-plugin/skills/*` name these tools,
   checked by the lockstep test.
 

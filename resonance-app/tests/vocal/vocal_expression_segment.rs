@@ -1,15 +1,18 @@
 //! Feeding edited expression curves into `DsSegment` building (todo #334).
 //!
-//! Covers the contract from doc #154 / epic #17: an edited dynamics overlay
-//! drives `DsSegment.energy`; tension & breathiness are honoured only on
-//! voicebanks that accept them; a pitch-bend overlay shifts the f0 curve;
+//! Covers the contract from doc #154 / epic #17: dynamics (→ energy),
+//! tension and breathiness are honoured only on voicebanks whose acoustic
+//! model accepts them — no shipped bank takes energy or breathiness,
+//! Lilia and Meiji take tension; a pitch-bend overlay shifts the f0 curve;
 //! and a curve left in its `Auto` state leaves the auto-derived result
 //! untouched (baseline only).
 
 use resonance_app::compose::vocal_svs::{build_segment, CurveKind};
 use resonance_app::compose::ExpressionCurves;
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
-use resonance_music_theory::g2p::{AssignedSyllable, PhonemeProvenance, SyllableStress};
+use resonance_music_theory::g2p::{
+    AssignedSyllable, G2pSource, PhonemeProvenance, SyllableStress,
+};
 use resonance_music_theory::{VocalParams, VocalVoicebank};
 
 const TPQ: u32 = TICKS_PER_QUARTER_NOTE as u32;
@@ -34,6 +37,9 @@ fn syl(phonemes: &[&'static str], syllable_index: usize) -> AssignedSyllable {
         syllable_index,
         stress: SyllableStress::None,
         provenance: PhonemeProvenance::Auto,
+        source: G2pSource::Cmu,
+        breath_before: false,
+        syllable_warning: false,
     }
 }
 
@@ -91,7 +97,7 @@ fn auto_tension_matches_auto_derived_baseline() {
     );
 
     // An edited *dynamics* overlay must not perturb the tension or f0 curve
-    // (only energy changes) — the curves stay frame-independent.
+    // — the curves stay frame-independent.
     let dyn_edited = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::Dynamics, 0.9));
     assert_eq!(
         seg_default.tension.samples, dyn_edited.tension.samples,
@@ -104,65 +110,57 @@ fn auto_tension_matches_auto_derived_baseline() {
 }
 
 // ---------------------------------------------------------------------------
-// Dynamics → energy
+// Dynamics / Breathiness: no shipped acoustic model takes them
 // ---------------------------------------------------------------------------
 
 #[test]
-fn edited_dynamics_overlay_changes_energy_samples() {
-    let seg = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::Dynamics, 1.0));
-    assert!(
-        !seg.energy.is_empty(),
-        "an edited dynamics overlay must emit an energy curve"
-    );
-    assert_eq!(seg.energy.samples.len(), seg.f0.samples.len());
-    // 1.0 on the 0..1 envelope maps to the model's +1.0 extreme.
-    for v in &seg.energy.samples {
-        assert!((*v - 1.0).abs() < 1e-6, "energy frame {v} should map to +1.0");
+fn dynamics_overlay_is_a_no_op_on_every_shipped_voicebank() {
+    // No shipped bank's acoustic config sets `use_energy_embed`, so an
+    // edited dynamics overlay must not emit an energy curve the model
+    // would ignore (or, worse, claim to honour).
+    for vb in VocalVoicebank::ALL.iter().copied() {
+        let seg = build(vb, &flat_overlay(CurveKind::Dynamics, 1.0));
+        assert!(seg.energy.is_empty(), "{vb:?} must leave energy default");
     }
 }
 
 #[test]
-fn dynamics_energy_tracks_overlay_value() {
-    // Midpoint of the envelope (0.5) maps to model-neutral (0.0).
-    let seg = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::Dynamics, 0.5));
-    for v in &seg.energy.samples {
-        assert!((*v).abs() < 1e-6, "energy frame {v} should map to 0.0");
+fn breathiness_overlay_is_a_no_op_on_every_shipped_voicebank() {
+    for vb in VocalVoicebank::ALL.iter().copied() {
+        let seg = build(vb, &flat_overlay(CurveKind::Breathiness, 1.0));
+        assert!(
+            seg.breathiness.is_empty(),
+            "{vb:?} must leave breathiness default"
+        );
     }
 }
 
-#[test]
-fn dynamics_supported_on_every_voicebank() {
-    // Dynamics is universally supported, so even TIGER emits the energy
-    // curve (the model simply ignores it if its acoustic graph lacks the
-    // input — never an error).
-    let seg = build(VocalVoicebank::Tiger, &flat_overlay(CurveKind::Dynamics, 0.8));
-    assert!(!seg.energy.is_empty(), "dynamics must feed energy on TIGER too");
-}
-
 // ---------------------------------------------------------------------------
-// Tension / Breathiness honoured only on supporting voicebanks
+// Tension honoured only on supporting voicebanks; value mapping
 // ---------------------------------------------------------------------------
-
-#[test]
-fn breathiness_overlay_honoured_on_supporting_voicebank() {
-    let seg = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::Breathiness, 1.0));
-    assert!(
-        !seg.breathiness.is_empty(),
-        "Lilia accepts breathiness, so the overlay must feed it"
-    );
-    for v in &seg.breathiness.samples {
-        assert!((*v - 1.0).abs() < 1e-6);
-    }
-}
 
 #[test]
 fn tension_overlay_honoured_on_supporting_voicebank() {
-    let seg = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::Tension, 1.0));
+    for vb in [VocalVoicebank::Lilia, VocalVoicebank::Meiji] {
+        let seg = build(vb, &flat_overlay(CurveKind::Tension, 1.0));
+        assert!(!seg.tension.is_empty(), "{vb:?}");
+        assert_eq!(seg.tension.samples.len(), seg.f0.samples.len());
+        // The edited overlay replaces the auto-derived tension; a flat 1.0
+        // envelope maps to the model's +1.0 extreme.
+        for v in &seg.tension.samples {
+            assert!((*v - 1.0).abs() < 1e-6, "tension frame {v} should map to +1.0");
+        }
+    }
+}
+
+#[test]
+fn tension_tracks_overlay_value() {
+    // Midpoint of the envelope (0.5) maps to model-neutral (0.0); the same
+    // mapping serves energy and breathiness on a bank that takes them.
+    let seg = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::Tension, 0.5));
     assert!(!seg.tension.is_empty());
-    // The edited overlay replaces the auto-derived tension; a flat 1.0
-    // envelope maps to the model's +1.0.
     for v in &seg.tension.samples {
-        assert!((*v - 1.0).abs() < 1e-6, "tension frame {v} should map to +1.0");
+        assert!((*v).abs() < 1e-6, "tension frame {v} should map to 0.0");
     }
 }
 
@@ -174,15 +172,6 @@ fn unsupported_tension_overlay_leaves_field_default() {
     assert!(
         seg.tension.is_empty(),
         "TIGER must leave tension default even when the overlay is edited"
-    );
-}
-
-#[test]
-fn unsupported_breathiness_overlay_leaves_field_default() {
-    let seg = build(VocalVoicebank::Tiger, &flat_overlay(CurveKind::Breathiness, 1.0));
-    assert!(
-        seg.breathiness.is_empty(),
-        "TIGER must leave breathiness default even when the overlay is edited"
     );
 }
 

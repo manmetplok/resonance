@@ -8,6 +8,7 @@ use resonance_control::ids::{
     ChordId, ClipId, SectionDefinitionId, SectionPlacementId, SendId, TrackId,
 };
 use resonance_control::methods::global::{SignatureEventView, TempoEventView};
+use resonance_control::methods::vocal::{self, VocalParamsView};
 use resonance_control::methods::song::{
     ChordView, ClipView, LyricLineView, NoteView, NotesView, SectionDefinitionView,
     SectionPlacementView, SectionsView, SendView, SongSummary, SyllableView, TrackDetail,
@@ -290,6 +291,43 @@ fn notes_view_reports_both_pitch_and_positions() {
     assert_eq!(back, view);
 }
 
+fn sample_vocal_params_view() -> VocalParamsView {
+    VocalParamsView {
+        voicebank: "tiger".to_owned(),
+        speaker: Some("glam".to_owned()),
+        timbre: vocal::VocalTimbre::Warm,
+        vibrato: 0.3,
+        vibrato_rate: 5.0,
+        tension: 0.5,
+        tension_velocity_amount: 0.5,
+        tension_contour_amount: 0.5,
+        portamento_ms: 40.0,
+        articulation: 0.65,
+        consonant_emphasis: 0.5,
+        voice: vocal::VocalVoice::MezzoSoprano,
+        range: vocal::VocalRange { low: 57, high: 79 },
+        style: vocal::VocalStyle::PopBallad,
+        contour: vocal::VocalContour::Arch,
+        syllable_mode: vocal::VocalSyllableMode::Syllabic,
+        chord_tone_anchor: 0.65,
+        leap_range: 0.15,
+        phrase_length_bars: 2,
+        breath: 0.45,
+        stay_in_scale: true,
+        avoid_clashes: true,
+        use_section_motif: false,
+        theme: "glass".to_owned(),
+        mood: vocal::VocalMood::Yearning,
+        pov: vocal::VocalPov::FirstSingular,
+        rhyme: vocal::VocalRhyme::Abab,
+        lines: 4,
+        syllables_min: 8,
+        syllables_max: 11,
+        match_syllables_to_melody: true,
+        avoid_cliches: true,
+    }
+}
+
 #[test]
 fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
     let mut overrides = BTreeMap::new();
@@ -324,13 +362,14 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
             }],
             short_note_count: 0,
             out_of_range_note_count: 0,
-        }],
-        lines: vec![LyricLineView {
-            index: 0,
-            text: "hello world".to_owned(),
-            syllables: vec![SyllableView {
-                text: "hel".to_owned(),
-                phonemes: vec!["hh".to_owned(), "eh".to_owned()],
+            params: sample_vocal_params_view(),
+            lines: vec![LyricLineView {
+                index: 0,
+                text: "hello world".to_owned(),
+                syllables: vec![SyllableView {
+                    text: "hel".to_owned(),
+                    phonemes: vec!["hh".to_owned(), "eh".to_owned()],
+                }],
             }],
         }],
         pronunciation_overrides: overrides,
@@ -342,11 +381,22 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
     assert_eq!(wire["pronunciation_overrides"]["lilia"], json!(["l", "ih"]));
     assert_eq!(wire["lanes"][0]["definition_id"], json!(3));
     assert_eq!(wire["lanes"][0]["counts_mismatch"], json!(true));
+    // Lines are per lane (protocol 2), indexed within it; no top-level list.
+    assert_eq!(wire["lanes"][0]["lines"][0]["index"], json!(0));
+    assert!(wire.get("lines").is_none());
+    // Params ride along in snake_case, range as {low, high}.
+    assert_eq!(wire["lanes"][0]["params"]["style"], json!("pop_ballad"));
+    assert_eq!(wire["lanes"][0]["params"]["pov"], json!("first_singular"));
+    assert_eq!(wire["lanes"][0]["params"]["voice"], json!("mezzo_soprano"));
+    assert_eq!(
+        wire["lanes"][0]["params"]["range"],
+        json!({"low": 57, "high": 79})
+    );
     let back: VocalView = serde_json::from_value(wire).unwrap();
     assert_eq!(back, view);
 
-    // `lanes` is skipped when empty, and an older reply without it still
-    // deserializes (the top-level fields kept their meaning).
+    // `lanes` is skipped when empty, and a reply without it still
+    // deserializes.
     let mut legacy = view.clone();
     legacy.lanes.clear();
     let wire = serde_json::to_value(&legacy).unwrap();

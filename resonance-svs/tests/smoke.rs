@@ -23,6 +23,35 @@ fn note_name_parsing_matches_jobsecond_regex() {
 }
 
 #[test]
+fn execution_provider_names_round_trip_and_rocm_means_migraphx() {
+    use resonance_svs::ExecutionProvider;
+    for ep in [
+        ExecutionProvider::Cpu,
+        ExecutionProvider::Cuda,
+        ExecutionProvider::MiGraphX,
+    ] {
+        assert_eq!(ExecutionProvider::parse(ep.as_str()), ep);
+    }
+    // ONNX Runtime 1.23 removed the ROCm provider; the old names select
+    // its replacement rather than silently meaning CPU.
+    assert_eq!(ExecutionProvider::parse("rocm"), ExecutionProvider::MiGraphX);
+    assert_eq!(ExecutionProvider::parse("HIP"), ExecutionProvider::MiGraphX);
+    assert_eq!(ExecutionProvider::parse("bogus"), ExecutionProvider::Cpu);
+}
+
+/// A GPU fallback is remembered so later renders go straight to CPU — but
+/// only when the model itself loads on CPU. A missing model fails on
+/// every provider and must not switch the GPU off for the process.
+#[test]
+fn a_missing_model_does_not_mark_the_gpu_provider_failed() {
+    use resonance_svs::stages::common::{build_session_reporting, provider_failed};
+    use resonance_svs::ExecutionProvider;
+    let missing = std::path::Path::new("/nonexistent/resonance-svs-test/acoustic.onnx");
+    assert!(build_session_reporting(missing, ExecutionProvider::Cuda, 7).is_err());
+    assert!(!provider_failed(ExecutionProvider::Cuda, 7));
+}
+
+#[test]
 fn sample_curve_resamples_to_target_length() {
     use resonance_svs::ds::SampleCurve;
     let curve = SampleCurve {
@@ -94,6 +123,11 @@ fn end_to_end_render() {
         depth: 1000,
     };
     let summary = resonance_svs::pipeline::run(&args).expect("pipeline run failed");
+    // The acoustic session's backend is recorded once it exists.
+    assert_eq!(
+        resonance_svs::active_backend(),
+        Some(resonance_svs::ExecutionProvider::Cpu)
+    );
     assert!(summary.total_samples > summary.sample_rate as usize / 2);
     assert!(out.exists(), "WAV should have been written");
     let meta = std::fs::metadata(&out).expect("WAV metadata");

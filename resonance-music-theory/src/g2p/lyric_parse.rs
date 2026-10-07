@@ -11,18 +11,53 @@ use super::phonemes::canonical_phoneme;
 /// pronunciation for proper nouns, foreign words, or anything CMU
 /// gets wrong. Internal to the note-assignment resolver.
 pub(crate) enum LyricToken {
-    Word { cleaned: String, syl_count: usize, variant_idx: usize },
+    /// A sung word. `pieces` holds the word split at the user's `·`
+    /// (or between-letter `-`) breaks, each piece reduced to letters and
+    /// apostrophes; an unbroken word is one piece. `cleaned` is the
+    /// pieces joined — the dictionary key. `variant_idx` is the `(N)`
+    /// pronunciation hint, `None` when the word carries none.
+    Word { cleaned: String, pieces: Vec<String>, variant_idx: Option<usize> },
     /// Pre-segmented phoneme groups, one inner vec per syllable.
     /// User-typed overrides carry no stress, so the syllable stress
     /// defaults to `None`.
     PhonemeBlock(Vec<Vec<&'static str>>),
+    /// A standalone melisma token (`_`, or its alias `+`): hold
+    /// the previous syllable onto one more note. Never emitted before the
+    /// first sung token of a line — there is nothing to hold yet.
+    Slur,
+    /// A standalone uppercase `AP`: a breath before the next sung
+    /// syllable. Takes no note.
+    Breath,
+}
+
+/// `true` when a whitespace-delimited lyric token is a standalone
+/// melisma marker in the draft: `_`, or its alias `+`. The draft-side
+/// counterpart of [`is_slur_lyric`].
+///
+/// A standalone `-` is deliberately *not* a hold in the draft: prose
+/// writes it as a dash (`wait - no`), and reading it as a melisma
+/// silently added a note. It is punctuation there and dropped; only the
+/// per-note side table ([`is_slur_lyric`]) still accepts `-`, where a
+/// lone dash on a note can only mean "hold".
+pub fn is_slur_token(token: &str) -> bool {
+    matches!(token, "_" | "+")
+}
+
+/// `true` when a whitespace-delimited lyric token is the breath marker:
+/// exactly `AP`, uppercase. Lowercase `ap` is an ordinary word, and the
+/// bracketed `[AP]` is an inline phoneme block, not this marker.
+pub fn is_breath_token(token: &str) -> bool {
+    token == "AP"
 }
 
 /// Walk a line and split it into `LyricToken`s. Recognises `[...]`
-/// blocks as inline phoneme overrides; everything else is a word.
+/// blocks as inline phoneme overrides, standalone `_` / `+` as
+/// slurs and standalone `AP` as a breath; everything else is a word.
+/// A slur before the line's first sung token is dropped.
 pub(crate) fn tokenize_line(text: &str) -> Vec<LyricToken> {
     let chars: Vec<char> = text.chars().filter(|c| !c.is_control()).collect();
     let mut tokens: Vec<LyricToken> = Vec::new();
+    let mut sung_seen = false;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -41,6 +76,7 @@ pub(crate) fn tokenize_line(text: &str) -> Vec<LyricToken> {
                 let groups = parse_phoneme_block(&inner);
                 if !groups.is_empty() {
                     tokens.push(LyricToken::PhonemeBlock(groups));
+                    sung_seen = true;
                 }
                 i = j + 1;
                 continue;
@@ -59,6 +95,16 @@ pub(crate) fn tokenize_line(text: &str) -> Vec<LyricToken> {
             i += 1;
         }
         let word_raw: String = chars[start..i].iter().collect();
+        if is_slur_token(&word_raw) {
+            if sung_seen {
+                tokens.push(LyricToken::Slur);
+            }
+            continue;
+        }
+        if is_breath_token(&word_raw) {
+            tokens.push(LyricToken::Breath);
+            continue;
+        }
         // Extract a trailing `(N)` pronunciation hint. Recognised
         // pattern: end of token, `(`, one or more digits, `)`. The
         // hint lives outside the phonemic word so we strip it before
@@ -71,34 +117,55 @@ pub(crate) fn tokenize_line(text: &str) -> Vec<LyricToken> {
         let trimmed = word_body.trim_matches(|c: char| {
             !c.is_alphabetic() && c != '\'' && c != '\u{00B7}'
         });
-        let syl_count = trimmed.split('\u{00B7}').count().max(1);
-        let cleaned: String = trimmed
-            .chars()
-            .filter(|c| c.is_alphabetic() || *c == '\'')
+        let pieces: Vec<String> = trimmed
+            .split('\u{00B7}')
+            .map(|p| p.chars().filter(|c| c.is_alphabetic() || *c == '\'').collect())
             .collect();
+        let cleaned: String = pieces.concat();
         if !cleaned.is_empty() {
-            tokens.push(LyricToken::Word { cleaned, syl_count, variant_idx });
+            tokens.push(LyricToken::Word { cleaned, pieces, variant_idx });
+            sung_seen = true;
         }
     }
     tokens
 }
 
 /// Strip a trailing `(N)` from `word` and return `(stripped, variant)`.
-/// `variant` defaults to 1 when no hint is present. Anything other
-/// than a digit run inside the parens is preserved unchanged.
-fn extract_variant_hint(word: &str) -> (String, usize) {
+/// `variant` is `None` when no hint is present. Anything other than a
+/// digit run inside the parens is preserved unchanged.
+fn extract_variant_hint(word: &str) -> (String, Option<usize>) {
     if !word.ends_with(')') {
-        return (word.to_string(), 1);
+        return (word.to_string(), None);
     }
     if let Some(open) = word.rfind('(') {
         let inside = &word[open + 1..word.len() - 1];
         if !inside.is_empty() && inside.chars().all(|c| c.is_ascii_digit()) {
             if let Ok(n) = inside.parse::<usize>() {
-                return (word[..open].to_string(), n.max(1));
+                return (word[..open].to_string(), Some(n.max(1)));
             }
         }
     }
-    (word.to_string(), 1)
+    (word.to_string(), None)
+}
+
+/// Notes a lyric text fills, counted from the same tokens the resolver
+/// walks but without any dictionary lookup: a word fills one note per
+/// `·` (or between-letter `-`) piece, an inline `[..]` block one per `·`
+/// group, a `_` / `+` hold one, and an `AP` breath none.
+/// Punctuation-only tokens (`&`, a standalone `-`) fill nothing, and a
+/// hold before a line's first sung token is dropped, exactly as
+/// [`resolve_draft`](super::resolve_draft) drops it. `\n` separates
+/// lines.
+pub(crate) fn note_units(text: &str) -> usize {
+    text.split('\n')
+        .flat_map(tokenize_line)
+        .map(|token| match token {
+            LyricToken::Word { pieces, .. } => pieces.len(),
+            LyricToken::PhonemeBlock(groups) => groups.len(),
+            LyricToken::Slur => 1,
+            LyricToken::Breath => 0,
+        })
+        .sum()
 }
 
 /// Parse the contents of a `[...]` block into per-syllable phoneme
@@ -145,10 +212,12 @@ fn parse_phoneme_block(inner: &str) -> Vec<Vec<&'static str>> {
 /// side-table never disagree on which sigil counts.
 pub const SLUR_MARKER: &str = "+";
 
-/// `true` when `s` is a slur annotation (`"+"` or `"-"`, ignoring
-/// surrounding whitespace). The single source of truth for the
-/// convention — every call site routes through this.
+/// `true` when `s` is a per-note slur annotation (`"+"`, `"-"` or `"_"`,
+/// ignoring surrounding whitespace). The single source of truth for the
+/// convention — every call site routes through this. `_` is accepted so
+/// the per-note side-table and the lyric draft (see [`is_slur_token`])
+/// share one spelling; `-` is accepted here only, never in the draft.
 pub fn is_slur_lyric(s: &str) -> bool {
-    let t = s.trim();
-    t == "+" || t == "-"
+    let s = s.trim();
+    is_slur_token(s) || s == "-"
 }

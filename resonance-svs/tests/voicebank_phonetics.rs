@@ -287,17 +287,26 @@ fn pitch_bend_is_always_available() {
 
 #[test]
 fn curve_support_follows_the_acoustic_embeds() {
-    // was: curve_supported(Tiger, …) — dynamics/pitch yes, tension/breath no.
-    let tiger = CurveSupport {
+    // Each embed gates exactly its own curve.
+    let energy_only = CurveSupport {
         energy: true,
         ..CurveSupport::default()
     };
-    assert!(tiger.supports(ExpressionCurve::Dynamics));
-    assert!(tiger.supports(ExpressionCurve::PitchBend));
-    assert!(!tiger.supports(ExpressionCurve::Tension));
-    assert!(!tiger.supports(ExpressionCurve::Breathiness));
+    assert!(energy_only.supports(ExpressionCurve::Dynamics));
+    assert!(energy_only.supports(ExpressionCurve::PitchBend));
+    assert!(!energy_only.supports(ExpressionCurve::Tension));
+    assert!(!energy_only.supports(ExpressionCurve::Breathiness));
 
-    // was: curve_supported(Lilia|Meiji, …) — all four supported.
+    // The shipped Lilia/Meiji shape: tension only.
+    let tension_only = CurveSupport {
+        tension: true,
+        ..CurveSupport::default()
+    };
+    assert!(tension_only.supports(ExpressionCurve::Tension));
+    assert!(!tension_only.supports(ExpressionCurve::Dynamics));
+    assert!(!tension_only.supports(ExpressionCurve::Breathiness));
+
+    // All three embeds: all four curves.
     let full = CurveSupport {
         energy: true,
         tension: true,

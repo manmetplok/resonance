@@ -94,6 +94,14 @@ down before adding EQ to fix the collision later.
 **derives no notes** — it is for pinning a lane's config and for creating the
 vocal lane. To get MIDI now, call `generate_part`.
 
+A song that sings in several sections uses **one vocal lane per section on the
+same vocal track**, each addressed by passing its section as `section_id` to the
+`vocal_*` tools. For a vocal lane, `options` is a partial patch in snake_case
+(`{"style": "folk", "range": {"low": 55, "high": 72}}`) that merges into the
+lane and keeps its lyrics and seed. To change a lane's voice or generator later,
+read it with `vocal_get_params` and patch it with `vocal_set_params`; neither
+renders, so follow with `vocal_generate` or `vocal_render`.
+
 ## Reproducibility
 
 `seed` makes output reproducible. Omitted, it is derived from the section id, so

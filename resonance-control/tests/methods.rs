@@ -43,7 +43,7 @@ fn capabilities_cover_all_namespaces_without_duplicates() {
 
 #[test]
 fn hello_roundtrips_and_reports_capabilities() {
-    assert_eq!(PROTOCOL_VERSION, 1);
+    assert_eq!(PROTOCOL_VERSION, 2);
     let result = control::HelloResult {
         app_version: "0.1.0".to_owned(),
         protocol_version: PROTOCOL_VERSION,
@@ -51,11 +51,37 @@ fn hello_roundtrips_and_reports_capabilities() {
             .into_iter()
             .map(str::to_owned)
             .collect(),
+        svs_backend: None,
     };
     let wire = serde_json::to_value(&result).unwrap();
-    assert_eq!(wire["protocol_version"], json!(1));
+    assert_eq!(wire["protocol_version"], json!(2));
     let back: control::HelloResult = serde_json::from_value(wire).unwrap();
     assert_eq!(back, result);
+}
+
+#[test]
+fn hello_svs_backend_is_optional_on_the_wire() {
+    // Absent until a vocal render created a session: not serialized, and a
+    // result without it (an older app) still parses.
+    let result = control::HelloResult {
+        app_version: "0.1.0".to_owned(),
+        protocol_version: PROTOCOL_VERSION,
+        capabilities: Vec::new(),
+        svs_backend: None,
+    };
+    let wire = serde_json::to_value(&result).unwrap();
+    assert!(wire.get("svs_backend").is_none(), "{wire}");
+    let back: control::HelloResult = serde_json::from_value(wire).unwrap();
+    assert_eq!(back.svs_backend, None);
+
+    let with = control::HelloResult {
+        svs_backend: Some("cpu".to_owned()),
+        ..result
+    };
+    let wire = serde_json::to_value(&with).unwrap();
+    assert_eq!(wire["svs_backend"], json!("cpu"));
+    let back: control::HelloResult = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, with);
 }
 
 #[test]
@@ -321,6 +347,51 @@ fn mixer_and_vocal_params_roundtrip() {
     let render_all: vocal::RenderParams = serde_json::from_value(json!({})).unwrap();
     assert_eq!(render_all, vocal::RenderParams::default());
     assert!(render_all.voicebank.is_none());
+}
+
+#[test]
+fn vocal_params_patch_is_partial_snake_case_and_strict() {
+    let set: vocal::SetParamsParams = serde_json::from_value(json!({
+        "track_id": 9,
+        "section_id": 3,
+        "params": {
+            "style": "pop_ballad",
+            "pov": "first_singular",
+            "voice": "mezzo_soprano",
+            "range": {"low": 57, "high": 79},
+            "voicebank": "tiger",
+            "speaker": "disco"
+        }
+    }))
+    .unwrap();
+    let patch = &set.params;
+    assert_eq!(patch.style, Some(vocal::VocalStyle::PopBallad));
+    assert_eq!(patch.pov, Some(vocal::VocalPov::FirstSingular));
+    assert_eq!(patch.voice, Some(vocal::VocalVoice::MezzoSoprano));
+    assert_eq!(patch.range, Some(vocal::VocalRangePatch { low: 57, high: 79 }));
+    assert_eq!(patch.voicebank.as_deref(), Some("tiger"));
+    assert!(patch.vibrato.is_none(), "absent fields stay None");
+
+    // Round-trip: only the present fields are written back.
+    let wire = serde_json::to_value(patch).unwrap();
+    assert_eq!(wire.as_object().unwrap().len(), 6);
+    assert_eq!(wire["style"], json!("pop_ballad"));
+    let back: vocal::VocalParamsPatch = serde_json::from_value(wire).unwrap();
+    assert_eq!(&back, patch);
+
+    // An empty patch is valid; unknown fields and the old PascalCase
+    // enum names are not.
+    let empty: vocal::VocalParamsPatch = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(empty, vocal::VocalParamsPatch::default());
+    assert!(serde_json::from_value::<vocal::VocalParamsPatch>(json!({"draft": []})).is_err());
+    assert!(serde_json::from_value::<vocal::VocalParamsPatch>(json!({"singer": "Glam"})).is_err());
+    assert!(
+        serde_json::from_value::<vocal::VocalParamsPatch>(json!({"style": "PopBallad"})).is_err()
+    );
+    assert!(serde_json::from_value::<vocal::VocalParamsPatch>(
+        json!({"range": {"low": 50, "high": 70, "mid": 60}})
+    )
+    .is_err());
 }
 
 #[test]

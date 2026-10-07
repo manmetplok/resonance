@@ -184,7 +184,7 @@ fn hello_lists_meter_measure() {
     let mut app = app();
     let hello: HelloResult = roundtrip(
         &mut app,
-        request(1, "control.hello", json!({ "protocol_version": 1 })),
+        request(1, "control.hello", json!({ "protocol_version": resonance_control::PROTOCOL_VERSION })),
     )
     .result()
     .expect("hello succeeds");
@@ -1053,7 +1053,7 @@ fn hello_lists_meter_stems() {
     let mut app = app();
     let hello: HelloResult = roundtrip(
         &mut app,
-        request(1, "control.hello", json!({ "protocol_version": 1 })),
+        request(1, "control.hello", json!({ "protocol_version": resonance_control::PROTOCOL_VERSION })),
     )
     .result()
     .expect("hello succeeds");

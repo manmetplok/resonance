@@ -76,4 +76,4 @@ pub use rpc::{ErrorData, ErrorKind, Request, RequestId, Response, RpcError};
 
 /// Version of this control protocol. Bumped only on breaking changes;
 /// additions (new methods, new optional fields) keep the same version.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;

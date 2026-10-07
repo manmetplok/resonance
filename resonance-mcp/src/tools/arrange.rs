@@ -131,17 +131,19 @@ impl ResonanceMcp {
                        lane and for pinning a lane's generator config. \
                        \
                        It is the ONLY way to create the vocal lane that every vocal_* tool \
-                       needs. Lyrics live per (section, track) vocal lane and vocal_set_lyrics \
-                       targets a track's FIRST vocal lane, so a song that sings in four sections \
-                       needs four vocal tracks — one vocal lane each. \
+                       needs. Lyrics live per (section, track) vocal lane, so a song that sings \
+                       in four sections needs one vocal lane per section on the SAME vocal \
+                       track: call this once per section, then pass each section as section_id \
+                       to the vocal_* tools (omitted, they act on the track's first lane). \
                        \
                        options is the same per-kind object generate_part documents (bass -> \
                        BassParams, melody -> the same params generate_part's role \"lead\" takes, \
                        pad -> PadParams); a partial object is fine, omitted fields keep the \
-                       generator defaults. EXCEPTION: for kind \"vocal\" the options object must \
-                       be COMPLETE — it has no field defaults, so any partial object is rejected \
-                       with a serde \"missing field\" error. Omit options entirely for vocal \
-                       lanes and shape the result with vocal_generate + notes_* instead.",
+                       generator defaults. For kind \"vocal\", options is the vocal_set_params \
+                       patch (snake_case, partial): on a section that already has a vocal lane \
+                       on this track it MERGES into that lane and keeps its lyrics and seed; on \
+                       a new lane, omitted fields take their defaults (voicebank lilia). Later \
+                       changes are easier with vocal_set_params.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<section::SetLaneGeneratorResult>()
     )]

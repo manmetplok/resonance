@@ -37,9 +37,12 @@ required-features = ["cli"]
 [features]
 default = []
 # Enabling these requires the corresponding ONNX Runtime provider libraries on the host.
-# CPU works out of the box; CUDA and ROCm just register the provider on session build.
+# CPU works out of the box; CUDA and MIGraphX register the provider on session build
+# (with `error_on_failure`; a failure falls back to CPU with a warning and is
+# reported by `resonance_svs::active_backend()`). ONNX Runtime 1.23 removed the
+# ROCm provider, so AMD GPUs go through MIGraphX.
 cuda = ["ort/cuda"]
-rocm = ["ort/rocm"]
+migraphx = ["ort/migraphx"]
 # Useful for CI smoke without local model files: build only, no runtime.
 # `clap` (derive) + `tracing-subscriber` are only used by `src/main.rs` and
 # the `render_resonance_vocal` example's argument parsing/logging setup —

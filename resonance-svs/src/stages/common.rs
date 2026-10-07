@@ -1,75 +1,170 @@
 use anyhow::Result;
 use ort::execution_providers::{
     CPUExecutionProvider, CUDAExecutionProvider, ExecutionProviderDispatch,
+    MIGraphXExecutionProvider,
 };
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Mutex;
 
-#[derive(Debug, Clone, Copy)]
+/// ONNX Runtime execution provider an SVS session runs on.
+///
+/// `Cpu` works out of the box. `Cuda` and `MiGraphX` need the matching
+/// cargo feature (`cuda` / `migraphx`) *and* an ONNX Runtime build with
+/// that provider on the host; when either is missing, [`build_session`]
+/// falls back to CPU with a warning and reports `Cpu` as the backend in
+/// use. (ONNX Runtime 1.23 removed the ROCm provider; MIGraphX replaces
+/// it for AMD GPUs.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExecutionProvider {
     Cpu,
     Cuda,
-    Rocm,
+    MiGraphX,
 }
 
 impl ExecutionProvider {
+    /// Parse a CLI/config name. Unknown names mean CPU. `rocm` and `hip`
+    /// are accepted as aliases for MIGraphX, the AMD path now that ONNX
+    /// Runtime has dropped its ROCm provider.
     pub fn parse(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "cuda" => Self::Cuda,
-            "rocm" | "hip" => Self::Rocm,
+            "migraphx" | "rocm" | "hip" => Self::MiGraphX,
             _ => Self::Cpu,
+        }
+    }
+
+    /// Stable lowercase name (`cpu`, `cuda`, `migraphx`): what
+    /// [`active_backend`] reports over the control API.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Cuda => "cuda",
+            Self::MiGraphX => "migraphx",
         }
     }
 }
 
-/// Build a session with the requested provider, falling back to CPU if the provider isn't
-/// registered (e.g. ROCm requested on a machine that only has CPU ORT binaries). Logs a
-/// warning when falling back. The PoC tolerates this so users can develop on CPU machines.
+/// The backend the most recent acoustic session really runs on; `None`
+/// until one was created in this process.
+static ACTIVE_BACKEND: Mutex<Option<ExecutionProvider>> = Mutex::new(None);
+
+/// The execution provider the most recently created acoustic session is
+/// really running on (after any CPU fallback), or `None` before the first
+/// render in this process. The vocoder always runs on CPU and is not
+/// reported here.
+pub fn active_backend() -> Option<ExecutionProvider> {
+    *ACTIVE_BACKEND.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Record `backend` as the one in use, logging it at info level the first
+/// time and whenever it changes. Sessions are rebuilt per render, so this
+/// keeps the log to one line per change rather than one per render.
+pub(crate) fn record_active_backend(backend: ExecutionProvider) {
+    let mut slot = ACTIVE_BACKEND.lock().unwrap_or_else(|e| e.into_inner());
+    if *slot != Some(backend) {
+        tracing::info!("SVS acoustic model running on the {} backend", backend.as_str());
+        *slot = Some(backend);
+    }
+}
+
+/// Build a session on the requested provider, discarding which backend it
+/// ended up on. See [`build_session_reporting`].
 pub fn build_session(model_path: &Path, ep: ExecutionProvider, device_index: i32) -> Result<Session> {
-    let providers: Vec<ExecutionProviderDispatch> = match ep {
-        ExecutionProvider::Cpu => vec![CPUExecutionProvider::default().build()],
-        ExecutionProvider::Cuda => vec![
+    build_session_reporting(model_path, ep, device_index).map(|(session, _)| session)
+}
+
+/// Build a session on the requested provider and return the backend it
+/// really runs on.
+///
+/// A GPU provider is registered with `error_on_failure`, so ort cannot
+/// quietly drop it and run on CPU behind our back. If registration, or
+/// session creation on that provider, fails (feature not compiled in, ONNX
+/// Runtime build without the provider, driver missing), the session is
+/// rebuilt on CPU, a warning names the provider and the reason, and the
+/// returned backend is `Cpu`. CPU stays the fail-soft path so a render
+/// still happens on a machine without the GPU stack. A provider that
+/// failed while the model itself loaded fine on CPU is remembered for the
+/// rest of the process ([`provider_failed`]) and not tried again.
+pub fn build_session_reporting(
+    model_path: &Path,
+    ep: ExecutionProvider,
+    device_index: i32,
+) -> Result<(Session, ExecutionProvider)> {
+    let gpu: Option<ExecutionProviderDispatch> = match ep {
+        ExecutionProvider::Cpu => None,
+        ExecutionProvider::Cuda => Some(
             CUDAExecutionProvider::default()
                 .with_device_id(device_index)
-                .build(),
-            CPUExecutionProvider::default().build(),
-        ],
-        ExecutionProvider::Rocm => {
-            // ort 2.0.0-rc.10 gates the ROCm provider behind the `rocm` Cargo feature. Compile
-            // with `--features rocm` to enable it. Without the feature flag we still attempt to
-            // register, but it will silently fall back to CPU.
-            #[cfg(feature = "rocm")]
-            {
-                vec![
-                    ort::execution_providers::ROCmExecutionProvider::default()
-                        .with_device_id(device_index)
-                        .build(),
-                    CPUExecutionProvider::default().build(),
-                ]
-            }
-            #[cfg(not(feature = "rocm"))]
-            {
-                tracing::warn!(
-                    "ROCm execution provider requested but resonance-svs was built without `rocm` \
-                     feature; falling back to CPU. Rebuild with `--features rocm` to enable."
-                );
-                vec![CPUExecutionProvider::default().build()]
-            }
-        }
+                .build()
+                .error_on_failure(),
+        ),
+        ExecutionProvider::MiGraphX => Some(
+            MIGraphXExecutionProvider::default()
+                .with_device_id(device_index)
+                .build()
+                .error_on_failure(),
+        ),
     };
 
-    let session = Session::builder()
+    // A provider that already failed in this process is not retried:
+    // sessions are rebuilt for every render, and re-probing a missing GPU
+    // stack each time cost a failed provider registration (and a warning)
+    // per render for nothing.
+    let gpu = gpu.filter(|_| !provider_failed(ep, device_index));
+    let mut gpu_failed = false;
+    if let Some(gpu) = gpu {
+        match commit_session(model_path, vec![gpu]) {
+            Ok(session) => return Ok((session, ep)),
+            Err(e) => {
+                tracing::warn!(
+                    "{} execution provider unavailable for {} ({e:#}); running on CPU \
+                     instead (not retried in this process)",
+                    ep.as_str(),
+                    model_path.display()
+                );
+                gpu_failed = true;
+            }
+        }
+    }
+    let session = commit_session(model_path, vec![CPUExecutionProvider::default().build()])?;
+    // Only blame the provider once the same model loads on CPU: a missing
+    // or broken model file fails both, and must not turn the GPU off.
+    if gpu_failed {
+        FAILED_PROVIDERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((ep, device_index));
+    }
+    Ok((session, ExecutionProvider::Cpu))
+}
+
+/// GPU providers (with their device index) whose session creation failed
+/// in this process. [`build_session_reporting`] goes straight to CPU for
+/// them, so the fallback warning is logged once, not once per render.
+static FAILED_PROVIDERS: Mutex<Vec<(ExecutionProvider, i32)>> = Mutex::new(Vec::new());
+
+/// Has `ep` on `device_index` already failed in this process?
+pub fn provider_failed(ep: ExecutionProvider, device_index: i32) -> bool {
+    FAILED_PROVIDERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&(ep, device_index))
+}
+
+fn commit_session(
+    model_path: &Path,
+    providers: Vec<ExecutionProviderDispatch>,
+) -> Result<Session> {
+    Session::builder()
         .map_err(|e| anyhow::anyhow!("creating ORT SessionBuilder: {e}"))?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| anyhow::anyhow!("setting graph optimization level: {e}"))?
         .with_execution_providers(providers)
         .map_err(|e| anyhow::anyhow!("registering execution providers: {e}"))?
         .commit_from_file(model_path)
-        .map_err(|e| {
-            anyhow::anyhow!("loading ONNX model at {}: {e}", model_path.display())
-        })?;
-    Ok(session)
+        .map_err(|e| anyhow::anyhow!("loading ONNX model at {}: {e}", model_path.display()))
 }
 
 /// Names of the inputs declared by an ONNX model.

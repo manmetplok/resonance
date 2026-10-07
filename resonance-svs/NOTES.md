@@ -97,11 +97,12 @@ across longer / more elaborate `.ds` files to build out a richer perf table.
   `name` and `dtype` are also methods, not fields. The PoC adapts via small
   `input_names()` / `output_names()` helpers that turn them into
   `HashSet<String>` for "does this model declare input X?" feature-detection.
-- **CPU fallback for non-default providers.** The session builder is given
-  the requested provider followed by `CPUExecutionProvider::default()`, so
-  if the requested provider isn't registered (e.g. ROCm requested on a CPU
-  machine), session creation still succeeds and the model runs on CPU. The
-  PoC logs a warning when the `rocm` feature flag is off.
+- **CPU fallback for non-default providers.** The requested GPU provider
+  is registered with `error_on_failure` (ort otherwise drops a provider
+  that fails to register and silently runs on CPU). On failure the session
+  is rebuilt on CPU with a warning, and the backend in use is recorded
+  (`resonance_svs::active_backend()`). The old `rocm` feature is gone:
+  ONNX Runtime 1.23 removed the ROCm provider; use `migraphx`.
 - **`speedup` vs `steps`.** Two generations of openvpi exporter coexist in
   the wild. Older ONNX takes a `speedup: int64` scalar (PNDM stride); newer
   "continuous-acceleration" exports take a `steps: int64` scalar (direct

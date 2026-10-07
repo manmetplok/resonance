@@ -2,6 +2,11 @@
 //! add-phoneme palette and dictionary need: CMU variant enumeration, the
 //! ARPAbet inventory list, public phoneme validation, and the
 //! dictionary / per-syllable override resolution hooks (with provenance).
+//! The lyric-draft markers (`_`, `AP`, exact `·` breaks, `G2pSource`)
+//! live in the `lyric_markers` module.
+
+#[path = "g2p_apis/lyric_markers.rs"]
+mod lyric_markers;
 
 use std::collections::HashMap;
 
@@ -281,7 +286,10 @@ fn slur_note_inherits_overridden_vowel_and_provenance() {
     let assigned = assign_syllables_to_notes_with(&syllables, &ann, 2, &overrides);
     assert_eq!(assigned.len(), 2);
     assert!(assigned[1].is_slur);
-    assert_eq!(assigned[1].phonemes, vec!["ao"], "slur should hold edited vowel");
+    // The hold sings the edited vowel and, as the hold's last note, the
+    // syllable's final consonant.
+    assert_eq!(assigned[0].phonemes, vec!["s", "ao"]);
+    assert_eq!(assigned[1].phonemes, vec!["ao", "n"], "slur should hold edited vowel");
     assert_eq!(assigned[1].provenance, PhonemeProvenance::Edited);
 }
 

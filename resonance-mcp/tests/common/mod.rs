@@ -128,6 +128,7 @@ fn serve(
                     .into_iter()
                     .map(str::to_owned)
                     .collect(),
+                svs_backend: None,
             };
             Response::success(request.id.clone(), &result).expect("hello result serializes")
         } else {

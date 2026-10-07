@@ -228,10 +228,10 @@ impl VocalStyle {
 )]
 pub enum VocalVoicebank {
     /// TIGER (English DiffSinger v106) — 7 community speakers, the
-    /// historic default since the SVS PoC.
+    /// first bank of the SVS PoC.
     #[strum(serialize = "TIGER")]
     Tiger,
-    /// LIEE Lilia (multi-language MM 2.8) — single-speaker voicebank
+    /// LIEE Lilia (multi-language MM 2.8) — the default; single-speaker voicebank
     /// with native English / Japanese / Tagalog / Korean / Spanish
     /// support. Sings in English through the same ARPAbet G2P we use
     /// for TIGER.
@@ -457,9 +457,8 @@ pub struct VocalParams {
     #[serde(default = "default_singer_meiji")]
     pub singer_meiji: VocalSingerMeiji,
     /// Trained DiffSinger model used for the SVS render. Defaults to
-    /// `Tiger` so projects that pre-date the multi-voicebank work pick
-    /// up the historic singer; older JSON without the field falls back
-    /// via `#[serde(default)]`.
+    /// `Lilia`, also for older JSON without the field (via
+    /// `#[serde(default)]`).
     #[serde(default = "default_voicebank")]
     pub voicebank: VocalVoicebank,
 }
@@ -542,6 +541,27 @@ pub enum VocalParamsError {
 }
 
 impl VocalParams {
+    /// Longest lyric theme, in characters. The lane inspector truncates
+    /// to it; the control API refuses longer text.
+    pub const THEME_MAX_CHARS: usize = 240;
+
+    /// Switch to `voicebank`, resetting the speaker to the new bank's
+    /// default when the bank actually changes (TIGER: the voice type's
+    /// historic singer; Meiji: `Standard`; Lilia has a single voice).
+    /// Re-selecting the current bank changes nothing. The one rule every
+    /// bank switch outside the GUI picker goes through (`vocal.set_params`,
+    /// `vocal.render {voicebank}`).
+    pub fn switch_voicebank(&mut self, voicebank: VocalVoicebank) {
+        if voicebank != self.voicebank {
+            match voicebank {
+                VocalVoicebank::Tiger => self.singer = self.voice.default_singer(),
+                VocalVoicebank::Meiji => self.singer_meiji = VocalSingerMeiji::Standard,
+                VocalVoicebank::Lilia => {}
+            }
+        }
+        self.voicebank = voicebank;
+    }
+
     /// Bounds-check the implicit invariants on each field. Run at the
     /// app boundary before handing params to the engine so a malformed
     /// project file or a UI state-machine bug surfaces as a clean
@@ -660,8 +680,13 @@ fn default_singer_meiji() -> VocalSingerMeiji {
     VocalSingerMeiji::Standard
 }
 
+/// Lilia is the default bank (vocal-mcp-control-and-quality.md D9): the
+/// maintained multi-language bank, and what the control API has always
+/// rendered a fresh lane with. Its generative-AI clause and NC-SA vocoder
+/// are accepted while Resonance is not commercial; revisit before any
+/// commercial release.
 fn default_voicebank() -> VocalVoicebank {
-    VocalVoicebank::Tiger
+    VocalVoicebank::Lilia
 }
 
 /// Seeded preview lines that mirror the prototype's draft.

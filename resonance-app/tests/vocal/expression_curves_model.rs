@@ -153,30 +153,25 @@ fn status_is_na_on_unsupported_voicebank() {
         vec![0.0, 10.0],
     );
 
-    // TIGER accepts only dynamics + pitch bend; tension/breathiness are n/a.
-    assert_eq!(
-        curves.status(CurveKind::Dynamics, VocalVoicebank::Tiger),
-        CurveStatus::Auto
-    );
-    assert_eq!(
-        curves.status(CurveKind::PitchBend, VocalVoicebank::Tiger),
-        CurveStatus::Auto
-    );
+    // No shipped acoustic model takes energy or breathiness, so dynamics
+    // and breathiness are n/a everywhere; pitch bend is always available.
+    for vb in VocalVoicebank::ALL.iter().copied() {
+        for (kind, status) in [
+            (CurveKind::Dynamics, CurveStatus::Na),
+            (CurveKind::Breathiness, CurveStatus::Na),
+            (CurveKind::PitchBend, CurveStatus::Auto),
+        ] {
+            assert_eq!(curves.status(kind, vb), status, "{vb:?} {kind:?}");
+        }
+    }
+
+    // Tension: TIGER has no input; Lilia and Meiji do.
     assert_eq!(
         curves.status(CurveKind::Tension, VocalVoicebank::Tiger),
         CurveStatus::Na
     );
-    assert_eq!(
-        curves.status(CurveKind::Breathiness, VocalVoicebank::Tiger),
-        CurveStatus::Na
-    );
-
-    // Lilia accepts all four.
-    for kind in CurveKind::ALL {
-        assert_eq!(
-            curves.status(kind, VocalVoicebank::Lilia),
-            CurveStatus::Auto
-        );
+    for vb in [VocalVoicebank::Lilia, VocalVoicebank::Meiji] {
+        assert_eq!(curves.status(CurveKind::Tension, vb), CurveStatus::Auto);
     }
 }
 
@@ -219,7 +214,7 @@ fn default_bundle_is_untouched() {
     assert!(!curves.any_edited());
     for kind in CurveKind::ALL {
         assert!(!curves.is_edited(kind));
-        assert_eq!(curves.status(kind, VocalVoicebank::Lilia), CurveStatus::Auto);
+        assert_eq!(curves.curve(kind).status(true), CurveStatus::Auto);
     }
 }
 

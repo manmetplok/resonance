@@ -17,9 +17,14 @@
 //! immediately and the render lands asynchronously; the job resolves
 //! from the existing `VocalAudioReady` / `VocalAudioFailed` completion
 //! messages via a [`JobToken::VocalRender`], once **all** of its lanes
-//! have landed. The default voicebank is
-//! **Lilia** (doc #265) — the maintained multi-language bank — overriding
-//! the code-level `VocalParams` default of TIGER.
+//! have landed. A render without `voicebank` uses each lane's own bank;
+//! a new lane starts on Lilia, the `VocalParams` code default.
+//!
+//! `vocal.get_params` / `vocal.set_params` read and patch a lane's
+//! settings through the snake_case wire types in
+//! `resonance_control::methods::vocal`; the conversion lives here
+//! ([`apply_params_patch`]) and in `view_model::vocal_params_view`, so
+//! the project format (`VocalParams`' own serde) is untouched.
 
 use crate::compose::ComposeMessage;
 use crate::control_jobs::JobToken;
@@ -30,7 +35,9 @@ use iced::Task;
 use resonance_control::job::JobStarted;
 use resonance_control::methods::vocal as proto;
 use resonance_control::{Request, Response, RpcError};
-use resonance_music_theory::VocalVoicebank;
+use resonance_music_theory::{VocalParams, VocalSinger, VocalSingerMeiji, VocalVoicebank};
+
+use super::view_model;
 
 // The `vocal.*` writes route ComposeMessages, so they answer with the
 // compose-aware acknowledgement rather than a bare one: a reducer that
@@ -50,6 +57,8 @@ pub(super) fn try_handle(
         proto::CLEAR_PRONUNCIATION => clear_pronunciation(app, request),
         proto::RENDER => render(app, conn, request),
         proto::GENERATE => generate(app, request),
+        proto::GET_PARAMS => get_params(app, request),
+        proto::SET_PARAMS => set_params(app, request),
         _ => return None,
     };
     Some(handled)
@@ -263,6 +272,230 @@ fn first_derived_clip(app: &Resonance, definition_id: u64, track_id: u64) -> Opt
 }
 
 // ---------------------------------------------------------------------------
+// Lane params
+// ---------------------------------------------------------------------------
+
+/// `vocal.get_params`: the lane's full settings and seed.
+fn get_params(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: proto::GetParamsParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let track_id: u64 = params.track_id.into();
+    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
+        Ok(id) => id,
+        Err(e) => return reject(request, e),
+    };
+    match params_result(app, definition_id, track_id) {
+        Some(result) => (super::success(request, &result), Task::none()),
+        None => reject(request, RpcError::internal("the vocal lane vanished")),
+    }
+}
+
+/// `vocal.set_params`: merge a partial patch into the lane, validate the
+/// merged settings, and write them back as one undoable edit.
+///
+/// The write is a `SetLaneGenerator` carrying the lane's own seed and
+/// lyric draft, so nothing but the patched fields changes. It never
+/// renders and never regenerates (spec §3.1).
+fn set_params(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: proto::SetParamsParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let track_id: u64 = params.track_id.into();
+    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
+        Ok(id) => id,
+        Err(e) => return reject(request, e),
+    };
+    let Some((mut vocal, seed)) = lane_params(app, definition_id, track_id) else {
+        return reject(request, RpcError::internal("the vocal lane vanished"));
+    };
+    if let Err(e) = apply_params_patch(&mut vocal, &params.params) {
+        return reject(request, e);
+    }
+    let task = super::run_via_update(
+        app,
+        Message::Compose(ComposeMessage::SetLaneGenerator {
+            definition_id,
+            track_id,
+            config: Some(Box::new(crate::compose::LaneGeneratorConfig {
+                kind: crate::compose::LaneGeneratorKind::Vocal(vocal),
+                seed,
+            })),
+        }),
+    );
+    if let Some(error) = app.compose.last_error.take() {
+        return reject(request, RpcError::invalid_params(error));
+    }
+    match params_result(app, definition_id, track_id) {
+        Some(result) => (super::success(request, &result), task),
+        None => reject(request, RpcError::internal("the vocal lane vanished")),
+    }
+}
+
+/// The lane's current settings and seed.
+fn lane_params(app: &Resonance, definition_id: u64, track_id: u64) -> Option<(VocalParams, u64)> {
+    app.compose
+        .find_definition(definition_id)
+        .and_then(|d| d.lane_generators.get(&track_id))
+        .and_then(|c| match &c.kind {
+            crate::compose::LaneGeneratorKind::Vocal(p) => Some((p.clone(), c.seed)),
+            _ => None,
+        })
+}
+
+fn params_result(app: &Resonance, definition_id: u64, track_id: u64) -> Option<proto::ParamsResult> {
+    let (vocal, seed) = lane_params(app, definition_id, track_id)?;
+    Some(proto::ParamsResult {
+        track_id: resonance_control::ids::TrackId(track_id),
+        section_id: definition_id.into(),
+        params: view_model::vocal_params_view(&vocal),
+        seed,
+        revision: app.revision(),
+    })
+}
+
+/// Merge a wire patch into `p`, then validate the merged result.
+///
+/// Shared with `section.set_lane_generator`'s vocal options. On error
+/// `p` may be partly patched; callers patch a copy and drop it.
+///
+/// A voicebank change without a `speaker` in the same patch resets the
+/// speaker to the new bank's default (TIGER: the voice type's historic
+/// singer; Meiji: `standard`).
+pub(super) fn apply_params_patch(
+    p: &mut VocalParams,
+    patch: &proto::VocalParamsPatch,
+) -> Result<(), RpcError> {
+    use view_model as vm;
+
+    // Voice / render.
+    if let Some(v) = patch.timbre {
+        p.timbre = vm::timbre_from_wire(v);
+    }
+    set(&mut p.vibrato, patch.vibrato);
+    set(&mut p.vibrato_rate, patch.vibrato_rate);
+    set(&mut p.tension, patch.tension);
+    set(&mut p.tension_velocity_amount, patch.tension_velocity_amount);
+    set(&mut p.tension_contour_amount, patch.tension_contour_amount);
+    set(&mut p.portamento_ms, patch.portamento_ms);
+    set(&mut p.articulation, patch.articulation);
+    set(&mut p.consonant_emphasis, patch.consonant_emphasis);
+
+    // Melody generator.
+    if let Some(v) = patch.voice {
+        p.voice = vm::voice_from_wire(v);
+    }
+    if let Some(r) = patch.range {
+        p.range = (r.low, r.high);
+    }
+    if let Some(v) = patch.style {
+        p.style = vm::style_from_wire(v);
+    }
+    if let Some(v) = patch.contour {
+        p.contour = vm::contour_from_wire(v);
+    }
+    if let Some(v) = patch.syllable_mode {
+        p.syllable_mode = vm::syllable_mode_from_wire(v);
+    }
+    set(&mut p.chord_tone_anchor, patch.chord_tone_anchor);
+    set(&mut p.leap_range, patch.leap_range);
+    set(&mut p.phrase_length_bars, patch.phrase_length_bars);
+    set(&mut p.breath, patch.breath);
+    set(&mut p.stay_in_scale, patch.stay_in_scale);
+    set(&mut p.avoid_clashes, patch.avoid_clashes);
+    set(&mut p.use_section_motif, patch.use_section_motif);
+
+    // Lyric generator.
+    if let Some(theme) = &patch.theme {
+        // The GUI truncates at this limit; over the wire a silent cut
+        // would store something the caller never wrote, so refuse.
+        let len = theme.chars().count();
+        if len > VocalParams::THEME_MAX_CHARS {
+            return Err(RpcError::invalid_params(format!(
+                "theme: {len} characters is over the {}-character limit",
+                VocalParams::THEME_MAX_CHARS
+            )));
+        }
+        p.theme = theme.clone();
+    }
+    if let Some(v) = patch.mood {
+        p.mood = vm::mood_from_wire(v);
+    }
+    if let Some(v) = patch.pov {
+        p.pov = vm::pov_from_wire(v);
+    }
+    if let Some(v) = patch.rhyme {
+        p.rhyme = vm::rhyme_from_wire(v);
+    }
+    set(&mut p.lines, patch.lines);
+    set(&mut p.syllables_min, patch.syllables_min);
+    set(&mut p.syllables_max, patch.syllables_max);
+    set(&mut p.match_syllables_to_melody, patch.match_syllables_to_melody);
+    set(&mut p.avoid_cliches, patch.avoid_cliches);
+
+    // Bank, then speaker — last, so a reset to the bank's default
+    // speaker sees the patched voice type.
+    if let Some(id) = &patch.voicebank {
+        let vb = vm::parse_voicebank_id(id).ok_or_else(|| unknown_voicebank(id))?;
+        // A `speaker` in the same patch overwrites the reset just below.
+        p.switch_voicebank(vb);
+    }
+    if let Some(name) = &patch.speaker {
+        let wanted = name.trim().to_ascii_lowercase();
+        let vb = p.voicebank;
+        let unknown = || {
+            let bank = vm::voicebank_id(vb);
+            let known = vm::speaker_ids(vb);
+            if known.is_empty() {
+                RpcError::invalid_params(format!(
+                    "speaker: voicebank {bank:?} has a single voice; omit speaker"
+                ))
+            } else {
+                RpcError::invalid_params(format!(
+                    "speaker: unknown speaker {name:?} for voicebank {bank:?} (one of: {})",
+                    known.join(", ")
+                ))
+            }
+        };
+        match vb {
+            VocalVoicebank::Tiger => {
+                p.singer = VocalSinger::ALL
+                    .iter()
+                    .copied()
+                    .find(|s| s.as_str().to_ascii_lowercase() == wanted)
+                    .ok_or_else(unknown)?;
+            }
+            VocalVoicebank::Meiji => {
+                p.singer_meiji = VocalSingerMeiji::ALL
+                    .iter()
+                    .copied()
+                    .find(|s| s.as_str().to_ascii_lowercase() == wanted)
+                    .ok_or_else(unknown)?;
+            }
+            VocalVoicebank::Lilia => return Err(unknown()),
+        }
+    }
+
+    p.validate()
+        .map_err(|e| RpcError::invalid_params(format!("invalid vocal params: {e}")))
+}
+
+fn set<T>(field: &mut T, value: Option<T>) {
+    if let Some(v) = value {
+        *field = v;
+    }
+}
+
+fn unknown_voicebank(name: &str) -> RpcError {
+    RpcError::invalid_params(format!(
+        "unknown voicebank {name:?} (one of: {})",
+        view_model::voicebank_ids().join(", ")
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Pronunciation
 // ---------------------------------------------------------------------------
 
@@ -351,19 +584,9 @@ fn render(
     // it must not blanket-default, or every plain render would reset the
     // lane (ba doc #271).
     let requested = match &params.voicebank {
-        Some(name) => match parse_voicebank(name) {
+        Some(name) => match view_model::parse_voicebank_id(name) {
             Some(vb) => Some(vb),
-            None => {
-                let known: Vec<&str> =
-                    VocalVoicebank::ALL.iter().map(|vb| vb.as_str()).collect();
-                return reject(
-                    request,
-                    RpcError::invalid_params(format!(
-                        "unknown voicebank {name:?} (one of: {})",
-                        known.join(", ")
-                    )),
-                );
-            }
+            None => return reject(request, unknown_voicebank(name)),
         },
         None => None,
     };
@@ -416,21 +639,15 @@ fn render(
     let mut started: Vec<(u64, u64)> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for (definition_id, track_id) in renderable {
-        // Resolve an omitted voicebank against the lane rather than
-        // against a constant. Blanket-defaulting to Lilia meant every
-        // render that left the argument out silently reset the lane, so a
-        // song with a TIGER character and a Lilia character lost the
-        // split on the next plain render (ba doc #271). A lane still
-        // holding the untouched `VocalParams` code default has never
-        // chosen one, so it still picks up doc #265's Lilia; anything
-        // explicitly set wins. Per lane, because a fan-out crosses lanes
-        // that may have chosen differently.
-        let voicebank = requested.unwrap_or_else(|| {
-            match lane_voicebank(app, definition_id, track_id) {
-                Some(vb) if vb != default_lane_voicebank() => vb,
-                _ => VocalVoicebank::Lilia,
-            }
-        });
+        // An omitted voicebank renders with whatever the lane holds, per
+        // lane, because a fan-out crosses lanes that may have chosen
+        // differently. Blanket-defaulting reset every lane on a plain
+        // render (ba doc #271), and remapping "the code default" to Lilia
+        // overrode a lane that had explicitly chosen that default
+        // (BUG-52); Lilia is now the code default itself, so the lane's
+        // value is always the answer.
+        let voicebank =
+            requested.unwrap_or_else(|| lane_voicebank(app, definition_id, track_id));
 
         let task = super::run_via_update(
             app,
@@ -613,11 +830,11 @@ fn describe_batch(lanes: &[(u64, u64)]) -> String {
 // ---------------------------------------------------------------------------
 
 /// The voicebank currently stored on a vocal lane.
-fn lane_voicebank(
-    app: &Resonance,
-    definition_id: u64,
-    track_id: u64,
-) -> Option<VocalVoicebank> {
+///
+/// Only called for lanes [`resolve_render_lanes`] produced, which are
+/// vocal lanes by construction, and nothing between that lookup and this
+/// one edits the project — so a miss is a bug, not a request error.
+fn lane_voicebank(app: &Resonance, definition_id: u64, track_id: u64) -> VocalVoicebank {
     app.compose
         .find_definition(definition_id)
         .and_then(|d| d.lane_generators.get(&track_id))
@@ -625,13 +842,7 @@ fn lane_voicebank(
             crate::compose::LaneGeneratorKind::Vocal(p) => Some(p.voicebank),
             _ => None,
         })
-}
-
-/// The voicebank a freshly-installed vocal lane carries — i.e. "the user
-/// has not chosen one". Read from `VocalParams::default()` so this stays
-/// true if that default is ever changed.
-fn default_lane_voicebank() -> VocalVoicebank {
-    resonance_music_theory::VocalParams::default().voicebank
+        .expect("vocal.render: resolve_render_lanes yields vocal lanes only")
 }
 
 /// Does the lane have a MIDI clip holding at least one note?
@@ -709,14 +920,4 @@ fn resolve_vocal_lane(
     })
 }
 
-/// Parse a wire voicebank name against [`VocalVoicebank`] (case-
-/// insensitive; matches the strum `as_str` names `TIGER` / `Lilia` /
-/// `Meiji`).
-fn parse_voicebank(name: &str) -> Option<VocalVoicebank> {
-    let wanted = name.trim().to_ascii_lowercase();
-    VocalVoicebank::ALL
-        .iter()
-        .copied()
-        .find(|vb| vb.as_str().to_ascii_lowercase() == wanted)
-}
 

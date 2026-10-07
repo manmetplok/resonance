@@ -75,12 +75,14 @@ pub(super) fn build_segment_windowed(
     let f0_curve = build_f0_curve(&track, params, &curves.pitch_bend, window);
     let n_frames = f0_curve.samples.len();
 
-    // Dynamics → energy. Universally supported; emitted only when the
-    // user has shaped an overlay, otherwise left default (today's audio).
+    // Dynamics → energy. Only a bank whose acoustic model takes `energy`
+    // (`curve_supported`; no shipped bank does) gets it, and only when the
+    // user has shaped an overlay — otherwise a clean no-op.
     let energy =
         overlay::overlay_envelope(&curves.dynamics, params.voicebank, n_frames, window)
             .unwrap_or_default();
-    // Breathiness → breathiness (TIGER-unsupported, then a clean no-op).
+    // Breathiness → breathiness. Same gate: no shipped bank takes it, so
+    // today this is a no-op on every bank, not just TIGER.
     let breathiness =
         overlay::overlay_envelope(&curves.breathiness, params.voicebank, n_frames, window)
             .unwrap_or_default();

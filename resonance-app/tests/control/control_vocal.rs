@@ -344,15 +344,14 @@ fn generate_lane(app: &mut Resonance, track: ProtoTrackId) {
 }
 
 #[test]
-fn render_returns_a_job_and_sets_the_default_voicebank() {
+fn render_returns_a_job_and_keeps_the_default_voicebank() {
     let mut app = app_with_project();
     let (def, track) = vocal_section(&mut app, 33);
     generate_lane(&mut app, track);
-    // The lane starts on the code default (TIGER); render with no
-    // voicebank must switch it to the app default (Lilia, doc #265).
+    // A new lane starts on the code default, Lilia (spec D9).
     assert_eq!(
         app.test_vocal_voicebank(def, 33),
-        Some(resonance_music_theory::VocalVoicebank::Tiger)
+        Some(resonance_music_theory::VocalVoicebank::Lilia)
     );
 
     let response = call(
@@ -366,7 +365,7 @@ fn render_returns_a_job_and_sets_the_default_voicebank() {
     );
     let started: JobStarted = response.result().expect("render returns a job");
 
-    // The lane's voicebank is now Lilia.
+    // The lane's voicebank is still Lilia.
     assert_eq!(
         app.test_vocal_voicebank(def, 33),
         Some(resonance_music_theory::VocalVoicebank::Lilia)

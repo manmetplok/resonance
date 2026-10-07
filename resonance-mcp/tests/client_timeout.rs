@@ -82,6 +82,7 @@ fn answer_hello_then_hang(stream: &UnixStream) {
         app_version: "silent-app".to_owned(),
         protocol_version: PROTOCOL_VERSION,
         capabilities: Vec::new(),
+        svs_backend: None,
     };
     let Ok(mut writer) = stream.try_clone() else { return };
     let response = Response::success(request.id.clone(), &result).expect("hello serializes");

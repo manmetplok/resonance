@@ -4,11 +4,16 @@
 //! and quirks (Meiji prefixes English phonemes with `en/`; Lilia lacks
 //! a voiced `v`; etc.). All of that lives here so the rendering code
 //! in `segment.rs` and the post-processor in `post.rs` can stay
-//! voicebank-agnostic.
+//! voicebank-agnostic. It also answers what the installed SVS stack can
+//! do: which expression curves a bank's acoustic model takes
+//! ([`curve_supported`]) and which ONNX backend renders ([`svs_backend`]).
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use resonance_music_theory::{VocalParams, VocalVoicebank};
+pub use resonance_svs::voicebank::CurveSupport;
+use resonance_svs::voicebank::layout::read_curve_support;
 
 /// Meiji's per-token language id for English-prefixed phonemes. Lifted
 /// from `voicebanks/meiji/files/languages.json` (`"en": 3`). Silence
@@ -164,13 +169,14 @@ pub(super) fn voicebank_language_id(voicebank: VocalVoicebank, ph: &str) -> Opti
 /// acoustic model accepts every curve — see [`curve_supported`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CurveKind {
-    /// Dynamics / energy (loudness envelope). Universally supported.
+    /// Dynamics / energy (loudness envelope). Needs the acoustic model's
+    /// `energy` input, which no shipped bank has.
     Dynamics,
     /// Vocal tension (relaxed/breathy ↔ compressed/belted). Accepted by
     /// Lilia and Meiji; TIGER's acoustic model has no `tension` input.
     Tension,
-    /// Breathiness (added breath/air in the delivery). Accepted by
-    /// Lilia and Meiji; TIGER has no `breathiness` input.
+    /// Breathiness (added breath/air in the delivery). Needs the
+    /// `breathiness` input, which no shipped bank has.
     Breathiness,
     /// Pitch bend — f0 offset / portamento in cents. Always applied as a
     /// pre-synthesis f0 modification, so every voicebank supports it.
@@ -200,27 +206,78 @@ impl CurveKind {
     }
 }
 
-/// Whether `voicebank`'s pipeline accepts the given expression `curve`.
+/// Whether `voicebank`'s acoustic model accepts the given expression `curve`.
 ///
 /// Single source of truth consumed by both the vocal-roll Expression
 /// dock (an unsupported curve shows an `n/a` badge) and the SVS segment
 /// builder (an unsupported curve is a cheap no-op rather than an error).
 ///
-/// Matrix (doc #154):
-/// - **Dynamics** and **PitchBend** — supported on every voicebank.
-///   Pitch bend is a pre-synthesis f0 edit; dynamics maps to the
-///   universally-present energy curve.
-/// - **Tension** and **Breathiness** — TIGER's acoustic model exposes
-///   neither input, so they're unsupported there; Lilia and Meiji
-///   accept both.
-///
-/// Cheaper than introspecting the ONNX inputs at every render.
+/// Answered from the bank's acoustic `dsconfig.yaml`: `use_energy_embed`
+/// gates Dynamics, `use_breathiness_embed` Breathiness and
+/// `use_tension_embed` Tension. PitchBend is a pre-synthesis f0 edit and
+/// always supported. The flags are read once per bank per process
+/// ([`bank_curve_support`]); a bank that is not installed, or whose config
+/// does not parse, answers from [`shipped_curve_support`].
 pub fn curve_supported(voicebank: VocalVoicebank, curve: CurveKind) -> bool {
+    let support = bank_curve_support(voicebank);
     match curve {
-        CurveKind::Dynamics | CurveKind::PitchBend => true,
-        CurveKind::Tension | CurveKind::Breathiness => match voicebank {
-            VocalVoicebank::Tiger => false,
-            VocalVoicebank::Lilia | VocalVoicebank::Meiji => true,
+        CurveKind::PitchBend => true,
+        CurveKind::Dynamics => support.energy,
+        CurveKind::Tension => support.tension,
+        CurveKind::Breathiness => support.breathiness,
+    }
+}
+
+/// The conservative fallback when a bank's acoustic config can't be read:
+/// exactly what the shipped configs declare (checked 2026-10-07 against
+/// `resonance-svs/models/`). No shipped bank takes energy or breathiness;
+/// Lilia (MM 2.8) and Meiji take tension, TIGER (v106) does not.
+pub fn shipped_curve_support(voicebank: VocalVoicebank) -> CurveSupport {
+    match voicebank {
+        VocalVoicebank::Tiger => CurveSupport::default(),
+        VocalVoicebank::Lilia | VocalVoicebank::Meiji => CurveSupport {
+            tension: true,
+            ..CurveSupport::default()
         },
+    }
+}
+
+/// The curve flags of `voicebank`'s installed acoustic config, parsed on
+/// first use and cached for the life of the process: the curve gate runs
+/// per segment and per dock redraw, so it must not re-read YAML. A bank
+/// installed or replaced after the first query keeps the cached answer
+/// until restart; the fallback equals the shipped configs, so that only
+/// matters for a hand-edited bank.
+pub fn bank_curve_support(voicebank: VocalVoicebank) -> CurveSupport {
+    static CACHE: [OnceLock<CurveSupport>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
+    let slot = match voicebank {
+        VocalVoicebank::Tiger => &CACHE[0],
+        VocalVoicebank::Lilia => &CACHE[1],
+        VocalVoicebank::Meiji => &CACHE[2],
+    };
+    *slot.get_or_init(|| read_bank_curve_support(voicebank))
+}
+
+/// The ONNX Runtime backend (`cpu`, `cuda`, `migraphx`) the most recent
+/// vocal render's acoustic model really ran on, after any CPU fallback;
+/// `None` until a render has created a session in this process. Reported
+/// as `svs_backend` by `control.hello`.
+pub fn svs_backend() -> Option<&'static str> {
+    resonance_svs::active_backend().map(resonance_svs::ExecutionProvider::as_str)
+}
+
+fn read_bank_curve_support(voicebank: VocalVoicebank) -> CurveSupport {
+    let Some(paths) = locate_voicebank(voicebank, &VocalParams::default()) else {
+        return shipped_curve_support(voicebank);
+    };
+    match read_curve_support(&paths.acoustic_config) {
+        Ok(support) => support,
+        Err(e) => {
+            tracing::warn!(
+                "reading curve support for {voicebank:?} from {}: {e:#}; using the shipped table",
+                paths.acoustic_config.display()
+            );
+            shipped_curve_support(voicebank)
+        }
     }
 }
