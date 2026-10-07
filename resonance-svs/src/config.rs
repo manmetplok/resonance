@@ -11,6 +11,8 @@ pub struct DsAcousticConfigRaw {
     pub phonemes: Option<String>,
     pub acoustic: Option<String>,
     pub vocoder: Option<String>,
+    /// Path of the bank's `languages.json` (multi-language banks).
+    pub languages: Option<String>,
 
     pub speakers: Vec<String>,
 
@@ -100,6 +102,9 @@ pub struct AcousticConfig {
     /// (multi-language banks like Gahata Meiji). Drives
     /// [`crate::voicebank::VoicebankManifest::language_id`].
     pub use_lang_id: bool,
+    /// The bank's `languages` map (`languages.json`: name -> id), resolved
+    /// against the config's directory; `None` when the config names none.
+    pub languages_path: Option<PathBuf>,
 
     pub predict_dur: bool,
     pub predict_pitch: bool,
@@ -160,6 +165,7 @@ pub fn load_acoustic(path: &Path) -> Result<AcousticConfig> {
         use_tension_embed: raw.use_tension_embed.unwrap_or(false),
         use_shallow_diffusion: raw.use_shallow_diffusion.unwrap_or(false),
         use_lang_id: raw.use_lang_id.unwrap_or(false),
+        languages_path: raw.languages.map(|p| dir.join(p)),
         predict_dur: raw.predict_dur.unwrap_or(false),
         predict_pitch: raw.predict_pitch.unwrap_or(false),
         predict_energy: raw.predict_energy.unwrap_or(false),

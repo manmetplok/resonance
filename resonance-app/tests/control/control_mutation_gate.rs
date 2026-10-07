@@ -94,7 +94,9 @@ fn mutating_methods() -> Vec<&'static str> {
     // query served by the `song::try_handle` block above the gate.
     // Everything else in `track::*` is a mutation. (`plugins.catalog`
     // moved out of this namespace entirely in todo #1236.)
-    methods.retain(|m| *m != methods::track::PLUGIN_PARAMS);
+    // `vocal.voicebanks` lists the machine's installed voicebanks, not
+    // project state (vocal spec §4.5); the rest of `vocal.*` is gated.
+    methods.retain(|m| *m != methods::track::PLUGIN_PARAMS && *m != methods::vocal::VOICEBANKS);
     methods
 }
 
@@ -106,7 +108,11 @@ fn allowlisted_methods() -> Vec<&'static str> {
     // installed-plugin catalog — is read-only AND project-independent:
     // it reads the startup scanner's results, so gating it made a pure
     // catalog query answer `busy` with nothing open (todo #1236).
-    let mut methods = vec!["control.hello", methods::track::PLUGIN_PARAMS];
+    let mut methods = vec![
+        "control.hello",
+        methods::track::PLUGIN_PARAMS,
+        methods::vocal::VOICEBANKS,
+    ];
     for namespace in [
         methods::song::METHODS,
         methods::project::METHODS,

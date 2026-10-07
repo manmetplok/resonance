@@ -1,32 +1,40 @@
 //! Voicebank × expression-curve support matrix (doc #154, todo #333;
-//! `vocal-mcp-control-and-quality.md` slice 2).
+//! `vocal-mcp-control-and-quality.md` slices 2 and 4).
 //!
-//! `curve_supported` is the single source of truth that both the
-//! vocal-roll Expression dock (the `n/a` rail badge) and the SVS segment
-//! builder (cheap no-op for unsupported curves) consume. It answers from
-//! each bank's acoustic `dsconfig.yaml` (`use_*_embed`), falling back to a
-//! table equal to the shipped configs when the bank is not installed. The
-//! two agree, so these tests pin the same matrix with or without models
-//! on disk:
+//! [`BankProfile::curve_supported`] is the single source of truth that
+//! both the vocal-roll Expression dock (the `n/a` rail badge) and the SVS
+//! segment builder (cheap no-op for unsupported curves) consume. An
+//! installed bank answers from its acoustic `dsconfig.yaml`
+//! (`use_*_embed`); a known bank that is not installed answers from the
+//! built-in record of the shipped configs. The two agree, so these tests
+//! pin the same matrix with or without models on disk:
 //!
 //! - **PitchBend** is supported everywhere (a pre-synthesis f0 edit).
 //! - **Dynamics** (energy) and **Breathiness** are supported nowhere: no
 //!   shipped acoustic model has those inputs.
 //! - **Tension** is accepted by Lilia and Meiji, not by TIGER.
+//!
+//! With `RESONANCE_SVS_MODELS_DIR` pointing at the real models, the last
+//! two tests also check that the three shipped layouts register under
+//! their fixed ids with the right speakers and curve flags.
 
 use resonance_app::compose::vocal_svs::{
-    bank_curve_support, curve_supported, shipped_curve_support, CurveKind,
+    BankProfile, CurveKind, VoicebankRegistry, VoicebankRoots,
 };
-use resonance_music_theory::VocalVoicebank;
+use resonance_music_theory::VoicebankId;
+
+const SHIPPED: [&str; 3] = ["tiger", "lilia", "meiji"];
 
 #[test]
 fn pitch_bend_supported_everywhere() {
-    for vb in VocalVoicebank::ALL.iter().copied() {
+    for vb in SHIPPED {
         assert!(
-            curve_supported(vb, CurveKind::PitchBend),
-            "PitchBend must be supported on {vb:?}"
+            BankProfile::not_installed(vb).curve_supported(CurveKind::PitchBend),
+            "PitchBend must be supported on {vb}"
         );
     }
+    // Even on a bank nothing is known about.
+    assert!(BankProfile::not_installed("nobody").curve_supported(CurveKind::PitchBend));
 }
 
 /// No shipped acoustic model takes `energy` or `breathiness`, so neither
@@ -34,15 +42,10 @@ fn pitch_bend_supported_everywhere() {
 /// found.
 #[test]
 fn dynamics_and_breathiness_supported_nowhere() {
-    for vb in VocalVoicebank::ALL.iter().copied() {
-        assert!(
-            !curve_supported(vb, CurveKind::Dynamics),
-            "Dynamics must not be supported on {vb:?}"
-        );
-        assert!(
-            !curve_supported(vb, CurveKind::Breathiness),
-            "Breathiness must not be supported on {vb:?}"
-        );
+    for vb in SHIPPED {
+        let bank = BankProfile::not_installed(vb);
+        assert!(!bank.curve_supported(CurveKind::Dynamics), "{vb}");
+        assert!(!bank.curve_supported(CurveKind::Breathiness), "{vb}");
     }
 }
 
@@ -50,18 +53,97 @@ fn dynamics_and_breathiness_supported_nowhere() {
 /// `tension` input; Lilia and Meiji do.
 #[test]
 fn tension_matrix_per_voicebank() {
-    assert!(!curve_supported(VocalVoicebank::Tiger, CurveKind::Tension));
-    assert!(curve_supported(VocalVoicebank::Lilia, CurveKind::Tension));
-    assert!(curve_supported(VocalVoicebank::Meiji, CurveKind::Tension));
+    assert!(!BankProfile::not_installed("tiger").curve_supported(CurveKind::Tension));
+    assert!(BankProfile::not_installed("lilia").curve_supported(CurveKind::Tension));
+    assert!(BankProfile::not_installed("meiji").curve_supported(CurveKind::Tension));
 }
 
-/// The fallback table is the shipped configs, so an installed bank and a
-/// missing one answer the same. (With models installed this compares the
-/// parsed YAML against the table; without, it is trivially the table.)
+/// The models root a developer opted into, if any.
+fn real_models() -> Option<VoicebankRegistry> {
+    let dir = std::env::var_os("RESONANCE_SVS_MODELS_DIR").filter(|v| !v.is_empty())?;
+    Some(VoicebankRegistry::scan(VoicebankRoots {
+        dev_models: vec![dir.into()],
+        ..VoicebankRoots::default()
+    }))
+}
+
+/// The built-in record is the shipped configs, so an installed bank and a
+/// missing one answer the same.
 #[test]
-fn installed_flags_match_the_shipped_fallback() {
-    for vb in VocalVoicebank::ALL.iter().copied() {
-        assert_eq!(bank_curve_support(vb), shipped_curve_support(vb), "{vb:?}");
+fn installed_flags_match_the_shipped_record() {
+    let Some(registry) = real_models() else {
+        eprintln!("RESONANCE_SVS_MODELS_DIR unset; nothing installed to compare");
+        return;
+    };
+    for vb in SHIPPED {
+        let Some(bank) = registry.get(vb) else {
+            continue;
+        };
+        let installed = registry.profile(&VoicebankId::new(vb));
+        assert_eq!(
+            installed.curve_support(),
+            BankProfile::not_installed(vb).curve_support(),
+            "{vb}"
+        );
+        assert_eq!(
+            installed.missing_phonemes(),
+            BankProfile::not_installed(vb).missing_phonemes(),
+            "{vb}: the scanned inventory's gaps match the built-in record"
+        );
+        assert!(installed.english(), "{vb} sings English");
+        assert!(bank.vocoder_config.is_some(), "{vb} has its vocoder");
+    }
+}
+
+/// The real shipped banks register under their fixed ids, with TIGER
+/// offering only its own seven modes and Meiji its four.
+#[test]
+fn real_banks_register_with_their_ids_and_speakers() {
+    let Some(registry) = real_models() else {
+        eprintln!("RESONANCE_SVS_MODELS_DIR unset; skipping");
+        return;
+    };
+    let ids: Vec<String> = registry.installed().map(|b| b.id.clone()).collect();
+    eprintln!("installed: {ids:?}");
+    let speakers = |id: &str| -> Vec<String> {
+        registry
+            .profile(&VoicebankId::new(id))
+            .speakers()
+            .into_iter()
+            .map(|s| s.id)
+            .collect()
+    };
+    if registry.get("tiger").is_some() {
+        assert_eq!(
+            speakers("tiger"),
+            ["glam", "fresh", "disco", "royal", "electric", "mystic", "vinyl"]
+        );
+        let tiger = registry.profile(&VoicebankId::new("tiger"));
+        let target = tiger
+            .render_target(Some("vinyl"), resonance_music_theory::VoiceType::Alto, None)
+            .expect("TIGER renders");
+        assert!(target.speaker.unwrap().ends_with("tiger_vinyl"));
+    }
+    if registry.get("lilia").is_some() {
+        assert!(speakers("lilia").is_empty(), "Lilia is single-voice");
+        let lilia = registry.profile(&VoicebankId::new("lilia"));
+        assert!(lilia.dictionary().is_some(), "Lilia ships dsdict-en.yaml");
+        assert_eq!(
+            lilia.language_id("ah"),
+            None,
+            "Lilia takes no language input"
+        );
+    }
+    if registry.get("meiji").is_some() {
+        assert_eq!(
+            speakers("meiji"),
+            ["standard", "hunter", "lilith", "phantom"]
+        );
+        let meiji = registry.profile(&VoicebankId::new("meiji"));
+        assert_eq!(meiji.phoneme_name("ah"), "en/ah");
+        assert_eq!(meiji.phoneme_name("hh"), "hh", "Meiji's universal bucket");
+        assert_eq!(meiji.language_id("ah"), Some(3), "Meiji's id for en");
+        assert_eq!(meiji.language_id("AP"), Some(0));
     }
 }
 

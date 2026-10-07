@@ -1,13 +1,19 @@
-//! Voice & delivery group — timbre / voicebank / singer / vibrato /
+//! Voice & delivery group — timbre / voicebank / speaker / vibrato /
 //! tension / portamento / articulation / consonant emphasis.
+//!
+//! The Voicebank and Speaker pickers are driven by the voicebank registry
+//! (vocal-mcp-control-and-quality.md §4): the options are the installed
+//! English banks, cached in `UiViewCaches::voicebank_choices`, and the
+//! speakers are the chosen bank's own. A lane whose bank is not installed
+//! shows it as `<id> (not installed)`.
 
-use iced::widget::{column, row, slider, text, Space};
+use std::rc::Rc;
+
+use iced::widget::{column, pick_list, row, slider, text, Space};
 use iced::{Element, Length};
 
 use resonance_audio::types::TrackId;
-use resonance_music_theory::{
-    VocalParams, VocalSinger, VocalSingerMeiji, VocalTimbre, VocalVoicebank,
-};
+use resonance_music_theory::{VocalParams, VocalTimbre};
 
 use crate::compose::messages::LaneInspectorMsg;
 use crate::compose::ComposeMessage;
@@ -15,11 +21,14 @@ use crate::message::*;
 use crate::theme;
 
 use super::common::{chip, dim_label, group_card, group_title};
+use crate::state::picks::{SpeakerChoice, VoicebankChoice};
+use crate::state::ui_caches::ChoiceList;
 
 pub(super) fn voice_group<'a>(
     definition_id: u64,
     track_id: TrackId,
     params: &VocalParams,
+    voicebanks: &Rc<[VoicebankChoice]>,
     collapsed: bool,
 ) -> Element<'a, Message> {
     let key = crate::compose::RailPanelKey::VocalVoice(track_id);
@@ -41,79 +50,8 @@ pub(super) fn voice_group<'a>(
         ));
     }
 
-    // Voicebank chips — picks the trained DiffSinger model that
-    // produces the singing audio. Each voicebank has its own character;
-    // singer chips below are scoped to the chosen voicebank.
-    let voicebank_chips: Vec<Element<'_, Message>> = VocalVoicebank::ALL
-        .iter()
-        .copied()
-        .map(|v| {
-            chip(
-                v.as_str(),
-                params.voicebank == v,
-                Message::Compose(ComposeMessage::LaneInspector {
-                    definition_id,
-                    track_id,
-                    msg: LaneInspectorMsg::SetVocalVoicebank(v),
-                }),
-            )
-        })
-        .collect();
-    let voicebank_row =
-        iced::widget::Row::with_children(voicebank_chips).spacing(4).wrap();
-
-    // Singer chips — only meaningful for multi-speaker voicebanks.
-    // TIGER ships 7 `tiger_*` speakers; Lilia is single-speaker so the
-    // chip row is hidden when Lilia is selected.
-    let singer_block: Option<Element<'_, Message>> = match params.voicebank {
-        VocalVoicebank::Tiger => {
-            let chips: Vec<Element<'_, Message>> = VocalSinger::ALL
-                .iter()
-                .copied()
-                .map(|s| {
-                    chip(
-                        s.as_str(),
-                        params.singer == s,
-                        Message::Compose(ComposeMessage::LaneInspector {
-                            definition_id,
-                            track_id,
-                            msg: LaneInspectorMsg::SetVocalSinger(s),
-                        }),
-                    )
-                })
-                .collect();
-            let row = iced::widget::Row::with_children(chips).spacing(4).wrap();
-            Some(
-                column![dim_label("Singer"), Space::new().height(2), row]
-                    .spacing(0)
-                    .into(),
-            )
-        }
-        VocalVoicebank::Lilia => None,
-        VocalVoicebank::Meiji => {
-            let chips: Vec<Element<'_, Message>> = VocalSingerMeiji::ALL
-                .iter()
-                .copied()
-                .map(|s| {
-                    chip(
-                        s.as_str(),
-                        params.singer_meiji == s,
-                        Message::Compose(ComposeMessage::LaneInspector {
-                            definition_id,
-                            track_id,
-                            msg: LaneInspectorMsg::SetVocalSingerMeiji(s),
-                        }),
-                    )
-                })
-                .collect();
-            let row = iced::widget::Row::with_children(chips).spacing(4).wrap();
-            Some(
-                column![dim_label("Mode"), Space::new().height(2), row]
-                    .spacing(0)
-                    .into(),
-            )
-        }
-    };
+    let (voicebank_picker, speaker_block) =
+        voicebank_pickers(definition_id, track_id, params, voicebanks);
 
     let vibrato_label = dim_label(format!("Vibrato · {:.2}", params.vibrato));
     let vibrato_slider = slider(0.0..=1.0, params.vibrato, move |v| {
@@ -267,11 +205,11 @@ pub(super) fn voice_group<'a>(
         Space::new().height(8),
         dim_label("Voicebank"),
         Space::new().height(2),
-        voicebank_row,
+        voicebank_picker,
     ]
     .spacing(0);
-    if let Some(singer) = singer_block {
-        body = body.push(Space::new().height(8)).push(singer);
+    if let Some(speaker) = speaker_block {
+        body = body.push(Space::new().height(8)).push(speaker);
     }
     let body = body
         .push(Space::new().height(8))
@@ -310,4 +248,64 @@ pub(super) fn voice_group<'a>(
         .push(consonant_slider);
 
     group_card(body.into())
+}
+
+/// The Voicebank picker (installed English banks; a lane on a bank that
+/// is not installed shows it as `<id> (not installed)`) and, for a bank
+/// with more than one speaker, the Speaker picker.
+fn voicebank_pickers<'a>(
+    definition_id: u64,
+    track_id: TrackId,
+    params: &VocalParams,
+    voicebanks: &Rc<[VoicebankChoice]>,
+) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
+    let selected = voicebanks
+        .iter()
+        .find(|c| c.id == params.voicebank)
+        .cloned()
+        .unwrap_or_else(|| VoicebankChoice::not_installed(&params.voicebank));
+    let speakers = selected.speakers.clone();
+    let bank_picker = pick_list(
+        ChoiceList::Cached(voicebanks.clone()),
+        Some(selected),
+        move |choice: VoicebankChoice| {
+            Message::Compose(ComposeMessage::LaneInspector {
+                definition_id,
+                track_id,
+                msg: LaneInspectorMsg::SetVocalVoicebank(choice.id),
+            })
+        },
+    )
+    .placeholder("No voicebank installed")
+    .text_size(12)
+    .padding([4, 6])
+    .width(Length::Fill);
+
+    if speakers.len() <= 1 {
+        return (bank_picker.into(), None);
+    }
+    let current = params
+        .speaker
+        .as_deref()
+        .and_then(|id| speakers.iter().find(|s| s.id == id))
+        .cloned();
+    let speaker_picker = pick_list(
+        ChoiceList::Cached(speakers),
+        current,
+        move |choice: SpeakerChoice| {
+            Message::Compose(ComposeMessage::LaneInspector {
+                definition_id,
+                track_id,
+                msg: LaneInspectorMsg::SetVocalSpeaker(choice.id),
+            })
+        },
+    )
+    .placeholder("Default")
+    .text_size(12)
+    .padding([4, 6])
+    .width(Length::Fill);
+    let block = column![dim_label("Speaker"), Space::new().height(2), speaker_picker]
+        .spacing(0)
+        .into();
+    (bank_picker.into(), Some(block))
 }

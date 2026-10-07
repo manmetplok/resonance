@@ -17,6 +17,7 @@
 //! | [`clip`] | a track's audio + MIDI clips, clip counts |
 //! | [`lane`] | vocal lanes: clip, note count, articulation, render state |
 //! | [`vocal_params`] | vocal lane settings <-> the snake_case wire enums |
+//! | [`voicebanks`] | the voicebank registry (`vocal.voicebanks`) |
 //!
 //! The unit conversions the wire protocol fixes sit here at the root
 //! (0.0..=1.0 velocity -> MIDI 0..=127, the app's `Scale` -> `KeyScale`),
@@ -40,6 +41,7 @@ mod position;
 mod section;
 mod track;
 mod vocal_params;
+mod voicebanks;
 
 // Flat re-exports so a caller writes `view_model::song_position(..)` and
 // never has to know which entity file it lives in. Only the projections
@@ -51,6 +53,7 @@ pub(in crate::update::control) use lane::{
 };
 pub(in crate::update::control) use position::{song_end_sample, song_position, transport_state};
 pub(in crate::update::control) use vocal_params::*;
+pub(in crate::update::control) use voicebanks::voicebank_list;
 pub(in crate::update::control) use section::{definitions_in_placement_order, placement_views};
 pub(in crate::update::control) use track::{
     bus_plugin_entries, master_plugin_entries, param_view, plugin_entries, track_detail,

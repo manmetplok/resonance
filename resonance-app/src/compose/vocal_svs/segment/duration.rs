@@ -9,7 +9,7 @@ use resonance_audio::types::MidiNote;
 use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::{g2p, VocalParams};
 
-use super::super::paths::{voicebank_language_id, voicebank_phoneme_name};
+use super::super::registry::BankProfile;
 use super::super::phonemes::{floor_duration_sec, min_articulation_sec, target_duration_sec};
 use super::super::SEGMENT_PAD_SEC;
 
@@ -48,6 +48,7 @@ pub(super) fn build_phoneme_track(
     assigned: &[AssignedSyllable],
     ticks_per_quarter: u32,
     bpm: f32,
+    bank: &BankProfile,
 ) -> PhonemeTrack {
     // Seconds per tick at the section's tempo. Vocal-lane MIDI clips use
     // `TICKS_PER_QUARTER_NOTE` as their tick rate, same as everywhere else
@@ -116,7 +117,7 @@ pub(super) fn build_phoneme_track(
     // Leading silence pad. The hand-crafted reference fixtures all
     // start with a 0.3 s `AP` so the model has time to ramp up cleanly;
     // skipping this produces an attack click on the first phoneme.
-    push_rest_entry(&mut track, params, "AP", SEGMENT_PAD_SEC);
+    push_rest_entry(&mut track, bank, "AP", SEGMENT_PAD_SEC);
 
     let note_name_cache: Vec<String> = notes
         .iter()
@@ -240,12 +241,12 @@ pub(super) fn build_phoneme_track(
             let own_dur = durations.get(ph_idx).copied().unwrap_or(0.0);
             if stop_closure_sec > 0.0 && is_stop && ph_idx > 0 {
                 let cl_dur = stop_closure_sec.min(own_dur * 0.4);
-                track.ph_seq.push(voicebank_phoneme_name(params.voicebank, "cl"));
+                track.ph_seq.push(bank.phoneme_name("cl"));
                 track.ph_dur.push(cl_dur);
                 track.note_seq.push(note_name.clone());
                 track.note_dur.push(cl_dur);
                 track.note_seq_midi.push(n.note as i32);
-                if let Some(id) = voicebank_language_id(params.voicebank, "cl") {
+                if let Some(id) = bank.language_id("cl") {
                     track.languages.push(id);
                 }
             }
@@ -255,12 +256,12 @@ pub(super) fn build_phoneme_track(
             if stop_closure_sec > 0.0 && is_stop && ph_idx > 0 {
                 d = (d - stop_closure_sec.min(own_dur * 0.4)).max(0.005);
             }
-            track.ph_seq.push(voicebank_phoneme_name(params.voicebank, ph));
+            track.ph_seq.push(bank.phoneme_name(ph));
             track.ph_dur.push(d);
             track.note_seq.push(note_name.clone());
             track.note_dur.push(d);
             track.note_seq_midi.push(n.note as i32);
-            if let Some(id) = voicebank_language_id(params.voicebank, ph) {
+            if let Some(id) = bank.language_id(ph) {
                 track.languages.push(id);
             }
             track.entry_note_velocity.push(stressed_velocity);
@@ -271,12 +272,12 @@ pub(super) fn build_phoneme_track(
         if sp_sec > 0.0 {
             // Insert SP within the same note's slot — the syllable's
             // pitch carries through the brief silence.
-            track.ph_seq.push(voicebank_phoneme_name(params.voicebank, "SP"));
+            track.ph_seq.push(bank.phoneme_name("SP"));
             track.ph_dur.push(sp_sec);
             track.note_seq.push(note_name.clone());
             track.note_dur.push(sp_sec);
             track.note_seq_midi.push(n.note as i32);
-            if let Some(id) = voicebank_language_id(params.voicebank, "SP") {
+            if let Some(id) = bank.language_id("SP") {
                 track.languages.push(id);
             }
             track.entry_note_velocity.push(stressed_velocity);
@@ -287,12 +288,12 @@ pub(super) fn build_phoneme_track(
         }
 
         if ap_sec > 0.0 {
-            push_rest_entry(&mut track, params, "AP", ap_sec);
+            push_rest_entry(&mut track, bank, "AP", ap_sec);
         }
     }
 
     // Trailing silence pad, mirroring the leading AP.
-    push_rest_entry(&mut track, params, "AP", SEGMENT_PAD_SEC);
+    push_rest_entry(&mut track, bank, "AP", SEGMENT_PAD_SEC);
 
     track
 }
@@ -549,13 +550,13 @@ fn allocate_phoneme_durations(phonemes: &[&str], slot_sec: f64, emphasis: f32) -
 /// Append a rest entry (`AP`/`SP`) to every parallel array in `track`.
 /// The leading pad, trailing pad, and long-gap rest insertions all
 /// shared the same boilerplate before this helper.
-fn push_rest_entry(track: &mut PhonemeTrack, params: &VocalParams, kind: &str, dur: f64) {
-    track.ph_seq.push(voicebank_phoneme_name(params.voicebank, kind));
+fn push_rest_entry(track: &mut PhonemeTrack, bank: &BankProfile, kind: &str, dur: f64) {
+    track.ph_seq.push(bank.phoneme_name(kind));
     track.ph_dur.push(dur);
     track.note_seq.push("rest".to_string());
     track.note_dur.push(dur);
     track.note_seq_midi.push(0);
-    if let Some(id) = voicebank_language_id(params.voicebank, kind) {
+    if let Some(id) = bank.language_id(kind) {
         track.languages.push(id);
     }
     track.entry_note_velocity.push(0.0);

@@ -22,7 +22,8 @@ use resonance_app::compose::vocal_svs::{
 };
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::derive::LyricLine;
-use resonance_music_theory::{VocalParams, VocalVoicebank};
+use resonance_app::compose::vocal_svs::BankProfile;
+use resonance_music_theory::{VocalParams, VoicebankId};
 
 /// A one-line, one-syllable draft from `text`.
 fn line(text: &str) -> Vec<LyricLine> {
@@ -36,9 +37,9 @@ fn line(text: &str) -> Vec<LyricLine> {
 }
 
 /// Vocal params on `vb` with a single-line draft of `text`.
-fn params(vb: VocalVoicebank, text: &str) -> VocalParams {
+fn params(vb: &str, text: &str) -> VocalParams {
     VocalParams {
-        voicebank: vb,
+        voicebank: VoicebankId::new(vb),
         draft: line(text),
         ..VocalParams::default()
     }
@@ -57,7 +58,11 @@ fn one_note() -> Vec<MidiNote> {
 
 /// Build a segment from a pre-resolved/validated syllable stream and
 /// return its `ph_seq` (silence pads included).
-fn ph_seq(vb: VocalVoicebank, text: &str, assigned: &[resonance_music_theory::g2p::AssignedSyllable]) -> Vec<String> {
+fn ph_seq(
+    vb: &str,
+    text: &str,
+    assigned: &[resonance_music_theory::g2p::AssignedSyllable],
+) -> Vec<String> {
     build_segment(
         &one_note(),
         &params(vb, text),
@@ -65,6 +70,7 @@ fn ph_seq(vb: VocalVoicebank, text: &str, assigned: &[resonance_music_theory::g2
         &resonance_app::compose::ExpressionCurves::default(),
         TICKS_PER_QUARTER_NOTE as u32,
         120.0,
+        &BankProfile::not_installed(vb),
     )
     .ph_seq
 }
@@ -86,8 +92,11 @@ fn project_dictionary_entry_changes_ph_seq() {
     let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &dict, &[]);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Dict);
 
-    let validated = validate_for_voicebank(&assigned, VocalVoicebank::Tiger).unwrap();
-    let seq = ph_seq(VocalVoicebank::Tiger, "vee", &validated);
+    let validated = validate_for_voicebank(
+        &assigned,
+        &BankProfile::not_installed("tiger"),
+    ).unwrap();
+    let seq = ph_seq("tiger", "vee", &validated);
     assert!(contains(&seq, "v"), "dict phoneme `v` missing from {seq:?}");
     assert!(contains(&seq, "iy"), "dict phoneme `iy` missing from {seq:?}");
 }
@@ -104,8 +113,11 @@ fn override_changes_ph_seq() {
     let assigned = resolve_clip_pronunciation(&draft, &[], 1, &overrides, &[], &[]);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Edited);
 
-    let validated = validate_for_voicebank(&assigned, VocalVoicebank::Tiger).unwrap();
-    let seq = ph_seq(VocalVoicebank::Tiger, "go", &validated);
+    let validated = validate_for_voicebank(
+        &assigned,
+        &BankProfile::not_installed("tiger"),
+    ).unwrap();
+    let seq = ph_seq("tiger", "go", &validated);
     assert!(contains(&seq, "m"), "override phoneme `m` missing from {seq:?}");
     assert!(contains(&seq, "ow"), "override phoneme `ow` missing from {seq:?}");
 }
@@ -120,13 +132,16 @@ fn lilia_substitutes_v_to_f_in_ph_seq() {
     let dict = vec![DictionaryEntry::new("vee", &["v", "iy"], DictionaryScope::Project)];
     let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &dict, &[]);
 
-    let validated = validate_for_voicebank(&assigned, VocalVoicebank::Lilia).unwrap();
+    let validated = validate_for_voicebank(
+        &assigned,
+        &BankProfile::not_installed("lilia"),
+    ).unwrap();
     // The validation pass rewrites the phonemes to their effective form...
     assert_eq!(validated[0].phonemes, vec!["f", "iy"]);
     // ...and provenance is carried through unchanged.
     assert_eq!(validated[0].provenance, PhonemeProvenance::Dict);
 
-    let seq = ph_seq(VocalVoicebank::Lilia, "vee", &validated);
+    let seq = ph_seq("lilia", "vee", &validated);
     assert!(contains(&seq, "f"), "expected substituted `f` in {seq:?}");
     assert!(!contains(&seq, "v"), "unsupported `v` leaked into {seq:?}");
 }
@@ -137,9 +152,12 @@ fn tiger_keeps_v_unsubstituted() {
     let dict = vec![DictionaryEntry::new("vee", &["v", "iy"], DictionaryScope::Project)];
     let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &dict, &[]);
 
-    let validated = validate_for_voicebank(&assigned, VocalVoicebank::Tiger).unwrap();
+    let validated = validate_for_voicebank(
+        &assigned,
+        &BankProfile::not_installed("tiger"),
+    ).unwrap();
     assert_eq!(validated[0].phonemes, vec!["v", "iy"]);
-    let seq = ph_seq(VocalVoicebank::Tiger, "vee", &validated);
+    let seq = ph_seq("tiger", "vee", &validated);
     assert!(contains(&seq, "v"), "TIGER should sing `v` directly: {seq:?}");
 }
 
@@ -152,10 +170,17 @@ fn non_arpabet_phoneme_blocks_render() {
     // Inject a garbage symbol that bypassed canonicalisation. The
     // voicebank accessor's denylist would wave it through, so the ARPAbet
     // gate (#491) is the safety net that keeps it off the model.
-    let mut assigned = resolve_clip_pronunciation(&line("hello"), &[], 1, &HashMap::new(), &[], &[]);
+    let mut assigned = resolve_clip_pronunciation(
+        &line("hello"),
+        &[],
+        1,
+        &HashMap::new(),
+        &[],
+        &[],
+    );
     assigned[0].phonemes = vec!["zzz"];
 
-    let err = validate_for_voicebank(&assigned, VocalVoicebank::Tiger).unwrap_err();
+    let err = validate_for_voicebank(&assigned, &BankProfile::not_installed("tiger")).unwrap_err();
     assert_eq!(err.len(), 1);
     assert_eq!(err[0].reason, InvalidPhonemeReason::NotArpabet);
     assert_eq!(err[0].phoneme, "zzz");
@@ -172,7 +197,7 @@ fn all_invalid_phonemes_are_reported_with_note_indices() {
     assigned[0].phonemes = vec!["qq"];
     assigned[1].phonemes = vec!["xx"];
 
-    let err = validate_for_voicebank(&assigned, VocalVoicebank::Tiger).unwrap_err();
+    let err = validate_for_voicebank(&assigned, &BankProfile::not_installed("tiger")).unwrap_err();
     assert_eq!(err.len(), 2);
     assert_eq!(err[0].note_index, 0);
     assert_eq!(err[1].note_index, 1);
@@ -182,13 +207,9 @@ fn all_invalid_phonemes_are_reported_with_note_indices() {
 fn valid_resolution_is_not_blocked() {
     // The ordinary auto path clears both gates on every shipped bank.
     let assigned = resolve_clip_pronunciation(&line("hello"), &[], 1, &HashMap::new(), &[], &[]);
-    for vb in [
-        VocalVoicebank::Tiger,
-        VocalVoicebank::Lilia,
-        VocalVoicebank::Meiji,
-    ] {
+    for vb in ["tiger", "lilia", "meiji"] {
         assert!(
-            validate_for_voicebank(&assigned, vb).is_ok(),
+            validate_for_voicebank(&assigned, &BankProfile::not_installed(vb)).is_ok(),
             "{vb:?} should sing the auto transcription of `hello`"
         );
     }

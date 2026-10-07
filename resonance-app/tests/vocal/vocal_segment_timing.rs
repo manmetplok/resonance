@@ -11,7 +11,8 @@ use resonance_app::compose::vocal_svs::{
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::derive::LyricLine;
 use resonance_music_theory::g2p::AssignedSyllable;
-use resonance_music_theory::{VocalParams, VocalVoicebank};
+use resonance_app::compose::vocal_svs::BankProfile;
+use resonance_music_theory::{VocalParams, VoicebankId};
 
 const TPQ: u32 = TICKS_PER_QUARTER_NOTE as u32;
 /// Leading + trailing `AP` pads the builder wraps every segment in.
@@ -19,7 +20,7 @@ const PADS_SEC: f64 = 0.6;
 
 fn params() -> VocalParams {
     VocalParams {
-        voicebank: VocalVoicebank::Lilia,
+        voicebank: VoicebankId::new("lilia"),
         ..VocalParams::default()
     }
 }
@@ -34,7 +35,10 @@ fn assign(n: usize) -> Vec<AssignedSyllable> {
         locked: false,
     }];
     let resolved = resolve_clip_pronunciation(&draft, &[], n, &Default::default(), &[], &[]);
-    validate_for_voicebank(&resolved, VocalVoicebank::Lilia).expect("plain English resolves")
+    validate_for_voicebank(
+        &resolved,
+        &BankProfile::not_installed("lilia"),
+    ).expect("plain English resolves")
 }
 
 fn note(start_tick: u64, duration_ticks: u64) -> MidiNote {
@@ -61,6 +65,7 @@ fn segment_sec(notes: &[MidiNote], bpm: f32) -> f64 {
         &ExpressionCurves::default(),
         TPQ,
         bpm,
+        &BankProfile::not_installed("lilia"),
     );
     assert!(seg.ph_dur.iter().all(|&d| d > 0.0), "{:?}", seg.ph_dur);
     seg.ph_dur.iter().sum::<f64>() - PADS_SEC
@@ -103,6 +108,7 @@ fn render_units_span_their_notes() {
         &ExpressionCurves::default(),
         TPQ,
         bpm,
+        &BankProfile::not_installed("lilia"),
     );
     assert_eq!(units.len(), 2);
     for u in &units {

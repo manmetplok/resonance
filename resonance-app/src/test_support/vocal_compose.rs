@@ -268,13 +268,13 @@ impl Resonance {
         &self,
         definition_id: u64,
         track_id: resonance_audio::types::TrackId,
-    ) -> Option<resonance_music_theory::VocalVoicebank> {
+    ) -> Option<resonance_music_theory::VoicebankId> {
         use crate::compose::LaneGeneratorKind;
         self.compose
             .find_definition(definition_id)
             .and_then(|d| d.lane_generators.get(&track_id))
             .and_then(|c| match &c.kind {
-                LaneGeneratorKind::Vocal(p) => Some(p.voicebank),
+                LaneGeneratorKind::Vocal(p) => Some(p.voicebank.clone()),
                 _ => None,
             })
     }

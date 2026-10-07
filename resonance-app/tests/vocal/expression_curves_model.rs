@@ -7,7 +7,7 @@ use resonance_app::compose::expression::{
     Breakpoint, CurveStatus, ExpressionCurve, ExpressionCurves,
 };
 use resonance_app::compose::vocal_svs::CurveKind;
-use resonance_music_theory::VocalVoicebank;
+use resonance_app::compose::vocal_svs::BankProfile;
 
 const EPS: f32 = 1e-5;
 
@@ -155,23 +155,25 @@ fn status_is_na_on_unsupported_voicebank() {
 
     // No shipped acoustic model takes energy or breathiness, so dynamics
     // and breathiness are n/a everywhere; pitch bend is always available.
-    for vb in VocalVoicebank::ALL.iter().copied() {
+    for vb in ["tiger", "lilia", "meiji"] {
         for (kind, status) in [
             (CurveKind::Dynamics, CurveStatus::Na),
             (CurveKind::Breathiness, CurveStatus::Na),
             (CurveKind::PitchBend, CurveStatus::Auto),
         ] {
-            assert_eq!(curves.status(kind, vb), status, "{vb:?} {kind:?}");
+            let bank = BankProfile::not_installed(vb);
+            assert_eq!(curves.status(kind, &bank), status, "{vb:?} {kind:?}");
         }
     }
 
     // Tension: TIGER has no input; Lilia and Meiji do.
     assert_eq!(
-        curves.status(CurveKind::Tension, VocalVoicebank::Tiger),
+        curves.status(CurveKind::Tension, &BankProfile::not_installed("tiger")),
         CurveStatus::Na
     );
-    for vb in [VocalVoicebank::Lilia, VocalVoicebank::Meiji] {
-        assert_eq!(curves.status(CurveKind::Tension, vb), CurveStatus::Auto);
+    for vb in ["lilia", "meiji"] {
+        let bank = BankProfile::not_installed(vb);
+        assert_eq!(curves.status(CurveKind::Tension, &bank), CurveStatus::Auto);
     }
 }
 
@@ -184,11 +186,11 @@ fn na_status_wins_even_when_edited() {
     assert!(curves.is_edited(CurveKind::Tension));
     // Edited but unsupported -> still reported n/a.
     assert_eq!(
-        curves.status(CurveKind::Tension, VocalVoicebank::Tiger),
+        curves.status(CurveKind::Tension, &BankProfile::not_installed("tiger")),
         CurveStatus::Na
     );
     assert_eq!(
-        curves.status(CurveKind::Tension, VocalVoicebank::Lilia),
+        curves.status(CurveKind::Tension, &BankProfile::not_installed("lilia")),
         CurveStatus::Edited
     );
 }

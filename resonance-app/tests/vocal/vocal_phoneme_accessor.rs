@@ -9,25 +9,29 @@
 //! displays — agrees with that substitution for every phone the G2P can
 //! emit, so the strip and the render can never disagree.
 
-use resonance_app::compose::vocal_svs::{PhonemeFate, VoicebankPhonemes};
+use resonance_app::compose::vocal_svs::{BankProfile, PhonemeFate, VoicebankPhonemes};
 use resonance_music_theory::g2p::ARPABET_PHONEMES;
-use resonance_music_theory::VocalVoicebank;
+
+/// A shipped bank as the built-in table describes it (nothing on disk).
+fn bank(id: &str) -> BankProfile {
+    BankProfile::not_installed(id)
+}
 
 /// The historic hardcoded `substitute_phoneme` mapping, reproduced here
 /// so the accessor is checked against an independent statement of the
 /// old behaviour rather than its own internals.
-fn legacy_substitute(vb: VocalVoicebank, ph: &str) -> &str {
+fn legacy_substitute<'a>(vb: &str, ph: &'a str) -> &'a str {
     match vb {
-        VocalVoicebank::Tiger | VocalVoicebank::Meiji => ph,
-        VocalVoicebank::Lilia if ph == "v" => "f",
-        VocalVoicebank::Lilia => ph,
+        "lilia" if ph == "v" => "f",
+        _ => ph,
     }
 }
 
 #[test]
 fn effective_matches_legacy_substitution_for_every_phone() {
-    for &vb in VocalVoicebank::ALL {
-        let bank = VoicebankPhonemes::new(vb);
+    for vb in ["tiger", "lilia", "meiji"] {
+        let profile = bank(vb);
+        let bank = VoicebankPhonemes::new(&profile);
         for &ph in ARPABET_PHONEMES {
             assert_eq!(
                 bank.effective(ph),
@@ -45,7 +49,8 @@ fn effective_matches_legacy_substitution_for_every_phone() {
 
 #[test]
 fn lilia_resolves_v_as_a_substitution_others_direct() {
-    let lilia = VoicebankPhonemes::new(VocalVoicebank::Lilia);
+    let profile = bank("lilia");
+    let lilia = VoicebankPhonemes::new(&profile);
     assert_eq!(lilia.resolve("v"), PhonemeFate::Substituted("f"));
     assert_eq!(lilia.resolve("f"), PhonemeFate::Direct);
     assert_eq!(lilia.resolve("ah"), PhonemeFate::Direct);
@@ -56,8 +61,9 @@ fn lilia_resolves_v_as_a_substitution_others_direct() {
 
 #[test]
 fn full_inventory_banks_substitute_nothing() {
-    for vb in [VocalVoicebank::Tiger, VocalVoicebank::Meiji] {
-        let bank = VoicebankPhonemes::new(vb);
+    for vb in ["tiger", "meiji"] {
+        let profile = bank(vb);
+        let bank = VoicebankPhonemes::new(&profile);
         for &ph in ARPABET_PHONEMES {
             assert_eq!(
                 bank.resolve(ph),
@@ -70,10 +76,12 @@ fn full_inventory_banks_substitute_nothing() {
 
 #[test]
 fn valid_set_is_full_arpabet_except_lilias_v() {
-    let tiger = VoicebankPhonemes::new(VocalVoicebank::Tiger);
+    let tiger_profile = bank("tiger");
+    let tiger = VoicebankPhonemes::new(&tiger_profile);
     assert_eq!(tiger.valid_set(), ARPABET_PHONEMES);
 
-    let lilia = VoicebankPhonemes::new(VocalVoicebank::Lilia);
+    let lilia_profile = bank("lilia");
+    let lilia = VoicebankPhonemes::new(&lilia_profile);
     let expected: Vec<&str> = ARPABET_PHONEMES
         .iter()
         .copied()
@@ -87,7 +95,8 @@ fn valid_set_is_full_arpabet_except_lilias_v() {
 fn valid_set_preserves_canonical_order() {
     // The set must come back in ARPABET_PHONEMES order so the UI can show
     // a stable inventory; filtering must not reshuffle it.
-    let lilia = VoicebankPhonemes::new(VocalVoicebank::Lilia).valid_set();
+    let profile = bank("lilia");
+    let lilia = VoicebankPhonemes::new(&profile).valid_set();
     let mut sorted = lilia.clone();
     sorted.sort_by_key(|ph| ARPABET_PHONEMES.iter().position(|p| p == ph));
     assert_eq!(lilia, sorted);

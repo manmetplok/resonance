@@ -18,7 +18,12 @@
 //! from the existing `VocalAudioReady` / `VocalAudioFailed` completion
 //! messages via a [`JobToken::VocalRender`], once **all** of its lanes
 //! have landed. A render without `voicebank` uses each lane's own bank;
-//! a new lane starts on Lilia, the `VocalParams` code default.
+//! a new lane starts on Lilia, the `VocalParams` code default. A lane
+//! whose bank (or its vocoder) is not installed fails the call with
+//! `voicebank_missing` before anything starts (spec §4.6).
+//!
+//! `vocal.voicebanks` lists the installed banks; it reads the machine,
+//! not the project, so it bypasses the mutation gate.
 //!
 //! `vocal.get_params` / `vocal.set_params` read and patch a lane's
 //! settings through the snake_case wire types in
@@ -35,7 +40,8 @@ use iced::Task;
 use resonance_control::job::JobStarted;
 use resonance_control::methods::vocal as proto;
 use resonance_control::{Request, Response, RpcError};
-use resonance_music_theory::{VocalParams, VocalSinger, VocalSingerMeiji, VocalVoicebank};
+use crate::compose::vocal_svs::VoicebankRegistry;
+use resonance_music_theory::{VocalParams, VoicebankId};
 
 use super::view_model;
 
@@ -59,6 +65,7 @@ pub(super) fn try_handle(
         proto::GENERATE => generate(app, request),
         proto::GET_PARAMS => get_params(app, request),
         proto::SET_PARAMS => set_params(app, request),
+        proto::VOICEBANKS => voicebanks(app, request),
         _ => return None,
     };
     Some(handled)
@@ -226,8 +233,37 @@ fn generate(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
     let result = proto::GenerateResult {
         clip_id: resonance_control::ids::ClipId(clip_id),
         revision: app.revision(),
+        render_error: lane_bank_missing(app, definition_id, track_id).map(|missing| {
+            proto::RenderError {
+                kind: resonance_control::ErrorKind::VoicebankMissing,
+                message: missing.to_string(),
+            }
+        }),
     };
     (super::success(request, &result), task)
+}
+
+/// Why the lane's render cannot run — its bank or the bank's vocoder is
+/// not installed — or `None` when it can.
+fn lane_bank_missing(
+    app: &Resonance,
+    definition_id: u64,
+    track_id: u64,
+) -> Option<crate::compose::vocal_svs::VoicebankMissing> {
+    let (bank, speaker, voice) = lane_voice(app, definition_id, track_id);
+    bank_missing(app, &bank, speaker.as_deref(), voice)
+}
+
+/// Why rendering with `bank` cannot run, or `None` when it can.
+fn bank_missing(
+    app: &Resonance,
+    bank: &VoicebankId,
+    speaker: Option<&str>,
+    voice: resonance_music_theory::VoiceType,
+) -> Option<crate::compose::vocal_svs::VoicebankMissing> {
+    let install_dir = app.voicebanks.user_bank_dir(bank.as_str());
+    let profile = app.voicebanks.profile(bank);
+    profile.render_target(speaker, voice, install_dir).err()
 }
 
 /// True when the lane carries no lyric lines to sing.
@@ -311,7 +347,7 @@ fn set_params(app: &mut Resonance, request: &Request) -> (Response, Task<Message
     let Some((mut vocal, seed)) = lane_params(app, definition_id, track_id) else {
         return reject(request, RpcError::internal("the vocal lane vanished"));
     };
-    if let Err(e) = apply_params_patch(&mut vocal, &params.params) {
+    if let Err(e) = apply_params_patch(&mut vocal, &params.params, &app.voicebanks) {
         return reject(request, e);
     }
     let task = super::run_via_update(
@@ -363,10 +399,12 @@ fn params_result(app: &Resonance, definition_id: u64, track_id: u64) -> Option<p
 ///
 /// A voicebank change without a `speaker` in the same patch resets the
 /// speaker to the new bank's default (TIGER: the voice type's historic
-/// singer; Meiji: `standard`).
+/// mode; Meiji: `standard`). `banks` decides which ids and speakers are
+/// valid: an installed bank, or one of the built-in ones (spec §4.6).
 pub(super) fn apply_params_patch(
     p: &mut VocalParams,
     patch: &proto::VocalParamsPatch,
+    banks: &VoicebankRegistry,
 ) -> Result<(), RpcError> {
     use view_model as vm;
 
@@ -438,44 +476,27 @@ pub(super) fn apply_params_patch(
     // Bank, then speaker — last, so a reset to the bank's default
     // speaker sees the patched voice type.
     if let Some(id) = &patch.voicebank {
-        let vb = vm::parse_voicebank_id(id).ok_or_else(|| unknown_voicebank(id))?;
+        let id = checked_voicebank(banks, id)?;
         // A `speaker` in the same patch overwrites the reset just below.
-        p.switch_voicebank(vb);
+        let speaker = banks.profile(&id).default_speaker(p.voice);
+        p.switch_voicebank(id, speaker);
     }
     if let Some(name) = &patch.speaker {
         let wanted = name.trim().to_ascii_lowercase();
-        let vb = p.voicebank;
-        let unknown = || {
-            let bank = vm::voicebank_id(vb);
-            let known = vm::speaker_ids(vb);
-            if known.is_empty() {
-                RpcError::invalid_params(format!(
-                    "speaker: voicebank {bank:?} has a single voice; omit speaker"
-                ))
+        let bank = banks.profile(&p.voicebank);
+        let known: Vec<String> = bank.speakers().into_iter().map(|s| s.id).collect();
+        if !known.contains(&wanted) {
+            let id = &p.voicebank;
+            return Err(RpcError::invalid_params(if known.len() <= 1 {
+                format!("speaker: voicebank {id:?} has a single voice; omit speaker")
             } else {
-                RpcError::invalid_params(format!(
-                    "speaker: unknown speaker {name:?} for voicebank {bank:?} (one of: {})",
+                format!(
+                    "speaker: unknown speaker {name:?} for voicebank {id:?} (one of: {})",
                     known.join(", ")
-                ))
-            }
-        };
-        match vb {
-            VocalVoicebank::Tiger => {
-                p.singer = VocalSinger::ALL
-                    .iter()
-                    .copied()
-                    .find(|s| s.as_str().to_ascii_lowercase() == wanted)
-                    .ok_or_else(unknown)?;
-            }
-            VocalVoicebank::Meiji => {
-                p.singer_meiji = VocalSingerMeiji::ALL
-                    .iter()
-                    .copied()
-                    .find(|s| s.as_str().to_ascii_lowercase() == wanted)
-                    .ok_or_else(unknown)?;
-            }
-            VocalVoicebank::Lilia => return Err(unknown()),
+                )
+            }));
         }
+        p.speaker = Some(wanted);
     }
 
     p.validate()
@@ -488,11 +509,38 @@ fn set<T>(field: &mut T, value: Option<T>) {
     }
 }
 
-fn unknown_voicebank(name: &str) -> RpcError {
-    RpcError::invalid_params(format!(
-        "unknown voicebank {name:?} (one of: {})",
-        view_model::voicebank_ids().join(", ")
-    ))
+/// A wire voicebank id the registry accepts: installed, or one of the
+/// built-in banks (spec §4.6 typo guard), and able to sing English.
+fn checked_voicebank(banks: &VoicebankRegistry, name: &str) -> Result<VoicebankId, RpcError> {
+    let id = VoicebankId::new(name);
+    if !banks.is_known(id.as_str()) {
+        let mut ids: Vec<String> = banks.installed().map(|b| b.id.clone()).collect();
+        for b in crate::compose::vocal_svs::registry::BUILTIN_BANKS {
+            if !ids.iter().any(|i| i == b.id) {
+                ids.push(b.id.to_owned());
+            }
+        }
+        return Err(RpcError::invalid_params(format!(
+            "unknown voicebank {name:?} (one of: {}; vocal_voicebanks lists the installed ones)",
+            ids.join(", ")
+        )));
+    }
+    if !banks.profile(&id).english() {
+        return Err(RpcError::invalid_params(format!(
+            "voicebank {id:?} cannot sing English (it lacks most English phonemes), and lyrics \
+             are English; pick a bank vocal_voicebanks lists with english: true"
+        )));
+    }
+    Ok(id)
+}
+
+/// `vocal.voicebanks`: rescan the voicebank folders and list what is
+/// installed. Reads the machine, not the project: no undo entry, no
+/// revision bump.
+fn voicebanks(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    app.rescan_voicebanks();
+    let list = view_model::voicebank_list(&app.voicebanks);
+    (super::success(request, &list), Task::none())
 }
 
 // ---------------------------------------------------------------------------
@@ -583,10 +631,10 @@ fn render(
     // before any job starts. `None` is resolved per lane further down —
     // it must not blanket-default, or every plain render would reset the
     // lane (ba doc #271).
-    let requested = match &params.voicebank {
-        Some(name) => match view_model::parse_voicebank_id(name) {
-            Some(vb) => Some(vb),
-            None => return reject(request, unknown_voicebank(name)),
+    let requested = match params.voicebank.as_deref() {
+        Some(name) => match checked_voicebank(&app.voicebanks, name) {
+            Ok(id) => Some(id),
+            Err(e) => return reject(request, e),
         },
         None => None,
     };
@@ -631,6 +679,21 @@ fn render(
         );
     }
 
+    // Every lane that will render must have its bank (and the bank's
+    // vocoder) installed; a missing one fails the whole call with
+    // `voicebank_missing` before anything is torn down (spec §4.6, D12).
+    for &(definition_id, track_id) in &renderable {
+        let (bank, speaker, voice) = lane_voice(app, definition_id, track_id);
+        // A bank named by the request resets the speaker, like set_params.
+        let (bank, speaker) = match &requested {
+            Some(id) => (id.clone(), None),
+            None => (bank, speaker),
+        };
+        if let Some(missing) = bank_missing(app, &bank, speaker.as_deref(), voice) {
+            return reject(request, RpcError::voicebank_missing(missing.to_string()));
+        }
+    }
+
     // Any error left over from an earlier operation would otherwise be
     // misread as this render's failure.
     let _ = app.compose.last_error.take();
@@ -646,8 +709,9 @@ fn render(
         // overrode a lane that had explicitly chosen that default
         // (BUG-52); Lilia is now the code default itself, so the lane's
         // value is always the answer.
-        let voicebank =
-            requested.unwrap_or_else(|| lane_voicebank(app, definition_id, track_id));
+        let voicebank = requested
+            .clone()
+            .unwrap_or_else(|| lane_voice(app, definition_id, track_id).0);
 
         let task = super::run_via_update(
             app,
@@ -829,17 +893,24 @@ fn describe_batch(lanes: &[(u64, u64)]) -> String {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// The voicebank currently stored on a vocal lane.
+/// The voicebank, speaker and voice type currently stored on a vocal
+/// lane.
 ///
 /// Only called for lanes [`resolve_render_lanes`] produced, which are
 /// vocal lanes by construction, and nothing between that lookup and this
 /// one edits the project — so a miss is a bug, not a request error.
-fn lane_voicebank(app: &Resonance, definition_id: u64, track_id: u64) -> VocalVoicebank {
+fn lane_voice(
+    app: &Resonance,
+    definition_id: u64,
+    track_id: u64,
+) -> (VoicebankId, Option<String>, resonance_music_theory::VoiceType) {
     app.compose
         .find_definition(definition_id)
         .and_then(|d| d.lane_generators.get(&track_id))
         .and_then(|c| match &c.kind {
-            crate::compose::LaneGeneratorKind::Vocal(p) => Some(p.voicebank),
+            crate::compose::LaneGeneratorKind::Vocal(p) => {
+                Some((p.voicebank.clone(), p.speaker.clone(), p.voice))
+            }
             _ => None,
         })
         .expect("vocal.render: resolve_render_lanes yields vocal lanes only")

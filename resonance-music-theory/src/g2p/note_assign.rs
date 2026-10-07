@@ -194,6 +194,43 @@ pub fn resolve_draft_with_dict(
     draft: &[crate::derive::LyricLine],
     dictionary: &PhonemeDictionary,
 ) -> Vec<ResolvedSyllable> {
+    resolve_draft_with_layers(
+        draft,
+        DictionaryLayers {
+            project: dictionary,
+            bank: None,
+        },
+    )
+}
+
+/// The caller-supplied dictionaries [`resolve_draft_with_layers`] reads,
+/// highest precedence first. Both hold canonical ARPAbet.
+#[derive(Debug, Clone, Copy)]
+pub struct DictionaryLayers<'a> {
+    /// The user's dictionaries (project over global), reported as
+    /// [`G2pSource::ProjectDict`] / [`PhonemeProvenance::Dict`].
+    pub project: &'a PhonemeDictionary,
+    /// The voicebank's own English dictionary (its `dsdict-en.yaml`,
+    /// mapped to ARPAbet), consulted after the user's and before CMU —
+    /// the order OpenUtau uses (vocal-mcp-control-and-quality.md §4.4).
+    /// Reported as [`G2pSource::BankDict`] with [`PhonemeProvenance::Auto`]:
+    /// the user did not choose it.
+    pub bank: Option<&'a PhonemeDictionary>,
+}
+
+/// [`resolve_draft_with_dict`] with the voicebank's dictionary as a third
+/// layer: `[..]` block > project dictionary > bank dictionary > CMU >
+/// spelling rules.
+///
+/// A bank entry is skipped for a word with a `(N)` CMU-variant hint (the
+/// user asked for a CMU reading), and for a word whose `·` pieces do not
+/// match the entry's vowel count (CMU's variants may fit the breaks; the
+/// bank's single reading cannot be re-split exactly).
+pub fn resolve_draft_with_layers(
+    draft: &[crate::derive::LyricLine],
+    layers: DictionaryLayers<'_>,
+) -> Vec<ResolvedSyllable> {
+    let dictionary = layers.project;
     let mut tokens: Vec<LyricToken> = Vec::new();
     for line in draft {
         tokens.extend(tokenize_line(&line.text));
@@ -242,10 +279,21 @@ pub fn resolve_draft_with_dict(
                         PhonemeProvenance::Dict,
                         G2pSource::ProjectDict,
                     ),
-                    None => {
-                        let (phonemes, source) = auto_word_phonemes(&cleaned, &pieces, variant_idx);
-                        (phonemes, PhonemeProvenance::Auto, source)
-                    }
+                    None => match bank_entry(layers.bank, &cleaned, &pieces, variant_idx) {
+                        Some(bank_phonemes) => (
+                            bank_phonemes
+                                .iter()
+                                .map(|p| (*p, SyllableStress::None))
+                                .collect::<Vec<_>>(),
+                            PhonemeProvenance::Auto,
+                            G2pSource::BankDict,
+                        ),
+                        None => {
+                            let (phonemes, source) =
+                                auto_word_phonemes(&cleaned, &pieces, variant_idx);
+                            (phonemes, PhonemeProvenance::Auto, source)
+                        }
+                    },
                 };
                 // The user's breaks are exact: labels are the written
                 // pieces and the phonemes split at the matching
@@ -286,6 +334,22 @@ pub fn resolve_draft_with_dict(
         }
     }
     out
+}
+
+/// The bank dictionary's reading of `cleaned`, when it should be used —
+/// see [`resolve_draft_with_layers`] for when it is skipped.
+fn bank_entry<'d>(
+    bank: Option<&'d PhonemeDictionary>,
+    cleaned: &str,
+    pieces: &[String],
+    variant_idx: Option<usize>,
+) -> Option<&'d Vec<&'static str>> {
+    if variant_idx.is_some() {
+        return None;
+    }
+    let entry = bank?.get(cleaned)?;
+    let vowels = entry.iter().filter(|p| !is_consonant(p)).count();
+    (pieces.len() <= 1 || vowels == pieces.len()).then_some(entry)
 }
 
 /// The CMU / rules transcription of a word for the resolver.

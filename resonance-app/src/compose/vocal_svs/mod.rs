@@ -13,10 +13,9 @@
 //! 5 Hz vibrato modulates the curve when the user's `vibrato` slider is
 //! non-zero.
 //!
-//! The implementation is split into:
-//! - [`paths`]: voicebank file resolution + per-bank phoneme/language conventions.
-//! - [`segment`]: `DsSegment` construction (phoneme allocation, f0 + tension curves).
-//! - [`post`]: AP gating, safety gain, mono→stereo, resample, WAV writer.
+//! Split into [`registry`] (installed banks and each bank's facts),
+//! [`segment`] (`DsSegment` construction) and [`post`] (AP gating, gain,
+//! resample, WAV writer).
 
 use std::path::PathBuf;
 
@@ -28,35 +27,38 @@ use resonance_svs::stages::common::ExecutionProvider;
 
 use crate::compose::expression::ExpressionCurves;
 
+mod error;
 mod paths;
 mod phonemes;
 mod post;
 mod pronunciation;
+pub mod registry;
 mod render_cache;
 mod segment;
 mod validate;
 
-pub use paths::{bank_curve_support, curve_supported, shipped_curve_support, svs_backend};
-pub use paths::{CurveKind, CurveSupport};
+pub use error::{VocalRenderError, VocalRenderErrorKind};
+pub use paths::{svs_backend, CurveKind, CurveSupport};
+pub use registry::{BankProfile, VoicebankMissing, VoicebankRegistry, VoicebankRoots};
 pub use phonemes::{
-    articulation_class, floor_duration_sec, min_articulation_sec, target_duration_sec,
-    ArticulationClass, PhonemeFate, VoicebankPhonemes,
+    articulation_class, floor_duration_sec, min_articulation_sec, nearest_by_class,
+    target_duration_sec, ArticulationClass, PhonemeFate, VoicebankPhonemes,
 };
 pub use post::write_stereo_wav;
 pub use pronunciation::{
-    canonicalize_phonemes, clean_word, resolve_clip as resolve_clip_pronunciation, DictionaryEntry,
-    DictionaryScope, PhonemeProvenance, PronunciationState, SyllableOverride,
+    canonicalize_phonemes, clean_word, resolve_clip as resolve_clip_pronunciation,
+    resolve_clip_with_bank, DictionaryEntry, DictionaryScope, PhonemeProvenance,
+    PronunciationState, SyllableOverride,
 };
 pub use render_cache::{
     render_units_cached, split_render_units, RenderPlan, RenderUnit, SvsRenderCache,
 };
 pub use segment::build_segment;
 pub use validate::{
-    articulation_report, comfortable_pitch_range, validate_for_voicebank, InvalidPhonemeReason,
-    InvalidSyllable, NoteArticulation,
+    articulation_report, validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable,
+    NoteArticulation,
 };
 
-use paths::locate_voicebank;
 use post::{
     apply_ap_gate, collect_ap_intervals, mono_to_stereo_with_gain, resample_to, safety_gain_factor,
 };
@@ -113,23 +115,19 @@ pub fn vocal_audio_start(
     tempo_map.tick_to_abs_sample(section_start_sample, lead_ticks, sample_rate)
 }
 
-/// Render a vocal MIDI clip + lyric draft to a singing waveform. Returns
-/// `None` when the SVS model files aren't installed (the PoC's download
-/// script hasn't been run, env var unset, etc.) so the caller can fall
-/// back to its existing MIDI-only behaviour silently.
+/// Render a vocal MIDI clip + lyric draft to a singing waveform with
+/// `bank`. `Ok(None)` when there are no notes; an error when the bank (or
+/// its vocoder) is not installed ([`VocalRenderError::VoicebankMissing`]),
+/// when nothing resolves to phonemes, or when the pipeline fails.
 ///
 /// `assigned` is the per-note resolved + voicebank-validated syllable
 /// stream (one entry per note), produced on the main thread by
-/// [`resolve_clip_pronunciation`] + [`validate_for_voicebank`] so
-/// per-syllable overrides, dictionary entries and the voicebank's
-/// substitutions are already folded into the phonemes the model sings.
-/// Slur notes hold the previous vowel (the last one also its coda); an empty
-/// `assigned` slice renders nothing.
-/// `cache` carries per-unit rendered audio across renders of the same
-/// clip so an edit only re-renders the segments it touched (see
-/// [`render_cache`]); pass a fresh [`SvsRenderCache`] for a clip that has
-/// never been rendered. After the call its [`SvsRenderCache::last_plan`]
-/// holds the "N of M segments changed" tally for the UI overlay.
+/// [`resolve_clip_pronunciation`] + [`validate_for_voicebank`]. Slur notes
+/// hold the previous vowel (the last one also its coda). `cache` carries
+/// per-unit rendered audio across renders of the same clip so an edit only
+/// re-renders the segments it touched (see [`render_cache`]); after the
+/// call its [`SvsRenderCache::last_plan`] holds the "N of M segments
+/// changed" tally for the UI overlay.
 #[allow(clippy::too_many_arguments)]
 pub fn render_vocal_clip(
     notes: &[MidiNote],
@@ -140,30 +138,31 @@ pub fn render_vocal_clip(
     bpm: f32,
     engine_sample_rate: u32,
     cache: &mut SvsRenderCache,
-) -> Result<Option<RenderedVocal>, String> {
+    bank: &BankProfile,
+) -> Result<Option<RenderedVocal>, VocalRenderError> {
     if notes.is_empty() {
         return Ok(None);
     }
-    let Some(paths) = locate_voicebank(params.voicebank, params) else {
-        return Ok(None);
-    };
+    let target = bank
+        .render_target(params.speaker.as_deref(), params.voice, None)
+        .map_err(VocalRenderError::VoicebankMissing)?;
 
     // Split the clip into independently-renderable units at genuine
     // silences. A continuous phrase yields a single unit whose segment
     // matches the old whole-clip build.
-    let units = split_render_units(notes, params, assigned, curves, ticks_per_quarter, bpm);
+    let units = split_render_units(notes, params, assigned, curves, ticks_per_quarter, bpm, bank);
     if units.iter().all(|u| u.segment.ph_seq.is_empty()) {
-        return Ok(None);
+        return Err(VocalRenderError::NothingToSing);
     }
 
     let args = PipelineArgs {
         ds_file: PathBuf::new(),
-        acoustic_config: paths.acoustic_config,
-        vocoder_config: paths.vocoder_config,
+        acoustic_config: target.acoustic_config,
+        vocoder_config: target.vocoder_config,
         out: PathBuf::new(),
         execution_provider: ExecutionProvider::Cpu,
         device_index: 0,
-        speaker: paths.speaker,
+        speaker: target.speaker,
         // The TIGER voicebank's working CLI command uses speedup=20.
         // (We previously thought 20 produced diffusion artifacts, but
         // those artifacts were actually from feeding the mel into the

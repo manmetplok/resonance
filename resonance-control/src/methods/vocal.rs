@@ -37,6 +37,9 @@ pub const GET_PARAMS: &str = "vocal.get_params";
 /// `vocal.set_params` — merge a partial patch into a vocal lane's
 /// settings ([`SetParamsParams`] -> [`ParamsResult`]).
 pub const SET_PARAMS: &str = "vocal.set_params";
+/// `vocal.voicebanks` — the installed voicebanks and what each can do
+/// (no params -> [`VoicebankList`]). Read-only, needs no project.
+pub const VOICEBANKS: &str = "vocal.voicebanks";
 
 /// All `vocal.*` method names.
 pub const METHODS: &[&str] = &[
@@ -48,6 +51,7 @@ pub const METHODS: &[&str] = &[
     GENERATE,
     GET_PARAMS,
     SET_PARAMS,
+    VOICEBANKS,
 ];
 
 /// Params for `vocal.set_lyrics`: bulk text, one line per lyric line.
@@ -156,8 +160,9 @@ pub struct RenderParams {
     /// lane, while the call still reported success.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section_id: Option<SectionDefinitionId>,
-    /// Voicebank id (`tiger`, `lilia` or `meiji`; matched
-    /// case-insensitively), stored on every lane the render covers.
+    /// Voicebank id (an installed bank's id from `vocal.voicebanks`, e.g.
+    /// `tiger`, `lilia`, `meiji`; matched case-insensitively), stored on
+    /// every lane the render covers.
     /// Omitted renders each lane with the bank it already has — a plain
     /// re-render never changes it. Prefer `vocal.set_params` to choose a
     /// bank; this is a shortcut for "switch and render".
@@ -200,7 +205,7 @@ fn default_lyrics() -> bool {
 
 /// Result of `vocal.generate`: the lane's derived MIDI clip, ready for
 /// `song.notes` / `notes.*` edits and then `vocal.render`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct GenerateResult {
     /// The derived clip at the lane's first placement. A lane derives
@@ -208,6 +213,20 @@ pub struct GenerateResult {
     /// material.
     pub clip_id: ClipId,
     pub revision: u64,
+    /// Set when the melody was generated but its render cannot run: the
+    /// lane's voicebank (or its vocoder) is not installed
+    /// (`kind: voicebank_missing`). The notes are there; install the bank
+    /// or pick another with `vocal.set_params`, then `vocal.render`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_error: Option<RenderError>,
+}
+
+/// Why a render did not start: a typed kind plus the message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RenderError {
+    pub kind: crate::rpc::ErrorKind,
+    pub message: String,
 }
 
 /// Job payload once a `vocal.render` job completes.
@@ -400,15 +419,17 @@ pub struct VocalRange {
 #[serde(deny_unknown_fields)]
 pub struct VocalParamsPatch {
     // ---- Voice / render ----
-    /// Voicebank id: `tiger`, `lilia` (the default) or `meiji`. Changing
-    /// it resets `speaker` to that bank's default unless the same patch
-    /// sets `speaker` too.
+    /// Voicebank id: any installed bank's id (`vocal.voicebanks` lists
+    /// them), or one of the known `tiger`, `lilia` (the default),
+    /// `meiji`. A bank that cannot sing English is refused. Changing it
+    /// resets `speaker` to that bank's default unless the same patch sets
+    /// `speaker` too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voicebank: Option<String>,
-    /// The bank's singer: on `tiger` one of `glam`, `fresh`, `disco`,
-    /// `royal`, `electric`, `mystic`, `vinyl`; on `meiji` one of
-    /// `standard`, `hunter`, `lilith`, `phantom`. `lilia` has a single
-    /// voice and refuses a speaker.
+    /// The bank's speaker (voice mode), one of its `speakers` ids from
+    /// `vocal.voicebanks`: on `tiger` `glam`, `fresh`, `disco`, `royal`,
+    /// `electric`, `mystic`, `vinyl`; on `meiji` `standard`, `hunter`,
+    /// `lilith`, `phantom`. A single-voice bank (`lilia`) refuses one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -499,9 +520,9 @@ pub struct VocalParamsPatch {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct VocalParamsView {
     // ---- Voice / render ----
-    /// Voicebank id: `tiger`, `lilia` or `meiji`.
+    /// Voicebank id (`vocal.voicebanks` lists the installed ones).
     pub voicebank: String,
-    /// The bank's singer; absent on a single-voice bank (`lilia`).
+    /// The bank's speaker; absent on a single-voice bank (`lilia`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
     pub timbre: VocalTimbre,
@@ -538,4 +559,118 @@ pub struct VocalParamsView {
     pub syllables_max: u8,
     pub match_syllables_to_melody: bool,
     pub avoid_cliches: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Voicebanks (`vocal.voicebanks`)
+// ---------------------------------------------------------------------------
+
+/// Result of `vocal.voicebanks`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicebankList {
+    /// The banks installed on this machine, by id.
+    pub installed: Vec<VoicebankEntry>,
+    /// Banks the plok.org index offers that are not installed. Empty
+    /// until the index lists voicebanks.
+    #[serde(default)]
+    pub available: Vec<AvailableVoicebank>,
+}
+
+/// One installed voicebank.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicebankEntry {
+    /// The id `vocal.set_params` takes as `voicebank`.
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Can sing English (lyrics are English); `false` banks are refused
+    /// by `vocal.set_params`.
+    pub english: bool,
+    /// The speakers (voice modes) `speaker` takes; empty for a
+    /// single-voice bank.
+    pub speakers: Vec<VoicebankSpeaker>,
+    /// The speaker a lane gets on switching to this bank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_speaker: Option<String>,
+    /// Where the bank sings clearly.
+    pub comfortable_range: VoicebankRange,
+    /// ARPAbet phonemes the bank lacks.
+    pub missing_phonemes: Vec<String>,
+    /// What each missing phoneme is sung as; a missing phoneme without
+    /// an entry cannot be sung and blocks a render that needs it.
+    pub substitutions: Vec<PhonemeSubstitution>,
+    /// Which expression curves reach the model.
+    pub curves: VoicebankCurves,
+    /// The credit line the bank's terms ask for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms_url: Option<String>,
+    /// `free_with_credit`, `paid` or `permission`, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commercial: Option<String>,
+    /// The vocoder the bank renders with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocoder: Option<String>,
+    /// `false`: the vocoder is missing, and rendering this bank fails
+    /// with `voicebank_missing`.
+    pub vocoder_installed: bool,
+}
+
+/// One speaker of a voicebank.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicebankSpeaker {
+    pub id: String,
+    pub name: String,
+    pub comfortable_range: VoicebankRange,
+}
+
+/// A comfortable MIDI range (inclusive).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicebankRange {
+    pub low: u8,
+    pub high: u8,
+    /// `builtin` (Resonance's estimate for this bank) or `default`
+    /// (nothing is known: a wide C3..E5).
+    pub range_source: String,
+}
+
+/// A phoneme a bank lacks and what it is sung as.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PhonemeSubstitution {
+    pub phoneme: String,
+    pub sung_as: String,
+}
+
+/// Which expression curves a bank's acoustic model takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicebankCurves {
+    pub dynamics: bool,
+    pub tension: bool,
+    pub breathiness: bool,
+    /// Always `true`: pitch bend is applied before synthesis.
+    pub pitch_bend: bool,
+}
+
+/// A downloadable voicebank from the plok.org index.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AvailableVoicebank {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commercial: Option<String>,
 }

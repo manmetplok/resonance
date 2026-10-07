@@ -44,6 +44,9 @@ mod test_support;
 pub use test_support::TestChain;
 #[cfg(feature = "test-support")]
 pub use test_support::SendSlotAffordances;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use test_support::{write_voicebank_fixture, VoicebankFixture};
 pub mod theme;
 pub mod undo;
 pub mod update;
@@ -155,6 +158,12 @@ pub struct Resonance {
     /// Markov table registry for chord generators. Constructed once at
     /// startup with all built-in tables.
     pub(crate) table_registry: TableRegistry,
+    /// The installed SVS voicebanks (vocal-mcp-control-and-quality.md
+    /// §4.2): the user's voicebank folder plus the development models, or
+    /// a private folder in a hermetic test app. Machine state, not project
+    /// state — a project load leaves it alone. Rescan with
+    /// [`Resonance::rescan_voicebanks`].
+    pub(crate) voicebanks: compose::vocal_svs::VoicebankRegistry,
 
     /// Tempo change events on the tempo track (sorted by bar number).
     pub(crate) tempo_events: Vec<state::TempoEvent>,
@@ -664,6 +673,10 @@ impl Resonance {
             },
             reference: reference::ReferenceState::default(),
             table_registry: TableRegistry::with_builtins(),
+            voicebanks: compose::vocal_svs::VoicebankRegistry::scan(match host {
+                Host::Machine => compose::vocal_svs::VoicebankRoots::for_machine(),
+                Host::None => compose::vocal_svs::VoicebankRoots::hermetic(),
+            }),
 
             tempo_events: vec![state::TempoEvent { bar: 0, bpm: 120.0 }],
             signature_events: vec![state::SignatureEvent {
@@ -738,6 +751,7 @@ impl Resonance {
         // Derive the transport label strings once so the very first
         // frame (rendered before the first `Tick`) shows real values.
         app.refresh_transport_labels();
+        app.ui.view_caches.rebuild_voicebank_choices(&app.voicebanks);
 
         // Build the tempo map's bar table up front. `TempoMap::default()`
         // has an empty table and `table_sample_rate: 0`, under which

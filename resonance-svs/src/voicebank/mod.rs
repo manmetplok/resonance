@@ -20,6 +20,7 @@
 //!   loaders so an unusable bank is rejected with a descriptive error
 //!   before the pipeline ever touches an ONNX session.
 
+pub mod dsdict;
 pub mod layout;
 pub mod phonetics;
 
@@ -28,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-pub use layout::BankLayout;
+pub use layout::{BankDetails, BankLayout};
 pub use phonetics::{
     detect_phoneme_target, nearest_substitutes, CurveSupport, ExpressionCurve, PhonemeInventory,
     PhonemeTarget,
@@ -84,6 +85,8 @@ pub struct VoicebankManifest {
     pub phonemes: Vec<String>,
     /// `languages.json` contents (name -> language id), empty if absent.
     pub languages: BTreeMap<String, i64>,
+    /// Name, version, vocoder id and English dictionary.
+    pub details: BankDetails,
 
     /// Alphabet the dict is written in, detected from the inventory.
     pub phoneme_target: PhonemeTarget,
@@ -142,6 +145,7 @@ impl VoicebankManifest {
             singers,
             phonemes,
             languages,
+            details,
             accepts_language_id,
             accepts_energy,
             accepts_breathiness,
@@ -163,6 +167,7 @@ impl VoicebankManifest {
             singers,
             phonemes,
             languages,
+            details,
             phoneme_target,
             accepts_language_id,
             accepts_energy,
@@ -209,16 +214,8 @@ impl VoicebankManifest {
         )
     }
 
-    // -----------------------------------------------------------------
-    // Data-driven per-bank quirks (doc #164)
-    //
-    // These reproduce — from the scanned inventory / languages / acoustic
-    // config — the behaviour previously hardcoded per `VocalVoicebank`
-    // enum arm in `resonance-app`'s `vocal_svs/paths.rs`. Working from the
-    // data means a freshly-dropped bank gets the right treatment without a
-    // code change. The answers themselves live in `phonetics`; the
-    // manifest only supplies this bank's data.
-    // -----------------------------------------------------------------
+    // Data-driven per-bank quirks (doc #164), answered by `phonetics`
+    // from this bank's scanned inventory, languages and acoustic config.
 
     /// The dict key to feed the acoustic model for a G2P ARPAbet symbol.
     /// See [`PhonemeInventory::phoneme_name`].

@@ -174,12 +174,24 @@ pub(crate) fn control_render(
     r: &mut crate::Resonance,
     definition_id: u64,
     track_id: TrackId,
-    voicebank: resonance_music_theory::VocalVoicebank,
+    voicebank: resonance_music_theory::VoicebankId,
 ) -> Task<Message> {
+    let bank = r.voicebanks.profile(&voicebank);
     super::lane_inspector::update_vocal(r, definition_id, track_id, |p| {
         // Same rule as `vocal.set_params`: a bank switch resets the
         // speaker to the new bank's default.
-        p.switch_voicebank(voicebank);
+        let speaker = bank.default_speaker(p.voice);
+        p.switch_voicebank(voicebank, speaker);
     });
     super::vocal_render::rerender_vocal_audio(r, definition_id, track_id)
+}
+
+impl crate::Resonance {
+    /// Re-read the voicebank folders (vocal-mcp-control-and-quality.md
+    /// §4.2) and refresh the inspector's Voicebank picker: after an
+    /// install, and on every `vocal.voicebanks`.
+    pub(crate) fn rescan_voicebanks(&mut self) {
+        self.voicebanks.rescan();
+        self.ui.view_caches.rebuild_voicebank_choices(&self.voicebanks);
+    }
 }

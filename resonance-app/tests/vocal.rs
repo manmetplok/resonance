@@ -38,3 +38,7 @@ mod vocal_segment_timing;
 mod vocal_tuning_mirror;
 #[path = "vocal/voicebank_curve_support.rs"]
 mod voicebank_curve_support;
+#[path = "vocal/voicebank_registry.rs"]
+mod voicebank_registry;
+#[path = "vocal/bank_phonemisation.rs"]
+mod bank_phonemisation;

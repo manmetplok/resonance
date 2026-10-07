@@ -52,6 +52,10 @@ pub(crate) fn bypasses_mutation_gate(method: &str) -> bool {
         || methods::drum_kits::METHODS.contains(&method)
         // `presets.*` is the user's preset library (§12.2).
         || methods::presets::METHODS.contains(&method)
+        // `vocal.voicebanks` lists the machine's installed voicebanks
+        // (vocal-mcp-control-and-quality.md §4.5); the rest of `vocal.*`
+        // edits the project and stays gated.
+        || method == methods::vocal::VOICEBANKS
         || resonance_control::job::METHODS.contains(&method)
 }
 

@@ -221,6 +221,21 @@ pub(super) fn set_breath(
 // Vocal voice & delivery
 // ---------------------------------------------------------------------------
 
+/// The Voicebank picker: switch the lane's bank, resetting its speaker to
+/// the new bank's default (the same rule `vocal.set_params` applies).
+pub(super) fn set_voicebank(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    voicebank: resonance_music_theory::VoicebankId,
+) {
+    let bank = r.voicebanks.profile(&voicebank);
+    update_vocal(r, definition_id, track_id, |p| {
+        let speaker = bank.default_speaker(p.voice);
+        p.switch_voicebank(voicebank, speaker);
+    });
+}
+
 pub(super) fn set_vibrato(
     r: &mut crate::Resonance,
     definition_id: u64,

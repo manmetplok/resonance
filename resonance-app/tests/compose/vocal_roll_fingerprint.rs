@@ -7,7 +7,7 @@ use resonance_app::compose::ChordState;
 use resonance_app::state::MidiClipState;
 use resonance_app::view::compose::vocal_roll::{VocalRollCanvas, VocalRollState};
 use resonance_audio::types::MidiNote;
-use resonance_music_theory::{Chord, ChordQuality, PitchClass, VocalParams, VocalVoicebank};
+use resonance_music_theory::{Chord, ChordQuality, PitchClass, VocalParams, VoicebankId};
 
 fn clip() -> MidiClipState {
     MidiClipState {
@@ -49,6 +49,9 @@ fn canvas<'a>(
         clip,
         track_id: 3,
         params,
+        bank: resonance_app::compose::vocal_svs::BankProfile::not_installed(
+            params.voicebank.as_str(),
+        ),
         chords,
         section_beats: 16,
         scroll_y: 0.0,
@@ -100,11 +103,11 @@ fn voicebank_change_invalidates() {
     let c = clip();
     let ch = chords(ChordQuality::Maj);
     let tiger = VocalParams {
-        voicebank: VocalVoicebank::Tiger,
+        voicebank: VoicebankId::new("tiger"),
         ..VocalParams::default()
     };
     let lilia = VocalParams {
-        voicebank: VocalVoicebank::Lilia,
+        voicebank: VoicebankId::new("lilia"),
         ..VocalParams::default()
     };
     let state = VocalRollState::default();

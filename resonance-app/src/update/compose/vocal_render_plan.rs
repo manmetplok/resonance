@@ -14,7 +14,9 @@ use resonance_audio::types::{MidiNote, TempoMap};
 use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::VocalParams;
 
-use crate::compose::vocal_svs::{self, DictionaryEntry, InvalidSyllable, SyllableOverride};
+use crate::compose::vocal_svs::{
+    self, BankProfile, DictionaryEntry, InvalidSyllable, SyllableOverride,
+};
 
 /// A validated, placed vocal render, ready for the handler to execute.
 #[derive(Debug)]
@@ -34,9 +36,11 @@ pub struct VocalRenderPlan {
 pub struct VocalRenderPlanInputs<'a> {
     pub tempo_map: &'a TempoMap,
     pub engine_sample_rate: u32,
-    /// Lane params — the planner reads `draft` (lyrics) and `voicebank`
-    /// (the phoneme gate).
+    /// Lane params — the planner reads `draft` (lyrics).
     pub params: &'a VocalParams,
+    /// The lane's bank: its dictionary joins the pronunciation layers and
+    /// its inventory gates the phonemes.
+    pub bank: &'a BankProfile,
     /// Per-note lyric annotations overlaying the draft.
     pub annotations: &'a [String],
     /// Notes to be sung.
@@ -57,6 +61,7 @@ pub struct VocalRenderPlanInputs<'a> {
 pub fn plan_vocal_render(inputs: VocalRenderPlanInputs<'_>) -> Result<VocalRenderPlan, String> {
     let assigned = resolve_and_validate(
         inputs.params,
+        inputs.bank,
         inputs.annotations,
         inputs.midi_notes.len(),
         inputs.overrides,
@@ -126,33 +131,37 @@ pub fn next_render_epoch(current: Option<u64>) -> u64 {
 /// stream ready for the render or a user-facing error listing the
 /// syllables that can't be sung. (#494)
 ///
-/// Precedence is `override > project-dict > global-dict > CMU-auto`: the
-/// clip's overrides (only present for a re-render of an edited clip) win,
-/// then the project dictionary. The global (user-config) dictionary has
-/// no on-disk store yet — a later todo wires it; until then it is empty.
+/// Precedence is `override > project-dict > global-dict > bank-dict >
+/// CMU-auto`: the clip's overrides (only present for a re-render of an
+/// edited clip) win, then the project dictionary, then the bank's own.
+/// The global (user-config) dictionary has no on-disk store yet — a later
+/// todo wires it; until then it is empty.
 fn resolve_and_validate(
     params: &VocalParams,
+    bank: &BankProfile,
     annotations: &[String],
     note_count: usize,
     overrides: &HashMap<usize, SyllableOverride>,
     project_dictionary: &[DictionaryEntry],
 ) -> Result<Vec<AssignedSyllable>, String> {
-    let resolved = vocal_svs::resolve_clip_pronunciation(
+    let bank_dictionary = bank.dictionary();
+    let resolved = vocal_svs::resolve_clip_with_bank(
         &params.draft,
         annotations,
         note_count,
         overrides,
         project_dictionary,
         &[],
+        bank_dictionary.as_deref(),
     );
-    vocal_svs::validate_for_voicebank(&resolved, params.voicebank)
-        .map_err(|invalid| describe_invalid(&invalid))
+    vocal_svs::validate_for_voicebank(&resolved, bank)
+        .map_err(|invalid| describe_invalid(&invalid, bank))
 }
 
 /// Render the blocked-phoneme report into a single status-bar line. Caps
 /// the number of syllables spelled out so a wholesale-bad draft doesn't
 /// produce a wall of text.
-pub fn describe_invalid(invalid: &[InvalidSyllable]) -> String {
+pub fn describe_invalid(invalid: &[InvalidSyllable], bank: &BankProfile) -> String {
     const MAX_SHOWN: usize = 6;
     let shown = invalid.len().min(MAX_SHOWN);
     let mut parts: Vec<String> = invalid
@@ -164,8 +173,13 @@ pub fn describe_invalid(invalid: &[InvalidSyllable]) -> String {
             } else {
                 s.label.clone()
             };
+            let word = if s.word.is_empty() || s.word == s.label {
+                String::new()
+            } else {
+                format!(" in \u{201c}{}\u{201d}", s.word)
+            };
             format!(
-                "note {} \u{201c}{}\u{201d}: {} ({})",
+                "note {} \u{201c}{}\u{201d}{word}: {} ({})",
                 s.note_index + 1,
                 label,
                 s.phoneme,
@@ -177,8 +191,9 @@ pub fn describe_invalid(invalid: &[InvalidSyllable]) -> String {
         parts.push(format!("+{} more", invalid.len() - shown));
     }
     format!(
-        "Can\u{2019}t render vocals \u{2014} {} phoneme(s) the voicebank can\u{2019}t sing: {}",
+        "Can\u{2019}t render vocals \u{2014} {} phoneme(s) voicebank {} can\u{2019}t sing: {}",
         invalid.len(),
+        bank.id(),
         parts.join("; ")
     )
 }

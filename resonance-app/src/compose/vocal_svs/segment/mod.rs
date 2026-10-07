@@ -33,6 +33,8 @@ use duration::build_phoneme_track;
 use f0::{build_f0_curve, F0_TIMESTEP};
 use tension::build_tension_curve;
 
+use super::registry::BankProfile;
+
 /// Build a single `DsSegment` covering every note in the clip from the
 /// pre-resolved, voicebank-validated `assigned` syllable stream (one
 /// entry per note). See the module docs for the stage breakdown and
@@ -44,7 +46,8 @@ use tension::build_tension_curve;
 /// the matching per-frame curve (dynamics → energy, breathiness, tension,
 /// pitch bend → f0 cents offset). A curve in its `Auto` state leaves the
 /// auto-derived result untouched. Pass [`ExpressionCurves::default`] for a
-/// lane with no edits.
+/// lane with no edits. `bank` spells the phonemes and language ids and
+/// decides which curves reach the model.
 pub fn build_segment(
     notes: &[MidiNote],
     params: &VocalParams,
@@ -52,8 +55,10 @@ pub fn build_segment(
     curves: &ExpressionCurves,
     ticks_per_quarter: u32,
     bpm: f32,
+    bank: &BankProfile,
 ) -> DsSegment {
-    build_segment_windowed(notes, params, assigned, curves, (0.0, 1.0), ticks_per_quarter, bpm)
+    let window = (0.0, 1.0);
+    build_segment_windowed(notes, params, assigned, curves, window, ticks_per_quarter, bpm, bank)
 }
 
 /// As [`build_segment`], but `window` maps this segment's local frame span
@@ -70,8 +75,9 @@ pub(super) fn build_segment_windowed(
     window: (f32, f32),
     ticks_per_quarter: u32,
     bpm: f32,
+    bank: &BankProfile,
 ) -> DsSegment {
-    let track = build_phoneme_track(notes, params, assigned, ticks_per_quarter, bpm);
+    let track = build_phoneme_track(notes, params, assigned, ticks_per_quarter, bpm, bank);
     let f0_curve = build_f0_curve(&track, params, &curves.pitch_bend, window);
     let n_frames = f0_curve.samples.len();
 
@@ -79,19 +85,19 @@ pub(super) fn build_segment_windowed(
     // (`curve_supported`; no shipped bank does) gets it, and only when the
     // user has shaped an overlay — otherwise a clean no-op.
     let energy =
-        overlay::overlay_envelope(&curves.dynamics, params.voicebank, n_frames, window)
+        overlay::overlay_envelope(&curves.dynamics, bank, n_frames, window)
             .unwrap_or_default();
     // Breathiness → breathiness. Same gate: no shipped bank takes it, so
     // today this is a no-op on every bank, not just TIGER.
     let breathiness =
-        overlay::overlay_envelope(&curves.breathiness, params.voicebank, n_frames, window)
+        overlay::overlay_envelope(&curves.breathiness, bank, n_frames, window)
             .unwrap_or_default();
     // Tension → tension. An edited+supported overlay replaces the
     // auto-derived velocity/contour tension; otherwise keep the baseline
     // (which itself no-ops on TIGER).
     let tension =
-        overlay::overlay_envelope(&curves.tension, params.voicebank, n_frames, window)
-            .unwrap_or_else(|| build_tension_curve(&f0_curve, params));
+        overlay::overlay_envelope(&curves.tension, bank, n_frames, window)
+            .unwrap_or_else(|| build_tension_curve(&f0_curve, params, bank));
     let gender = build_gender_curve(params, n_frames);
 
     DsSegment {

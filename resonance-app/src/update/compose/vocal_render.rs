@@ -237,7 +237,11 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
     // voicebank *before* touching the existing audio. A blocked phoneme
     // aborts the render with a report and leaves the current clip intact
     // rather than corrupting the segment. (#494)
-    let plan = match plan_render(r, &req) {
+    // The lane's bank, as the registry knows it now. A bank that is not
+    // installed still plans (the built-in table answers for it); the
+    // render itself then fails with `voicebank_missing`.
+    let bank = r.voicebanks.profile(&req.params.voicebank);
+    let plan = match plan_render(r, &req, &bank) {
         Ok(plan) => plan,
         Err(message) => {
             r.compose.last_error = Some(message);
@@ -268,6 +272,7 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
         render_cache: render_cache_for(r, req.definition_id, req.track_id),
         midi_notes: req.midi_notes,
         params: req.params,
+        bank,
     };
     let bpm = job.bpm;
     spawn_render(
@@ -288,6 +293,7 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
 fn plan_render(
     r: &crate::Resonance,
     req: &VocalRenderRequest,
+    bank: &crate::compose::vocal_svs::BankProfile,
 ) -> Result<VocalRenderPlan, String> {
     let empty = std::collections::HashMap::new();
     let overrides = req
@@ -298,6 +304,7 @@ fn plan_render(
         tempo_map: &r.tempo_map,
         engine_sample_rate: r.sample_rate,
         params: &req.params,
+        bank,
         annotations: &req.lyrics,
         midi_notes: &req.midi_notes,
         placement_starts: &req.placement_starts,
@@ -373,7 +380,9 @@ fn spawn_render(
         async move {
             tokio::task::spawn_blocking(move || job.run())
                 .await
-                .unwrap_or_else(|join_err| Err(format!("vocal render task join: {join_err}")))
+                .unwrap_or_else(|join_err| {
+                    Err(format!("vocal render task join: {join_err}").into())
+                })
         },
         move |result| match result {
             Ok(Some((wav_path, trim_start, trim_end))) => Message::Compose(
@@ -399,7 +408,8 @@ fn spawn_render(
                 definition_id,
                 track_id,
                 render_epoch,
-                error,
+                kind: error.kind(),
+                error: error.to_string(),
             }),
         },
     )

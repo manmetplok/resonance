@@ -15,7 +15,7 @@ use resonance_app::compose::expression_edit::{normalized_onsets, snap_time, Expr
 use resonance_app::compose::vocal_svs::CurveKind;
 use resonance_app::compose::PenMode;
 use resonance_audio::types::MidiNote;
-use resonance_music_theory::VocalVoicebank;
+use resonance_app::compose::vocal_svs::BankProfile;
 
 const EPS: f32 = 1e-5;
 
@@ -78,7 +78,7 @@ fn add_breakpoint_marks_edited_and_flips_status() {
         vec![0.0, 0.0],
     );
     assert_eq!(
-        curves.status(CurveKind::Tension, VocalVoicebank::Lilia),
+        curves.status(CurveKind::Tension, &BankProfile::not_installed("lilia")),
         CurveStatus::Auto
     );
 
@@ -88,7 +88,7 @@ fn add_breakpoint_marks_edited_and_flips_status() {
 
     assert!(curves.is_edited(CurveKind::Tension));
     assert_eq!(
-        curves.status(CurveKind::Tension, VocalVoicebank::Lilia),
+        curves.status(CurveKind::Tension, &BankProfile::not_installed("lilia")),
         CurveStatus::Edited
     );
     assert!(approx(curves.evaluate(CurveKind::Tension, 0.5), 0.7));

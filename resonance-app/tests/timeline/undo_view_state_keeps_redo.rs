@@ -84,6 +84,7 @@ fn superseded_vocal_completions_are_no_edit() {
         track_id: TRACK,
         render_epoch: 99,
         error: "boom".into(),
+        kind: resonance_app::compose::vocal_svs::VocalRenderErrorKind::Failed,
     }));
 }
 

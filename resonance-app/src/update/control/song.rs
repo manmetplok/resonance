@@ -268,8 +268,11 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             view_model::lane_articulation(app, definition.id, track.id, vocal_params);
         let short_note_count = articulation.iter().filter(|n| n.too_short).count();
         let out_of_range_note_count = articulation.iter().filter(|n| n.out_of_range).count();
-        let (range_lo, range_hi) =
-            crate::compose::vocal_svs::comfortable_pitch_range(vocal_params.voicebank);
+        let range = app
+            .voicebanks
+            .profile(&vocal_params.voicebank)
+            .comfortable_range(vocal_params.speaker.as_deref());
+        let (range_lo, range_hi) = (range.low, range.high);
         lanes.push(song::VocalLaneView {
             definition_id: definition.id.into(),
             name: definition.name.clone(),
@@ -291,7 +294,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             // false confidence right before a render (ba doc #271).
             // "Not generated yet" stays legible as `note_count == 0`.
             counts_mismatch: syllable_count > 0 && note_count != syllable_count,
-            voicebank: Some(view_model::voicebank_id(vocal_params.voicebank)),
+            voicebank: Some(vocal_params.voicebank.to_string()),
             comfortable_range: Some(song::PitchRangeView {
                 low: range_lo,
                 high: range_hi,

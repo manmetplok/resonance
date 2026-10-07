@@ -399,7 +399,7 @@ fn build_vocal_lane_config(
             definition_id.wrapping_mul(0xBF58476D1CE4E5B9),
         )
     });
-    super::vocal::apply_params_patch(&mut vocal, &patch)?;
+    super::vocal::apply_params_patch(&mut vocal, &patch, &app.voicebanks)?;
     Ok(LaneGeneratorConfig {
         kind: LaneGeneratorKind::Vocal(vocal),
         seed: params.seed.unwrap_or(seed),

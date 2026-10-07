@@ -503,12 +503,22 @@ impl JobBoard {
     /// ones that already received its audio and moved on — keep running.
     /// Returns whether any batch matched (a `false` is normal: a
     /// GUI-driven render, with no control job attached).
+    ///
+    /// `kind` classifies the failure for the job's `error.kind`: a missing
+    /// bank or vocoder reports `voicebank_missing` (vocal spec §4.6).
     pub fn fail_vocal_lane(
         &self,
         definition_id: u64,
         track_id: u64,
         error: impl Into<String>,
+        kind: Option<crate::compose::vocal_svs::VocalRenderErrorKind>,
     ) -> bool {
+        use crate::compose::vocal_svs::VocalRenderErrorKind as K;
+        let kind = kind.and_then(|k| match k {
+            K::VoicebankMissing => Some(ErrorKind::VoicebankMissing),
+            K::NothingToSing => Some(ErrorKind::InvalidParams),
+            K::Failed => None,
+        });
         let ids: Vec<u64> = {
             let table = self.table();
             table
@@ -523,7 +533,7 @@ impl JobBoard {
         };
         let error = error.into();
         for id in &ids {
-            self.fail(*id, error.clone());
+            self.fail_with_kind(*id, error.clone(), kind);
         }
         !ids.is_empty()
     }

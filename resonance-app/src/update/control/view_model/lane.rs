@@ -57,7 +57,7 @@ pub(in crate::update::control) fn lane_clip<'a>(
 /// `song.vocal`'s `too_short` / `out_of_range` flags.
 ///
 /// Resolves the lane's pronunciation the same way the render does
-/// (`override > project-dict > CMU-auto`, then the voicebank's phoneme
+/// (`override > project-dict > bank-dict > CMU-auto`, then the voicebank's phoneme
 /// substitutions) so the phonemes reported are the ones that will be
 /// sung. A lane whose phonemes fail the voicebank gate outright reports
 /// on the unsubstituted stream rather than nothing — the render will
@@ -87,15 +87,18 @@ pub(in crate::update::control) fn lane_articulation(
         .get(&clip.id)
         .cloned()
         .unwrap_or_else(|| vec![String::new(); clip.notes.len()]);
-    let resolved = crate::compose::vocal_svs::resolve_clip_pronunciation(
+    let bank = app.voicebanks.profile(&params.voicebank);
+    let bank_dictionary = bank.dictionary();
+    let resolved = crate::compose::vocal_svs::resolve_clip_with_bank(
         &params.draft,
         &annotations,
         clip.notes.len(),
         overrides,
         &app.compose.pronunciation.project_dictionary,
         &[],
+        bank_dictionary.as_deref(),
     );
-    let assigned = crate::compose::vocal_svs::validate_for_voicebank(&resolved, params.voicebank)
+    let assigned = crate::compose::vocal_svs::validate_for_voicebank(&resolved, &bank)
         .unwrap_or(resolved);
     crate::compose::vocal_svs::articulation_report(
         &clip.notes,
@@ -105,7 +108,7 @@ pub(in crate::update::control) fn lane_articulation(
         // (`vocal_render::enqueue_vocal_render`), so the durations
         // reported here are the ones the segment builder will divide up.
         crate::update::compose::section_meter(app, definition_id).bpm,
-        params.voicebank,
+        &bank,
     )
 }
 

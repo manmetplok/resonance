@@ -165,15 +165,20 @@ pub(crate) struct VocalRenderJob {
     pub engine_sample_rate: u32,
     pub dest_dir: PathBuf,
     pub render_cache: Arc<Mutex<SvsRenderCache>>,
+    /// The lane's bank, resolved on the main thread.
+    pub bank: vocal_svs::BankProfile,
 }
 
 impl VocalRenderJob {
     /// Run the SVS pipeline and write the WAV. Blocking.
     ///
-    /// Returns `Ok(None)` when the SVS model dir isn't installed (silent
-    /// fallback to MIDI-only mode), `Ok(Some((path, trim_start_frames,
-    /// trim_end_frames)))` on success.
-    pub(crate) fn run(&self) -> Result<Option<(PathBuf, u64, u64)>, String> {
+    /// Returns `Ok(None)` when the clip has no notes, `Ok(Some((path,
+    /// trim_start_frames, trim_end_frames)))` on success, and an error —
+    /// [`VocalRenderError::VoicebankMissing`] for a bank or vocoder that is
+    /// not installed — otherwise.
+    ///
+    /// [`VocalRenderError::VoicebankMissing`]: vocal_svs::VocalRenderError::VoicebankMissing
+    pub(crate) fn run(&self) -> Result<Option<(PathBuf, u64, u64)>, vocal_svs::VocalRenderError> {
         let mut cache = self
             .render_cache
             .lock()
@@ -187,10 +192,14 @@ impl VocalRenderJob {
             self.bpm,
             self.engine_sample_rate,
             &mut cache,
+            &self.bank,
         ) {
             Ok(Some(r)) => r,
             Ok(None) => return Ok(None),
-            Err(e) => return Err(format!("SVS render: {e}")),
+            Err(vocal_svs::VocalRenderError::Failed(e)) => {
+                return Err(format!("SVS render: {e}").into())
+            }
+            Err(e) => return Err(e),
         };
 
         let path = write_rendered_wav(

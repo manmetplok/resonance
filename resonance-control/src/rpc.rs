@@ -185,6 +185,10 @@ pub enum ErrorKind {
     Unsupported,
     /// An unexpected internal failure.
     Internal,
+    /// A vocal render named a voicebank (or the vocoder it needs) that is
+    /// not installed; the message names it and where to get it. Added
+    /// without a protocol bump: an older client reads it as `unknown`.
+    VoicebankMissing,
     /// Forward-compat catch-all for kinds introduced by newer peers.
     /// Never sent deliberately.
     #[serde(other)]
@@ -201,6 +205,7 @@ impl ErrorKind {
             ErrorKind::Busy => "busy",
             ErrorKind::Unsupported => "unsupported",
             ErrorKind::Internal => "internal",
+            ErrorKind::VoicebankMissing => "voicebank_missing",
             ErrorKind::Unknown => "unknown",
         }
     }
@@ -216,6 +221,7 @@ impl ErrorKind {
             ErrorKind::NeedsConfirmation => codes::NEEDS_CONFIRMATION,
             ErrorKind::Busy => codes::BUSY,
             ErrorKind::Unsupported => codes::UNSUPPORTED,
+            ErrorKind::VoicebankMissing => codes::VOICEBANK_MISSING,
         }
     }
 }
@@ -246,6 +252,8 @@ pub mod codes {
     pub const BUSY: i64 = 1002;
     /// Application: unsupported operation.
     pub const UNSUPPORTED: i64 = 1003;
+    /// Application: a voicebank (or its vocoder) is not installed.
+    pub const VOICEBANK_MISSING: i64 = 1004;
 }
 
 /// Machine-readable error payload carried in `error.data`.
@@ -304,6 +312,10 @@ impl RpcError {
 
     pub fn unsupported(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Unsupported, message)
+    }
+
+    pub fn voicebank_missing(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::VoicebankMissing, message)
     }
 
     pub fn internal(message: impl Into<String>) -> Self {

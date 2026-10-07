@@ -242,8 +242,27 @@ pub fn resolve_clip(
     project: &[DictionaryEntry],
     global: &[DictionaryEntry],
 ) -> Vec<AssignedSyllable> {
+    resolve_clip_with_bank(draft, annotations, note_count, overrides, project, global, None)
+}
+
+/// [`resolve_clip`] with the voicebank's own English dictionary as the
+/// layer between the user's dictionaries and CMU (spec §4.4):
+/// `override > project-dict > global-dict > bank-dict > CMU > rules`.
+pub fn resolve_clip_with_bank(
+    draft: &[LyricLine],
+    annotations: &[String],
+    note_count: usize,
+    overrides: &HashMap<usize, SyllableOverride>,
+    project: &[DictionaryEntry],
+    global: &[DictionaryEntry],
+    bank: Option<&PhonemeDictionary>,
+) -> Vec<AssignedSyllable> {
     let dictionary = merged_dictionary(project, global);
-    let syllables = g2p::resolve_draft_with_dict(draft, &dictionary);
+    let layers = g2p::DictionaryLayers {
+        project: &dictionary,
+        bank,
+    };
+    let syllables = g2p::resolve_draft_with_layers(draft, layers);
     let syllable_overrides = note_overrides_to_syllable(overrides, &syllables, annotations, note_count);
     g2p::assign_syllables_to_notes_with(&syllables, annotations, note_count, &syllable_overrides)
 }

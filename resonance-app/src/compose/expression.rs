@@ -17,7 +17,7 @@
 //! (sparklines, canvas) and the SVS segment builder (todo #334). A curve's
 //! derived [`CurveStatus`] is `Auto` while untouched, `Edited` once the
 //! user adds breakpoints, or `Na` when the active voicebank's acoustic
-//! model doesn't accept it (see [`curve_supported`]).
+//! model doesn't accept it (see [`BankProfile::curve_supported`]).
 //!
 //! This is **data only** — no UI or render wiring lives here. The model is
 //! `serde`-serializable so it can later persist with the project file
@@ -26,9 +26,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use resonance_music_theory::VocalVoicebank;
-
-use super::vocal_svs::{curve_supported, CurveKind};
+use super::vocal_svs::{BankProfile, CurveKind};
 
 /// Neutral depth-over-baseline: the overlay is applied exactly as drawn,
 /// with no extra deviation scaled in. The range is symmetric about zero so
@@ -393,11 +391,10 @@ impl ExpressionCurves {
         }
     }
 
-    /// Derived [`CurveStatus`] of the curve of `kind` for `voicebank`,
-    /// resolving voicebank support via [`curve_supported`].
-    pub fn status(&self, kind: CurveKind, voicebank: VocalVoicebank) -> CurveStatus {
-        self.curve(kind)
-            .status(curve_supported(voicebank, kind))
+    /// Derived [`CurveStatus`] of the curve of `kind` on `bank`,
+    /// resolving support via [`BankProfile::curve_supported`].
+    pub fn status(&self, kind: CurveKind, bank: &BankProfile) -> CurveStatus {
+        self.curve(kind).status(bank.curve_supported(kind))
     }
 }
 

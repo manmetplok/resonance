@@ -13,14 +13,15 @@ use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::g2p::{
     AssignedSyllable, G2pSource, PhonemeProvenance, SyllableStress,
 };
-use resonance_music_theory::{VocalParams, VocalVoicebank};
+use resonance_app::compose::vocal_svs::BankProfile;
+use resonance_music_theory::{VocalParams, VoicebankId};
 
 const TPQ: u32 = TICKS_PER_QUARTER_NOTE as u32;
 const BPM: f32 = 120.0;
 
-fn params(vb: VocalVoicebank) -> VocalParams {
+fn params(vb: &str) -> VocalParams {
     VocalParams {
-        voicebank: vb,
+        voicebank: VoicebankId::new(vb),
         // A non-zero baseline tension so the auto-derived tension curve is
         // present (non-default) on supporting voicebanks.
         tension: 0.3,
@@ -63,9 +64,9 @@ fn flat_overlay(kind: CurveKind, value: f32) -> ExpressionCurves {
     curves
 }
 
-fn build(vb: VocalVoicebank, curves: &ExpressionCurves) -> resonance_svs::ds::DsSegment {
+fn build(vb: &str, curves: &ExpressionCurves) -> resonance_svs::ds::DsSegment {
     let (notes, assigned) = one_note();
-    build_segment(&notes, &params(vb), &assigned, curves, TPQ, BPM)
+    build_segment(&notes, &params(vb), &assigned, curves, TPQ, BPM, &BankProfile::not_installed(vb))
 }
 
 // ---------------------------------------------------------------------------
@@ -76,7 +77,7 @@ fn build(vb: VocalVoicebank, curves: &ExpressionCurves) -> resonance_svs::ds::Ds
 fn auto_curves_leave_energy_and_breathiness_default() {
     // No overlays: dynamics/breathiness contribute nothing, so their
     // per-frame curves stay empty (the pre-#334 default).
-    let seg = build(VocalVoicebank::Lilia, &ExpressionCurves::default());
+    let seg = build("lilia", &ExpressionCurves::default());
     assert!(seg.energy.is_empty(), "energy should be default when Auto");
     assert!(
         seg.breathiness.is_empty(),
@@ -89,7 +90,7 @@ fn auto_tension_matches_auto_derived_baseline() {
     // The tension field for an Auto curve must equal the builder's own
     // auto-derived tension (driven by params.tension), unchanged by the
     // overlay feature.
-    let seg_default = build(VocalVoicebank::Lilia, &ExpressionCurves::default());
+    let seg_default = build("lilia", &ExpressionCurves::default());
     // Lilia accepts tension and params.tension is non-zero, so it's present.
     assert!(
         !seg_default.tension.is_empty(),
@@ -98,7 +99,7 @@ fn auto_tension_matches_auto_derived_baseline() {
 
     // An edited *dynamics* overlay must not perturb the tension or f0 curve
     // — the curves stay frame-independent.
-    let dyn_edited = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::Dynamics, 0.9));
+    let dyn_edited = build("lilia", &flat_overlay(CurveKind::Dynamics, 0.9));
     assert_eq!(
         seg_default.tension.samples, dyn_edited.tension.samples,
         "editing dynamics must not change tension"
@@ -118,7 +119,7 @@ fn dynamics_overlay_is_a_no_op_on_every_shipped_voicebank() {
     // No shipped bank's acoustic config sets `use_energy_embed`, so an
     // edited dynamics overlay must not emit an energy curve the model
     // would ignore (or, worse, claim to honour).
-    for vb in VocalVoicebank::ALL.iter().copied() {
+    for vb in ["tiger", "lilia", "meiji"] {
         let seg = build(vb, &flat_overlay(CurveKind::Dynamics, 1.0));
         assert!(seg.energy.is_empty(), "{vb:?} must leave energy default");
     }
@@ -126,7 +127,7 @@ fn dynamics_overlay_is_a_no_op_on_every_shipped_voicebank() {
 
 #[test]
 fn breathiness_overlay_is_a_no_op_on_every_shipped_voicebank() {
-    for vb in VocalVoicebank::ALL.iter().copied() {
+    for vb in ["tiger", "lilia", "meiji"] {
         let seg = build(vb, &flat_overlay(CurveKind::Breathiness, 1.0));
         assert!(
             seg.breathiness.is_empty(),
@@ -141,7 +142,7 @@ fn breathiness_overlay_is_a_no_op_on_every_shipped_voicebank() {
 
 #[test]
 fn tension_overlay_honoured_on_supporting_voicebank() {
-    for vb in [VocalVoicebank::Lilia, VocalVoicebank::Meiji] {
+    for vb in ["lilia", "meiji"] {
         let seg = build(vb, &flat_overlay(CurveKind::Tension, 1.0));
         assert!(!seg.tension.is_empty(), "{vb:?}");
         assert_eq!(seg.tension.samples.len(), seg.f0.samples.len());
@@ -157,7 +158,7 @@ fn tension_overlay_honoured_on_supporting_voicebank() {
 fn tension_tracks_overlay_value() {
     // Midpoint of the envelope (0.5) maps to model-neutral (0.0); the same
     // mapping serves energy and breathiness on a bank that takes them.
-    let seg = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::Tension, 0.5));
+    let seg = build("lilia", &flat_overlay(CurveKind::Tension, 0.5));
     assert!(!seg.tension.is_empty());
     for v in &seg.tension.samples {
         assert!((*v).abs() < 1e-6, "tension frame {v} should map to 0.0");
@@ -168,7 +169,7 @@ fn tension_tracks_overlay_value() {
 fn unsupported_tension_overlay_leaves_field_default() {
     // TIGER's acoustic model has no tension input, so even an edited
     // overlay is a clean no-op (field stays default), not an error.
-    let seg = build(VocalVoicebank::Tiger, &flat_overlay(CurveKind::Tension, 1.0));
+    let seg = build("tiger", &flat_overlay(CurveKind::Tension, 1.0));
     assert!(
         seg.tension.is_empty(),
         "TIGER must leave tension default even when the overlay is edited"
@@ -181,9 +182,9 @@ fn unsupported_tension_overlay_leaves_field_default() {
 
 #[test]
 fn pitch_bend_overlay_shifts_f0_up() {
-    let baseline = build(VocalVoicebank::Lilia, &ExpressionCurves::default());
+    let baseline = build("lilia", &ExpressionCurves::default());
     // +50 cents constant: every voiced frame should rise by ~2^(50/1200).
-    let bent = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::PitchBend, 50.0));
+    let bent = build("lilia", &flat_overlay(CurveKind::PitchBend, 50.0));
 
     assert_eq!(baseline.f0.samples.len(), bent.f0.samples.len());
     let factor = 2.0_f64.powf(50.0 / 1200.0);
@@ -200,8 +201,8 @@ fn pitch_bend_overlay_shifts_f0_up() {
 
 #[test]
 fn pitch_bend_overlay_shifts_f0_down() {
-    let baseline = build(VocalVoicebank::Lilia, &ExpressionCurves::default());
-    let bent = build(VocalVoicebank::Lilia, &flat_overlay(CurveKind::PitchBend, -50.0));
+    let baseline = build("lilia", &ExpressionCurves::default());
+    let bent = build("lilia", &flat_overlay(CurveKind::PitchBend, -50.0));
     for (b, e) in baseline.f0.samples.iter().zip(&bent.f0.samples) {
         if *b > 0.0 {
             assert!(*e < *b, "negative bend should lower f0");
@@ -213,12 +214,12 @@ fn pitch_bend_overlay_shifts_f0_down() {
 fn auto_pitch_bend_leaves_f0_identical() {
     // PitchBend is universally supported, but an Auto (un-edited) curve
     // must leave the f0 curve byte-for-byte identical.
-    let baseline = build(VocalVoicebank::Tiger, &ExpressionCurves::default());
+    let baseline = build("tiger", &ExpressionCurves::default());
     let mut curves = ExpressionCurves::default();
     // Touch a *different* curve so the bundle isn't all-default but pitch
     // bend stays Auto.
     curves.curve_mut(CurveKind::Dynamics).add_breakpoint(0.0, 0.5);
-    let other = build(VocalVoicebank::Tiger, &curves);
+    let other = build("tiger", &curves);
     assert_eq!(
         baseline.f0.samples, other.f0.samples,
         "an Auto pitch-bend curve must not touch f0"

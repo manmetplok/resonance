@@ -15,7 +15,7 @@
 //! Change tracking is *content-addressed* rather than flag-based: each
 //! unit's cache key is a hash of everything that determines its rendered
 //! audio (phonemes, durations, f0/gender/tension curves, and the active
-//! voicebank/singer). An edit that changes a syllable changes that unit's
+//! voicebank/speaker). An edit that changes a syllable changes that unit's
 //! key and nothing else, so the cache lookup alone decides what to
 //! re-render — no separate per-syllable dirty bit to keep in sync. The
 //! "N of M segments changed" figure the UI overlay wants (design #173
@@ -32,6 +32,7 @@ use resonance_svs::ds::{DsSegment, SampleCurve};
 
 use crate::compose::expression::ExpressionCurves;
 
+use super::registry::BankProfile;
 use super::segment::build_segment_windowed;
 use super::SILENCE_GAP_SEC;
 
@@ -83,6 +84,7 @@ pub fn split_render_units(
     curves: &ExpressionCurves,
     ticks_per_quarter: u32,
     bpm: f32,
+    bank: &BankProfile,
 ) -> Vec<RenderUnit> {
     if notes.is_empty() {
         return Vec::new();
@@ -139,6 +141,7 @@ pub fn split_render_units(
             window,
             ticks_per_quarter,
             bpm,
+            bank,
         );
         let start_sec = (notes[lo].start_tick.saturating_sub(base_tick)) as f64 * spt;
         let syllable_range = assigned[lo].syllable_index..assigned[hi - 1].syllable_index + 1;
@@ -156,7 +159,7 @@ pub fn split_render_units(
 
 /// FNV-1a hash of everything that determines a unit's rendered audio:
 /// the phoneme/note/duration arrays, every per-frame curve, and the
-/// active voicebank + singer (which select the acoustic/vocoder model and
+/// active voicebank + speaker (which select the acoustic/vocoder model and
 /// speaker embedding — not captured by the segment arrays themselves).
 /// Two units with the same key render bit-identical audio, so a cache hit
 /// is always safe to reuse.
@@ -164,10 +167,7 @@ fn content_key(seg: &DsSegment, params: &VocalParams) -> u64 {
     let mut h = Fnv::new();
     // Model + speaker identity. The segment arrays already fold in the
     // voicebank's phoneme substitutions, but not which model renders them.
-    h.str(&format!(
-        "{:?}|{:?}|{:?}",
-        params.voicebank, params.singer, params.singer_meiji
-    ));
+    h.str(&format!("{}|{:?}", params.voicebank, params.speaker));
     for s in &seg.ph_seq {
         h.str(s);
     }

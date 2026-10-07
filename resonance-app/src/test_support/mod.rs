@@ -32,3 +32,5 @@ mod timeline;
 mod tracks;
 mod transport;
 mod vocal_compose;
+mod voicebanks;
+pub use voicebanks::{write_voicebank_fixture, VoicebankFixture};

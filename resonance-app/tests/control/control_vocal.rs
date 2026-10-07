@@ -21,6 +21,7 @@ use crate::common::roundtrip;
 
 fn app_with_project() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_install_shipped_voicebanks();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-vocal-test.rprj"));
     app
@@ -351,7 +352,7 @@ fn render_returns_a_job_and_keeps_the_default_voicebank() {
     // A new lane starts on the code default, Lilia (spec D9).
     assert_eq!(
         app.test_vocal_voicebank(def, 33),
-        Some(resonance_music_theory::VocalVoicebank::Lilia)
+        Some(resonance_music_theory::VoicebankId::new("lilia"))
     );
 
     let response = call(
@@ -368,7 +369,7 @@ fn render_returns_a_job_and_keeps_the_default_voicebank() {
     // The lane's voicebank is still Lilia.
     assert_eq!(
         app.test_vocal_voicebank(def, 33),
-        Some(resonance_music_theory::VocalVoicebank::Lilia)
+        Some(resonance_music_theory::VoicebankId::new("lilia"))
     );
 
     // The job exists and is live (the SVS model dir is absent under test,
@@ -407,7 +408,7 @@ fn an_omitted_voicebank_keeps_the_lane_setting() {
     .expect("render returns a job");
     assert_eq!(
         app.test_vocal_voicebank(def, 35),
-        Some(resonance_music_theory::VocalVoicebank::Meiji)
+        Some(resonance_music_theory::VoicebankId::new("meiji"))
     );
 
     // Render again without naming one: the lane keeps Meiji.
@@ -424,7 +425,7 @@ fn an_omitted_voicebank_keeps_the_lane_setting() {
     .expect("render returns a job");
     assert_eq!(
         app.test_vocal_voicebank(def, 35),
-        Some(resonance_music_theory::VocalVoicebank::Meiji),
+        Some(resonance_music_theory::VoicebankId::new("meiji")),
         "an omitted voicebank must not reset the lane"
     );
 }
@@ -447,7 +448,7 @@ fn render_accepts_an_explicit_voicebank() {
     let _: JobStarted = response.result().expect("render returns a job");
     assert_eq!(
         app.test_vocal_voicebank(def, 34),
-        Some(resonance_music_theory::VocalVoicebank::Meiji)
+        Some(resonance_music_theory::VoicebankId::new("meiji"))
     );
 
     // Unknown voicebank rejected before any job starts.

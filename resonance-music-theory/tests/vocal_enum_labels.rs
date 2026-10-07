@@ -5,8 +5,8 @@
 //! arrays and match arms).
 
 use resonance_music_theory::{
-    SyllableMode, VocalContour, VocalMood, VocalPov, VocalRhymeScheme, VocalSinger,
-    VocalSingerMeiji, VocalStyle, VocalTimbre, VocalVoicebank, VoiceType,
+    SyllableMode, VocalContour, VocalMood, VocalPov, VocalRhymeScheme, VocalStyle, VocalTimbre,
+    VoicebankId, VoiceType,
 };
 
 #[test]
@@ -18,9 +18,6 @@ fn variant_counts_are_stable() {
     assert_eq!(SyllableMode::ALL.len(), 3);
     assert_eq!(VocalContour::ALL.len(), 5);
     assert_eq!(VocalStyle::ALL.len(), 6);
-    assert_eq!(VocalVoicebank::ALL.len(), 3);
-    assert_eq!(VocalSinger::ALL.len(), 7);
-    assert_eq!(VocalSingerMeiji::ALL.len(), 4);
     assert_eq!(VocalTimbre::ALL.len(), 4);
 }
 
@@ -79,27 +76,6 @@ fn style_labels_spell_pop_ballad_with_a_space() {
 }
 
 #[test]
-fn voicebank_labels_uppercase_tiger() {
-    let labels: Vec<&str> = VocalVoicebank::ALL.iter().map(|v| v.as_str()).collect();
-    assert_eq!(labels, ["TIGER", "Lilia", "Meiji"]);
-}
-
-#[test]
-fn singer_labels_match_variant_names() {
-    let labels: Vec<&str> = VocalSinger::ALL.iter().map(|s| s.as_str()).collect();
-    assert_eq!(
-        labels,
-        ["Glam", "Fresh", "Disco", "Royal", "Electric", "Mystic", "Vinyl"]
-    );
-}
-
-#[test]
-fn meiji_singer_labels_match_variant_names() {
-    let labels: Vec<&str> = VocalSingerMeiji::ALL.iter().map(|s| s.as_str()).collect();
-    assert_eq!(labels, ["Standard", "Hunter", "Lilith", "Phantom"]);
-}
-
-#[test]
 fn timbre_labels_match_variant_names() {
     let labels: Vec<&str> = VocalTimbre::ALL.iter().map(|t| t.as_str()).collect();
     assert_eq!(labels, ["Airy", "Warm", "Edged", "Bright"]);
@@ -112,8 +88,9 @@ fn serde_uses_variant_idents_not_strum_labels() {
     // labels must not leak into the JSON.
     let json = serde_json::to_string(&VocalStyle::PopBallad).expect("serialize");
     assert_eq!(json, "\"PopBallad\"");
-    let json = serde_json::to_string(&VocalVoicebank::Tiger).expect("serialize");
-    assert_eq!(json, "\"Tiger\"");
+    // The voicebank is a string id, written as the id itself.
+    let json = serde_json::to_string(&VoicebankId::new("Tiger")).expect("serialize");
+    assert_eq!(json, "\"tiger\"");
     let json = serde_json::to_string(&VocalPov::FirstSingular).expect("serialize");
     assert_eq!(json, "\"FirstSingular\"");
     let json = serde_json::to_string(&VoiceType::MezzoSoprano).expect("serialize");

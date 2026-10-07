@@ -20,7 +20,8 @@ use resonance_app::update::compose::vocal_render_plan::{
 };
 use resonance_audio::types::{MidiNote, TempoMap, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::derive::LyricLine;
-use resonance_music_theory::{VocalParams, VocalVoicebank};
+use resonance_music_theory::{VocalParams, VoicebankId};
+use resonance_app::compose::vocal_svs::BankProfile;
 
 const SR: u32 = 48_000;
 const BPM: f32 = 120.0;
@@ -52,7 +53,7 @@ fn note_at(start_tick: u64) -> MidiNote {
 /// A one-line, one-syllable draft.
 fn params(text: &str, syllables: u8) -> VocalParams {
     VocalParams {
-        voicebank: VocalVoicebank::Tiger,
+        voicebank: VoicebankId::new("tiger"),
         draft: vec![LyricLine {
             n: 1,
             rhyme: 'A',
@@ -159,6 +160,7 @@ fn a_singable_draft_plans_one_syllable_per_note() {
     let plan = plan_vocal_render(VocalRenderPlanInputs {
         tempo_map: &tm,
         engine_sample_rate: SR,
+        bank: &BankProfile::not_installed("tiger"),
         params: &params("hello there", 2),
         annotations: &[],
         midi_notes: &notes,
@@ -180,6 +182,7 @@ fn the_project_dictionary_reaches_the_planned_syllables() {
     let plan = plan_vocal_render(VocalRenderPlanInputs {
         tempo_map: &tm,
         engine_sample_rate: SR,
+        bank: &BankProfile::not_installed("tiger"),
         params: &params("vee", 1),
         annotations: &[],
         midi_notes: &[note_at(0)],
@@ -213,6 +216,7 @@ fn an_unsingable_phoneme_blocks_the_plan() {
     let err = plan_vocal_render(VocalRenderPlanInputs {
         tempo_map: &tm,
         engine_sample_rate: SR,
+        bank: &BankProfile::not_installed("tiger"),
         params: &params("hello", 1),
         annotations: &[],
         midi_notes: &[note_at(0)],
@@ -234,6 +238,7 @@ fn invalid(note_index: usize, label: &str, phoneme: &str) -> InvalidSyllable {
     InvalidSyllable {
         note_index,
         label: label.to_string(),
+        word: label.to_string(),
         phoneme: phoneme.to_string(),
         reason: InvalidPhonemeReason::NotArpabet,
     }
@@ -241,7 +246,7 @@ fn invalid(note_index: usize, label: &str, phoneme: &str) -> InvalidSyllable {
 
 #[test]
 fn the_report_names_the_note_one_based() {
-    let line = describe_invalid(&[invalid(0, "hi", "zzz")]);
+    let line = describe_invalid(&[invalid(0, "hi", "zzz")], &BankProfile::not_installed("tiger"));
     assert!(line.contains("note 1"), "{line}");
     assert!(line.contains("zzz"), "{line}");
     assert!(line.contains("not ARPAbet"), "{line}");
@@ -249,7 +254,7 @@ fn the_report_names_the_note_one_based() {
 
 #[test]
 fn a_label_less_syllable_is_shown_as_a_question_mark() {
-    let line = describe_invalid(&[invalid(3, "", "qq")]);
+    let line = describe_invalid(&[invalid(3, "", "qq")], &BankProfile::not_installed("tiger"));
     assert!(line.contains("note 4"), "{line}");
     assert!(line.contains('?'), "{line}");
 }
@@ -259,7 +264,7 @@ fn a_wholesale_bad_draft_is_summarised_not_spelled_out() {
     // Every offender is counted, but at most six are named — the report
     // goes into a one-line status bar.
     let all: Vec<InvalidSyllable> = (0..9).map(|i| invalid(i, "x", "zz")).collect();
-    let line = describe_invalid(&all);
+    let line = describe_invalid(&all, &BankProfile::not_installed("tiger"));
     assert!(line.contains("9 phoneme(s)"), "{line}");
     assert!(line.contains("+3 more"), "{line}");
     assert_eq!(line.matches("note ").count(), 6, "{line}");

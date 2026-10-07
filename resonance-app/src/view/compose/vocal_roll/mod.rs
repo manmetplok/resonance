@@ -101,8 +101,9 @@ pub struct VocalRollCanvas<'a> {
     pub clip: &'a MidiClipState,
     pub track_id: TrackId,
     pub params: &'a VocalParams,
-    /// Section chords + total beats — used to draw the read-only chord
-    /// context strip above the note grid.
+    /// The lane's bank: its dictionary and inventory shape the phoneme strip.
+    pub bank: crate::compose::vocal_svs::BankProfile,
+    /// Section chords + total beats for the read-only chord strip.
     pub chords: &'a [ChordState],
     pub section_beats: u32,
     pub scroll_y: f32,
@@ -111,16 +112,13 @@ pub struct VocalRollCanvas<'a> {
     pub snap_ticks: u64,
     pub selected_note: Option<usize>,
     pub time_sig_num: u8,
-    /// The section's BPM (from the tempo map at the section). Plumbed in so the pitch-curve
-    /// preview's portamento + vibrato match what the SVS pipeline
-    /// will produce at the same tempo.
+    /// The section's BPM, so the pitch-curve preview's portamento and
+    /// vibrato match what the SVS pipeline produces at that tempo.
     pub bpm: f32,
     /// Voice name shown in the top-left meta corner.
     pub voice_label: &'a str,
-    /// Per-note lyrics from `compose.vocal_audio.clip_lyrics`. Index i aligns
-    /// with the i-th `MidiNote`. Slurs are identified by the lyric
-    /// being equal to [`resonance_music_theory::g2p::SLUR_MARKER`]
-    /// (`"+"`).
+    /// Per-note lyrics from `compose.vocal_audio.clip_lyrics` (index i is
+    /// the i-th `MidiNote`); a slur is [`resonance_music_theory::g2p::SLUR_MARKER`].
     pub lyrics: &'a [String],
 }
 
@@ -156,6 +154,7 @@ pub fn build_canvas<'a>(
         clip,
         track_id: editor_state.track_id,
         params,
+        bank: app.voicebanks.profile(&params.voicebank),
         chords: &definition.chords,
         section_beats: definition.length_bars * meter.numerator as u32,
         scroll_y: editor_state.scroll_y,
