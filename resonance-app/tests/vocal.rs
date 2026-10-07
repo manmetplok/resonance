@@ -48,3 +48,5 @@ mod vocal_rests_breaths;
 mod vocal_velocity_dynamics;
 #[path = "vocal/vocal_dynamics_render.rs"]
 mod vocal_dynamics_render;
+#[path = "vocal/bank_audition.rs"]
+mod bank_audition;

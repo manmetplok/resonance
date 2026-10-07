@@ -1,6 +1,6 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `ce484ad3` + vocal phase 3 on 2026-10-07.
+> Verified against master @ `2b28debd` + the bank audition script on 2026-10-07.
 > Spec history: crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -363,6 +363,42 @@ It depends only on `resonance-music-theory`.
 - **Agent skills:** `mixing`, `spatial` read `song_vocal`; external
   `singer-songwriter` and `resonance-studio` skills drive renders.
 
+## Bank audition
+
+A blind listening tool for choosing which banks join the registry (spec
+§12 slice 6, D30) — not a render feature itself, just a harness over the
+real one. `resonance-app/tests/vocal/bank_audition.rs` (`#[ignore]`d,
+test `audition`) renders one committed test phrase
+(`tests/vocal/fixtures/bank_audition_song.json`: ~4 bars, `v`/`th`/`r`/`l`
+clusters, a held `_` melisma, a written `AP` breath, a rest, a high and a
+low note) through the real registry → resolver → segment → render path
+on **every installed bank × speaker** — the same `VoicebankRoots::for_machine`
+roots the app itself scans, so it picks up `$RESONANCE_SVS_MODELS_DIR` and
+any bank dropped into the user voicebank folder. It checks each render's
+RMS before writing it (a render under −45 dBFS fails the test loudly
+rather than leaving a silent WAV in the pile) and writes plainly-named
+WAVs (`<bank>__<speaker>.wav`) plus a `manifest.json` into
+`$RESONANCE_AUDITION_OUT`.
+
+`scripts/vocal-audition.py` is the entry point: it sets
+`$RESONANCE_AUDITION_OUT` (default `target/audition`), runs the test,
+then shuffles `manifest.json`'s entries behind random 8-character tokens,
+renames the WAVs to `<token>.wav` and writes `key.json`
+(token → bank/speaker) — so a listen is blind until `--reveal` prints the
+key. Neither the WAVs nor the keys are committed.
+
+```sh
+RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models scripts/vocal-audition.py
+# listen to target/audition/*.wav blind, then:
+scripts/vocal-audition.py --reveal
+```
+
+Run once against TIGER, Lilia and Meiji (2026-10-07): 12 files (Lilia's
+one voice, Meiji's four modes, TIGER's seven), 7.85 s each, all
+non-silent (−20 to −27 dBFS). The listen itself and picking which
+candidates (Peiton, the LUNAI English singers, Meiji v170) join the index
+is Jorrit's job, not this tool's — see spec §12 slice 6 and §5.
+
 ## How it's tested
 
 | What | Where | Run |
@@ -382,6 +418,7 @@ It depends only on `resonance-music-theory`.
 | In-flight / re-render safety | `tests/compose/vocal_render_inflight_placement.rs`, `vocal_rerender_keeps_saved_audio.rs`, `vocal_tempo_mismatch_warning.rs` | same |
 | Control render, `svs_backend` in hello | `tests/control/control_endpoint.rs`, `control_vocal.rs`, `control_vocal_render_all_lanes.rs`, `control_jobs.rs`, `tests/e2e_compose_via_control.rs` | same |
 | SVS crate | `resonance-svs/tests/{ds_validation,mix_timeline,voicebank_manifest,voicebank_phonetics,smoke}.rs` (`read_curve_support`, two-level layout, library vocoders, `dsdict` parsing, execution-provider names); `smoke.rs::end_to_end_render` is `#[ignore]` and also checks `active_backend()` | `./scripts/run-tests.py -p resonance-svs`; by hand: `SVS_POC_VOICEBANK_DIR=… SVS_POC_DS_FILE=… cargo test -p resonance-svs --test smoke -- --ignored` |
+| Bank audition: every installed bank × speaker renders the committed phrase non-silently | `tests/vocal/bank_audition.rs` (`#[ignore]`, no-ops with no `$RESONANCE_AUDITION_OUT`) | `scripts/vocal-audition.py` (see [Bank audition](#bank-audition)) |
 
 Not covered: no hermetic test runs ONNX inference; real audio quality is
 checked by ear only. The app tests drive the pipeline with injected

@@ -1,0 +1,19 @@
+{
+  "description": "Committed fixture for the blind bank audition (vocal-mcp-control-and-quality.md §12 slice 6, D30). ~4 bars at 120bpm: v/th/r/l clusters ('velvet', 'thread', 'truly', 'lovers', 'throbs', 'really', 'rhythm'), a held `_` melisma on 'lovers', an `AP` breath before 'earth', a 1.5-beat rest before it, a high note ('lovers', pitch 74) and a low one ('velvet', pitch 50). `start_beat`/`duration_beat` are in quarter notes at `bpm`; the test converts them to ticks.",
+  "bpm": 120.0,
+  "lyrics": "velvet thread truly lovers _ _ AP earth throbs really rhythm glow love",
+  "notes": [
+    { "start_beat": 0.0, "duration_beat": 1.0, "pitch": 50, "velocity": 0.72 },
+    { "start_beat": 1.0, "duration_beat": 1.0, "pitch": 62, "velocity": 0.80 },
+    { "start_beat": 2.0, "duration_beat": 1.0, "pitch": 63, "velocity": 0.78 },
+    { "start_beat": 3.0, "duration_beat": 1.0, "pitch": 74, "velocity": 0.88 },
+    { "start_beat": 4.0, "duration_beat": 1.0, "pitch": 74, "velocity": 0.88 },
+    { "start_beat": 5.0, "duration_beat": 1.0, "pitch": 74, "velocity": 0.88 },
+    { "start_beat": 7.5, "duration_beat": 1.0, "pitch": 58, "velocity": 0.70 },
+    { "start_beat": 8.5, "duration_beat": 1.0, "pitch": 61, "velocity": 0.76 },
+    { "start_beat": 9.5, "duration_beat": 1.0, "pitch": 63, "velocity": 0.74 },
+    { "start_beat": 10.5, "duration_beat": 1.0, "pitch": 60, "velocity": 0.78 },
+    { "start_beat": 11.5, "duration_beat": 1.0, "pitch": 52, "velocity": 0.80 },
+    { "start_beat": 12.5, "duration_beat": 2.0, "pitch": 65, "velocity": 0.90 }
+  ]
+}

@@ -1,6 +1,6 @@
 # Vocals: MCP control, voicebank library, correctness and expression
 
-> Status: **partly built** (slices 1–5 and 8–13 built; progress per slice in §12)
+> Status: **partly built** (slices 1–6 and 8–13 built; progress per slice in §12)
 > Area: compose (vocals) + control-api + plugins-instruments (library)
 > Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
 > (every decision below was put to him as a multiple-choice question; §11
@@ -465,13 +465,20 @@ handler, MCP tool, GUI, tests, and the feature doc with its
    skipped, so those words fall back to CMU. The bank dictionary, then CMU mapped onto
    the inventory; generalised substitutions and language ids; the
    `english` flag.
-6. **Bank audition script.**
-   - A `resonance-svs` example renders one committed test song on every
-     installed bank and speaker into `target/audition/`, with names hidden
-     behind a key file.
+6. **Bank audition script.** ✅ built (see
+   [vocal rendering § bank audition](../../features/compose/vocal-rendering.md#bank-audition)).
+   Deviation: an `#[ignore]`d test module
+   (`resonance-app/tests/vocal/bank_audition.rs`) through the app's real
+   registry → resolver → segment → render path, not a `resonance-svs`
+   example — it reuses the real app's `VoicebankRoots::for_machine` and
+   needs no example-only phonemiser copy (the known gap that the example
+   can't drive Meiji does not apply here). `scripts/vocal-audition.py`
+   runs it, shuffles the result behind random tokens into
+   `target/audition/`, and `--reveal` prints the key.
    - Jorrit listens blind, and the results pick which banks go in the index:
      Peiton, LUNAI Katyusha / Keiro / Liam and Meiji v170 against the
-     current three.
+     current three. That listen and the index decision are still open —
+     only the render-and-blind tooling is built.
 7. **plok.org install.** Index entries, shared `plok_download`, the library
    overlay, `vocal.voicebank_install`, and the available list in
    `vocal.voicebanks`.
