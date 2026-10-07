@@ -21,7 +21,8 @@ The version-matching exercise was useful regardless: `hound 3.5.1`, `serde 1`,
 already in `Cargo.lock` and were pinned to compatible versions in the PoC's
 `Cargo.toml`, so `cargo build` compiles each at most once across the
 workspace. Newly introduced to the dependency tree: `ort`, `ndarray`,
-`serde_yaml`, `clap`, `tracing-subscriber`.
+`serde_yaml_ng` (originally `serde_yaml`), and — only behind the `cli`
+feature, so the app never pulls them in — `clap` and `tracing-subscriber`.
 
 ## Inventory of Resonance shared-code touches
 
@@ -194,12 +195,15 @@ loader into the PoC itself — keeps the PoC's config parser straight.
   don't appear in the singer's `phonemes.txt` map to id 0 (silence/AP).
   This is a feature of DiffSinger's contract, not a PoC bug.
 
-## What the PoC explicitly does *not* do
+## What the crate does *not* do
+
+These are limits of this crate; the app layers the missing parts on top
+(`resonance-app/src/compose/vocal_svs/`: G2P, partial re-render cache,
+placement install — see `docs/features/compose/vocal-rendering.md`).
 
 - No phonemizer. Input must already be phonemized via `.ds`.
 - No streaming, chunked render, or incremental re-render.
-- No project / clip / track / automation integration with the rest of
-  Resonance.
+- No project / clip / track / automation integration.
 - No variance ONNX execution. Voicebanks whose acoustic model declares
   required `energy` or `breathiness` inputs but whose `.ds` omits them will
   fail with a clear error pointing at the missing curve.

@@ -1,0 +1,119 @@
+# Section chords, scale and progression generators
+
+> Verified against master @ `8eac71b3` on 2026-10-07.
+> Spec history: `docs/history/specs/melody-generation-research.md`, `docs/history/specs/todo.md` (Tier 2 harmony items).
+
+Every section definition has its own **chord grid** (chords on whole
+beats, relative to the section start) and an optional **scale**. The user
+draws chords on the Compose chord lane, or has a generator write a
+progression: a Markov "style table" sampler or a named pop **schema**.
+Agents write chords with `harmony.*`. Chord changes regenerate every
+chord-reading lane in the section.
+
+## Behaviour
+
+- **Grid rules.** Chords sit on whole beats, are at least one beat long,
+  never overlap, and must end inside the section (`chord_overlaps`,
+  `chord_fits_in_section`, with beats per bar from the section's meter).
+  A chord is a `resonance_music_theory::Chord`: root, `ChordQuality`
+  (Maj, Min, Dim, Aug, Maj7, Min7, Dom7, MinMaj7, Dim7, HalfDim7, Sus2,
+  Sus4, Maj6, Min6, Add9) and an optional slash bass.
+- **Scale.** `Scale { root, mode }` with `Mode` Chromatic, Major, Minor,
+  Dorian, Phrygian, Lydian, Mixolydian, Locrian, HarmonicMinor,
+  MelodicMinor. A section may have no scale; the progression generators
+  refuse to run without one ("Pick a scale before generating a
+  progression"). The scale stripe above the chord lane shows it. Note
+  that lane regeneration uses the [chord track](chord-track.md)'s key
+  instead whenever one is set.
+- **Chord lane (GUI).** Click an empty beat → adds C major for up to
+  `DEFAULT_NEW_CHORD_BEATS`, shortened to the gap. Drag to move or resize.
+  Selecting a chord opens an inline row (`view/compose/popover.rs`) with
+  root, quality and bass pickers and Delete.
+- **Generators (chord inspector).**
+  - *Style table* (`GeneratorSpec::MarkovProgression`): built-in tables
+    `pop`, `modal`, `jazz`, `post_rock`, `metal`, `classical`; chord count,
+    optional start/end degree. Output carries the phrase-model overlay
+    (T→PD→D arc, harmonic-rhythm splits that halve a slot before the
+    cadence) and inversions (ii6, cadential 6/4) as slash basses.
+  - *Schema* (`GeneratorSpec::Schema`): `SchemaKind` TwelveBarBlues,
+    DooWop, Axis, Hopscotch, Lament, PlagalVamp, DoublePlagal, PlagalSigh,
+    MixolydianShuttle, DorianShuttle, LydianShuttle, CircleOfFifths, Puff,
+    Pentatonic; `rotation` and `substitution` (0..1 chance per slot of a
+    chord sharing ≥2 tones).
+  - Shared: beats per chord, sevenths. Generate re-rolls from scratch;
+    Regenerate bumps `generator_seed`. Diatonic degrees take their quality
+    from the scale (`diatonic_chord`); borrowed degrees keep their own.
+    If chords × beats exceed the section, the generate is refused.
+  - The chord inspector also holds the section's shared motif controls
+    (complexity, length, leap chance, Regenerate motif, manual motif
+    canvas) — see [lane generators](lane-generators.md).
+- **Locks.** The generator honours per-chord locks from
+  `generated_material` on Regenerate, but no GUI or control action sets a
+  lock today.
+- **Cascade.** Every chord mutation ends in `propagate_chord_change`.
+
+## Where the logic lives
+
+| Concern | Location | Key items |
+|---|---|---|
+| Chord state | `resonance-app/src/compose/section.rs` | `ChordState`, `SectionDefinitionState::{chords, scale, generator_spec, generator_seed, generated_material, beats_per_chord, seventh_chords}` |
+| Chord ops | `resonance-app/src/update/compose/chord.rs` | `handle_add`, `handle_edit`, `handle_move`, `handle_resize`, `handle_replace`, `handle_delete` |
+| Generator UI handlers | `resonance-app/src/update/compose/chord_inspector.rs` | `handle`, `generate_chord_lane`, `regenerate_if_materialized` |
+| Views | `resonance-app/src/view/compose/chord_lane/`, `popover.rs`, `scale_stripe.rs`, `lane_inspector/chord/{body,scale,motif}.rs` | chord canvas, inline editor, generator pick lists |
+| Theory | `resonance-music-theory/src/{chord,scale,progression}.rs`, `generator/` | `parse_chord`, `diatonic_chord`, `GeneratorSpec::generate`, `SchemaKind`, `TableRegistry::with_builtins` |
+| Control | `resonance-app/src/update/control/harmony.rs` | `PRESETS`, `render_numeral`, `whole_beats`, all funnel into `ComposeMessage::ReplaceSectionChords` |
+
+## Surfaces
+
+- **GUI:** Compose tab → chord lane and scale stripe; select the chord lane
+  for the right-rail chord inspector (generator, table/schema, motif,
+  scale picker).
+- **Control API / MCP:**
+  - `harmony.add_chord` → `mcp__resonance__harmony_add_chord`
+    (`start_beat`, `duration_beats` as whole-number floats, `symbol` such
+    as `"Am7"` or `"C/G"`); `harmony.edit_chord`, `harmony.delete_chord`.
+  - `harmony.apply_progression` → `harmony_apply_progression`: exactly one
+    of `symbols`, `key` + `numerals`, or `key` + `preset`; replaces the
+    grid; default one bar per chord; `sevenths`. Numerals are `i`..`vii`
+    or `1`..`7`, case ignored, quality always diatonic to the key (no
+    borrowed chords). Presets: `pop`, `axis`, `50s`, `doo-wop`,
+    `pachelbel`, `andalusian`, `ii-V-I`, `12-bar-blues`. The GUI's Markov
+    and schema generators are not reachable over the wire.
+  - `section.set_scale` → `section_set_scale` (`tonic` like `"F#"`, scale
+    name from `Mode`, `_`/`-` for spaces).
+  - Each call is one undo step with one regeneration cascade. Frozen
+    tracks are not refused; their lanes go stale.
+- **Agent skills:** `arranging`, `song-structure`.
+
+## How it's tested
+
+| What | Where | Run |
+|---|---|---|
+| Control harmony/section | `resonance-app/tests/control/control_section_harmony.rs` | `./scripts/run-tests.py -p resonance-app` |
+| Schema inspector flow | `tests/compose/chord_schema_inspector.rs` | same |
+| Chord drag repaint | `tests/compose/chord_lane_drag_preview.rs` | same |
+| Meter change trim | `tests/compose/chords_after_meter_change.rs` | same |
+| Generators, schema, Markov goldens, inversions, SATB | `resonance-music-theory/tests/{generator,schema_generator,markov_golden,inversions,progression,chord_parse,phrase_overlay}.rs` | `./scripts/run-tests.py -p resonance-music-theory` |
+| Goldens | `tests/snapshots/compose_chord_rail_generator_markov-wgpu.png`, `compose_chord_rail_generator_schema-wgpu.png`, `compose_chord_rail_folded-wgpu.png` | `RESONANCE_BLESS=1` |
+
+Not covered: chord locks (unreachable), the inline popover editor.
+
+## Decisions and deviations
+
+- The control layer funnels all four `harmony.*` methods into
+  `ReplaceSectionChords` so a slash bass survives (the GUI `AddChord`
+  carries no bass).
+- `GeneratorSpec::Pentatonic` (pentatonic-root harmony) exists in the crate
+  and loads from files, but the inspector's generator pick list only offers
+  Style table and Schema. The pentatonic *schema* (`SchemaKind::Pentatonic`)
+  is selectable.
+
+## Known gaps
+
+- Harmony does not share the melody's phrase plan —
+  [harmony-melody-phrase-plan](../../intents/compose/harmony-melody-phrase-plan.md).
+- Missing pop/jazz cadence colour (plagal sigh formula, turnaround, blues
+  ii–V) — [pop-jazz-cadence-color](../../intents/compose/pop-jazz-cadence-color.md).
+- No way to lock chords before Regenerate; Pentatonic generator not in the
+  pick list; no control access to the Markov/schema generators. No intent
+  yet.

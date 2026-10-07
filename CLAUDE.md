@@ -1,10 +1,26 @@
 # Resonance — collaboration notes
 
+## Documentation
+
+`docs/README.md` is the index. The layout is a contract:
+
+- `docs/features/<area>/` — what is **built**, as it is on master: behaviour,
+  where the logic lives, surfaces (GUI / control method / MCP tool), how it is
+  tested, deviations, known gaps. When you change a feature, update its doc in
+  the same commit and bump its `Verified against master @` line.
+- `docs/intents/<area>/` — what we **want** and have not built (or built
+  partly); `docs/intents/bugs.md` for known defects. When an intent ships,
+  fold it into the feature doc and delete the intent.
+- `docs/guides/` — rules that always hold (UX, control-API conventions).
+- `docs/history/` — archived specs, reviews and plans. Never updated; code
+  comments that cite a spec by name (e.g. `nam-model-library.md §5`) resolve
+  there. New design work goes in an intent, not a new root-level `.md`.
+
 ## Driving the DAW from an agent
 
 `resonance-mcp` exposes the running app's control surface as MCP tools;
-`resonance-agent-plugin/` is a Claude Code plugin of **skills** (`mixing`,
-`mastering`) that use them. It ships no `.mcp.json` on purpose — register the
+`resonance-agent-plugin/` is a Claude Code plugin of **skills** (`arranging`,
+`drumming`, `mastering`, `mixing`, `song-structure`, `spatial`) that use them. It ships no `.mcp.json` on purpose — register the
 server with `claude mcp add` so the tools stay named `mcp__resonance__<tool>`.
 
 The two are kept in step by `resonance-mcp/tests/agent_plugin_lockstep.rs`: a
@@ -42,7 +58,7 @@ Six things to know before adding tests:
   behind the `test-internals` feature that tests get via dev-dependency.
 - **Rendering is parallel in the app, serial in tests.** The mixer runs
   track and bus jobs on a worker pool (`resonance-audio/src/render_pool`,
-  realtime-multithreading.md); output is bit-identical at any thread count.
+  `docs/features/audio-engine/render-pool.md`); output is bit-identical at any thread count.
   Hermetic tests render serially unless `RESONANCE_RENDER_THREADS=<n>` is
   set — run the suite with `RESONANCE_RENDER_THREADS=8` after touching the
   render path, and every golden must still hold.

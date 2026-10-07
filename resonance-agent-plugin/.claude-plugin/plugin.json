@@ -1,6 +1,6 @@
 {
   "name": "resonance-agent-plugin",
-  "description": "Skills for driving a running resonance DAW over the resonance MCP server: mixing (balance, tone, character), spatial (width and depth) and mastering procedures built on the meter_* measurement tools.",
+  "description": "Skills for driving a running resonance DAW over the resonance MCP server: arranging, drumming, song structure, mixing (balance, tone, character), spatial (width and depth) and mastering procedures built on the meter_* measurement tools.",
   "version": "0.3.5",
   "author": {
     "name": "Jorrit"
