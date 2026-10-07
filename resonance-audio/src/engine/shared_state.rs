@@ -194,6 +194,16 @@ pub struct SharedState {
     /// Lifetime output callbacks that rendered nothing (no buffer, no
     /// mapped data, a misaligned one) — a quantum of silence each.
     pub output_dropped_cycles: AtomicU64,
+    /// The native output stream's wakeup timing (`output_pipewire::
+    /// on_process`): the longest delay from the graph cycle's start to the
+    /// callback running, and the longest whole callback, since the load
+    /// meter last took them (it swaps them to 0 per report); and the
+    /// lifetime count of callbacks that woke over [`LATE_WAKE_NS`] late.
+    ///
+    /// [`LATE_WAKE_NS`]: crate::cycle_load::LATE_WAKE_NS
+    pub output_wake_max_ns: AtomicU64,
+    pub output_callback_max_ns: AtomicU64,
+    pub output_late_wakes: AtomicU64,
     /// The load meter's report hand-off to the engine loop, which
     /// formats and prints it — never the audio thread.
     pub cycle_report: crate::cycle_load::CycleReportSlot,
@@ -484,6 +494,9 @@ impl Default for SharedState {
             monitor_shortfall_cycles: AtomicU64::new(0),
             graph_missed_cycles: AtomicU64::new(0),
             output_dropped_cycles: AtomicU64::new(0),
+            output_wake_max_ns: AtomicU64::new(0),
+            output_callback_max_ns: AtomicU64::new(0),
+            output_late_wakes: AtomicU64::new(0),
             cycle_report: crate::cycle_load::CycleReportSlot::default(),
             oversize_buffer: crate::cycle_load::OversizeBufferLatch::default(),
             render_pool: parking_lot::Mutex::new(None),

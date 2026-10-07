@@ -163,6 +163,10 @@ fn report_slot_hands_each_report_to_the_engine_loop_once() {
         graph_missed_lifetime: 8,
         output_dropped_window: 9,
         output_dropped_lifetime: 10,
+        wake_max_us: 11,
+        callback_max_us: 12,
+        late_wakes_window: 13,
+        late_wakes_lifetime: 14,
         pool: PoolReport {
             threads: 8,
             critical_us: 1_234,
@@ -206,6 +210,10 @@ fn report_slot_never_hands_out_a_torn_report() {
             graph_missed_lifetime: i,
             output_dropped_window: i,
             output_dropped_lifetime: i,
+            wake_max_us: i as u32,
+            callback_max_us: i as u32,
+            late_wakes_window: i,
+            late_wakes_lifetime: i,
             pool: PoolReport {
                 threads: i as u32,
                 critical_us: i as u32,
@@ -497,4 +505,32 @@ fn missed_graph_cycles_counts_whole_cycles_beyond_the_first() {
     // A 96 kHz driver clock under a 48 kHz engine: 128 frames = 256 ticks.
     assert_eq!(missed_graph_cycles(1_000, 1_256, 128, 1, 96_000, 48_000), 0);
     assert_eq!(missed_graph_cycles(1_000, 1_512, 128, 1, 96_000, 48_000), 1);
+}
+
+/// A callback that ran late in its cycle — fast mix, late start — is a
+/// stutter only the wakeup timing shows; one is reason for a quiet line,
+/// and the line carries the window's worst wakeup and callback.
+#[test]
+fn quiet_mode_reports_late_wakes_with_the_window_maxima() {
+    let shared = SharedState::default();
+    let mut meter = CycleLoadMeter::new(false).with_lock_miss_source(no_misses);
+    let start = Instant::now();
+    let cycles = (QUIET_REPORT_INTERVAL.as_secs_f64() / budget().as_secs_f64()) as usize + 50;
+    shared.output_late_wakes.store(2, Ordering::Relaxed);
+    shared.output_wake_max_ns.store(1_850_000, Ordering::Relaxed);
+    shared.output_callback_max_ns.store(240_000, Ordering::Relaxed);
+    let report = drive(&mut meter, &shared, start, cycles, budget() / 100).expect("report");
+    assert_eq!((report.late_wakes_window, report.late_wakes_lifetime), (2, 2));
+    assert_eq!((report.wake_max_us, report.callback_max_us), (1_850, 240));
+    assert_eq!(shared.output_wake_max_ns.load(Ordering::Relaxed), 0, "maxima reset per report");
+    assert!(
+        format_cycle_load_line(&report).contains(
+            "| stream wake max 1850 µs, callback max 240 µs, late wakes 2 (lifetime 2)"
+        ),
+        "{}",
+        format_cycle_load_line(&report)
+    );
+
+    let start2 = start + budget() * (cycles as u32 + 1);
+    assert_eq!(drive(&mut meter, &shared, start2, cycles, budget() / 100), None);
 }

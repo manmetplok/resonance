@@ -82,6 +82,11 @@ pub fn plugin_lock_misses() -> u64 {
     PLUGIN_LOCK_MISSES.load(Ordering::Relaxed)
 }
 
+/// An output callback that starts this long after its graph cycle began
+/// counts as a late wakeup: with a 2.67 ms cycle there is little left for
+/// the mix, and the graph may xrun before it finishes.
+pub const LATE_WAKE_NS: u64 = 1_000_000;
+
 /// Graph cycles that went by between two output callbacks, from the
 /// driver clock: `prev_ticks` / `ticks` are `pw_time.ticks` at the two
 /// callbacks, in units of `rate_num / rate_denom` seconds, and
@@ -152,6 +157,14 @@ pub struct CycleLoadReport {
     pub output_dropped_window: u64,
     /// Lifetime output callbacks that rendered nothing.
     pub output_dropped_lifetime: u64,
+    /// The native output stream's longest wakeup delay (graph cycle start
+    /// to callback) and longest whole callback in the window, in µs; 0 on
+    /// a backend that does not report them.
+    pub wake_max_us: u32,
+    pub callback_max_us: u32,
+    /// Callbacks that woke over [`LATE_WAKE_NS`] after their cycle began.
+    pub late_wakes_window: u64,
+    pub late_wakes_lifetime: u64,
     /// The track pass's parallel rendering over the window
     /// (realtime-multithreading.md §6). All zero when nothing was
     /// recorded, and then left out of the line.
@@ -201,6 +214,10 @@ pub struct CycleReportSlot {
     graph_missed_lifetime: AtomicU64,
     output_dropped_window: AtomicU64,
     output_dropped_lifetime: AtomicU64,
+    wake_max_us: AtomicU32,
+    callback_max_us: AtomicU32,
+    late_wakes_window: AtomicU64,
+    late_wakes_lifetime: AtomicU64,
     pool_threads: AtomicU32,
     pool_critical_us: AtomicU32,
     /// `track id + 1`; 0 = none.
@@ -243,6 +260,13 @@ impl CycleReportSlot {
             .store(report.output_dropped_window, Ordering::Relaxed);
         self.output_dropped_lifetime
             .store(report.output_dropped_lifetime, Ordering::Relaxed);
+        self.wake_max_us.store(report.wake_max_us, Ordering::Relaxed);
+        self.callback_max_us
+            .store(report.callback_max_us, Ordering::Relaxed);
+        self.late_wakes_window
+            .store(report.late_wakes_window, Ordering::Relaxed);
+        self.late_wakes_lifetime
+            .store(report.late_wakes_lifetime, Ordering::Relaxed);
         let pool = &report.pool;
         self.pool_threads.store(pool.threads, Ordering::Relaxed);
         self.pool_critical_us
@@ -278,6 +302,10 @@ impl CycleReportSlot {
                 graph_missed_lifetime: self.graph_missed_lifetime.load(Ordering::Relaxed),
                 output_dropped_window: self.output_dropped_window.load(Ordering::Relaxed),
                 output_dropped_lifetime: self.output_dropped_lifetime.load(Ordering::Relaxed),
+                wake_max_us: self.wake_max_us.load(Ordering::Relaxed),
+                callback_max_us: self.callback_max_us.load(Ordering::Relaxed),
+                late_wakes_window: self.late_wakes_window.load(Ordering::Relaxed),
+                late_wakes_lifetime: self.late_wakes_lifetime.load(Ordering::Relaxed),
                 pool: PoolReport {
                     threads: self.pool_threads.load(Ordering::Relaxed),
                     critical_us: self.pool_critical_us.load(Ordering::Relaxed),
@@ -365,6 +393,7 @@ pub struct CycleLoadMeter {
     /// last report.
     graph_missed_seen: u64,
     output_dropped_seen: u64,
+    late_wakes_seen: u64,
     /// Where the lifetime lock-miss count comes from:
     /// [`plugin_lock_misses`], unless a test substitutes its own
     /// ([`Self::with_lock_miss_source`]) — the real count is process-wide,
@@ -401,6 +430,7 @@ impl CycleLoadMeter {
             lock_misses_seen: plugin_lock_misses(),
             graph_missed_seen: 0,
             output_dropped_seen: 0,
+            late_wakes_seen: 0,
             lock_misses: plugin_lock_misses,
             last_report: None,
             pass_threads: 0,
@@ -513,6 +543,8 @@ impl CycleLoadMeter {
         let lock_misses_lifetime = (self.lock_misses)();
         let graph_missed_lifetime = shared.graph_missed_cycles.load(Ordering::Relaxed);
         let output_dropped_lifetime = shared.output_dropped_cycles.load(Ordering::Relaxed);
+        let late_wakes_lifetime = shared.output_late_wakes.load(Ordering::Relaxed);
+        let ns_to_us = |ns: u64| (ns / 1_000).min(u32::MAX as u64) as u32;
         let report = CycleLoadReport {
             avg: (self.window_sum / self.window_cycles as f64) as f32,
             peak: self.window_peak,
@@ -526,6 +558,10 @@ impl CycleLoadMeter {
             graph_missed_lifetime,
             output_dropped_window: output_dropped_lifetime.saturating_sub(self.output_dropped_seen),
             output_dropped_lifetime,
+            wake_max_us: ns_to_us(shared.output_wake_max_ns.swap(0, Ordering::Relaxed)),
+            callback_max_us: ns_to_us(shared.output_callback_max_ns.swap(0, Ordering::Relaxed)),
+            late_wakes_window: late_wakes_lifetime.saturating_sub(self.late_wakes_seen),
+            late_wakes_lifetime,
             pool: self.take_pool_report(),
         };
         self.last_report = Some(now);
@@ -537,12 +573,14 @@ impl CycleLoadMeter {
         self.lock_misses_seen = lock_misses_lifetime;
         self.graph_missed_seen = graph_missed_lifetime;
         self.output_dropped_seen = output_dropped_lifetime;
+        self.late_wakes_seen = late_wakes_lifetime;
 
         let noteworthy = report.overruns_window > 0
             || report.shortfalls_window > 0
             || report.lock_misses_window > 0
             || report.graph_missed_window > 0
             || report.output_dropped_window > 0
+            || report.late_wakes_window > 0
             || report.peak >= QUIET_PEAK_THRESHOLD;
         (self.verbose || noteworthy).then_some(report)
     }
@@ -576,6 +614,15 @@ pub fn format_cycle_load_line(report: &CycleLoadReport) -> String {
         line.push_str(&format!(
             " | dropped output cycles {} (lifetime {})",
             report.output_dropped_window, report.output_dropped_lifetime,
+        ));
+    }
+    if report.wake_max_us > 0 || report.late_wakes_lifetime > 0 {
+        line.push_str(&format!(
+            " | stream wake max {} µs, callback max {} µs, late wakes {} (lifetime {})",
+            report.wake_max_us,
+            report.callback_max_us,
+            report.late_wakes_window,
+            report.late_wakes_lifetime,
         ));
     }
     let pool = &report.pool;
