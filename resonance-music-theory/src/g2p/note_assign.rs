@@ -3,12 +3,25 @@
 //! Converts a `&[LyricLine]` into a resolved syllable list and maps
 //! that list onto individual notes, honouring slur annotations and
 //! per-syllable phoneme overrides.
+//!
+//! Two draft markers take part in the note walk without being sung
+//! syllables themselves:
+//!
+//! * a standalone `_` (aliases `+`, `-`) is a **melisma**: it does not
+//!   become a [`ResolvedSyllable`] but bumps the previous syllable's
+//!   [`ResolvedSyllable::slurs_after`], and the note walk turns each one
+//!   into a slur note holding that syllable's vowel. Keeping holds off
+//!   the syllable list means typing a `_` never shifts the
+//!   `syllable_index` of later syllables (which pronunciation overrides
+//!   are keyed by).
+//! * a standalone uppercase `AP` is a **breath**: it takes no note and
+//!   sets [`ResolvedSyllable::breath_before`] on the next sung syllable.
 
 use std::collections::HashMap;
 
 use super::lyric_parse::{is_slur_lyric, tokenize_line, LyricToken, SLUR_MARKER};
-use super::phonemes::{is_consonant, word_to_phonemes_variant, SyllableStress};
-use super::syllabify::{split_into_syllables, syllabify_word};
+use super::phonemes::{is_consonant, word_to_phonemes_sourced, G2pSource, SyllableStress};
+use super::syllabify::{split_at_user_breaks, split_into_syllables};
 
 /// Where a syllable's phonemes came from, so the UI can badge edited /
 /// dictionary syllables and downstream code can reason about how much to
@@ -54,6 +67,29 @@ pub struct ResolvedSyllable {
     pub is_word_end: bool,
     pub stress: SyllableStress,
     pub provenance: PhonemeProvenance,
+    /// Finer-grained source of the phonemes (`cmu` vs `rules`, project
+    /// vs bank dictionary). See [`G2pSource`].
+    pub source: G2pSource,
+    /// How many `_` melisma tokens the draft writes straight after this
+    /// syllable: each one is an extra note that holds this syllable's
+    /// vowel. A syllable therefore consumes `1 + slurs_after` notes —
+    /// see [`note_unit_count`].
+    pub slurs_after: usize,
+    /// The draft has a breath (`AP`) right before this syllable.
+    pub breath_before: bool,
+    /// The user broke this syllable's word with `·`, but the number of
+    /// pieces did not match the word's vowel count, so the phonemes were
+    /// split automatically and may not line up with the written pieces.
+    pub syllable_warning: bool,
+}
+
+/// Notes a resolved draft fills: one per sung syllable plus one per `_`
+/// hold. Breaths take none. This is what a clip's note count is compared
+/// against; it agrees with summing
+/// [`count_syllables`](crate::count_syllables) over the draft's lines
+/// for well-formed text.
+pub fn note_unit_count(syllables: &[ResolvedSyllable]) -> usize {
+    syllables.iter().map(|s| 1 + s.slurs_after).sum()
 }
 
 /// One note's assignment after the lyric side-table annotations have
@@ -89,6 +125,16 @@ pub struct AssignedSyllable {
     /// Where this note's phonemes came from. Slur notes inherit the
     /// held syllable's provenance. See [`PhonemeProvenance`].
     pub provenance: PhonemeProvenance,
+    /// Finer-grained source of this note's phonemes; slur notes inherit
+    /// the held syllable's. See [`G2pSource`].
+    pub source: G2pSource,
+    /// The draft asks for a breath before this note (an `AP` token in
+    /// front of its syllable). Only ever set on the syllable's first,
+    /// non-slur note.
+    pub breath_before: bool,
+    /// Copied from [`ResolvedSyllable::syllable_warning`]; `false` on
+    /// slur notes.
+    pub syllable_warning: bool,
 }
 
 /// Resolve a draft into one phoneme list per syllable. For each
@@ -150,8 +196,20 @@ pub fn resolve_draft_with_dict(
         tokens.extend(tokenize_line(&line.text));
     }
     let mut out: Vec<ResolvedSyllable> = Vec::new();
+    // An `AP` waits here until the next sung syllable claims it; one at
+    // the very end of the draft has nothing to precede and is dropped.
+    let mut pending_breath = false;
     for token in tokens {
         match token {
+            LyricToken::Breath => pending_breath = true,
+            LyricToken::Slur => {
+                // `tokenize_line` never emits a slur before a line's
+                // first sung token, so `out` is non-empty here; the
+                // guard only keeps a malformed stream from panicking.
+                if let Some(prev) = out.last_mut() {
+                    prev.slurs_after += 1;
+                }
+            }
             LyricToken::PhonemeBlock(groups) => {
                 let last_idx = groups.len().saturating_sub(1);
                 for (i, g) in groups.into_iter().enumerate() {
@@ -164,44 +222,44 @@ pub fn resolve_draft_with_dict(
                         // An inline block is the user typing phonemes
                         // directly — the highest-precedence source.
                         provenance: PhonemeProvenance::Edited,
+                        source: G2pSource::Edited,
+                        slurs_after: 0,
+                        breath_before: std::mem::take(&mut pending_breath),
+                        syllable_warning: false,
                     });
                 }
             }
-            LyricToken::Word { cleaned, syl_count, variant_idx } => {
-                let (phonemes, provenance) = match dictionary.get(&cleaned) {
+            LyricToken::Word { cleaned, pieces, variant_idx } => {
+                let (phonemes, provenance, source) = match dictionary.get(&cleaned) {
                     Some(dict_phonemes) => (
                         dict_phonemes
                             .iter()
                             .map(|p| (*p, SyllableStress::None))
                             .collect::<Vec<_>>(),
                         PhonemeProvenance::Dict,
+                        G2pSource::ProjectDict,
                     ),
-                    None => (
-                        word_to_phonemes_variant(&cleaned, variant_idx),
-                        PhonemeProvenance::Auto,
-                    ),
+                    None => {
+                        let (phonemes, source) = word_to_phonemes_sourced(&cleaned, variant_idx);
+                        (phonemes, PhonemeProvenance::Auto, source)
+                    }
                 };
-                let phoneme_groups: Vec<Vec<(&'static str, SyllableStress)>> = if syl_count <= 1 {
-                    vec![phonemes]
-                } else {
-                    split_into_syllables(&phonemes, syl_count)
+                // The user's breaks are exact: labels are the written
+                // pieces and the phonemes split at the matching
+                // consonant boundary. When the pieces do not match the
+                // vowel count the phonemes fall back to the automatic
+                // onset-maximising split (same number of syllables, so
+                // the note count is unchanged) and every syllable of the
+                // word is flagged.
+                let syl_count = pieces.len().max(1);
+                let (phoneme_groups, warning) = match split_at_user_breaks(&phonemes, &pieces) {
+                    Some(groups) => (groups, false),
+                    None => (split_into_syllables(&phonemes, syl_count), true),
                 };
-                // Surface labels via `syllabify_word`, which inserts
-                // `·` markers using the same CMU syllable count the
-                // phoneme split uses. Falling back to the cleaned word
-                // when syllabify-word can't reach the target keeps the
-                // two slices balanced.
-                let with_dots = syllabify_word(&cleaned, syl_count);
-                let labels: Vec<String> = with_dots
-                    .split('\u{00B7}')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
                 let n = phoneme_groups.len();
                 let last_idx = n.saturating_sub(1);
-                for i in 0..n {
-                    let label = labels.get(i).cloned().unwrap_or_default();
-                    let group = phoneme_groups.get(i).cloned().unwrap_or_default();
+                for (i, group) in phoneme_groups.into_iter().enumerate() {
+                    let label = pieces.get(i).cloned().unwrap_or_default();
                     let stress = group
                         .iter()
                         .filter(|(p, _)| !is_consonant(p))
@@ -215,6 +273,10 @@ pub fn resolve_draft_with_dict(
                         is_word_end: i == last_idx,
                         stress,
                         provenance,
+                        source,
+                        slurs_after: 0,
+                        breath_before: std::mem::take(&mut pending_breath),
+                        syllable_warning: warning,
                     });
                 }
             }
@@ -231,10 +293,16 @@ pub fn resolve_draft_with_dict(
 /// `annotations[i]` is interpreted as:
 ///
 /// * `""` (empty)  — consume the next resolved syllable.
-/// * `"+"` / `"-"` — slur: inherit the previous note's vowel, no
-///   cursor advance.
+/// * `"+"` / `"-"` / `"_"` — slur: inherit the previous note's vowel,
+///   no cursor advance.
 /// * anything else — explicit label override (cursor still advances;
 ///   phonemes still come from the resolved syllable).
+///
+/// The draft's own `_` holds ([`ResolvedSyllable::slurs_after`]) are
+/// honoured too: after a syllable is consumed, its next `slurs_after`
+/// notes are slur notes holding it. A per-note slur annotation that
+/// lands on one of those notes is the same hold, not an extra one, so
+/// it uses up one of the pending draft holds.
 ///
 /// Returns exactly `note_count` entries.
 ///
@@ -271,9 +339,14 @@ pub fn assign_syllables_to_notes_with(
     let mut last_vowel: Option<&'static str> = None;
     let mut last_stress: SyllableStress = SyllableStress::None;
     let mut last_provenance: PhonemeProvenance = PhonemeProvenance::Auto;
+    let mut last_source: G2pSource = G2pSource::default();
+    // Draft `_` holds still owed by the last consumed syllable.
+    let mut pending_slurs: usize = 0;
     for i in 0..note_count {
         let entry = annotations.get(i).map(|s| s.trim()).unwrap_or("");
-        if is_slur_lyric(entry) {
+        let annotated_slur = is_slur_lyric(entry);
+        if annotated_slur || pending_slurs > 0 {
+            pending_slurs = pending_slurs.saturating_sub(1);
             let phonemes: Vec<&'static str> =
                 last_vowel.map(|v| vec![v]).unwrap_or_default();
             out.push(AssignedSyllable {
@@ -284,6 +357,9 @@ pub fn assign_syllables_to_notes_with(
                 syllable_index: last_syllable_idx,
                 stress: last_stress,
                 provenance: last_provenance,
+                source: last_source,
+                breath_before: false,
+                syllable_warning: false,
             });
             continue;
         }
@@ -299,6 +375,11 @@ pub fn assign_syllables_to_notes_with(
                 syllable_index: syl_index,
                 stress: SyllableStress::None,
                 provenance: PhonemeProvenance::Auto,
+                // Nothing transcribed this note; the pipeline sings a
+                // fallback vowel, which is the rules layer's job.
+                source: G2pSource::Rules,
+                breath_before: false,
+                syllable_warning: false,
             });
             continue;
         };
@@ -306,9 +387,9 @@ pub fn assign_syllables_to_notes_with(
         // by resolved-syllable index) replaces the phonemes and stamps
         // `Edited`; otherwise we keep the syllable's own phonemes and
         // provenance.
-        let (phonemes, provenance) = match overrides.get(&syl_index) {
-            Some(ov) => (ov.clone(), PhonemeProvenance::Edited),
-            None => (syl.phonemes.clone(), syl.provenance),
+        let (phonemes, provenance, source) = match overrides.get(&syl_index) {
+            Some(ov) => (ov.clone(), PhonemeProvenance::Edited, G2pSource::Edited),
+            None => (syl.phonemes.clone(), syl.provenance, syl.source),
         };
         // Cache the last non-consonant phoneme so a following slur
         // note can hold the vowel. Falls back to the final phoneme
@@ -323,6 +404,8 @@ pub fn assign_syllables_to_notes_with(
         last_syllable_idx = syl_index;
         last_stress = syl.stress;
         last_provenance = provenance;
+        last_source = source;
+        pending_slurs = syl.slurs_after;
         let label = if !entry.is_empty() {
             entry.to_string()
         } else {
@@ -336,6 +419,9 @@ pub fn assign_syllables_to_notes_with(
             syllable_index: syl_index,
             stress: syl.stress,
             provenance,
+            source,
+            breath_before: syl.breath_before,
+            syllable_warning: syl.syllable_warning,
         });
     }
     out

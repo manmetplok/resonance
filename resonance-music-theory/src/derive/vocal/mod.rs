@@ -17,7 +17,7 @@ mod melody;
 mod params;
 mod style;
 
-pub use lyrics::{generate_lyrics, LyricLine};
+pub use lyrics::{generate_lyrics, lyric_corpus_lines, LyricLine};
 pub use melody::{count_syllables, vocal_phrase_spans};
 pub use params::{
     SyllableMode, VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov,
@@ -25,14 +25,14 @@ pub use params::{
     VoiceType,
 };
 
-use crate::g2p::{resolve_draft, SyllableStress};
+use crate::g2p::SyllableStress;
 use crate::scale::Scale;
 
 use super::climax::enforce_single_climax;
 use super::{GeneratedNote, TimedChord};
 use melody::{
     apply_line_cadence_formulas, apply_motif_pitches, apply_section_climax, apply_srdc_layout,
-    enforce_no_overlap, scale_from_chords, total_beats, MotifPitchContext,
+    enforce_no_overlap, line_note_stresses, scale_from_chords, total_beats, MotifPitchContext,
 };
 use style::derive_with_profile;
 
@@ -277,15 +277,7 @@ impl<'a> VocalContext<'a> {
             .draft
             .iter()
             .zip(&line_syllables)
-            .map(|(line, &count)| {
-                let mut stresses: Vec<SyllableStress> =
-                    resolve_draft(std::slice::from_ref(line))
-                        .into_iter()
-                        .map(|s| s.stress)
-                        .collect();
-                stresses.resize(count as usize, SyllableStress::None);
-                stresses
-            })
+            .map(|(line, &count)| line_note_stresses(line, count))
             .collect();
         let scale = if params.stay_in_scale {
             scale_from_chords(chords)

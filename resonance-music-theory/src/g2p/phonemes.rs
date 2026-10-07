@@ -19,6 +19,7 @@
 use std::sync::OnceLock;
 
 use cmudict_fast::{Cmudict, Stress, Symbol};
+use serde::{Deserialize, Serialize};
 
 /// Embedded CMU Pronouncing Dictionary v0.7b. Licensed under the
 /// permissive CMUDict license (see `data/LICENSE-CMUDICT`). ~3.7 MB
@@ -113,13 +114,24 @@ pub(crate) fn word_to_phonemes_variant(
     word: &str,
     variant_idx: usize,
 ) -> Vec<(&'static str, SyllableStress)> {
+    word_to_phonemes_sourced(word, variant_idx).0
+}
+
+/// [`word_to_phonemes_variant`] plus which of the two automatic layers
+/// produced the phonemes: [`G2pSource::Cmu`] for a dictionary hit,
+/// [`G2pSource::Rules`] for the letter-pattern fallback (also used for
+/// an input with no letters at all).
+pub(crate) fn word_to_phonemes_sourced(
+    word: &str,
+    variant_idx: usize,
+) -> (Vec<(&'static str, SyllableStress)>, G2pSource) {
     let cleaned: String = word
         .to_lowercase()
         .chars()
         .filter(|c| c.is_alphabetic() || *c == '\'')
         .collect();
     if cleaned.is_empty() {
-        return vec![("ah", SyllableStress::None)];
+        return (vec![("ah", SyllableStress::None)], G2pSource::Rules);
     }
 
     if let Some(rules) = dict().get(&cleaned) {
@@ -128,7 +140,7 @@ pub(crate) fn word_to_phonemes_variant(
             let out: Vec<(&'static str, SyllableStress)> =
                 rule.pronunciation().iter().map(symbol_to_str).collect();
             if !out.is_empty() {
-                return ensure_vowel(out);
+                return (ensure_vowel(out), G2pSource::Cmu);
             }
         }
     }
@@ -139,7 +151,54 @@ pub(crate) fn word_to_phonemes_variant(
         .into_iter()
         .map(|p| (p, SyllableStress::None))
         .collect();
-    ensure_vowel(fallback)
+    (ensure_vowel(fallback), G2pSource::Rules)
+}
+
+/// Which automatic layer would transcribe `word`: [`G2pSource::Cmu`]
+/// when the bundled CMU dictionary has it (case-insensitive; punctuation
+/// and `·` breaks are ignored), else [`G2pSource::Rules`]. Never returns
+/// the caller-supplied layers (`Edited`, `ProjectDict`, `BankDict`) —
+/// the resolver decides those, because only it sees overrides.
+pub fn word_g2p_source(word: &str) -> G2pSource {
+    word_to_phonemes_sourced(word, 1).1
+}
+
+/// Where a syllable's phonemes came from, at the granularity the
+/// `song.vocal` readout reports as `g2p` (spec
+/// `vocal-mcp-control-and-quality.md` §8, D24). Finer than
+/// [`PhonemeProvenance`](super::PhonemeProvenance), which folds `Cmu`
+/// and `Rules` into `Auto` and both dictionaries into `Dict`. Resolution
+/// precedence: `Edited` > `ProjectDict` > `BankDict` > `Cmu` > `Rules`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum G2pSource {
+    /// A per-syllable override or an inline `[..]` phoneme block.
+    Edited,
+    /// The project's pronunciation dictionary (the caller-supplied
+    /// [`PhonemeDictionary`](super::PhonemeDictionary)).
+    ProjectDict,
+    /// The voicebank's own dictionary. Not produced yet — bank
+    /// dictionaries arrive with any-bank phonemisation (spec §4.4).
+    BankDict,
+    /// The bundled CMU Pronouncing Dictionary.
+    #[default]
+    Cmu,
+    /// The letter-pattern fallback for out-of-dictionary words.
+    Rules,
+}
+
+impl G2pSource {
+    /// The snake_case wire name (`"edited"`, `"project_dict"`, …) — the
+    /// same string serde writes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            G2pSource::Edited => "edited",
+            G2pSource::ProjectDict => "project_dict",
+            G2pSource::BankDict => "bank_dict",
+            G2pSource::Cmu => "cmu",
+            G2pSource::Rules => "rules",
+        }
+    }
 }
 
 /// How many CMU pronunciation variants the dict has for `word` (≥ 1
