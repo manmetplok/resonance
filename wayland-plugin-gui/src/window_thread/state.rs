@@ -10,7 +10,7 @@ use smithay_client_toolkit::shell::xdg::window::{DecorationMode, Window};
 use smithay_client_toolkit::shell::WaylandSurface;
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
 use wayland_client::protocol::wl_pointer::WlPointer;
-use wayland_client::{Connection, QueueHandle};
+use wayland_client::{Connection, Proxy, QueueHandle};
 
 use crate::input::InputState;
 use crate::size::SharedSize;
@@ -252,5 +252,26 @@ impl State {
     pub(super) fn physical_size(&self) -> (i32, i32) {
         let s = self.buffer_scale();
         (self.size.0 as i32 * s, self.size.1 as i32 * s)
+    }
+}
+
+impl Drop for State {
+    /// Release the keyboard before the event loop drops. A repeat keyboard
+    /// (`get_keyboard_with_repeat`, PUX-10) keeps a [`LoopHandle`] in its
+    /// proxy's user data, which the connection owns, and the event loop
+    /// owns the connection (its `WaylandSource`): a cycle. Left alone, the
+    /// loop, the connection and so the window outlived the editor thread,
+    /// and a window closed from the compositor stayed mapped. Releasing
+    /// destroys the proxy, which drops that user data. `State` is declared
+    /// after the event loop in `EditorThread::run_inner`, so this runs
+    /// first on every exit path, while the connection is still live.
+    fn drop(&mut self) {
+        if let Some(k) = self.keyboard.take() {
+            // `wl_keyboard.release` is a v3 request; an older seat has no
+            // way to destroy the keyboard at all.
+            if k.version() >= 3 {
+                k.release();
+            }
+        }
     }
 }

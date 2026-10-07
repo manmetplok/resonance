@@ -57,13 +57,20 @@ Six things to know before adding tests:
 - **Tests that open a real plugin window are `#[ignore]`d.** They need a live
   Wayland session, so the default run — `./scripts/run-tests.py`, which passes
   no libtest flags — skips them and stays headless. Run them by hand from a
-  Wayland session with `-- --ignored`; there are two, and a plugin editor
-  change should be checked against both:
+  Wayland session with `-- --ignored`; there are three, and a plugin editor
+  change should be checked against all of them:
 
   ```sh
   cargo test -p resonance-gate --test editor_open -- --ignored --nocapture
   cargo test -p wayland-plugin-gui --test editor_size -- --ignored --nocapture
+  cargo test -p wayland-plugin-gui --test editor_close -- --ignored --nocapture
   ```
+
+  `editor_close` guards the *self*-close path (the user closes the window
+  from the compositor or its close button): the host must be told, and the
+  editor's event loop and Wayland connection must really go away — a
+  reference cycle through the repeat keyboard once kept them, and with
+  them the window, alive after the close.
 
   `editor_open` is the guard on the editor lifecycle (create → show → size →
   set_size → hide → drop) that every plugin shares via

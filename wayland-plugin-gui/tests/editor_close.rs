@@ -8,7 +8,14 @@
 //! and only then. The click is synthesized through the runtime's own
 //! `WPG_TEST_CLOSE_AT` hook, which drives the real CSD close button, so
 //! these tests are a separate binary and run one at a time: the hook is
-//! process-wide and one-shot.
+//! process-wide and one-shot, and the runtime reads the variable once, at
+//! the first painted frame of the process — so it is set before any window
+//! opens, whichever test runs first. The panicking editor dies at frame 3,
+//! before the click is due.
+//!
+//! Both tests also check the editor's event loop is really gone after a
+//! self-close (the handle stops accepting commands): a repeat keyboard
+//! once kept it, its Wayland connection and so the window alive.
 //!
 //! Needs a live Wayland session, so it is `#[ignore]`d:
 //!
@@ -29,7 +36,24 @@ mod live {
     static LIVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serialize() -> std::sync::MutexGuard<'static, ()> {
-        LIVE.lock().unwrap_or_else(|e| e.into_inner())
+        let guard = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+        // Process-wide (and safe to call in edition 2021): the lock keeps
+        // every other window in this binary from reading it.
+        std::env::set_var("WPG_TEST_CLOSE_AT", "5");
+        guard
+    }
+
+    /// The editor thread, and with it the event loop that owns the
+    /// command channel, is gone once commands stop being accepted.
+    fn assert_editor_gone(editor: &mut Editor) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while editor.set_size(500, 300).is_ok() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the handle still accepts commands after the editor died"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     struct Blank {
@@ -80,13 +104,10 @@ mod live {
     #[ignore = "opens real windows; needs a live Wayland session"]
     fn a_self_close_is_reported_and_a_destroy_is_not() {
         let _live = serialize();
-        // Process-wide (and safe to call in edition 2021): the lock above
-        // keeps every other window in this binary from reading it.
-        std::env::set_var("WPG_TEST_CLOSE_AT", "5");
 
         // -- the user closes the window from its own close button ---------
         let on_close_ran = Arc::new(AtomicBool::new(false));
-        let editor = open(on_close_ran.clone());
+        let mut editor = open(on_close_ran.clone());
         let (tx, rx) = mpsc::channel();
         let on_close_seen = on_close_ran.clone();
         editor.set_closed_callback(move || {
@@ -105,6 +126,7 @@ mod live {
             rx.recv_timeout(Duration::from_millis(300)).is_err(),
             "fired twice"
         );
+        assert_editor_gone(&mut editor);
         editor.destroy();
 
         // -- the owner destroys the window: no report ---------------------
@@ -123,8 +145,6 @@ mod live {
             0,
             "a host-initiated destroy was reported back as a close"
         );
-
-        std::env::remove_var("WPG_TEST_CLOSE_AT");
     }
 
     #[test]
@@ -146,14 +166,7 @@ mod live {
             .expect("a panicking ui() never reported the editor closed");
 
         // The editor thread is gone; the handle degrades, the host lives.
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while editor.set_size(500, 300).is_ok() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the handle still accepts commands after the editor died"
-            );
-            std::thread::sleep(Duration::from_millis(25));
-        }
+        assert_editor_gone(&mut editor);
         editor.destroy();
     }
 }
