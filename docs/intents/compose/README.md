@@ -18,5 +18,6 @@ Each intent follows [`../_template.md`](../_template.md).
 | [Pronunciation editing, dictionary and persistence](pronunciation-editing.md) | partly built | Pronunciation fixes exist only over the control API and are lost on reload and undo. |
 | [Section placement editing (fill on place, move, place-again)](section-placement-editing.md) | partly built | Placing a section with generated parts gives a silent, empty placement. |
 | [Editable vocal expression curves (dock UI, persistence, control)](vocal-expression-curves.md) | partly built | Expression curves feed the vocal render, but nothing edits them, they are not saved, and there is no control method. |
+| [Vocal control over MCP, correctness and expressiveness](vocal-mcp-control-and-quality.md) | idea | Over MCP only lyrics and voicebank are settable; no melisma, voicebank list or accurate per-lane render state; no staccato, breaths or audible velocity on TIGER. |
 | [Vocal harmony and doubling generator](vocal-harmony-doubling.md) | designed | A single synthesized lead sounds thin; there is no harmony or double generator. |
 | [Vocal pitch editor (graphical tuning of recorded vocals)](vocal-pitch-editor.md) | partly built | Pitch detection and retune render exist, but no editor view opens, so tuning is unreachable. |
