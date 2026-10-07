@@ -2,8 +2,8 @@
 
 > Status: **idea**
 > Area: compose (vocal rendering)
-> Source: research report *Singing voicebank options 2026* (2026-10-07; not
-> committed, in `reports/` at the repo root); split out of
+> Source: research report
+> [singing-voicebank-options-2026](../../history/research/singing-voicebank-options-2026.md) (2026-10-07); split out of
 > [vocal MCP control and quality](vocal-mcp-control-and-quality.md) D31.
 
 ## Why

@@ -26,6 +26,10 @@ in place.
 - [todo.md](specs/todo.md) — the melody/harmony improvement todo derived from the research notes.
 - [warmth-width-depth.md](specs/warmth-width-depth.md) — mix-character tools for warmth, width and depth (W0–W12).
 
+## research/ — research reports and their source notes
+
+- [singing-voicebank-options-2026.md](research/singing-voicebank-options-2026.md) — are TIGER, Lilia and Meiji still the right singing voicebanks? Open SVS models, licensing, integration (2026-10-07); notes in `research/singing-voicebank-options-2026-notes/`.
+
 ## reviews/ — review registers and field reports
 
 - [code-review-todo.md](reviews/code-review-todo.md) — whole-workspace code review of 2026-09-26 (145 findings) and its fix campaign.

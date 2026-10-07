@@ -4,8 +4,8 @@
 > Area: compose (vocals) + control-api + plugins-instruments (library)
 > Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
 > (every decision below was put to him as a multiple-choice question; §11
-> lists the answers); research report *Singing voicebank options 2026*
-> (`reports/` and `research_notes/` at the repo root, not committed).
+> lists the answers); research report
+> [singing-voicebank-options-2026](../../history/research/singing-voicebank-options-2026.md).
 > Absorbs: the former `vocal-expression-curves.md` intent (deleted), slice 1
 > of [pronunciation editing](pronunciation-editing.md), BUG-50 and BUG-52.
 
