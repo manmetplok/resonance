@@ -165,7 +165,7 @@ pub(in crate::view::compose::lane_inspector) fn vocal_controls<'a>(
         definition_id,
         track_id,
         params,
-        &vocal.voicebanks,
+        vocal,
         collapsed_panels.contains(&RailPanelKey::VocalVoice(track_id)),
     );
     let generate_group = generate_group(definition_id, track_id, seed);

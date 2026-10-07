@@ -4,10 +4,9 @@
 //! The Voicebank and Speaker pickers are driven by the voicebank registry
 //! (vocal-mcp-control-and-quality.md §4): the options are the installed
 //! English banks, cached in `UiViewCaches::voicebank_choices`, and the
-//! speakers are the chosen bank's own. A lane whose bank is not installed
-//! shows it as `<id> (not installed)`.
-
-use std::rc::Rc;
+//! speakers are the chosen bank's own. A lane on a built-in bank that is
+//! not installed shows it as `<id> (not installed)`, from the cached
+//! `UiViewCaches::missing_voicebank_choices`.
 
 use iced::widget::{column, pick_list, row, slider, text, Space};
 use iced::{Element, Length};
@@ -22,13 +21,13 @@ use crate::theme;
 
 use super::common::{chip, dim_label, group_card, group_title};
 use crate::state::picks::{SpeakerChoice, VoicebankChoice};
-use crate::state::ui_caches::ChoiceList;
+use crate::state::ui_caches::{ChoiceList, VocalRailContext};
 
 pub(super) fn voice_group<'a>(
     definition_id: u64,
     track_id: TrackId,
     params: &VocalParams,
-    voicebanks: &Rc<[VoicebankChoice]>,
+    vocal: &VocalRailContext,
     collapsed: bool,
 ) -> Element<'a, Message> {
     let key = crate::compose::RailPanelKey::VocalVoice(track_id);
@@ -51,7 +50,7 @@ pub(super) fn voice_group<'a>(
     }
 
     let (voicebank_picker, speaker_block) =
-        voicebank_pickers(definition_id, track_id, params, voicebanks);
+        voicebank_pickers(definition_id, track_id, params, vocal);
 
     let vibrato_label = dim_label(format!("Vibrato · {:.2}", params.vibrato));
     let vibrato_slider = slider(0.0..=1.0, params.vibrato, move |v| {
@@ -250,40 +249,50 @@ pub(super) fn voice_group<'a>(
     group_card(body.into())
 }
 
-/// The Voicebank picker (installed English banks; a lane on a bank that
-/// is not installed shows it as `<id> (not installed)`) and, for a bank
-/// with more than one speaker, the Speaker picker.
+/// The Voicebank picker (installed English banks; a lane on a built-in
+/// bank that is not installed shows it as `<id> (not installed)`, any
+/// other missing bank as the placeholder) and, for a bank with more than
+/// one speaker, the Speaker picker. Every choice comes from the rail's
+/// cached lists, so building the pickers allocates nothing.
 fn voicebank_pickers<'a>(
     definition_id: u64,
     track_id: TrackId,
     params: &VocalParams,
-    voicebanks: &Rc<[VoicebankChoice]>,
+    vocal: &VocalRailContext,
 ) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
-    let selected = voicebanks
+    let lane_bank = params.voicebank.as_str();
+    let selected = vocal
+        .voicebanks
         .iter()
-        .find(|c| c.id == params.voicebank)
-        .cloned()
-        .unwrap_or_else(|| VoicebankChoice::not_installed(&params.voicebank));
-    let speakers = selected.speakers.clone();
+        .chain(vocal.missing_voicebanks.iter())
+        .find(|c| &*c.id == lane_bank)
+        .cloned();
+    let speakers = selected.as_ref().map(|c| c.speakers.clone());
     let bank_picker = pick_list(
-        ChoiceList::Cached(voicebanks.clone()),
-        Some(selected),
+        ChoiceList::Cached(vocal.voicebanks.clone()),
+        selected,
         move |choice: VoicebankChoice| {
             Message::Compose(ComposeMessage::LaneInspector {
                 definition_id,
                 track_id,
-                msg: LaneInspectorMsg::SetVocalVoicebank(choice.id),
+                msg: LaneInspectorMsg::SetVocalVoicebank(resonance_music_theory::VoicebankId::new(
+                    &*choice.id,
+                )),
             })
         },
     )
-    .placeholder("No voicebank installed")
+    .placeholder(if vocal.voicebanks.is_empty() {
+        "No voicebank installed"
+    } else {
+        "Voicebank not installed"
+    })
     .text_size(12)
     .padding([4, 6])
     .width(Length::Fill);
 
-    if speakers.len() <= 1 {
+    let Some(speakers) = speakers.filter(|s| s.len() > 1) else {
         return (bank_picker.into(), None);
-    }
+    };
     let current = params
         .speaker
         .as_deref()

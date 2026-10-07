@@ -68,6 +68,9 @@ pub(crate) struct UiViewCaches {
     /// banks. Rebuilt whenever the voicebank registry is rescanned
     /// (`Resonance::rescan_voicebanks`).
     pub voicebank_choices: Rc<[VoicebankChoice]>,
+    /// The picker's selection for a lane on a built-in bank that is not
+    /// installed, one per such bank; rebuilt with `voicebank_choices`.
+    pub missing_voicebank_choices: Rc<[VoicebankChoice]>,
     /// Revision memo keying the Compose right rail's `lazy` (UX-10).
     pub compose_rail: RevisionMemo<ComposeRailInputs>,
 }
@@ -98,6 +101,7 @@ impl Default for UiViewCaches {
             // rebuilds it from the bundled + user definitions at startup.
             device_choices: Rc::from(device_choices(&[])),
             voicebank_choices: Rc::from(Vec::<VoicebankChoice>::new()),
+            missing_voicebank_choices: Rc::from(Vec::<VoicebankChoice>::new()),
             compose_rail: RevisionMemo::default(),
         }
     }
@@ -129,6 +133,10 @@ impl UiViewCaches {
         let choices = crate::state::picks::voicebank_choices(registry);
         if *self.voicebank_choices != *choices {
             self.voicebank_choices = Rc::from(choices);
+        }
+        let missing = crate::state::picks::missing_voicebank_choices(registry);
+        if *self.missing_voicebank_choices != *missing {
+            self.missing_voicebank_choices = Rc::from(missing);
         }
     }
 
@@ -296,4 +304,7 @@ pub(crate) struct ComposeRailInputs {
 pub(crate) struct VocalRailContext {
     pub tempo_warning: Option<crate::compose::VocalTempoMismatch>,
     pub voicebanks: Rc<[VoicebankChoice]>,
+    /// The selection shown for a lane on a built-in bank that is not
+    /// installed ([`UiViewCaches::missing_voicebank_choices`]).
+    pub missing_voicebanks: Rc<[VoicebankChoice]>,
 }
