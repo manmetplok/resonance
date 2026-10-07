@@ -28,11 +28,12 @@ struct Cli {
     #[arg(long = "out")]
     out: PathBuf,
 
-    /// ONNX Runtime execution provider: cpu, cuda, or rocm.
+    /// ONNX Runtime execution provider: cpu, cuda, or migraphx (`rocm` is an alias for
+    /// migraphx; ONNX Runtime 1.23 removed its ROCm provider).
     #[arg(long = "execution-provider", default_value = "cpu")]
     execution_provider: String,
 
-    /// GPU device index for cuda/rocm providers.
+    /// GPU device index for the cuda/migraphx providers.
     #[arg(long = "device-index", default_value_t = 0)]
     device_index: i32,
 

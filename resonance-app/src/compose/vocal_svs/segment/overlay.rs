@@ -27,8 +27,8 @@
 //! [`curve_supported`] (todo #333) is the single source of truth for
 //! whether a voicebank's acoustic model accepts a curve. An unsupported
 //! curve is a clean no-op here — the corresponding `DsSegment` field is
-//! left at its default — never an error. Pitch bend and dynamics are
-//! universally supported; tension and breathiness are TIGER-unsupported.
+//! left at its default — never an error. Pitch bend is always supported;
+//! the others follow the bank's acoustic `use_*_embed` flags.
 //!
 //! ## Value mapping
 //! The dynamics / tension / breathiness overlays are drawn on a `0..=1`

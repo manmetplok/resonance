@@ -47,7 +47,7 @@ does not drive them — phoneme durations and `f0_seq` are read directly from th
 cargo build -p resonance-svs --features cli  # CPU only (the CLI binary needs `cli`)
 cargo build -p resonance-svs --release
 cargo build -p resonance-svs --features cuda --release   # requires CUDA toolchain
-cargo build -p resonance-svs --features rocm --release   # requires ROCm + matching ort binary
+cargo build -p resonance-svs --features migraphx --release   # AMD: requires MIGraphX + an ORT build with it
 ```
 
 The default build links a CPU-only `onnxruntime` binary pulled by the `ort`
@@ -92,8 +92,12 @@ segment carries its own `offset` in seconds along the global timeline.
 | Flag | Behaviour |
 |------|-----------|
 | `--execution-provider cpu` (default) | CPU-only, works on any machine. |
-| `--execution-provider cuda` | Registers the CUDA provider, falls back to CPU on failure. Build with `--features cuda`. |
-| `--execution-provider rocm` | Same, ROCm. Build with `--features rocm`. |
+| `--execution-provider cuda` | Registers the CUDA provider with `error_on_failure`; if that fails the session is rebuilt on CPU and a warning names the reason. Build with `--features cuda`. |
+| `--execution-provider migraphx` | Same, MIGraphX (AMD). Build with `--features migraphx`. `rocm`/`hip` are aliases: ONNX Runtime 1.23 removed the ROCm provider. |
+
+The backend the acoustic session really runs on (after any fallback) is
+logged once and readable as `resonance_svs::active_backend()`; the app
+reports it as `svs_backend` in `control.hello`.
 
 The acoustic model is the heavy stage (diffusion sampling steps); the vocoder
 always runs on CPU because the per-call dispatch overhead of a GPU outweighs

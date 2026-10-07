@@ -78,20 +78,20 @@ fn add_breakpoint_marks_edited_and_flips_status() {
         vec![0.0, 0.0],
     );
     assert_eq!(
-        curves.status(CurveKind::Dynamics, VocalVoicebank::Lilia),
+        curves.status(CurveKind::Tension, VocalVoicebank::Lilia),
         CurveStatus::Auto
     );
 
     curves
-        .curve_mut(CurveKind::Dynamics)
+        .curve_mut(CurveKind::Tension)
         .add_breakpoint(0.5, 0.7);
 
-    assert!(curves.is_edited(CurveKind::Dynamics));
+    assert!(curves.is_edited(CurveKind::Tension));
     assert_eq!(
-        curves.status(CurveKind::Dynamics, VocalVoicebank::Lilia),
+        curves.status(CurveKind::Tension, VocalVoicebank::Lilia),
         CurveStatus::Edited
     );
-    assert!(approx(curves.evaluate(CurveKind::Dynamics, 0.5), 0.7));
+    assert!(approx(curves.evaluate(CurveKind::Tension, 0.5), 0.7));
 }
 
 #[test]
@@ -235,10 +235,9 @@ fn reset_clears_overlay_depth_smoothing_and_restores_baseline() {
     assert!(dyn_curve.overlay().is_empty());
     assert!(approx(dyn_curve.depth(), DEPTH_DEFAULT));
     assert!(approx(dyn_curve.smoothing(), SMOOTHING_DEFAULT_MS));
-    assert_eq!(
-        curves.status(CurveKind::Dynamics, VocalVoicebank::Lilia),
-        CurveStatus::Auto
-    );
+    // Status with the curve supported (no shipped bank takes dynamics, so
+    // ask the curve directly rather than through a voicebank).
+    assert_eq!(dyn_curve.status(true), CurveStatus::Auto);
     // Baseline (provenance) survived the edit + reset and is sampled again.
     assert!(approx(curves.evaluate(CurveKind::Dynamics, 0.0), 0.1));
     assert!(approx(curves.evaluate(CurveKind::Dynamics, 1.0), 0.9));

@@ -357,6 +357,7 @@ impl ControlClient {
                 app_version: String::new(),
                 protocol_version: 0,
                 capabilities: Vec::new(),
+                svs_backend: None,
             },
         };
         let params = HelloParams {

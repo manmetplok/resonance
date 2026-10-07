@@ -18,7 +18,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use resonance_svs::voicebank::{scan, ExpressionCurve, PhonemeTarget, VoicebankManifest};
+use resonance_svs::voicebank::layout::read_curve_support;
+use resonance_svs::voicebank::{
+    scan, CurveSupport, ExpressionCurve, PhonemeTarget, VoicebankManifest,
+};
 
 /// A fresh, empty fixture dir named `name` under the temp dir. Removed
 /// first so reruns start clean; named per test so parallel tests don't
@@ -365,10 +368,8 @@ fn tiger_like(name: &str) -> VoicebankManifest {
         &BankSpec {
             speakers: vec!["s0", "s1", "s2", "s3", "s4", "s5", "s6"],
             phoneme_body: ARPABET_FULL,
-            // Energy is present on every shipped bank (doc #154: dynamics
-            // maps to the universally-present energy curve); TIGER's model
-            // exposes no tension/breathiness input.
-            use_energy_embed: true,
+            // Mirrors the shipped TIGER v106 acoustic config: no energy,
+            // breathiness or tension embed.
             ..BankSpec::default()
         },
     );
@@ -382,8 +383,7 @@ fn lilia_like(name: &str) -> VoicebankManifest {
         &BankSpec {
             speakers: vec![], // single-speaker
             phoneme_body: ARPABET_NO_V,
-            use_energy_embed: true,
-            use_breathiness_embed: true,
+            // Shipped Lilia MM 2.8: tension only.
             use_tension_embed: true,
             ..BankSpec::default()
         },
@@ -401,8 +401,7 @@ fn meiji_like(name: &str) -> VoicebankManifest {
             phoneme_body: MEIJI_DICT,
             languages: Some(r#"{"zh": 0, "ja": 1, "ko": 2, "en": 3}"#),
             use_lang_id: true,
-            use_energy_embed: true,
-            use_breathiness_embed: true,
+            // Shipped Meiji: tension only.
             use_tension_embed: true,
             ..BankSpec::default()
         },
@@ -486,24 +485,67 @@ fn language_id_is_gated_on_the_acoustic_models_languages_input() {
 
 #[test]
 fn scan_wires_the_acoustic_embeds_into_curve_support() {
-    // was: curve_supported(Tiger, …) — dynamics/pitch yes, tension/breath no.
+    // The shipped configs: TIGER takes none of the three embeds, Lilia and
+    // Meiji take tension only. Pitch bend needs no embed.
     let tiger = tiger_like("q_tiger_curves");
-    assert!(tiger.supports_curve(ExpressionCurve::Dynamics));
     assert!(tiger.supports_curve(ExpressionCurve::PitchBend));
+    assert!(!tiger.supports_curve(ExpressionCurve::Dynamics));
     assert!(!tiger.supports_curve(ExpressionCurve::Tension));
     assert!(!tiger.supports_curve(ExpressionCurve::Breathiness));
 
-    // was: curve_supported(Lilia|Meiji, …) — all four supported.
     for m in [lilia_like("q_lilia_curves"), meiji_like("q_meiji_curves")] {
-        for c in [
-            ExpressionCurve::Dynamics,
-            ExpressionCurve::Tension,
-            ExpressionCurve::Breathiness,
-            ExpressionCurve::PitchBend,
-        ] {
-            assert!(m.supports_curve(c), "{} curve {c:?}", m.id);
-        }
+        assert!(m.supports_curve(ExpressionCurve::PitchBend), "{}", m.id);
+        assert!(m.supports_curve(ExpressionCurve::Tension), "{}", m.id);
+        assert!(!m.supports_curve(ExpressionCurve::Dynamics), "{}", m.id);
+        assert!(!m.supports_curve(ExpressionCurve::Breathiness), "{}", m.id);
     }
+
+    // A bank that does declare energy and breathiness gets both.
+    let dir = fresh_dir("q_full_curves");
+    build_bank(
+        &dir,
+        &BankSpec {
+            use_energy_embed: true,
+            use_breathiness_embed: true,
+            use_tension_embed: true,
+            ..BankSpec::default()
+        },
+    );
+    let full = scan(&dir).expect("full-embed bank scans");
+    assert!(full.supports_curve(ExpressionCurve::Dynamics));
+    assert!(full.supports_curve(ExpressionCurve::Breathiness));
+}
+
+#[test]
+fn read_curve_support_reads_only_the_acoustic_flags() {
+    // The app's cheap path: one acoustic dsconfig, no bank probe.
+    let dir = fresh_dir("q_read_curve_support");
+    build_bank(
+        &dir,
+        &BankSpec {
+            use_energy_embed: true,
+            use_tension_embed: true,
+            ..BankSpec::default()
+        },
+    );
+    let support = read_curve_support(&dir.join("dsconfig.yaml")).expect("flags read");
+    assert_eq!(
+        support,
+        CurveSupport {
+            energy: true,
+            tension: true,
+            breathiness: false,
+        }
+    );
+
+    // Absent flags default to false (the dsconfig loader's default).
+    let bare = fresh_dir("q_read_curve_support_bare");
+    build_bank(&bare, &BankSpec::default());
+    let support = read_curve_support(&bare.join("dsconfig.yaml")).expect("flags read");
+    assert_eq!(support, CurveSupport::default());
+
+    // A missing config is an error, not a silent "nothing supported".
+    assert!(read_curve_support(&bare.join("nope.yaml")).is_err());
 }
 
 // ---------------------------------------------------------------------------

@@ -9,7 +9,9 @@ use ort::session::Session;
 use ort::value::Value;
 use std::path::Path;
 
-use super::common::{build_session, input_names, output_names, ExecutionProvider};
+use super::common::{
+    build_session_reporting, input_names, output_names, record_active_backend, ExecutionProvider,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AcousticFlags {
@@ -34,11 +36,18 @@ pub struct AcousticFlags {
 pub struct AcousticStage {
     pub session: Session,
     pub flags: AcousticFlags,
+    /// The execution provider the session really runs on — the requested
+    /// one, or `Cpu` after a fallback.
+    pub backend: ExecutionProvider,
 }
 
 impl AcousticStage {
+    /// Load the acoustic model on `ep` (CPU fallback, see
+    /// [`build_session_reporting`]) and record the backend in use as the
+    /// process-wide [`super::common::active_backend`].
     pub fn load(model_path: &Path, ep: ExecutionProvider, device_index: i32) -> Result<Self> {
-        let session = build_session(model_path, ep, device_index)?;
+        let (session, backend) = build_session_reporting(model_path, ep, device_index)?;
+        record_active_backend(backend);
         let ins = input_names(&session);
         let outs = output_names(&session);
 
@@ -72,7 +81,11 @@ impl AcousticStage {
             speed: ins.contains("speed"),
             languages: ins.contains("languages"),
         };
-        Ok(Self { session, flags })
+        Ok(Self {
+            session,
+            flags,
+            backend,
+        })
     }
 
     /// Run the acoustic model, returning the mel spectrogram as `[n_frames, n_mel_bins]` in
