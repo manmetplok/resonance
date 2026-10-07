@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Re-exec under python3 when started as `sh scripts/vocal-audition.py`.
+''':'
+exec python3 "$0" "$@"
+'''
 """Run the blind voicebank audition (vocal-mcp-control-and-quality.md §12
 slice 6, D30) and hide which file is which bank/speaker.
 
@@ -34,7 +38,6 @@ Usage:
     scripts/vocal-audition.py --reveal     # print the token -> bank/speaker key
 """
 
-from __future__ import annotations
 
 import argparse
 import json
