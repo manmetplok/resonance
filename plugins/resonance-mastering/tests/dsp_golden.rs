@@ -97,7 +97,7 @@ const MAX_RMS_DELTA: f64 = 2.0e-5;
 // Re-blessed for W12. The de-harsh stage delays everything after the
 // corrective EQ by 2048 samples, even when off. The full pre- and
 // post-W12 streams were compared after aligning them by 2048 samples
-// (`docs/design/deharsh-resonance-suppressor.md` §5.2):
+// (`docs/history/specs/deharsh-resonance-suppressor.md` §5.2):
 // - Static scenarios with dither off: at most −122.4 dB re peak, which
 //   is float rounding.
 // - Bypass: bit-exact.

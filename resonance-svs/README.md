@@ -8,11 +8,11 @@ the `resonance-svs` CLI.
 ## TL;DR — get singing in under 5 minutes
 
 ```bash
-# 1. Fetch TIGER (English DiffSinger) + its companion vocoder (~580 MB total).
+# 1. Fetch the voicebanks (TIGER, LIEE Lilia, Gahata Meiji) + vocoder (~1.5 GB total).
 resonance-svs/scripts/download_models.sh
 
 # 2. Render the bundled sample .ds file.
-cargo run -p resonance-svs --release -- \
+cargo run -p resonance-svs --features cli --release -- \
   --ds-file        resonance-svs/models/sample/hello_tiger.ds \
   --acoustic-config resonance-svs/models/singer/extracted/dsacoustic/dsconfig.yaml \
   --vocoder-config  resonance-svs/models/singer/extracted/dsvocoder/vocoder.yaml \
@@ -44,7 +44,7 @@ does not drive them — phoneme durations and `f0_seq` are read directly from th
 ## Build
 
 ```
-cargo build -p resonance-svs                # CPU only
+cargo build -p resonance-svs --features cli  # CPU only (the CLI binary needs `cli`)
 cargo build -p resonance-svs --release
 cargo build -p resonance-svs --features cuda --release   # requires CUDA toolchain
 cargo build -p resonance-svs --features rocm --release   # requires ROCm + matching ort binary
@@ -61,8 +61,10 @@ crate at compile time — no system install is needed for plain CPU rendering.
 |------|-----|---------|
 | **TIGER** English DiffSinger v106 (~529 MB) | <https://github.com/spicytigermeat/tiger_diffsinger> | CC BY-NC-SA 4.0 |
 | **tgm_hifigan v110** standalone vocoder (~50 MB, redundant — TIGER ships its own) | <https://github.com/mrtigermeat/tgm_hifigan> | CC BY-NC-SA 4.0 |
+| **LIEE Lilia** multi-language DiffSinger MM 2.8 (~580 MB) — the app's default for `vocal.render` | <https://github.com/julieraptor/DIFFSINGER-LIEE-Immortal-Idol> | see repo |
+| **Gahata Meiji** v160 multi-language DiffSinger (~314 MB) | <https://github.com/lunaiproject/lunai_singers> | see repo |
 
-Both are non-commercial. Re-read the licences before doing anything beyond
+TIGER and the vocoder are non-commercial. Re-read every licence before doing anything beyond
 personal experiments. The TIGER bundle includes 41 community voices; ready-to-go
 speaker embeddings (`.emb` files) are only shipped for the 7 `tiger_*` speakers.
 
@@ -115,10 +117,11 @@ cargo test -p resonance-svs                                                     
 SVS_POC_VOICEBANK_DIR=resonance-svs/models/singer/extracted/dsacoustic \
   SVS_POC_DS_FILE=resonance-svs/models/sample/hello_tiger.ds \
   SVS_POC_SPEAKER=tiger_disco \
-  cargo test -p resonance-svs end_to_end_render -- --nocapture
+  cargo test -p resonance-svs --test smoke end_to_end_render -- --ignored --nocapture
 ```
 
-The render test relies on the bundled vocoder shipped alongside `dsacoustic` —
+`end_to_end_render` is `#[ignore]`d (it needs the downloaded models), hence
+`--ignored`. The render test relies on the bundled vocoder shipped alongside `dsacoustic` —
 ensure `singer/extracted/dsvocoder/vocoder.yaml` is present (the download
 script puts it there).
 
@@ -131,7 +134,9 @@ resonance-svs/
 ├── NOTES.md
 ├── .gitignore                 # excludes models/, *.onnx, *.zip, *.wav
 ├── scripts/
-│   └── download_models.sh     # fetches TIGER + vocoder
+│   ├── download_models.sh     # fetches TIGER, Lilia, Meiji + vocoder
+│   └── make_silent_rain.py    # regenerates fixtures/silent_rain.ds
+├── fixtures/                  # committed .ds scores (hello_tiger, silent_rain, twinkle)
 ├── models/                    # NOT committed; populated by the script
 │   ├── singer/                # TIGER acoustic + bundled vocoder
 │   ├── vocoder/               # standalone tgm_hifigan vocoder
@@ -143,6 +148,7 @@ resonance-svs/
 │   ├── config.rs              # dsconfig.yaml + vocoder.yaml + phonemes.txt parsers
 │   ├── ds.rs                  # .ds JSON parser, SampleCurve, note-name → MIDI
 │   ├── pipeline.rs            # stage orchestration
+│   ├── voicebank/             # voicebank layout discovery + phoneme sets (mod, layout, phonetics)
 │   └── stages/
 │       ├── mod.rs
 │       ├── common.rs          # session builder, execution-provider parsing
@@ -156,5 +162,9 @@ resonance-svs/
 │   ├── probe.rs               # ONNX I/O inspector
 │   └── render_resonance_vocal.rs  # CLI that mirrors the resonance-app pipeline
 └── tests/
-    └── smoke.rs
+    ├── smoke.rs               # parser smoke + #[ignore]d end_to_end_render
+    ├── ds_validation.rs
+    ├── mix_timeline.rs
+    ├── voicebank_manifest.rs
+    └── voicebank_phonetics.rs
 ```

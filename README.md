@@ -15,7 +15,9 @@ It runs on **Linux** (PipeWire, Wayland) and **macOS** (CoreAudio, Cocoa).
 - [Troubleshooting](#troubleshooting)
 
 For how the code is organised, see [ARCHITECTURE.md](ARCHITECTURE.md). For
-tests and contributor conventions, see [CLAUDE.md](CLAUDE.md).
+tests and contributor conventions, see [CLAUDE.md](CLAUDE.md). Every feature —
+what it does, where its code is, how it is tested — and everything still
+planned is indexed in [docs/README.md](docs/README.md).
 
 ---
 
@@ -165,6 +167,8 @@ hand.
 | `RESONANCE_CONTROL_SOCKET` | Put the control socket at this path instead of the default. |
 | `RESONANCE_RENDER_THREADS=<n>` | Number of render threads (1 = serial). |
 | `RESONANCE_FORCE_CPAL_OUTPUT=1` | Linux: use cpal/ALSA output instead of native PipeWire. |
+| `RESONANCE_NO_GRAPH_FORCE=1` | Linux: don't force the PipeWire graph to the project rate; follow the graph rate. |
+| `RESONANCE_AUDIO_STATS=1` | Verbose audio-stats report every period (by default only over-budget cycles, shortfalls and lock misses are logged). |
 | `CLAP_PATH` | Extra plugin directories, `:`-separated. |
 
 ---
@@ -218,7 +222,8 @@ ask Claude to call `control_hello`, which returns the app version and every
 control method the running app implements.
 
 The server starts fine when the app isn't running. Its tools then return
-"resonance is not running — start the app and retry", and it reconnects on
+"resonance is not running: could not connect to the control socket at …",
+and it reconnects on
 the next call once the app is up.
 
 ### Claude Desktop (macOS)
@@ -276,7 +281,8 @@ claude --plugin-dir "$PWD/resonance-agent-plugin"
 
 It ships no MCP config of its own, so register the server as above first.
 See [resonance-agent-plugin/README.md](resonance-agent-plugin/README.md) and
-[resonance-mcp/README.md](resonance-mcp/README.md) for the full tool surface.
+[docs/features/control-api/method-catalogue.md](docs/features/control-api/method-catalogue.md)
+for the full tool surface.
 
 ---
 

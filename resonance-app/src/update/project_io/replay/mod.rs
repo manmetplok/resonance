@@ -72,6 +72,6 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // the routing edges; the clips and what derives from them; the
     // references and app-side content; external instruments, lanes, the
     // missing-plugin warning and freeze last. See
-    // `docs/design/A-13-reconcile.md` for why each sits where it does.
+    // `docs/history/refactor/A-13-reconcile.md` for why each sits where it does.
     reconcile_all(r, None, project, &ctx);
 }

@@ -2,7 +2,7 @@
 //! project modified, the monotonic edit counter, the per-process session
 //! id, and the undo/redo history that drives the first two.
 //!
-//! Grouped together per the A-12 survey (`docs/design/A-12-resonance-fields.md`),
+//! Grouped together per the A-12 survey (`docs/history/refactor/A-12-resonance-fields.md`),
 //! with one adjustment. The survey's `SessionMetaState` proposal also
 //! included `control: ControlEndpointState` (the unix-socket control
 //! endpoint), but that field is left on [`Resonance`](crate::Resonance)

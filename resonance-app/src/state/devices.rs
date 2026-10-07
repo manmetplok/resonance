@@ -4,7 +4,7 @@
 //! — previously five loose fields on [`Resonance`](crate::Resonance).
 //!
 //! Grouped together per the A-12 survey
-//! (`docs/design/A-12-resonance-fields.md`): all five are the
+//! (`docs/history/refactor/A-12-resonance-fields.md`): all five are the
 //! hardware/external-device domain. `input_devices` and `midi_devices` are
 //! themselves already sub-states (A-12a); nested here they'd stutter as
 //! `r.devices.input_devices` / `r.devices.midi_devices`, so the fields are

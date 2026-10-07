@@ -434,7 +434,7 @@ impl crate::Resonance {
         // target lacks, removed in that order; the entities, their plugin
         // state and order; the routing edges; the clips and what derives
         // from them; the app-side content; external instruments, lanes and
-        // freeze last. See `docs/design/A-13-reconcile.md`.
+        // freeze last. See `docs/history/refactor/A-13-reconcile.md`.
         reconcile_all(self, Some(current), &target.file, &ctx);
     }
 

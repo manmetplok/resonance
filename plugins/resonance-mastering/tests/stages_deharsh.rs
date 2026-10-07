@@ -1,5 +1,5 @@
 //! The de-harsh stage in the mastering chain (warmth-width-depth.md W12,
-//! `docs/design/deharsh-resonance-suppressor.md`): its params, the
+//! `docs/history/specs/deharsh-resonance-suppressor.md`): its params, the
 //! constant reported latency, bit-transparency while it is off, the
 //! resonance cut through the whole chain, and the editor panel.
 

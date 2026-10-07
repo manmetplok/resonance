@@ -1,6 +1,6 @@
 //! De-harsh stage: `resonance_dsp`'s [`ResonanceSuppressor`] between the
 //! corrective EQ and the glue compressor
-//! (`docs/design/deharsh-resonance-suppressor.md`).
+//! (`docs/history/specs/deharsh-resonance-suppressor.md`).
 //!
 //! The suppressor delays by one STFT frame ([`DeharshStage::latency`],
 //! 2048 samples at 48 kHz), and the chain reports that on top of its

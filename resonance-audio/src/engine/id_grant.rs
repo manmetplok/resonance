@@ -1,5 +1,5 @@
 //! The engine's standing grant of clip ids (ARCH-04 D-7d, design doc
-//! `docs/design/D-6-engine-created-ids.md` §4.2).
+//! `docs/history/refactor/D-6-engine-created-ids.md` §4.2).
 //!
 //! The engine creates clips at moments the app cannot decide ahead of
 //! time: a record run's first buffer (C3), every loop-seam pass (C4), a

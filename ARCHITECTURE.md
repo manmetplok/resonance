@@ -39,8 +39,8 @@ Hard rules — these are load-bearing for build times, testability, and cognitiv
 - Plugins reach `resonance-common` **only for utilities** (`scan_directory`, `drum_map`, WAV decode, the content libraries `nam_library`, `drumkit_library` and `library_marks`, the CLAP extension ABIs `kit_info`, `param_flags` and `preset_session`, `factory_presets` via the SDK — the full list is `PLUGIN_COMMON_ITEMS` in `tools/arch-invariants`). DAW model types (takes, automation, MIDI maps, device definitions, freeze, track groups) are not plugin API. Pure-DSP helpers such as `flush_denormals` live in `resonance-dsp`, so most plugins do not depend on `resonance-common` at all; only amp, drums and ir do (ARCH-07).
 - `resonance-svs` (singing-voice synthesis) depends only on `resonance-music-theory`. It renders DiffSinger `.ds` segments to audio headless, and ships its own CLI binary so the pipeline can be exercised without booting the app.
 - `plugin-gui-core` is the platform-neutral half of the editor stack: the `EditorApp`/`EditorOptions`/`EditorError` contract, the fleet theme, and the pure egui widget set. No windowing code; builds on every OS.
-- `wayland-plugin-gui` is the Linux editor runtime — it hosts an egui UI in its own Wayland window/thread, building on `plugin-gui-core` for the shared contract (and re-exporting it, so plugins have one import surface). No plugin depends on it directly: `resonance-plugin`'s `editor-widgets` feature pulls in the runtime for the current target and re-exports it as `editor_host::RuntimeEditor`, so a plugin's `editor` feature names only `plugin-gui-core` and `resonance-plugin/editor-widgets` (ARCH-08; `tools/arch-invariants` fails the build otherwise). It knows nothing about any specific plugin or the app. Its windowing body is Linux-only; other targets get a stub `Editor` so the workspace builds everywhere.
-- `cocoa-plugin-gui` is the macOS editor runtime — same public `Editor` surface, inverted mechanics: the window lives on the AppKit main thread (which AppKit requires) and the `Send` handle dispatches onto it; rendering is NSOpenGLView + the same egui_glow painter. Windowing body macOS-only, stub elsewhere. Plugins reach whichever runtime matches the platform through `resonance_plugin::editor_host` (migration tracked in `macos-editor-plan.md` item 3c).
+- `wayland-plugin-gui` is the Linux editor runtime — it hosts an egui UI in its own Wayland window/thread, building on `plugin-gui-core` for the shared contract (and re-exporting it, so plugins have one import surface). No plugin depends on it directly: `resonance-plugin`'s `editor-widgets` feature pulls in the runtime for the current target and re-exports it as `editor_host::RuntimeEditor`, so a plugin's `editor` feature names only `plugin-gui-core` and `resonance-plugin/editor-widgets` (ARCH-08; `tools/arch-invariants` fails the build otherwise). It knows nothing about any specific plugin or the app. Its windowing body is Linux-only: off Linux the crate still builds (it re-exports the `plugin-gui-core` contract) but `Editor` is compiled out, so the workspace builds everywhere.
+- `cocoa-plugin-gui` is the macOS editor runtime — same public `Editor` surface, inverted mechanics: the window lives on the AppKit main thread (which AppKit requires) and the `Send` handle dispatches onto it; rendering is NSOpenGLView + the same egui_glow painter. Windowing body macOS-only; elsewhere `Editor` is compiled out. Plugins reach whichever runtime matches the platform through `resonance_plugin::editor_host` (see `docs/features/plugins-instruments/plugin-editor-runtimes.md`).
 - `resonance-app` is allowed to depend on everything; it is the integration layer. The exception: it depends on no plugin crate. Plugins reach the app as CLAP bundles only; code both need goes into a library crate both depend on (as `resonance-mastering-assist` did for `master.assist`).
 
 These rules are tests, not only prose: `tools/arch-invariants/tests/architecture.rs` reads `cargo metadata` and fails the suite on an internal dependency that is not an edge of the diagram, a plugin manifest or source that names a platform runtime, a plugin naming a `resonance_common` item outside the utility allow-list (or gaining the dependency unlisted), a GUI toolkit or windowing stack (any crate of its family: `iced_*`, `egui_*`, …; `winit`/`wgpu`/`eframe` nowhere) outside its crate, `resonance-app` depending on a plugin crate, a test-support crate as a normal dependency, an inline `cfg(test)` beyond the documented exception, a new top-level test file (exact lists for `resonance-app/tests/` and `resonance-audio/tests/`, a per-crate count ratchet elsewhere), a first-party CLAP id spelled outside `resonance_plugin::first_party`, `resonance_control` named outside the app's control layer, an `AudioCommand` with no app caller that is not on the listed-orphan list, a per-owner plugin-chain command or event (`AddPluginToBus` and the like: the chains share one `ChainOwner`-parameterised API, ARCH2-02), a `state/` file naming `crate::view`, `crate::update` or `crate::control_socket` (ARCH2-05), a `mod.rs` over ~200 lines that is not on the shrinking allow-list (ARCH2-12), and a workspace crate this section does not name (ARCH-10, ARCH2-07). Adding a crate means deciding its layer here and adding its row there.
@@ -60,7 +60,7 @@ plugins/<name>/src/
 ├── viz.rs        (optional) Lock-free viz state for the editor
 └── editor/
     ├── mod.rs        EditorFactory + EditorApp impl, ui() entry
-    ├── theme.rs      Plugin-local colours (do not import app theme)
+    ├── theme.rs      Façade over the shared fleet palette (never the app theme)
     ├── controls.rs   Knob/button rows
     └── <feature>.rs  Per-panel views (curve, meters, scope, ...)
 ```
@@ -70,7 +70,7 @@ Discipline:
 - `dsp.rs` is the pure-DSP boundary. It must be testable without the plugin framework. Plugins ship integration tests in `tests/` that drive `dsp.rs` directly.
 - `params.rs` defines parameters as code, not as a serialized blob. Adding a parameter is a code change, not a config change.
 - The editor is **feature-gated** (`default = ["editor"]`). Headless builds for tests/CI use `--no-default-features` and skip the egui and platform-runtime deps.
-- `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 13 plugins re-exports the shared design system with `pub use plugin_gui_core::theme::lavender::*` (the canonical tokens: the `lavender` module of `plugin-gui-core/src/theme.rs`, which follows `ux-guidelines.md`), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
+- `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 13 plugins re-exports the shared design system with `pub use plugin_gui_core::theme::lavender::*` (the canonical tokens: the `lavender` module of `plugin-gui-core/src/theme.rs`, which follows `docs/guides/ux-guidelines.md`), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
 
 ## Bumping the clack git pin (DEP-13)
 
@@ -151,7 +151,7 @@ This pattern scales. New domains add a file; new messages within a domain add a 
 
 ## Audio Engine Public API
 
-`resonance-audio` exposes one surface to the app: `AudioEngine` (commands in via `AudioCommand`, events out via `AudioEvent`). The entire `engine/` module is private. Internal types (`Track`, `Bus`, `MidiClip`, the mixer thread, the CLAP host) are not exposed.
+`resonance-audio` drives the app through one surface: `AudioEngine` (commands in via `AudioCommand`, events out via `AudioEvent`). The entire `engine/` module is private, and so are the mixer thread and the CLAP host. The crate does publicly export its `types` (including `Track`, `Bus` and `MidiClip`, which the app reads as data) and a few stateless helpers the app calls directly — `midi_io`, `quantize`, `import_one_to_pool`, `transcode_to_wav`, `read_freeze_cache`, `linear_resample`. Keep that list to pure functions and plain data; anything that touches live engine state goes through a command.
 
 The app reconstructs its own state from `AudioEvent`s. The engine never reaches up to mutate app state. This one-way flow is what lets the engine be tested without spinning up Iced, and what lets the app be reasoned about without thinking about the audio thread.
 
@@ -161,7 +161,7 @@ When adding engine functionality:
 3. New `AudioEvent` variant carrying the result.
 4. App-side handler in `engine_events/` (per-domain file, routed via `dispatch.rs`) that mirrors the change in app state.
 
-Do not add direct getter methods on `AudioEngine` that read engine state — that creates synchronization headaches and undermines the command/event boundary.
+Do not add direct getter methods on `AudioEngine` that read engine state — that creates synchronization headaches and undermines the command/event boundary. The three that exist (`dsp_load`, `output_stream_lost`, `is_disconnected`) read lock-free `SharedState` atomics on purpose; that is the only acceptable shape for one.
 
 ## Test Layout
 
@@ -188,12 +188,13 @@ details if promoted to `pub`:
 
 These are the documented exception, not the rule. Do not add new inline tests
 elsewhere in the workspace (shrink this list when you can, don't grow it) — for
-example, the `update/project_io/replay.rs` and `replay_diff.rs` helpers this
-list used to carry an exception for (`migrate_auto_name`,
-`sort_plugins_by_saved_order`, `structurally_compatible`, `id_set_eq`,
-`midi_notes_equal`) are `pub fn` now, with their inline tests migrated to
-`resonance-app/tests/io/replay.rs` and `replay_diff.rs`; the `undo.rs` inline
-tests likewise moved out, to `tests/timeline/undo_history.rs`. If you need to
+example, the project-I/O helpers this list used to carry an exception for
+are `pub fn` now (`migrate_auto_name` and `sort_plugins_by_saved_order` in
+`update/project_io/reconcile/entities.rs`, `midi_notes_equal` in
+`update/project_io/replay_diff.rs`, tested from `resonance-app/tests/io/`),
+and `structurally_compatible` / `id_set_eq` were deleted with the `Reconcile`
+driver (A-13j); the `undo.rs` inline tests likewise moved out, to
+`tests/timeline/undo_history.rs`. If you need to
 test a private helper in any other crate, make the helper `pub(crate)` and
 write a `tests/<feature>.rs` integration test in that crate instead.
 

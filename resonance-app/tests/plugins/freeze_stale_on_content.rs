@@ -173,7 +173,7 @@ fn a_mixer_edit_leaves_the_track_frozen() {
 /// vacuously — it emitted no engine commands at all and would have stayed
 /// green even with the echo-pending skip in `revalidate_frozen_content`
 /// deleted outright (confirmed by instrumenting the rename and by cutting
-/// that skip; see the FU-A13j field note in `docs/design/A-13-reconcile.md`
+/// that skip; see the FU-A13j field note in `docs/history/refactor/A-13-reconcile.md`
 /// §15). Renamed and rewritten to drive an action that genuinely
 /// re-derives: switching a chord-lane's motif source to the kind it
 /// already has. `ChordInspectorMsg::SetMotifSourceKind` (`chord_inspector.rs`)
