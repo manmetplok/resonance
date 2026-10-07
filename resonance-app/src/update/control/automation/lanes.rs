@@ -49,6 +49,9 @@ fn build(app: &Resonance, params: &LanesParams) -> Result<LanesResult, RpcError>
 fn matches_filter(info: &LaneInfo, params: &LanesParams) -> bool {
     let spec = &params.target;
     let lane = &info.target;
+    if spec.vocal.is_some() && lane.spec.vocal != spec.vocal {
+        return false;
+    }
     if spec.control.is_some() && lane.spec.control != spec.control {
         return false;
     }

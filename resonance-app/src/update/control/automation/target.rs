@@ -35,6 +35,17 @@ pub(in crate::update::control) fn spec_owner(
     app: &Resonance,
     spec: &AutomationTargetSpec,
 ) -> Result<Option<ChainOwner>, RpcError> {
+    if let Some(vocal) = &spec.vocal {
+        if spec.track_id.is_some() || spec.bus_id.is_some() || spec.master {
+            return Err(RpcError::invalid_params(
+                "vocal: {track_id, curve} names its own track; drop track_id / bus_id / master",
+            ));
+        }
+        if !app.registry.tracks.iter().any(|t| t.id == vocal.track_id.0) {
+            return Err(no_track(vocal.track_id.0));
+        }
+        return Ok(Some(ChainOwner::Track(vocal.track_id.0)));
+    }
     let named = usize::from(spec.track_id.is_some())
         + usize::from(spec.bus_id.is_some())
         + usize::from(spec.master);
@@ -65,6 +76,9 @@ pub(in crate::update::control) fn resolve_target(
     app: &Resonance,
     spec: &AutomationTargetSpec,
 ) -> Result<ResolvedTarget, RpcError> {
+    if let Some(vocal) = &spec.vocal {
+        return super::vocal::resolve(app, spec, vocal);
+    }
     let Some(owner) = spec_owner(app, spec)? else {
         return Err(RpcError::invalid_params(
             "name the lane's owner: track_id, bus_id or master: true",
@@ -173,6 +187,7 @@ fn spec_is_empty(spec: &AutomationTargetSpec) -> bool {
         && spec.param.is_none()
         && spec.plugin_id.is_none()
         && spec.occurrence.is_none()
+        && spec.vocal.is_none()
 }
 
 /// [`resolve_write_target`], widened to accept `automation.delete_points`
@@ -206,9 +221,7 @@ pub(in crate::update::control) fn resolve_lane_or_target(
 fn target_by_lane_id(app: &Resonance, lane_id: u64) -> Result<AutomationTarget, RpcError> {
     let target = app
         .automation
-        .lanes
-        .values()
-        .find(|lane| lane.id == lane_id)
+        .lane_by_id(lane_id)
         .map(|lane| lane.target.clone())
         .ok_or_else(|| RpcError::not_found(format!("no automation lane with id {lane_id}")))?;
     if matches!(target, AutomationTarget::PluginParam { .. }) {

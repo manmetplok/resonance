@@ -224,6 +224,8 @@ fn priority(target: &AutomationTarget) -> u32 {
         // primary lane (the exact one among ties is unimportant).
         AutomationTarget::DeviceParam { .. } => 5,
         AutomationTarget::PluginParam { param_id, .. } => 10u32.saturating_add(*param_id),
+        // Render-only; never in the engine-lane mirror the mixer lists.
+        AutomationTarget::VocalCurve { .. } => u32::MAX,
     }
 }
 
@@ -257,6 +259,7 @@ fn target_label(target: &AutomationTarget, device_params: &[DeviceParam]) -> Str
             .find(|p| &p.id == param_id)
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "Device".to_string()),
+        AutomationTarget::VocalCurve { curve, .. } => format!("Vocal: {}", curve.label()),
     }
 }
 

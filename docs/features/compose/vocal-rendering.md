@@ -195,8 +195,11 @@ only marks the lane stale.
   len, sample_rate, smooth_sec) -> Option<Vec<f32>>` (per-sample linear
   gain; `None` when every span is 0 dB), `apply_dynamics_gain(mono,
   spans, sample_rate) -> bool`, with `velocity_gain_spans` /
-  `velocity_gain_db` as the velocity feed — a per-frame Dynamics curve on
-  a bank without energy can feed the same function (one span per frame).
+  `velocity_gain_db` as the velocity feed. The Dynamics expression curve
+  on a bank without energy is a second layer (one span per curve frame,
+  `RenderUnit::curve_gain`); `dynamics_gain_envelope_layers` /
+  `apply_dynamics_gain_layers` lay each layer out on its own and add them
+  in dB (the gains multiply) before the one smoothing pass.
 - **Inference.** Each missing unit goes through
   `resonance_svs::pipeline::render_segments` — combined acoustic ONNX (mel)
   then vocoder ONNX — on CPU, `speedup` 20, `depth` 1000. All three shipped
@@ -260,8 +263,8 @@ only marks the lane stale.
     reads `stale`; so does a lane whose plan cannot be built any more.
   - *Memo.* Planning builds every segment, so the expected keys are
     memoised per lane by a **fingerprint** of what the plan reads (clip
-    notes and lyrics, params, overrides, project dictionary, expression
-    curves, section tempo, the bank's model identity and stamp). A read
+    notes and lyrics, params (expression curves included), overrides,
+    project dictionary, section tempo, the bank's model identity and stamp). A read
     with an unchanged fingerprint costs ~3 µs per lane (release build).
   - *Precedence.* A queued render reads `rendering`; else a failure
     recorded on the lane's current fingerprint reads `error` (kinds
@@ -307,15 +310,39 @@ only marks the lane stale.
   placement. If the tempo changes while a render runs, it is re-queued at
   the new tempo. If placements sit at different tempos, the inspector warns
   (`vocal_tempo_mismatch`) instead of rendering per placement.
-- **Expression curves.** The segment builder reads the lane's
-  `ExpressionCurves` (dynamics, tension, breathiness, pitch bend) and
-  sends only those the bank takes (`BankProfile::curve_supported`). On
-  the shipped banks no model takes energy or breathiness, so **dynamics
-  and breathiness do nothing on any shipped bank**; Lilia and Meiji take
-  tension, TIGER does not. An unsupported curve is left out of the
-  segment (the dock shows `n/a`). No GUI or control path edits the
-  curves yet — see
-  [vocal MCP control and quality §10](../../intents/compose/vocal-mcp-control-and-quality.md).
+- **Expression curves** (§10, slice 14). Dynamics, Tension, Breathiness
+  and Pitch bend live in the lane config, `VocalParams::curves`
+  (`resonance-music-theory` `VocalCurves` / `VocalCurvePoint {beat,
+  value, stepped}`, `#[serde(default)]`, left out of the file when
+  empty): **section-relative** points, `beat` in quarter notes from the
+  section start, `value` normalized `0..=1`. They are saved and undone
+  with the project (BUG-50's curve part is fixed) and edited only as
+  `Vocal:` automation rows on the Arrange view and through `automation.*`
+  (see [automation lanes](../timeline/automation-lanes.md)) —
+  `vocal.set_params` has no `curves` field. Real units: the three
+  envelopes `0..=1` with `0.5` neutral, pitch bend `-50..=50` cents
+  (`compose/expression.rs` `real_value`). An empty curve leaves the
+  render exactly as before.
+  - **Time.** Each render unit samples the curves on the f0 grid with a
+    `CurveClock` built from its own first note (section-relative ticks):
+    frame `i` sits at beat `first_note_beat − pad + i·timestep` at the
+    section tempo. Points are linear (or stepped) between, held flat past
+    the ends (`expression::sample_at_beat`).
+  - **Per curve.** Pitch bend: an additive cents offset after portamento
+    and vibrato, every bank. Tension / Breathiness: the model input
+    (`0.5` → 0, ends → ±1) where `BankProfile::curve_supported`, else
+    nothing — Lilia and Meiji take tension, no shipped bank takes
+    breathiness. Dynamics: the energy input where the bank takes it
+    (none does), **otherwise the post-render gain**, `±DYNAMICS_CURVE_MAX_DB`
+    (12 dB) at the ends, `0.5` = 0 dB, multiplied with the velocity gain.
+    So Dynamics and Pitch bend are audible on every bank.
+  - **Render state.** The curves ride in the params, so the plan
+    fingerprint moves on every curve edit: a GUI edit arms the debounce, a
+    control edit leaves the lane `stale`. Model-input curves change the
+    unit's cache key; the Dynamics gain is applied after the cache, so the
+    unit **state key** hashes it (`state_key(.., curve_gain_db)`) and a
+    Dynamics edit on TIGER reads stale without re-running the model
+    needlessly on the units it does not touch.
 - **Comfortable ranges** (warnings only, `BankProfile::comfortable_range`):
   per bank from the built-in table (see above); per-speaker ranges are not
   known yet, so each speaker reports its bank's.
@@ -463,6 +490,8 @@ is Jorrit's job, not this tool's — see spec §12 slice 6 and §5.
 | What | Where | Run |
 |---|---|---|
 | Plan, cache, IO, placement, timing, articulation | `resonance-app/tests/vocal/{vocal_render_plan,vocal_render_cache,vocal_audio_io,vocal_audio_placement,vocal_segment_timing,vocal_articulation,vocal_phoneme_accessor,vocal_expression_segment,voicebank_curve_support}.rs` | `./scripts/run-tests.py -p resonance-app` |
+| Expression curves: per-curve support, value mapping, section-relative sampling, Dynamics as gain on a bank without energy (same cache key, new state key), gain layers add in dB; the model and `plan_set_lane` | `tests/vocal/{vocal_expression_segment,expression_curves_model}.rs`; curve edits → stale / debounce, persistence in `tests/control/control_vocal_curves.rs` | same |
+| A Dynamics curve audibly changes a TIGER take (−6 / +6 dB per note, silence guarded) | `tests/vocal/vocal_dynamics_render.rs` `on_tiger_a_dynamics_curve_changes_the_take_through_gain` (no-op unless the models are set) | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
 | Registry scans (temp-dir fixture banks: slugs, two-level layout, languages, shared vocoder, user-over-dev, rescan, built-in fallbacks) | `tests/vocal/voicebank_registry.rs`; fixtures from `resonance_app::{write_voicebank_fixture, VoicebankFixture}` | same |
 | Real banks register with the right ids, speakers, curve flags | `tests/vocal/voicebank_curve_support.rs` (`real_banks_register_…`, `installed_flags_match_…`; no-ops unless set). Nothing else reads the variable: the suite gives the same results with it set | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
 | plok.org install over a loopback server: available → installed, vocoder auto-fetch, terms in the result, no revision / undo, `already_installed`, sha mismatch installs nothing, a cut download resumes with `Range`, unknown id `not_found`, no project needed; the committed index proposal parses | `tests/control/control_voicebank_install.rs` (server: `tests/common/plok_server.rs`) | `./scripts/run-tests.py -p resonance-app` |
@@ -535,8 +564,9 @@ results.
 
 - The energy path (velocity → energy) runs on no shipped bank and has not
   been heard; it uses the overlay's signed ±1 convention, not dB.
-- Expression curves have no editor, no persistence and no control method —
-  [vocal MCP control and quality §10](../../intents/compose/vocal-mcp-control-and-quality.md).
+- The expression curves' baseline / depth / smoothing from the old dock
+  model (doc #154) are gone: a curve is just its points. Nothing derives a
+  baseline from the melody.
 - No harmony / doubled voices —
   [vocal-harmony-doubling](../../intents/compose/vocal-harmony-doubling.md).
 - Inference is CPU-only in the app (`ExecutionProvider::Cpu` is hard-coded

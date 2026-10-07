@@ -10,9 +10,7 @@ use resonance_music_theory::VocalParams;
 use resonance_svs::pipeline::{self, PipelineArgs};
 use resonance_svs::stages::common::ExecutionProvider;
 
-use crate::compose::expression::ExpressionCurves;
-
-use super::dynamics::{apply_dynamics_gain, velocity_gain_spans_with_breaths};
+use super::dynamics::{apply_dynamics_gain_layers, velocity_gain_spans_with_breaths, GainSpan};
 use super::rests::breath_lead_secs;
 use super::post::{
     apply_ap_gate, collect_rest_intervals, mono_to_stereo_with_gain, resample_to,
@@ -62,7 +60,6 @@ pub fn render_vocal_clip(
     notes: &[MidiNote],
     params: &VocalParams,
     assigned: &[AssignedSyllable],
-    curves: &ExpressionCurves,
     ticks_per_quarter: u32,
     bpm: f32,
     engine_sample_rate: u32,
@@ -80,7 +77,7 @@ pub fn render_vocal_clip(
     // Split the clip into independently-renderable units at genuine
     // silences. A continuous phrase yields a single unit whose segment
     // matches the old whole-clip build.
-    let units = split_render_units(notes, params, assigned, curves, ticks_per_quarter, bpm, bank);
+    let units = split_render_units(notes, params, assigned, ticks_per_quarter, bpm, bank);
     if units.iter().all(|u| u.segment.ph_seq.is_empty()) {
         return Err(VocalRenderError::NothingToSing);
     }
@@ -121,7 +118,10 @@ pub fn render_vocal_clip(
     // Velocity → loudness on every bank (§9): one gain per note, on the
     // stitched take (the first note sits `SEGMENT_PAD_SEC` in), before the
     // safety gain so a +6 dB note cannot clip. A written breath takes
-    // the gain of the note it leads into.
+    // the gain of the note it leads into. The Dynamics curve on a bank
+    // without energy (§10) is a second layer, one span per curve frame,
+    // each unit's spans moved to where the unit sits in the take; the two
+    // layers' gains multiply.
     let breaths = breath_lead_secs(notes, assigned, ticks_per_quarter, bpm, params);
     let spans = velocity_gain_spans_with_breaths(
         notes,
@@ -131,7 +131,17 @@ pub fn render_vocal_clip(
         params.velocity_dynamics,
         SEGMENT_PAD_SEC,
     );
-    apply_dynamics_gain(&mut mono, &spans, model_sr);
+    let curve_spans: Vec<GainSpan> = units
+        .iter()
+        .flat_map(|unit| {
+            unit.curve_gain.iter().map(move |s| GainSpan {
+                start_sec: unit.start_sec + s.start_sec,
+                end_sec: unit.start_sec + s.end_sec,
+                gain_db: s.gain_db,
+            })
+        })
+        .collect();
+    apply_dynamics_gain_layers(&mut mono, &[&spans, &curve_spans], model_sr);
 
     let gain = safety_gain_factor(&mono);
     let stereo = mono_to_stereo_with_gain(&mono, gain);

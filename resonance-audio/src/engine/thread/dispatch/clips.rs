@@ -95,6 +95,9 @@ pub(super) fn dispatch_clips(
         AudioCommand::AnalyzeClipPitch { clip_id } => {
             vocal_analysis::handle_analyze_clip_pitch(ctx, state, clip_id)
         }
+        // A render-only lane (a vocal expression curve) never drives the
+        // mixer; the app never sends one, and the engine refuses it anyway.
+        AudioCommand::SetAutomationLane { lane } if !lane.target.is_engine_lane() => {}
         AudioCommand::SetAutomationLane { lane } => {
             automation::set_automation_lane_in_place(
                 &mut state.automation_lanes,

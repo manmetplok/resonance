@@ -157,6 +157,26 @@ impl LaneContext {
             AutomationTarget::PluginParam { instance, param_id } => {
                 self.describe_plugin_lane(*instance, *param_id)
             }
+            AutomationTarget::VocalCurve { track, curve } => {
+                let owner = ChainOwner::Track(*track);
+                LaneInfo {
+                    owner: Some(owner),
+                    target: LaneTargetView {
+                        spec: super::vocal::spec_for(*track, *curve),
+                        plugin_name: None,
+                        param_id: None,
+                        param_name: None,
+                    },
+                    status: if self.track_order.contains_key(track) {
+                        LaneStatus::Ok
+                    } else {
+                        LaneStatus::Orphaned
+                    },
+                    domain: ValueDomain::Vocal(*curve),
+                    // After the track's mixer and plugin lanes.
+                    sort_key: self.sort_key(Some(owner), u32::MAX - 4 + curve.index() as u32, 0, 0),
+                }
+            }
         }
     }
 
@@ -266,7 +286,8 @@ fn owner_spec(owner: ChainOwner) -> AutomationTargetSpec {
 
 /// Every lane in the project, described, in listing order: tracks in
 /// mixer order, then busses, then master, then orphans; within an owner
-/// volume, pan, mute, device lanes, then plugin lanes by slot and param.
+/// volume, pan, mute, device lanes, plugin lanes by slot and param, then a
+/// vocal track's four expression curves.
 pub(in crate::update::control) fn sorted_lanes<'a>(
     app: &'a Resonance,
     ctx: &LaneContext,
@@ -275,6 +296,7 @@ pub(in crate::update::control) fn sorted_lanes<'a>(
         .automation
         .lanes
         .values()
+        .chain(app.automation.vocal.iter().map(|v| &v.lane))
         .map(|lane| (ctx.describe(lane), lane))
         .collect();
     lanes.sort_by(|(a, la), (b, lb)| a.sort_key.cmp(&b.sort_key).then(la.id.cmp(&lb.id)));
@@ -318,6 +340,7 @@ pub(in crate::update::control) fn lane_view(
         max: info.domain.max(),
         point_count: lane.points.len() as u32,
         points,
+        section_relative: !lane.target.is_engine_lane(),
     }
 }
 
@@ -327,7 +350,7 @@ pub(in crate::update::control) fn lane_view_for(
     app: &Resonance,
     target: &AutomationTarget,
 ) -> Option<LaneView> {
-    let lane = app.automation.lanes.get(target)?;
+    let lane = app.automation.lane_for(target)?;
     let ctx = LaneContext::new(app);
     Some(lane_view(app, &ctx.describe(lane), lane, None))
 }
@@ -343,7 +366,8 @@ pub(in crate::update::control) fn lane_summaries(
     let ctx = LaneContext::new(app);
     sorted_lanes(app, &ctx)
         .into_iter()
-        .filter(|(info, _)| info.owner == Some(owner))
+        // Vocal curves are listed by `song.vocal`, not with the mixer's.
+        .filter(|(info, lane)| info.owner == Some(owner) && lane.target.is_engine_lane())
         .map(|(info, lane)| LaneSummary {
             lane_id: lane.id,
             control: info.target.spec.control,
@@ -380,7 +404,8 @@ pub(in crate::update::control) fn lane_owner(
         AutomationTarget::TrackGain(id)
         | AutomationTarget::TrackPan(id)
         | AutomationTarget::TrackMute(id)
-        | AutomationTarget::DeviceParam { track: id, .. } => Some(ChainOwner::Track(*id)),
+        | AutomationTarget::DeviceParam { track: id, .. }
+        | AutomationTarget::VocalCurve { track: id, .. } => Some(ChainOwner::Track(*id)),
         AutomationTarget::BusGain(id)
         | AutomationTarget::BusPan(id)
         | AutomationTarget::BusMute(id) => Some(ChainOwner::Bus(*id)),

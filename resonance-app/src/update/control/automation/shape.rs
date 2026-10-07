@@ -110,10 +110,27 @@ fn build(
         }
     }
 
-    let existing: &[Breakpoint] = current_lane(app, &resolved.target)
-        .map(|lane| lane.points.as_slice())
-        .unwrap_or(&[]);
-    let points = replace_range(existing, start, end, generated, |p| p.time_frames);
+    let mut existing: Vec<Breakpoint> = current_lane(app, &resolved.target)
+        .map(|lane| lane.points.clone())
+        .unwrap_or_default();
+    // A vocal curve point is one section point shown at every placement:
+    // replacing it inside the range replaces every copy of it.
+    if let Some(vocal) = app.automation.vocal.get(&resolved.target) {
+        let inside: std::collections::HashSet<usize> = existing
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.time_frames >= start && p.time_frames <= end)
+            .map(|(i, _)| i)
+            .collect();
+        let copies = vocal.copies_of(&inside);
+        existing = existing
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !copies.contains(i))
+            .map(|(_, p)| p)
+            .collect();
+    }
+    let points = replace_range(&existing, start, end, generated, |p| p.time_frames);
     Ok((resolved, points, output.seed_used))
 }
 
@@ -233,6 +250,8 @@ fn real_input(
         }
         // `normalize` already refused a non-normalized value here.
         ValueDomain::Normalized => f64::from(norm),
+        ValueDomain::Vocal(_) => number(value)
+            .ok_or_else(|| RpcError::invalid_params(format!("expected a number, got {value:?}")))?,
     })
 }
 
@@ -262,6 +281,9 @@ fn lane_value(resolved: &ResolvedTarget, real: f64, normalized: bool) -> f32 {
             plugin_param_to_lane_value(real.clamp(param.min, param.max), param.min, param.max)
         }
         ValueDomain::Normalized => real.clamp(0.0, 1.0) as f32,
+        ValueDomain::Vocal(kind) => {
+            crate::compose::expression::normalized_value(*kind, real as f32)
+        }
     }
 }
 

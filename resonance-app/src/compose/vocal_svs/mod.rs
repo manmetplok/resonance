@@ -38,9 +38,10 @@ mod segment;
 mod validate;
 
 pub use dynamics::{
-    apply_dynamics_gain, dynamics_gain_envelope, velocity_gain_db, velocity_gain_spans,
-    velocity_gain_spans_with_breaths, velocity_modulation, GainSpan, DYNAMICS_SMOOTH_SEC,
-    NEUTRAL_VELOCITY, VELOCITY_GAIN_MAX_DB,
+    apply_dynamics_gain, apply_dynamics_gain_layers, dynamics_gain_envelope,
+    dynamics_gain_envelope_layers, velocity_gain_db, velocity_gain_spans,
+    velocity_gain_spans_with_breaths, velocity_modulation, GainSpan, DYNAMICS_CURVE_MAX_DB,
+    DYNAMICS_SMOOTH_SEC, NEUTRAL_VELOCITY, VELOCITY_GAIN_MAX_DB,
 };
 pub use error::{VocalRenderError, VocalRenderErrorKind};
 pub use paths::{svs_backend, CurveKind, CurveSupport};

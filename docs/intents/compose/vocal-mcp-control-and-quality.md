@@ -548,9 +548,24 @@ handler, MCP tool, GUI, tests, and the feature doc with its
     stress-weighted one), while the unit content key still hashes both
     new params as asked, so changing `velocity_dynamics` re-runs the
     models; energy uses the overlay's signed ±1 units.
-14. **Expression curves as automation.** The curves in the lane config,
-    section-relative storage, Arrange sub-rows, `AutomationTarget::VocalCurve`,
-    and `automation.*`. This fixes BUG-50's curve part.
+14. **Expression curves as automation.** ✅ built (phase 4; see
+    [automation lanes](../../features/timeline/automation-lanes.md) and
+    [vocal rendering](../../features/compose/vocal-rendering.md)). The
+    curves in the lane config, section-relative storage, Arrange sub-rows,
+    `AutomationTarget::VocalCurve`, and `automation.*`. This fixes BUG-50's
+    curve part. Deviations: the rows are a projection
+    (`AutomationState::vocal`, rebuilt after every update) with derived
+    lane ids, not stored automation lanes; the old model's baseline /
+    depth / smoothing are dropped (a curve is its points); the
+    envelopes stay `0..=1` (`0.5` neutral) and pitch bend `±50` cents as
+    in `expression.rs`, Dynamics on a bank without energy is ±12 dB; a
+    whole-lane replace keeps a section point while any copy of it
+    survives, so `delete_points` / `shape` remove every copy; two values
+    for one section beat are refused; `set_enabled` refuses vocal lanes;
+    `song.tracks` lane summaries leave them out (`song.vocal` lists
+    `curves` per lane); a placement whose bank does not take the curve is
+    greyed and ignores pointer input, but the control API still writes
+    it.
 
 Slices 1–3 come first, because they unblock the field report's P1. Slice 4
 must land before 5–7, and 8–14 are independent of each other.

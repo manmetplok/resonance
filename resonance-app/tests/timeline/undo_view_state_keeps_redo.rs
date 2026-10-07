@@ -1,13 +1,11 @@
 //! View state and async completions are no edits (code review VIEW-18).
 //!
-//! Selecting a drum-ribbon span, switching the Expression dock's curve,
-//! pen or snap, and a vocal render finishing seconds after its edit all
-//! fell through `classify` to `Record`: each one pushed an entry, wiped
+//! Selecting a drum-ribbon span and a vocal render finishing seconds
+//! after its edit both fell through `classify` to `Record`: each one pushed an entry, wiped
 //! the redo stack and (for the view state) marked the project dirty.
 
-use resonance_app::compose::messages::{ExpressionMessage, VocalAudioReadyData};
-use resonance_app::compose::vocal_svs::CurveKind;
-use resonance_app::compose::{ComposeMessage, PenMode};
+use resonance_app::compose::messages::VocalAudioReadyData;
+use resonance_app::compose::ComposeMessage;
 use resonance_app::message::{Message, TrackMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
@@ -40,25 +38,10 @@ fn assert_no_edit(msg: Message) {
     assert_eq!(app.revision(), revision, "{label} bumped the revision");
 }
 
-fn expression(msg: ExpressionMessage) -> Message {
-    Message::Compose(ComposeMessage::Expression {
-        definition_id: DEF,
-        track_id: TRACK,
-        msg,
-    })
-}
-
 #[test]
 fn ribbon_span_selection_is_no_edit() {
     assert_no_edit(Message::Compose(ComposeMessage::SelectArrangementEntry(Some(0))));
     assert_no_edit(Message::Compose(ComposeMessage::SelectArrangementEntry(None)));
-}
-
-#[test]
-fn expression_tool_state_is_no_edit() {
-    assert_no_edit(expression(ExpressionMessage::SelectCurve(CurveKind::Tension)));
-    assert_no_edit(expression(ExpressionMessage::SetPenMode(PenMode::Line)));
-    assert_no_edit(expression(ExpressionMessage::SetSnap(true)));
 }
 
 fn ready(epoch: u64) -> Message {

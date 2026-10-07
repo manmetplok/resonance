@@ -166,6 +166,11 @@ impl AutomationMessage {
 }
 
 pub fn handle(r: &mut Resonance, m: AutomationMessage) -> Task<Message> {
+    // A vocal expression curve is render-only: its points live in the
+    // section's vocal lane config, not in an engine lane (§10).
+    if matches!(m.edited_target(), Some(AutomationTarget::VocalCurve { .. })) {
+        return crate::update::compose::expression::handle(r, m);
+    }
     // No new lane on a parameter the plugin does not let a host automate
     // (CLAP `IS_AUTOMATABLE` unset). The picker never offers one; this
     // holds the line for every other way a lane gets created. An existing
@@ -419,6 +424,9 @@ fn ensure_lane(r: &mut Resonance, target: &AutomationTarget) {
 /// Mirror a lane into app state and push it to the engine (whole-lane
 /// replace).
 fn store_lane(r: &mut Resonance, lane: AutomationLane) {
+    if !lane.target.is_engine_lane() {
+        return;
+    }
     r.automation.lanes.insert(lane.target.clone(), lane.clone());
     let _ = r.engine.send(AudioCommand::SetAutomationLane { lane });
 }
@@ -447,6 +455,8 @@ fn current_static_lane_value(r: &Resonance, target: &AutomationTarget) -> f32 {
         // definition's binding mapping (not the fixed ranges here), so seed
         // a freshly-added lane at its floor — the engine corrects on replay.
         DeviceParam { .. } => 0.0,
+        // Never reached: vocal curves are routed away in `handle`.
+        VocalCurve { .. } => return crate::compose::expression::NEUTRAL,
     };
     real_to_lane_value(target, real)
 }

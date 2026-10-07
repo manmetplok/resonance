@@ -107,6 +107,9 @@ impl crate::Resonance {
             let vocal = if quiet_tick {
                 Task::none()
             } else {
+                // The vocal curve rows the timeline draws follow the
+                // compose model (sections, placements, params, tempo).
+                crate::update::compose::expression::refresh_vocal_lanes(self);
                 crate::update::compose::vocal_render_state::settle(self, grants)
             };
             Task::batch([task, settled, vocal])

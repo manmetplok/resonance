@@ -1,10 +1,27 @@
 //! `automation.*` — parameter automation lanes (automation-control-api.md).
 //!
 //! A lane drives ONE target over time: a track / bus / master fader, a
-//! track or bus pan or mute, or one parameter of one plugin. The model
-//! keeps **one lane per target**, so a target is also the lane's address:
-//! every method names the lane it reads or writes with the same
-//! [`AutomationTargetSpec`] fields, flattened into its params.
+//! track or bus pan or mute, one parameter of one plugin, or one of a
+//! vocal track's expression curves. The model keeps **one lane per
+//! target**, so a target is also the lane's address: every method names
+//! the lane it reads or writes with the same [`AutomationTargetSpec`]
+//! fields, flattened into its params.
+//!
+//! # Vocal curves
+//!
+//! `{"vocal": {"track_id": 3, "curve": "dynamics"}}` addresses a vocal
+//! track's Dynamics, Tension, Breathiness or Pitch bend curve. The curve
+//! is stored once per SECTION (in the section's vocal lane), relative to
+//! the section start, and reads back at every placement of the section —
+//! the lane view says `section_relative: true`. A point you write at a
+//! song position is mapped to the placement it falls in, then to that
+//! section and a beat offset: every placement of the section follows. A
+//! point outside every placement of a section with a vocal lane on the
+//! track is refused, and so are two points on the same beat of one
+//! section with different values. Deleting a point at one placement
+//! deletes it at all of them. Vocal lanes always play (no Read flag:
+//! `set_enabled` refuses them), never reach the mixer, and are rendered by
+//! `vocal.render`; a curve edit makes the lane `stale` in `song.vocal`.
 //!
 //! # Values
 //!
@@ -17,6 +34,13 @@
 //! | `control: "pan"` | `-1..=1` | number |
 //! | `control: "mute"` | bool | `true` / `false` (also `0` / `1`) |
 //! | `param` | the plugin's own `min..=max` | number, or a choice label |
+//! | `vocal` `dynamics` / `tension` / `breathiness` | `0..=1`, `0.5` neutral | number |
+//! | `vocal` `pitch_bend` | cents, `-50..=50` | number |
+//!
+//! Dynamics drives the voicebank's energy input where it has one, else a
+//! post-render gain of up to ±12 dB at the ends; Tension and Breathiness
+//! only play on a bank whose model takes them (otherwise the lane is kept
+//! but silent); Pitch bend plays on every bank.
 //!
 //! Plugin lanes are linear in the plugin's PLAIN units, so a sweep that
 //! should sound even on a skewed parameter (a filter cutoff in Hz) needs
@@ -132,6 +156,35 @@ pub struct AutomationTargetSpec {
     /// default 0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<u32>,
+    /// A vocal track's expression curve, INSTEAD of every field above:
+    /// `{"vocal": {"track_id": 3, "curve": "pitch_bend"}}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocal: Option<VocalCurveTarget>,
+}
+
+/// A vocal track's expression curve lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct VocalCurveTarget {
+    /// A track with a vocal lane in at least one section (`song_vocal`).
+    pub track_id: TrackId,
+    pub curve: VocalCurve,
+}
+
+/// Which vocal expression curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalCurve {
+    /// Loudness, `0..=1` (`0.5` = unchanged).
+    Dynamics,
+    /// Relaxed ↔ belted, `0..=1` (`0.5` = the model's neutral).
+    Tension,
+    /// Added air, `0..=1` (`0.5` = the model's neutral).
+    Breathiness,
+    /// Pitch offset in cents, `-50..=50`.
+    PitchBend,
 }
 
 /// A mixer (non-plugin) lane kind.
@@ -278,6 +331,11 @@ pub struct LaneView {
     /// Points on the whole lane (`points` may be a `range` window).
     pub point_count: u32,
     pub points: Vec<PointView>,
+    /// A vocal curve: stored per section, relative to the section start,
+    /// and listed at every placement — the same section point appears
+    /// once per placement, and editing any copy edits them all.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub section_relative: bool,
 }
 
 /// One lane, compact: what `song.tracks` and `master.summary` list.

@@ -165,6 +165,9 @@ impl ResonanceMcp {
                        most expensive operation on this surface. \
                        Pass a lane's definition_id as section_id to vocal_set_lyrics / \
                        vocal_set_line / vocal_set_params to write that specific lane. \
+                       curves lists the expression curves the lane has points on ({curve: \
+                       dynamics | tension | breathiness | pitch_bend, points, supported}); \
+                       shape them with automation_* on the target {vocal: {track_id, curve}}. \
                        Read-only.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<song::VocalView>()

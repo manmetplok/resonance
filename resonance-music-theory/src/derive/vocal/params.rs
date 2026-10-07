@@ -6,7 +6,10 @@ use thiserror::Error;
 
 use super::lyrics::LyricLine;
 
+mod curves;
 mod legacy;
+
+pub use curves::{VocalCurvePoint, VocalCurves};
 
 /// Lyrical mood preset. Drives the lyric generator's word choice and
 /// chord-mood pairing.
@@ -384,6 +387,12 @@ pub struct VocalParams {
     /// Trained DiffSinger model used for the SVS render, by id. Defaults
     /// to `lilia`, also for older JSON without the field.
     pub voicebank: VoicebankId,
+    /// The lane's expression curves (Dynamics, Tension, Breathiness, Pitch
+    /// bend), section-relative — edited as `Vocal:` automation sub-rows on
+    /// the Arrange view and through `automation.*`, never through
+    /// `vocal.set_params` (§10). Empty curves are left out of the file.
+    #[serde(default, skip_serializing_if = "VocalCurves::is_empty")]
+    pub curves: VocalCurves,
 }
 
 impl Default for VocalParams {
@@ -438,6 +447,7 @@ impl Default for VocalParams {
             velocity_dynamics: default_velocity_dynamics(),
             speaker: None,
             voicebank: VoicebankId::default(),
+            curves: VocalCurves::default(),
         }
     }
 }

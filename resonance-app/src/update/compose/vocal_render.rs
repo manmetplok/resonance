@@ -308,16 +308,6 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
 
     let job = vocal_audio_io::VocalRenderJob {
         assigned: plan.assigned,
-        // The lane's editable expression overlay (dynamics/tension/
-        // breathiness/pitch bend, doc #154). Cloned out of compose state
-        // before the render moves off-thread; an un-edited lane has no
-        // entry, so a default (all-`Auto`) bundle reproduces the
-        // pre-overlay audio exactly.
-        curves: r
-            .compose
-            .expression_curves(req.definition_id, req.track_id)
-            .cloned()
-            .unwrap_or_default(),
         // The section's tempo, not the one under the playhead (VIEW-13).
         bpm: super::section_meter(r, req.definition_id).bpm,
         engine_sample_rate: r.sample_rate,

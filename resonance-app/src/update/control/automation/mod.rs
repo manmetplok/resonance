@@ -15,6 +15,7 @@
 //! | [`set_enabled`] | `automation.set_enabled` |
 //! | [`remove_lane`] | `automation.remove_lane` |
 //! | [`shape`] | `automation.shape` (generator: `resonance_common::automation_shape`) |
+//! | [`vocal`] | the `{vocal: {track_id, curve}}` target: resolution, the section-mapping check, `song.vocal`'s curve list |
 //!
 //! Every write computes the lane's complete new point list as a pure
 //! function and dispatches exactly one `AutomationMessage` through
@@ -35,6 +36,7 @@ mod remove_lane;
 mod set_enabled;
 mod set_lane;
 mod shape;
+pub(in crate::update::control) mod vocal;
 pub(in crate::update::control) mod target;
 pub(in crate::update::control) mod value;
 pub(in crate::update::control) mod view;
@@ -47,6 +49,11 @@ pub(super) fn try_handle(
     app: &mut Resonance,
     request: &Request,
 ) -> Option<(Response, Task<Message>)> {
+    if request.method.starts_with("automation.") {
+        // The vocal curve rows are projected from the compose model; read
+        // and write against the model as it is now.
+        crate::update::compose::expression::refresh_vocal_lanes(app);
+    }
     let out = match request.method.as_str() {
         wire::LANES => (lanes::lanes(app, request), Task::none()),
         wire::SET_LANE => set_lane::set_lane(app, request),
