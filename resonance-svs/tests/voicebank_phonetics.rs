@@ -327,3 +327,30 @@ fn curve_support_follows_the_acoustic_embeds() {
     assert!(!none.supports(ExpressionCurve::Tension));
     assert!(!none.supports(ExpressionCurve::Breathiness));
 }
+
+// ---------------------------------------------------------------------------
+// Dictionary replacements (the bank's own spelling)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_replacement_wins_over_the_bare_symbol_and_reads_back() {
+    // Lilia: bare `w` is another language's phone (English `v`); English
+    // `w` is `L`. Both the bare and the replaced symbol are in the dict.
+    let inv = PhonemeInventory::new(["AP", "SP", "w", "L", "t", "t0", "ah"]).with_replacements([
+        ("w", "L"),
+        ("v", "w"),
+        ("t", "t0"),
+        ("x", "t0"),
+        ("r", "absent"),
+    ]);
+    assert_eq!(inv.phoneme_name("w"), "L");
+    assert_eq!(inv.phoneme_name("v"), "w");
+    assert_eq!(inv.phoneme_name("ah"), "ah");
+    assert_eq!(inv.dict_key_for("r"), None, "a replacement into nothing is dropped");
+    assert_eq!(inv.substitute_phoneme("v"), "v", "spelt, not substituted");
+    // Back from the bank's spelling to the G2P symbol, where unambiguous.
+    assert_eq!(inv.g2p_symbol_for("L"), Some("w"));
+    assert_eq!(inv.g2p_symbol_for("w"), Some("v"));
+    assert_eq!(inv.g2p_symbol_for("t0"), None, "both `t` and `x` map onto it");
+    assert_eq!(inv.g2p_symbol_for("ah"), None);
+}

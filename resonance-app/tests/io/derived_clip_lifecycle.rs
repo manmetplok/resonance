@@ -473,6 +473,7 @@ fn vocal_song_with_installed_audio()
             clip_name: "Verse · Vocal".to_owned(),
             trim_start_frames: 0,
             trim_end_frames: 0,
+            pre_roll_frames: 0,
             lead_ticks: 0,
             render_epoch: 0,
             bpm: 120.0,

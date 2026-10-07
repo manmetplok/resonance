@@ -102,6 +102,7 @@ impl Resonance {
             clip_name: "vocal".to_owned(),
             trim_start_frames: 0,
             trim_end_frames: 0,
+            pre_roll_frames: 0,
             lead_ticks: 0,
             render_epoch,
             bpm: crate::update::compose::section_meter(self, definition_id).bpm,

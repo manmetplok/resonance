@@ -212,18 +212,21 @@ pub struct NoteArticulation {
 /// modelled here.)
 ///
 /// `rest_threshold_beats` is the lane's, so the report bridges exactly
-/// the gaps the segment builder sings legato.
+/// the gaps the segment builder sings legato. `speaker` is the lane's, for
+/// its comfortable range.
+#[allow(clippy::too_many_arguments)]
 pub fn articulation_report_for(
     notes: &[MidiNote],
     assigned: &[AssignedSyllable],
     ticks_per_quarter: u32,
     bpm: f32,
     bank: &BankProfile,
+    speaker: Option<&str>,
     rest_threshold_beats: f32,
 ) -> Vec<NoteArticulation> {
     let rest_rule = RestRule::from_beats(rest_threshold_beats, bpm);
     let seconds_per_tick = 60.0 / (bpm.max(1.0) as f64 * ticks_per_quarter.max(1) as f64);
-    let range = bank.comfortable_range(None);
+    let range = bank.comfortable_range(speaker);
     let (lo, hi) = (range.low, range.high);
     let mut out = Vec::with_capacity(notes.len().min(assigned.len()));
     for (i, n) in notes.iter().enumerate() {

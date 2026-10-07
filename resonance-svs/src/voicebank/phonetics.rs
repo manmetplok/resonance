@@ -91,6 +91,10 @@ pub const G2P_LANGUAGE: &str = "en";
 pub struct PhonemeInventory {
     names: HashSet<String>,
     target: PhonemeTarget,
+    /// The bank dictionary's `replacements:` (G2P symbol → bank key), kept
+    /// only where the key is in the inventory. Consulted first by
+    /// [`Self::dict_key_for`].
+    replacements: BTreeMap<String, String>,
 }
 
 impl PhonemeInventory {
@@ -102,7 +106,57 @@ impl PhonemeInventory {
     {
         let names: HashSet<String> = names.into_iter().map(Into::into).collect();
         let target = detect_phoneme_target(names.iter());
-        Self { names, target }
+        Self {
+            names,
+            target,
+            replacements: BTreeMap::new(),
+        }
+    }
+
+    /// Respell G2P symbols as the bank's dictionary says
+    /// (`dsdict-en.yaml` `replacements:`, `(from, to)` pairs): LIEE Lilia's
+    /// multi-language inventory holds English `w` as `L`, `t` as `t0`, `v`
+    /// as its `w`, so singing the bare symbols sang another language's
+    /// phones. A pair whose `to` the inventory lacks is dropped; the first
+    /// pair for a `from` wins.
+    pub fn with_replacements<I, S>(mut self, pairs: I) -> Self
+    where
+        I: IntoIterator<Item = (S, S)>,
+        S: Into<String>,
+    {
+        for (from, to) in pairs {
+            let (from, to) = (from.into(), to.into());
+            if self.names.contains(&to) {
+                self.replacements.entry(from).or_insert(to);
+            }
+        }
+        self
+    }
+
+    /// A scanned bank's inventory: its phonemes, spelt as its English
+    /// dictionary's replacements say.
+    pub(crate) fn of_layout(layout: &super::BankLayout) -> Self {
+        Self::new(layout.phonemes.iter().cloned())
+            .with_replacements(layout.details.english_replacements.iter().cloned())
+    }
+
+    /// The replacements in force (G2P symbol → bank key).
+    pub fn replacements(&self) -> &BTreeMap<String, String> {
+        &self.replacements
+    }
+
+    /// The G2P symbol a bank key spells, when a replacement maps exactly
+    /// one symbol onto it (`L` → `w` on Lilia) — for reading the bank's
+    /// own dictionary back into ARPAbet. `None` for a key no replacement
+    /// produces, or one several do.
+    pub fn g2p_symbol_for(&self, key: &str) -> Option<&str> {
+        let mut froms = self
+            .replacements
+            .iter()
+            .filter(|(_, to)| to.as_str() == key)
+            .map(|(from, _)| from.as_str());
+        let first = froms.next()?;
+        froms.next().is_none().then_some(first)
     }
 
     /// Alphabet detected from the inventory.
@@ -127,8 +181,12 @@ impl PhonemeInventory {
     /// Single-language banks (TIGER, Lilia) store bare ARPAbet, so the bare
     /// lookup hits. Banks that namespace by language (Meiji) keep a small
     /// universal bucket bare (`AP`, `SP`, `hh`, `cl`, …) and prefix the
-    /// rest, so the `en/` fallback hits for those.
+    /// rest, so the `en/` fallback hits for those. A replacement the bank's
+    /// dictionary declares ([`Self::with_replacements`]) wins over both.
     pub fn dict_key_for(&self, ph: &str) -> Option<String> {
+        if let Some(key) = self.replacements.get(ph) {
+            return Some(key.clone());
+        }
         if self.names.contains(ph) {
             return Some(ph.to_string());
         }

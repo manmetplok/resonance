@@ -53,6 +53,7 @@ fn ready(epoch: u64) -> Message {
         clip_name: "vocal".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
+        pre_roll_frames: 0,
         lead_ticks: 0,
         render_epoch: epoch,
         bpm: 120.0,

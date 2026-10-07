@@ -460,6 +460,10 @@ pub struct VocalAudioReadyData {
     pub trim_start_frames: u64,
     /// Trailing frames to skip on playback, mirroring `trim_start`.
     pub trim_end_frames: u64,
+    /// Frames the take sings before the lane's first note (its onset
+    /// consonants or a breath): the install starts the clip this much
+    /// early — as far as the timeline allows, trimming what does not fit.
+    pub pre_roll_frames: u64,
     /// The lane's lead-in (tick of its first note) the audio is offset
     /// by from the section start. Kept so the install can re-place the
     /// audio at a placement that moved while the render ran (VIEW-19).

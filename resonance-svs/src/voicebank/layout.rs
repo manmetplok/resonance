@@ -88,6 +88,9 @@ pub struct BankDetails {
     /// The bank's English OpenUtau dictionary (`dsdict-en.yaml`), if it
     /// ships one ([`find_dsdict`]).
     pub english_dict: Option<PathBuf>,
+    /// That dictionary's `replacements:` as `(from, to)` pairs: how the
+    /// bank spells the phonemizer's symbols (empty when it has none).
+    pub english_replacements: Vec<(String, String)>,
 }
 
 /// Probe `dir` for a voicebank layout.
@@ -135,11 +138,17 @@ pub fn probe(dir: &Path) -> Result<BankLayout> {
     let (name, version) = read_character(&acoustic_dir)
         .or_else(|| read_character(&root))
         .unwrap_or_default();
+    let english_dict = find_dsdict(&root, &acoustic_dir, "en");
+    let english_replacements = english_dict
+        .as_deref()
+        .map(read_replacements)
+        .unwrap_or_default();
     let details = BankDetails {
         name,
         version,
         vocoder_name: acoustic.vocoder_name.clone(),
-        english_dict: find_dsdict(&root, &acoustic_dir, "en"),
+        english_dict,
+        english_replacements,
     };
 
     let display_name = root
@@ -373,6 +382,18 @@ fn read_character(dir: &Path) -> Option<(Option<String>, Option<String>)> {
         }
     }
     (name.is_some() || version.is_some()).then_some((name, version))
+}
+
+/// A dictionary's replacements as pairs; an unreadable one counts as none
+/// (the scan must not fail over it — the dictionary is an extra).
+fn read_replacements(path: &Path) -> Vec<(String, String)> {
+    match super::dsdict::load_replacements(path) {
+        Ok(rows) => rows.into_iter().map(|r| (r.from, r.to)).collect(),
+        Err(e) => {
+            tracing::warn!("ignoring the replacements of {}: {e:#}", path.display());
+            Vec::new()
+        }
+    }
 }
 
 /// The bank's OpenUtau dictionary for `lang` (`dsdict-<lang>.yaml`): next

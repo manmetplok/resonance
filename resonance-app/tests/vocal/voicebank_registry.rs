@@ -191,8 +191,15 @@ fn a_bank_that_is_not_installed_answers_from_the_built_in_table() {
         tiger.default_speaker(VoiceType::Bass).as_deref(),
         Some("mystic")
     );
+    // TIGER is a male voice: a pop line sits C3..A4.
     let range = tiger.comfortable_range(None);
-    assert_eq!((range.low, range.high), (48, 76));
+    assert_eq!((range.low, range.high), (48, 69));
+    assert_eq!(tiger.comfortable_range(Some("glam")), range);
+    // Lilia is an alto whose words blur as she climbs; Meiji sits low.
+    let lilia = BankProfile::not_installed("lilia").comfortable_range(None);
+    assert_eq!((lilia.low, lilia.high), (50, 70));
+    let meiji = BankProfile::not_installed("meiji").comfortable_range(Some("phantom"));
+    assert_eq!((meiji.low, meiji.high), (47, 66));
 
     let unknown = BankProfile::not_installed("someone");
     assert_eq!(unknown.comfortable_range(None).source.as_str(), "default");

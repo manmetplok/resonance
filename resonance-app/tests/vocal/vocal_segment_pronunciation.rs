@@ -7,8 +7,9 @@
 //!
 //! * dictionary entries and per-syllable overrides change the phonemes
 //!   the segment builder lays into `ph_seq`;
-//! * the active voicebank's substitution (Lilia `v` → `f`) is applied
-//!   before the phonemes reach the segment;
+//! * the active voicebank's spelling (Lilia's dictionary respells English
+//!   `v` as its `w`, `w` as `L`) is applied before the phonemes reach the
+//!   segment;
 //! * a phoneme that is not valid ARPAbet (or that the voicebank can't
 //!   sing) blocks the render and is reported rather than corrupting the
 //!   segment;
@@ -122,27 +123,39 @@ fn override_changes_ph_seq() {
 }
 
 // ---------------------------------------------------------------------------
-// Voicebank substitution (Lilia v -> f)
+// Voicebank spelling (Lilia's dictionary replacements)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn lilia_substitutes_v_to_f_in_ph_seq() {
-    let draft = line("vee");
-    let dict = vec![DictionaryEntry::new("vee", &["v", "iy"], DictionaryScope::Project)];
+fn lilia_spells_english_with_its_own_symbols_in_ph_seq() {
+    // MM 2.8's multi-language inventory holds English `v` as its `w` and
+    // English `w` as `L` (its `dsdict-en.yaml` replacements). Singing the
+    // bare symbols sang another language's phones — "walk" came out as
+    // "fuck" — so the segment carries the bank's spelling.
+    let draft = line("wave");
+    let dict = vec![DictionaryEntry::new(
+        "wave",
+        &["w", "ey", "v"],
+        DictionaryScope::Project,
+    )];
     let assigned = resolve_clip(&draft, &[], 1, &HashMap::new(), &dict, &[]);
 
     let validated = validate_for_voicebank(
         &assigned,
         &BankProfile::not_installed("lilia"),
     ).unwrap();
-    // The validation pass rewrites the phonemes to their effective form...
-    assert_eq!(validated[0].phonemes, vec!["f", "iy"]);
+    // The phonemes stay ARPAbet (nothing is substituted)...
+    assert_eq!(validated[0].phonemes, vec!["w", "ey", "v"]);
     // ...and provenance is carried through unchanged.
     assert_eq!(validated[0].provenance, PhonemeProvenance::Dict);
 
-    let seq = ph_seq("lilia", "vee", &validated);
-    assert!(contains(&seq, "f"), "expected substituted `f` in {seq:?}");
-    assert!(!contains(&seq, "v"), "unsupported `v` leaked into {seq:?}");
+    let seq = ph_seq("lilia", "wave", &validated);
+    let lexical: Vec<&str> = seq
+        .iter()
+        .map(String::as_str)
+        .filter(|p| !matches!(*p, "SP" | "AP"))
+        .collect();
+    assert_eq!(lexical, ["L", "ey", "w"]);
 }
 
 #[test]

@@ -24,7 +24,7 @@ const CONTROL_TOKENS: [&str; 3] = ["AP", "SP", "cl"];
 
 /// A bank counts as English-capable when it lacks at most this many of
 /// the 40 ARPAbet phones (directly or `en/`-prefixed). A Japanese or
-/// X-SAMPA bank lacks most of them; Lilia lacks one (`v`).
+/// X-SAMPA bank lacks most of them.
 const ENGLISH_MAX_MISSING: usize = 8;
 
 /// One speaker (voice mode) a bank offers.
@@ -210,7 +210,14 @@ impl BankProfile {
         self.missing_phonemes().len() <= ENGLISH_MAX_MISSING
     }
 
-    /// The built-in substitution hints for `ph` (Lilia `v` → `f`, `b`).
+    /// How far the timbre chip moves this bank's `gender` input (see
+    /// [`BuiltinBank::gender_scale`]); 1 for a bank the table does not know.
+    pub fn gender_scale(&self) -> f32 {
+        self.builtin.map_or(1.0, |b| b.gender_scale)
+    }
+
+    /// The built-in substitution hints for `ph` (none of the shipped banks
+    /// needs one today).
     pub fn substitution_hints(&self, ph: &str) -> &'static [&'static str] {
         self.builtin
             .and_then(|b| b.substitutions.iter().find(|(from, _)| *from == ph))
@@ -219,10 +226,17 @@ impl BankProfile {
     }
 
     /// The symbol the acoustic model's dictionary stores ARPAbet `ph`
-    /// under: bare, or `en/`-prefixed in a bank that namespaces English.
+    /// under: what the bank dictionary's replacements respell it as (Lilia
+    /// `w` → `L`), else bare, or `en/`-prefixed in a bank that namespaces
+    /// English.
     pub fn phoneme_name(&self, ph: &str) -> String {
         match (&self.installed, self.builtin) {
             (Some(bank), _) => bank.inventory.phoneme_name(ph),
+            (None, Some(b)) if let Some((_, to)) =
+                b.shipped_replacements.iter().find(|(from, _)| *from == ph) =>
+            {
+                (*to).to_owned()
+            }
             (None, Some(b)) => match b.shipped_spelling {
                 ShippedSpelling::Namespaced { .. } if !is_universal(ph) => format!("en/{ph}"),
                 _ => ph.to_owned(),
@@ -297,11 +311,19 @@ impl BankProfile {
         self.speakers().iter().any(|s| s.id == speaker)
     }
 
-    /// The comfortable range for `speaker` (per speaker where the table
-    /// knows one; today every known range is per bank).
-    pub fn comfortable_range(&self, _speaker: Option<&str>) -> ComfortableRange {
+    /// The comfortable range for `speaker`: the built-in table's range for
+    /// that speaker where it knows one, else the bank's.
+    pub fn comfortable_range(&self, speaker: Option<&str>) -> ComfortableRange {
         let (range, source) = match self.builtin {
-            Some(b) => (b.range, RangeSource::Builtin),
+            Some(b) => {
+                let per_speaker = speaker.and_then(|id| {
+                    b.speaker_ranges
+                        .iter()
+                        .find(|(s, _)| *s == id)
+                        .map(|(_, r)| *r)
+                });
+                (per_speaker.unwrap_or(b.range), RangeSource::Builtin)
+            }
             None => (DEFAULT_RANGE, RangeSource::Default),
         };
         ComfortableRange {

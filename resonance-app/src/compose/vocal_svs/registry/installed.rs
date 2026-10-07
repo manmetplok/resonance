@@ -59,7 +59,7 @@ impl InstalledBank {
             .get_or_init(|| {
                 let path = self.english_dict.as_deref()?;
                 let prefix = self.namespaces_english().then_some("en/");
-                match dict::load_english_dictionary(path, prefix) {
+                match dict::load_english_dictionary(path, prefix, &self.inventory) {
                     Ok(map) => Some(Arc::new(map)),
                     Err(e) => {
                         tracing::warn!("voicebank {}: {e}", self.id);

@@ -194,3 +194,52 @@ fn a_word_the_bank_cannot_sing_is_an_error_naming_the_word() {
         "{report}"
     );
 }
+
+#[test]
+fn an_installed_bank_sings_english_in_its_dictionarys_spelling() {
+    // LIEE Lilia's shape: a multi-language inventory where English `w` is
+    // `L` and English `v` is the bank's `w`, said by the `replacements:` of
+    // its `dsdict-en.yaml`. Sending the bare symbols sang another
+    // language's phones — Whisper heard "walk with me" as "fuck with me".
+    let mut spec = VoicebankFixture::shipped("lilia");
+    spec.english_dict = vec![
+        // Entries are written in the bank's spelling: `want` = `L aa n`.
+        entry("want", &["L", "aa", "n"]),
+        entry("van", &["w", "ae", "n"]),
+    ];
+    let lilia = bank("liliaish", spec);
+    for (ph, key) in [("w", "L"), ("v", "w"), ("t", "t0"), ("y", "j"), ("ah", "ah")] {
+        assert_eq!(lilia.phoneme_name(ph), key, "{ph}");
+    }
+    assert!(lilia.missing_phonemes().is_empty(), "{:?}", lilia.missing_phonemes());
+
+    // The dictionary reads back into ARPAbet through the same table...
+    let dict = lilia.dictionary().expect("the dictionary loads");
+    assert_eq!(dict.get("want").map(Vec::as_slice), Some(&["w", "aa", "n"][..]));
+    assert_eq!(dict.get("van").map(Vec::as_slice), Some(&["v", "ae", "n"][..]));
+
+    // ...and the segment carries the bank's spelling.
+    let resolved = resolve("walk", 1, &lilia, &[]);
+    let sung = validate_for_voicebank(&resolved, &lilia).expect("everything maps");
+    assert_eq!(sung[0].phonemes, ["w", "ao", "k"]);
+    let segment = resonance_app::compose::vocal_svs::build_segment(
+        &[resonance_audio::types::MidiNote {
+            note: 60,
+            velocity: 0.8,
+            start_tick: 0,
+            duration_ticks: resonance_audio::types::TICKS_PER_QUARTER_NOTE,
+        }],
+        &resonance_music_theory::VocalParams::default(),
+        &sung,
+        resonance_audio::types::TICKS_PER_QUARTER_NOTE as u32,
+        120.0,
+        &lilia,
+    );
+    let lexical: Vec<&str> = segment
+        .ph_seq
+        .iter()
+        .map(String::as_str)
+        .filter(|p| !matches!(*p, "SP" | "AP"))
+        .collect();
+    assert_eq!(lexical, ["L", "ao", "k"]);
+}

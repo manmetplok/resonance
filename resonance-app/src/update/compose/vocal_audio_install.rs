@@ -35,6 +35,7 @@ pub(super) fn handle_vocal_audio_ready(
         clip_name,
         trim_start_frames,
         trim_end_frames,
+        pre_roll_frames,
         lead_ticks,
         render_epoch,
         bpm: _,
@@ -60,12 +61,17 @@ pub(super) fn handle_vocal_audio_ready(
         // from where the section starts *now*, not where it started when
         // the render was queued (code review VIEW-19).
         let section_start = r.tempo_map.bar_to_sample(placement.start_bar);
-        let start_sample = crate::compose::vocal_svs::vocal_audio_start(
+        let note_sample = crate::compose::vocal_svs::vocal_audio_start(
             &r.tempo_map,
             section_start,
             lead_ticks,
             r.sample_rate,
         );
+        // The first note's onset consonants sound before its beat; a
+        // first note at sample 0 cannot start earlier, so what does not
+        // fit is trimmed instead.
+        let start_sample = note_sample.saturating_sub(pre_roll_frames);
+        let trim_start_frames = trim_start_frames + (pre_roll_frames - (note_sample - start_sample));
         if let Some((old_id, old_path)) = r
             .compose
             .vocal_audio

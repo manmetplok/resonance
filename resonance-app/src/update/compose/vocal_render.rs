@@ -476,6 +476,7 @@ fn spawn_render(
                     clip_name: clip_name.clone(),
                     trim_start_frames: take.trim_start_frames,
                     trim_end_frames: take.trim_end_frames,
+                    pre_roll_frames: take.pre_roll_frames,
                     lead_ticks,
                     render_epoch,
                     bpm,

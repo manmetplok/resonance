@@ -31,6 +31,10 @@ pub struct RenderedVocal {
     pub sample_rate: u32,
     pub trim_start_frames: u64,
     pub trim_end_frames: u64,
+    /// Frames sung before the first note's onset — its onset consonants,
+    /// or a written breath — which the clip keeps rather than trims: the
+    /// install starts the clip this much before the note.
+    pub pre_roll_frames: u64,
 }
 
 /// Render a vocal MIDI clip + lyric draft to a singing waveform with
@@ -111,6 +115,14 @@ pub fn render_vocal_clip(
         Ok((mono, sr))
     };
 
+    // What the first unit sings before its first note: the leading pad
+    // minus the `SP` left in front (onset consonants or a breath took the
+    // rest). The first unit starts the take, so its pad is the take's.
+    let pre_roll_sec = units
+        .first()
+        .and_then(|u| u.segment.ph_dur.first())
+        .map_or(0.0, |sp| (SEGMENT_PAD_SEC - sp).clamp(0.0, SEGMENT_PAD_SEC));
+
     let stitched = render_units_cached(&units, cache, render_fn)?;
     let model_sr = stitched.sample_rate;
     let mut mono = stitched.mono;
@@ -153,11 +165,13 @@ pub fn render_vocal_clip(
     // *final* sample rate so the engine's clip trim skips past it on
     // playback — keeps the timeline alignment between MIDI and audio.
     let pad_frames = (SEGMENT_PAD_SEC * out_sr as f64) as u64;
+    let trim_start_frames = ((SEGMENT_PAD_SEC - pre_roll_sec) * out_sr as f64) as u64;
 
     Ok(Some(RenderedVocal {
         samples_stereo,
         sample_rate: out_sr,
-        trim_start_frames: pad_frames,
+        trim_start_frames,
         trim_end_frames: pad_frames,
+        pre_roll_frames: pad_frames.saturating_sub(trim_start_frames),
     }))
 }

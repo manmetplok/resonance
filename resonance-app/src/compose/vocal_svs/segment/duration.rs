@@ -213,9 +213,25 @@ pub(super) fn build_phoneme_track(
     // Leading silence pad. The hand-crafted reference fixtures all
     // start with 0.3 s of silence so the model has time to ramp up
     // cleanly; skipping this produces an attack click on the first
-    // phoneme. A breath on the first note takes the end of it.
+    // phoneme. A breath on the first note takes the end of it; otherwise
+    // the first note's onset consonants do, so its vowel lands on the beat
+    // like every later note's (see `apply_onset_lead_in`).
     let lead_breath = plans.first().map_or(0.0, |p| p.breath_sec);
-    push_rest_entry(&mut track, bank, REST_PHONEME, SEGMENT_PAD_SEC - lead_breath);
+    let lead_onset = match plans.first_mut() {
+        Some(first) if first.breath_sec == 0.0 => {
+            let lead = (onset_target_sec(first, consonant_emphasis) * onset_lead_in)
+                .min(PAD_ONSET_MAX_SEC);
+            first.sing_sec += lead;
+            lead
+        }
+        _ => 0.0,
+    };
+    push_rest_entry(
+        &mut track,
+        bank,
+        REST_PHONEME,
+        SEGMENT_PAD_SEC - lead_breath - lead_onset,
+    );
 
     // Pass 2: pull each syllable's onset consonants back across the
     // preceding note boundary (see `onset_lead_in` above). Purely a
@@ -312,6 +328,19 @@ pub(super) fn build_phoneme_track(
     push_rest_entry(&mut track, bank, REST_PHONEME, SEGMENT_PAD_SEC);
 
     track
+}
+
+/// Most of the leading pad the first note's onset consonants may take,
+/// leaving the model 0.1 s of silence to start from.
+pub(crate) const PAD_ONSET_MAX_SEC: f64 = SEGMENT_PAD_SEC - 0.1;
+
+/// The target time of a note's onset cluster — what anticipating it moves
+/// across the boundary before the note.
+fn onset_target_sec(plan: &NotePlan, emphasis: f32) -> f64 {
+    plan.onset()
+        .iter()
+        .map(|p| target_duration_sec(p, emphasis))
+        .sum()
 }
 
 /// Shortest slot a note is given. Enforced by [`borrow_min_slot`], which
@@ -446,11 +475,7 @@ fn apply_onset_lead_in(plans: &mut [NotePlan], emphasis: f32, scale: f64) {
         return;
     }
     for i in 1..plans.len() {
-        let onset_target: f64 = plans[i]
-            .onset()
-            .iter()
-            .map(|p| target_duration_sec(p, emphasis))
-            .sum();
+        let onset_target = onset_target_sec(&plans[i], emphasis);
         if onset_target <= 0.0 {
             continue;
         }

@@ -115,3 +115,49 @@ fn render_units_span_their_notes() {
         assert!((got - want).abs() < 1e-6, "unit {:?}: {got} vs {want}", u.note_range);
     }
 }
+
+#[test]
+fn the_first_notes_onset_is_sung_before_its_beat_out_of_the_leading_pad() {
+    // Singers put a syllable's onset consonants before the beat so the
+    // vowel lands on it. Later notes borrow that time from the note
+    // before; the first note borrows it from the leading pad, leaving the
+    // model 0.1 s of silence. A vowel-initial first note leaves the pad
+    // whole, and the segment's length never changes.
+    let bpm = 120.0;
+    let notes = [note(0, TPQ as u64)];
+    let leading = |text: &str| {
+        let draft = vec![LyricLine {
+            n: 1,
+            rhyme: 'A',
+            syllables: 1,
+            text: text.to_owned(),
+            locked: false,
+        }];
+        let resolved = resolve_clip(&draft, &[], 1, &Default::default(), &[], &[]);
+        let assigned =
+            validate_for_voicebank(&resolved, &BankProfile::not_installed("tiger")).unwrap();
+        let seg = build_segment(
+            &notes,
+            &params(),
+            &assigned,
+            TPQ,
+            bpm,
+            &BankProfile::not_installed("tiger"),
+        );
+        let total: f64 = seg.ph_dur.iter().sum();
+        assert!((total - (0.5 + PADS_SEC)).abs() < 1e-9, "{text}: {total}");
+        assert_eq!(seg.ph_seq[0], "SP");
+        (seg.ph_seq.clone(), seg.ph_dur.clone())
+    };
+    let (seq, dur) = leading("song");
+    assert_eq!(&seq[1..3], ["s", "ao"]);
+    // The vowel starts on the beat, 0.3 s in.
+    assert!(dur[0] > 0.1 && (dur[0] + dur[1] - 0.3).abs() < 1e-9, "{dur:?}");
+    // A cluster longer than 0.2 s takes the pad down to its 0.1 s of
+    // silence and no further.
+    let (seq, dur) = leading("strong");
+    assert_eq!(&seq[1..4], ["s", "t", "r"]);
+    assert!((dur[0] - 0.1).abs() < 1e-9, "silence kept: {dur:?}");
+    let (_, dur) = leading("on");
+    assert!((dur[0] - 0.3).abs() < 1e-9, "a vowel onset keeps the pad: {dur:?}");
+}

@@ -83,6 +83,7 @@ fn crammed_word_on_one_short_note_is_flagged() {
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        None,
         VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     assert_eq!(report.len(), 1);
@@ -115,6 +116,7 @@ fn the_same_word_split_across_notes_is_not_flagged() {
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        None,
         VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     assert_eq!(report.len(), 4);
@@ -146,6 +148,7 @@ fn out_of_range_notes_are_flagged_against_the_voicebank() {
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        None,
         VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     assert!(!report[0].out_of_range, "mid-range note flagged");
@@ -165,6 +168,7 @@ fn report_durations_follow_the_note_grid() {
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        None,
         VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     let expected = 60.0 / BPM as f64 * 0.5;
@@ -201,7 +205,7 @@ fn a_roomy_note_gives_every_phoneme_its_floor() {
         &assigned,
         TPQ,
         BPM,
-        &BankProfile::not_installed("lilia"),
+        &BankProfile::not_installed("tiger"),
     );
     for (ph, d) in lexical_durations(&segment.ph_seq, &segment.ph_dur) {
         let floor = floor_duration_sec(&ph);
@@ -226,7 +230,7 @@ fn fricatives_get_more_time_than_stops() {
         &assigned,
         TPQ,
         BPM,
-        &BankProfile::not_installed("lilia"),
+        &BankProfile::not_installed("tiger"),
     );
     let lex = lexical_durations(&segment.ph_seq, &segment.ph_dur);
     let s = lex.iter().find(|(p, _)| p == "s").expect("`s` in {lex:?}").1;
