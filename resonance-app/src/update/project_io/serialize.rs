@@ -610,5 +610,9 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         chord_track: crate::project::ProjectChordTrack::from(&r.chord_track),
         // Compose section→clip map, verbatim (ARCH-01 A-6).
         derived_clips: Some(r.compose.derived_clips_for_file()),
+        // Project dictionary + per-syllable overrides (BUG-50), verbatim:
+        // an override whose lane was deleted is kept, so undoing the
+        // delete brings the lane back with its pronunciation.
+        pronunciation: r.compose.pronunciation.to_project(),
     }
 }

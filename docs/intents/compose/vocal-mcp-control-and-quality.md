@@ -475,10 +475,12 @@ handler, MCP tool, GUI, tests, and the feature doc with its
    - The chord-edit Task fix.
 10. **Syllables and pronunciation source.** Library side built in phase 1 (exact breaks, `G2pSource`, corpus); Exact user breaks, `g2p` per
     note, and the corpus fix and test.
-11. **Pronunciation persistence.** The project dictionary and overrides in
-    `ProjectFile`; reconcile restores them instead of clearing them
-    (`reconcile/globals.rs:161-162`). This fixes BUG-50's pronunciation
-    part.
+11. **Pronunciation persistence.** ✅ built. The project dictionary and
+    overrides in `ProjectFile::pronunciation`; the `pronunciation`
+    reconcile domain restores them instead of clearing them. Overrides are
+    keyed by `(definition, track, syllable index)` with the syllable text,
+    and ignored when the text changes. This fixes BUG-50's pronunciation
+    part. See [pronunciation](../../features/compose/pronunciation.md).
 12. **Rests and breaths.** `rest_threshold_beats`, the `AP` token, the AP/SP
     check, and re-blessed goldens.
 13. **Velocity dynamics.** `velocity_dynamics`, the bank curve, and the

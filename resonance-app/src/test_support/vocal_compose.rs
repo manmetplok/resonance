@@ -296,6 +296,26 @@ impl Resonance {
             .collect()
     }
 
+    /// Test-only: pin a per-syllable pronunciation override on a vocal
+    /// lane (no surface creates one yet; BUG-50 persistence tests). Not an
+    /// undo step, like any direct state poke.
+    #[doc(hidden)]
+    pub fn test_set_syllable_override(
+        &mut self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+        syllable_index: usize,
+        text: &str,
+        phonemes: &[&str],
+    ) {
+        self.compose.pronunciation.set_override(
+            definition_id,
+            track_id,
+            syllable_index,
+            crate::compose::vocal_svs::SyllableOverride::new(text, phonemes),
+        );
+    }
+
     /// Test-only: remove a track's lane-generator config from every
     /// compose section definition, turning a configured compose lane
     /// back into an unconfigured one (placeholder row in the vocal

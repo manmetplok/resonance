@@ -216,6 +216,7 @@ fn the_table_is_the_agreed_order() {
             (Stage::Globals, "transport"),
             (Stage::Globals, "transient_ui"),
             (Stage::Globals, "compose_sections"),
+            (Stage::Globals, "pronunciation"),
             (Stage::Globals, "drum_patterns"),
             (Stage::Timeline, "tempo_events"),
             (Stage::Timeline, "chord_track"),

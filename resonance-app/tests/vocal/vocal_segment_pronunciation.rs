@@ -100,7 +100,7 @@ fn project_dictionary_entry_changes_ph_seq() {
 fn override_changes_ph_seq() {
     let draft = line("go");
     let mut overrides = HashMap::new();
-    overrides.insert(0usize, SyllableOverride::new(&["m", "ow"]));
+    overrides.insert(0usize, SyllableOverride::new("go", &["m", "ow"]));
     let assigned = resolve_clip_pronunciation(&draft, &[], 1, &overrides, &[], &[]);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Edited);
 

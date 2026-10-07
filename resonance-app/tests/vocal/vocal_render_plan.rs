@@ -205,6 +205,7 @@ fn an_unsingable_phoneme_blocks_the_plan() {
     overrides.insert(
         0,
         SyllableOverride {
+            text: "hello".into(),
             phonemes: vec!["zzz"],
             variant_idx: None,
         },

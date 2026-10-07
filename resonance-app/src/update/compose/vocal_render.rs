@@ -199,9 +199,6 @@ pub(super) fn roll_vocal_melody(
             params,
             placement_starts,
             clip_name: name,
-            // A fresh roll has no edited clip yet, so no per-syllable
-            // overrides apply — only the project dictionary + auto path.
-            clip_id: None,
         },
     )
 }
@@ -220,9 +217,6 @@ struct VocalRenderRequest {
     /// `(placement_id, section_start_sample)` for every placement.
     placement_starts: Vec<(u64, u64)>,
     clip_name: String,
-    /// The clip being re-rendered, if any — the source of per-syllable
-    /// pronunciation overrides.
-    clip_id: Option<resonance_audio::types::ClipId>,
 }
 
 /// Shared off-thread vocal render path: plan, tear down the prior audio,
@@ -289,10 +283,14 @@ fn plan_render(
     r: &crate::Resonance,
     req: &VocalRenderRequest,
 ) -> Result<VocalRenderPlan, String> {
+    // Per-syllable overrides belong to the lane, not its clip, so a fresh
+    // roll keeps them too; one whose syllable's text changed is dropped
+    // by the resolver.
     let empty = std::collections::HashMap::new();
-    let overrides = req
-        .clip_id
-        .and_then(|c| r.compose.pronunciation.clip_overrides(c))
+    let overrides = r
+        .compose
+        .pronunciation
+        .lane_overrides(req.definition_id, req.track_id)
         .unwrap_or(&empty);
     plan::plan_vocal_render(plan::VocalRenderPlanInputs {
         tempo_map: &r.tempo_map,
@@ -486,9 +484,6 @@ pub(super) fn rerender_vocal_audio(
             params,
             placement_starts,
             clip_name,
-            // Re-rendering an existing clip: its per-syllable pronunciation
-            // overrides (if any) apply on top of the dictionary + auto path.
-            clip_id: Some(clip_id),
         },
     )
 }

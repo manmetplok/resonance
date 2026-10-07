@@ -163,6 +163,20 @@ impl Reconcile for ComposeSections {
     }
 }
 
+/// The project pronunciation dictionary and per-syllable overrides
+/// (BUG-50), replaced wholesale from the file — on a disk load and on
+/// every undo/redo alike, so a `vocal.set_pronunciation` survives both and
+/// undoing one takes it back. App-side only; the engine never sees it.
+pub(crate) struct Pronunciation;
+
+impl Reconcile for Pronunciation {
+    const NAME: &'static str = "pronunciation";
+
+    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, _: &ReconcileCtx<'_>) {
+        r.compose.pronunciation.restore_from_project(&new.pronunciation);
+    }
+}
+
 /// The drum-pattern bank, through [`restore_drum_patterns`] (legacy
 /// `drum_groups` promoted; after `ComposeSections`, whose definitions the
 /// promotion points at the new bank).

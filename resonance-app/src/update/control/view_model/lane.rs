@@ -78,7 +78,7 @@ pub(in crate::update::control) fn lane_articulation(
     let overrides = app
         .compose
         .pronunciation
-        .clip_overrides(clip.id)
+        .lane_overrides(definition_id, track_id)
         .unwrap_or(&empty);
     let annotations = app
         .compose
