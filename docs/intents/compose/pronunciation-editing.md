@@ -49,7 +49,9 @@ creates or loads them.
 ## Slices
 
 1. Persist project dictionary (+ overrides) in `ProjectFile`; undo
-   round-trip test.
+   round-trip test. **Moved** to
+   [vocal MCP control and quality](vocal-mcp-control-and-quality.md)
+   slice 11 (overrides keyed by `(definition, track, syllable index)`).
 2. Global dictionary load/save + scope in `vocal.set_pronunciation`.
 3. Phoneme-strip editing in the vocal roll with goldens.
 4. Dictionary editor modal, import/export.

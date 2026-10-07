@@ -1,182 +1,526 @@
-# Vocal control over MCP, correctness and expressiveness
+# Vocals: MCP control, voicebank library, correctness and expression
 
-> Status: **idea**
-> Area: compose (vocals) + control-api
-> Source: MCP field report, 2026-10-07 (an agent writing and singing a song over `resonance-mcp`).
+> Status: **designed**
+> Area: compose (vocals) + control-api + plugins-instruments (library)
+> Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
+> (every decision below was put to him as a multiple-choice question; §11
+> lists the answers); research report *Singing voicebank options 2026*
+> (`reports/` and `research_notes/` at the repo root, not committed).
+> Absorbs: the former `vocal-expression-curves.md` intent (deleted), slice 1
+> of [pronunciation editing](pronunciation-editing.md), BUG-50 and BUG-52.
 
-## Why
+## 1. Why
 
 An agent can set lyrics and pick a voicebank, and nothing else that shapes
-the voice. Voice type, timbre, vibrato, tension, portamento, articulation,
-the TIGER speaker, the Meiji mode and the melody and lyric generator settings
-can only be changed in the GUI. The agent also cannot see what is installed,
-cannot hold a syllable across several notes, and gets wrong answers from
-`song_vocal` about whether a lane needs re-rendering. On top of that, some
-render-side limits (no staccato, no breaths, velocity that does nothing on
-TIGER) cap the quality even when the GUI is used.
+the voice. Over MCP it cannot change the voice type, timbre, vibrato,
+tension, portamento, articulation, speaker or melody/lyric generator
+settings. It cannot see which voicebanks exist, cannot hold a syllable over
+several notes, and gets wrong answers from `song.vocal` about whether a lane
+needs re-rendering. Underneath, the render has limits that cap quality even
+from the GUI:
+- staccato and short rests are impossible;
+- there are no written breaths;
+- velocity is inaudible on TIGER;
+- expression curves are not saved and cannot be reached.
 
-Ordered by priority: P1 is what an agent needs to get good results at all,
-P2 is correctness and quality, P3 is bigger expressiveness work.
+The research added two findings:
+- **Bank support is overstated.** No shipped bank's acoustic model takes
+  energy or breathiness (every `dsconfig.yaml` has
+  `use_energy_embed: false` and `use_breathiness_embed: false`), yet
+  `curve_supported` claims Dynamics works everywhere and Breathiness works
+  on Lilia and Meiji.
+- **The bank set is frozen.** It is three banks fixed in an enum, while
+  better-fitting English banks exist (Peiton, the LUNAI English singers,
+  Meiji v170).
 
-## What it would do
+## 2. Outcome
 
-### P1: needed for good results over MCP
+When all slices have landed:
 
-1. **`vocal.set_params` / `vocal.get_params` per lane.** They cover
-   everything in `VocalParams`: voice type, timbre, vibrato depth and rate,
-   tension, portamento, consonant emphasis, articulation, TIGER speaker
-   (Glam, Fresh, Disco, Royal, Electric, Mystic, Vinyl), Meiji mode
-   (including Phantom, the whisper), the melody generator (style, contour,
-   range, breath) and the lyric generator (mood, rhyme, theme).
-   - Partial updates: unspecified fields keep their value. Apply the same
-     rule to `section.set_lane_generator`'s vocal options, which today
-     rejects an incomplete set.
-   - `song.vocal` reports the current values per lane.
-2. **`vocal.voicebanks`.** Lists TIGER, Lilia and Meiji with their speakers
-   or modes, comfortable range, phoneme gaps (Lilia has no `v`; the
-   `v` → `f` substitution applies) and whether each bank is actually
-   installed. Rendering with a missing bank is an error, not a silent
-   no-op.
-3. **Melisma over MCP.** The engine already holds a syllable across notes
-   via the `+` / `-` slur markers (`g2p/note_assign.rs`), but only the GUI's
-   slur key sets them.
-   - Either a lyric token that survives the lyric cleaner (`lo _ _ ove`, or
-     `+`), or a `vocal.set_slurs { note_indices }` method. The lyric token is
-     the recommended option (decision 2).
-   - `counts_mismatch` counts slur notes as held, so a lane with a slur is
-     not flagged as broken.
-   - `vocal.generate` keeps existing slur markers.
-   - `SyllableMode` (Syllabic / Mixed / Melismatic) is read by nothing.
-     Either make the melody generator honour it or remove it.
-4. **One default voicebank.** The code default and `vocal.generate`'s
-   auto-render use TIGER. `vocal.render` with no voicebank, the built-in
-   template and the docs say Lilia. Pick one and make the code, tool
-   descriptions and docs agree. This also covers
-   [BUG-52](../bugs.md) (a lane set to TIGER renders as Lilia).
+- An agent reads and sets every lane setting with one partial-update call.
+  It sees what each lane will sing and where the pronunciation came from,
+  whether the lane is rendered, stale or failed, and which banks are
+  installed or downloadable. It can install a bank and render, all without
+  the GUI.
+- Any DiffSinger bank in OpenUtau layout that can sing English can be
+  installed, either from the plok.org index (the files themselves come from
+  the creator's own URL) or by dropping a folder in.
+- Melisma, rests, breaths, velocity dynamics and expression curves are
+  audible, saved and undoable, and reachable from both the GUI and MCP.
 
-### P2: correctness and quality
+## 3. Lane parameters over the wire
 
-5. **Render state per lane.** `render_state` currently says `rendered` if any
-   lane on the track has audio (`view_model/lane.rs::vocal_render_state`).
-   Each lane should report its own state, and go `stale` after a note,
-   lyric or chord edit. During the session `rendered` showed up straight
-   after a lyric edit. A chord edit regenerates the melody but does not
-   re-render it.
-6. **Syllable splitting.**
-   - A user-placed break (`fore·get`) is the split point, not only a
-     syllable count.
-   - Fix the lyric generator's corpus: `"fore·get"` in
-     `derive/vocal/lyrics.rs` is a typo for `for·get` and is not in the
-     dictionary.
-   - `song.vocal` marks words that fell back to spelling rules instead of
-     the dictionary (e.g. `g2p: "rules"`), so the agent knows which words
-     to check.
-7. **Pronunciation overrides persist.** They are lost on save/reload and
-   wiped by undo/redo. This is already the first slice of
-   [pronunciation editing](pronunciation-editing.md) and [BUG-50](../bugs.md).
-   It is listed here because the MCP workflow depends on it.
-8. **Breaths and rests.**
-   - Any gap shorter than the note's own length plus `SILENCE_GAP_SEC`
-     (0.4 s, `compose/vocal_svs/mod.rs`) is sung legato straight through,
-     so staccato and short rests cannot be sung.
-   - Make the threshold a lane setting, and accept a breath token (`AP`)
-     in lyrics.
+### 3.1 Methods
 
-### P3: expressiveness, bigger work
+- **`vocal.get_params {track_id, section_id?}`** returns the lane's full
+  params, the `seed` and the `revision`. A lane is addressed the same way
+  as by the other `vocal.*` methods (`update/control/vocal.rs:680-710`).
+- **`vocal.set_params {track_id, section_id?, params: {…partial}}`**
+  - **Patch:** every field is optional. Fields that are present merge into
+    the lane's current params, and the rest are kept.
+  - **Validation:** the merged result goes through `VocalParams::validate()`
+    *at set time*. Today validation only runs at render time; a failure now
+    becomes `invalid_params` naming the field.
+  - **Bank switch:** changing `voicebank` resets `speaker` to that bank's
+    default unless the same call also sets `speaker`.
+  - **Undo and return:** one undo entry per call; the reply carries the full
+    params.
+  - **No auto-render:** the call marks the lane stale (§7) and never
+    renders on its own. It does not regenerate either; `vocal.generate`
+    does that.
+  - **Excluded fields:** the patch never carries `draft` (lyrics: use
+    `vocal.set_lyrics` / `vocal.set_line`) or the expression curves (§10).
+- **`section.set_lane_generator`** with `kind: vocal` merges:
+  - on an existing lane, the options are the same partial patch and the
+    lyrics and seed are kept;
+  - on a new lane, missing fields take their defaults.
 
-9. **Expression curves as automation lanes.** Energy, breathiness, tension
-   and pitch bend exist in the model, but they have no UI, are not saved
-   and have no API. This is
-   [vocal expression curves](vocal-expression-curves.md). This report adds
-   one request: expose them as automation lanes, so `automation.*` can
-   reach them, rather than a separate curve API.
-10. **Velocity does something.** Velocity only feeds tension
-    (`segment/duration.rs`), and TIGER ignores tension, so on TIGER
-    velocity is inaudible. Map it to energy (dynamics) as well, at least
-    on banks without tension.
-11. **Tool description fixes.**
-    - `section_set_lane_generator` (`resonance-mcp/src/tools/arrange.rs`,
-      `resonance-control/src/methods/section.rs`) says a song that sings in
-      four sections "needs four vocal tracks". That is wrong: there is one
-      lane per section.
-    - Several tools still name Lilia as the default (see item 4).
+  The "must be COMPLETE" text leaves the tool description.
+- **`song.vocal`:** each lane gains `params` (the `get_params` shape).
+  `lines[]` moves into each lane, indexed the way `vocal.set_line` indexes
+  it. Today it is one list across all lanes with a global index
+  (`update/control/song.rs:316-333`).
 
-## What exists to build on
+### 3.2 Wire shape
 
-- Params: `resonance-music-theory/src/derive/vocal/params.rs`
-  (`VocalParams`, `SyllableMode`, voicebank default near `:663`). Wire
-  shape: `resonance-control/src/methods/song.rs` (`VocalParams` view,
-  `render_state`, `counts_mismatch`).
-- Control handlers: `resonance-app/src/update/control/vocal.rs`
-  (`default_lane_voicebank`), `view_model/lane.rs`. MCP tools:
-  `resonance-mcp/src/tools/vocal.rs`, `song.rs`, `arrange.rs`.
-- Slurs: `resonance-music-theory/src/g2p/note_assign.rs`, `lyric_parse.rs`
-  (`SLUR_MARKER`, `is_slur_lyric`). Tests in `resonance-music-theory/tests/g2p*.rs`.
-- Render: `resonance-app/src/compose/vocal_svs/` (`SILENCE_GAP_SEC`,
-  `segment/duration.rs`, `render_cache.rs`, `validate.rs`).
-- Feature docs: [vocal lyrics and melody](../../features/compose/vocal-lyrics-and-melody.md),
-  [vocal rendering](../../features/compose/vocal-rendering.md),
-  [pronunciation](../../features/compose/pronunciation.md).
-- Related intents: [pronunciation editing](pronunciation-editing.md),
-  [vocal expression curves](vocal-expression-curves.md).
-- Agent plugin skills that sing (`resonance-agent-plugin/`) must be re-read
-  when new tools land (`agent_plugin_lockstep.rs`).
+The wire types are new and live in `resonance-control/src/methods/vocal.rs`:
+`VocalParamsPatch` (every field `Option`, `deny_unknown_fields`) and
+`VocalParamsView`. Enums are **snake_case** (`pop_ballad`, `first_singular`)
+and `range` is `{low, high}` in MIDI notes. The app converts between the
+wire types and `resonance_music_theory::VocalParams`, so the project format
+is untouched. `section.set_lane_generator`'s vocal options switch to the
+same snake_case wire type.
 
-## Open decisions
+The patch groups its fields as follows. Ranges and defaults are in
+`params.rs:358-521`; the last two render fields are new in this spec.
 
-1. **Default voicebank: Lilia (recommended).** It is the default in the
-   docs and the template, it is the agreed default (no `v`, with the
-   `v` → `f` substitution), and only the code and `vocal.generate`
-   disagree. Alternative: TIGER, and fix the docs instead.
-2. **Melisma surface: a lyric token (recommended).** It keeps a lane's
-   words and holds in one string, so `vocal.set_lyrics` and
-   `vocal.generate` round-trip it. `_` is the candidate, since the lyric
-   cleaner strips `+`. A `vocal.set_slurs` method is the fallback if the
-   token clashes with the lyric cleaner.
-3. **`SyllableMode`: implement it (recommended)**, since a working
-   Melismatic mode is the generator-side half of item 3. Remove it if
-   that turns out to be large.
-4. **Gap threshold: per lane in `VocalParams` (recommended)**, default
-   0.4 s so existing renders do not change.
-5. **Velocity → energy: only on banks without tension support
-   (recommended)**, using `curve_supported`, so Lilia and Meiji renders
-   keep their current sound.
+| Group | Fields |
+|---|---|
+| Voice / render | `voicebank` (string id, §4), `speaker` (string, §4), `timbre`, `vibrato`, `vibrato_rate`, `tension`, `tension_velocity_amount`, `tension_contour_amount`, `portamento_ms`, `articulation`, `consonant_emphasis`, **`rest_threshold_beats`** (§8), **`velocity_dynamics`** (§9) |
+| Melody generator | `voice`, `range`, `style`, `contour`, `syllable_mode`, `chord_tone_anchor`, `leap_range`, `phrase_length_bars`, `breath`, `stay_in_scale`, `avoid_clashes`, `use_section_motif` |
+| Lyric generator | `theme`, `mood`, `pov`, `rhyme`, `lines`, `syllables_min`, `syllables_max`, `match_syllables_to_melody`, `avoid_cliches` |
 
-## Slices
+`singer` (TIGER) and `singer_meiji` disappear into `speaker`.
 
-Each slice is a vertical slice per
-[control-API conventions](../../guides/control-api-conventions.md): wire
-type, handler, MCP tool and tests together.
+### 3.3 Protocol
 
-1. Default voicebank unified (item 4, BUG-52), plus the description fixes
-   (item 11).
-2. `vocal.get_params` / `vocal.set_params` with partial updates, the
-   `song.vocal` readout and partial `section.set_lane_generator` vocal
-   options.
-3. `vocal.voicebanks`, and a missing bank becomes an error.
-4. Melisma token, `counts_mismatch` counting held notes, `vocal.generate`
-   keeping slurs, `SyllableMode`.
-5. Per-lane render state with staleness on note, lyric and chord edits,
-   and a re-render after a chord edit.
-6. Syllable splitting: honour user breaks, fix the corpus typo, add the
-   `g2p` provenance field.
-7. Gap threshold as a lane setting, and the `AP` breath token.
-8. Velocity → energy.
-9. (Separate intents) pronunciation persistence, expression curves as
-   automation lanes.
+This changes the wire in three ways: the enum names, the `song.vocal`
+shape, and the voicebank becoming a string. So **`PROTOCOL_VERSION` goes to
+2** (`resonance-control/src/lib.rs:79`), `resonance-agent-plugin/lockstep.json`
+follows, and the skills that use vocals are re-read: `arranging` and its
+`references/generators.md`, `spatial` and `mixing`.
 
-## How we'd know it works
+## 4. Voicebanks as installable content
 
-- Control tests in `resonance-app/tests/control/`: `set_params` with one
-  field leaves the others unchanged, and `song.vocal` reads it back.
-  `vocal.voicebanks` reports a removed bank as not installed, and rendering
-  with it errors. A lyric with a hold token gives `counts_mismatch: false`
-  and survives `vocal.generate`. A lyric edit makes only that lane `stale`.
-- G2P tests: `fore·get` splits at the break, and a rules fallback carries
-  the provenance flag.
-- Render tests in `resonance-app/tests/vocal/`: a 0.2 s rest with a lowered
-  threshold produces a silence gap in the segment, `AP` produces a breath
-  phoneme, and on TIGER velocity changes the energy curve. Pin each
-  scenario's params and guard against silence per scenario.
-- A live MCP session: an agent sets params, holds a melisma, renders,
-  and nothing has to go through the GUI.
+### 4.1 Identity
+
+- `VocalParams.voicebank` becomes a string id and `speaker` an
+  `Option<String>`.
+- The ids of the three current banks are `tiger`, `lilia` and `meiji`.
+- Loading an old project accepts the old enum names (`Tiger`, …) and maps
+  `singer`/`singer_meiji` onto `speaker` (custom deserialise). There are no
+  external users, so this compatibility is for our own projects and
+  templates only.
+
+### 4.2 Where banks live
+
+- **User banks:** `$XDG_DATA_HOME/resonance/voicebanks/<id>/`, overridable
+  with `RESONANCE_VOICEBANK_DIR`. Vocoders go in a sibling
+  `…/resonance/vocoders/<id>/`.
+- **Development banks:** the existing `RESONANCE_SVS_MODELS_DIR` and
+  `resonance-svs/models/` are scanned as well, with fixed ids for the three
+  layouts there.
+- **What counts as a bank:** a directory holding a `dsconfig.yaml` at most
+  two levels deep. That covers OpenUtau layout, including Meiji's nested
+  `configs/configs/`.
+- **Registry:** a new `VoicebankRegistry` in `resonance-app/src/compose/vocal_svs/`,
+  built on the unused `resonance-svs` `VoicebankManifest::scan()`. It is
+  rescanned at startup, after an install, and on `vocal.voicebanks`.
+- `paths.rs::locate_voicebank` becomes a lookup in the registry.
+
+### 4.3 Facts per bank: derive, then built-in overrides
+
+| Fact | Derived from | Built-in table (keyed by id) |
+|---|---|---|
+| Speakers | the acoustic `dsconfig` `speakers` list | display names, and the allow-list for known banks. TIGER's acoustic model lists about 36 speakers, most from other creators' banks; only its 7 own modes are offered. |
+| Languages / English | `languages.json`, the dictionary files, `en/`-prefixed phonemes | — |
+| Phoneme inventory and gaps | the bank dictionary against ARPAbet | substitution hints (Lilia `v`→`f`/`b`, which moves out of `phonemes.rs:127-138`) |
+| Curve support | `use_{energy,breathiness,voicing,tension}_embed` on the acoustic config | — (this replaces the hardcoded `paths.rs:218` `curve_supported`) |
+| Comfortable range | — | per bank and speaker (moves out of `validate.rs:183-193`). An unknown bank gets 48–76 marked `range_source: "default"`. |
+| Credit line, terms URL, commercial-use summary | — | from the index entry (§5) or the table; an unknown bank gets none |
+| Vocoder | `dsconfig` `vocoder` field | — |
+
+Banks with no English phonemes are listed with `english: false`, and
+`vocal.set_params` rejects them, because lyrics are English.
+
+### 4.4 Phonemisation for any bank
+
+The lookup order is:
+1. a user edit;
+2. the project dictionary;
+3. the bank's own English `dsdict*.yaml` (as OpenUtau does);
+4. CMU;
+5. spelling rules.
+
+CMU and rules output is mapped onto the bank's inventory:
+- add or strip language prefixes;
+- apply the bank's substitution hints;
+- otherwise substitute the nearest phoneme by articulatory class.
+
+A word that still cannot be mapped is a validation error naming the word.
+Meiji's language id (`paths.rs:146-150`) generalises to "the bank's id for
+`en`" from `languages.json`.
+
+### 4.5 `vocal.voicebanks`
+
+The call returns `{installed: [...], available: [...]}`:
+- **Installed entries:** `id`, `name`, `version`, `english`, `speakers[]`,
+  `comfortable_range` (per speaker where known), `missing_phonemes`,
+  `substitutions`, `curves` (which expression curves work), `credit`,
+  `terms_url`, `commercial`, `vocoder` and `vocoder_installed`.
+- **Available entries:** the plok.org index entries that are not installed,
+  with their terms.
+
+The call is read-only, sits above the mutation gate and bumps no revision.
+
+### 4.6 Missing bank
+
+`vocal.render`, and the render step of `vocal.generate`, fail with a new
+error kind **`voicebank_missing`**. The error names the bank id, and the
+vocoder if that is what is missing, and points at `vocal_voicebank_install`
+or the library. It replaces the generic "no SVS voicebank is installed"
+(`update/compose/mod.rs:614-640`). An empty `ph_seq` gets its own error
+instead of sharing that one.
+
+`vocal.set_params` accepts a bank id that is installed or listed in the
+index, and rejects any other id as `invalid_params` (typo guard).
+
+## 5. plok.org index and install
+
+- **Index:** `https://resonance.plok.org/index.json` gains `voicebanks[]`
+  and `vocoders[]`. The entries are `{id, name, version, languages,
+  speakers, size, bytes?, sha256?, url, terms_url, credit, commercial:
+  "free_with_credit" | "paid" | "permission", vocoder?, added}`.
+- **Upstream files only:** `url` is **the creator's own download URL**
+  (a GitHub release, etc.). Bank terms forbid rehosting (TIGER, LUNAI) or
+  ask for permission (Lilia), so plok.org holds the index only, never the
+  files.
+  - `sha256` pins the upstream file. A mismatch fails with "upstream file
+    changed; the index needs updating".
+  - Maintaining the index is server work outside the repo.
+- **Shared download code:** the download machinery in
+  `plugins/resonance-drums/src/download.rs` moves to `resonance-common`
+  (`plok_download`): index cache, resume, free-space check, timeouts,
+  sha256 and the zip install through `drumkit_library/install.rs`. Drums
+  and vocals then share it, and the drums keep their behaviour and tests.
+- **Install:** unpack into the user voicebank directory and handle a
+  wrapper directory. If the bank's vocoder is missing, fetch that index
+  entry too. A bank that ships its own vocoder uses it.
+- **GUI:** a voicebank library overlay opens from the lane inspector's
+  voicebank picker, with tabs `Installed | plok.org`.
+  - It reuses `BrowserModel` / `parse_search` and the shared marks under a
+    new `voicebank:` kind.
+  - Download shows the terms and credit line and needs an explicit accept.
+    It also has progress, Cancel, Update and Delete (with confirmation).
+- **MCP: `vocal.voicebank_install {id}`** is a job (`job_wait` /
+  `job_status`) that installs the bank and its vocoder.
+  - Running it counts as accepting the terms; the result carries `terms_url`,
+    `credit` and `commercial` so the agent can tell the user.
+  - It creates no undo entry and bumps no revision.
+- **Index content at first:** TIGER, Lilia and Meiji v170, plus the
+  candidates that pass the audition (§12, slice 6). Shipping v170 is how
+  Meiji gets upgraded.
+
+## 6. Melisma
+
+- **Lyric token:** `_` as a standalone token holds the previous syllable
+  onto the next note. For example, `love _ _` sings "love" across three
+  notes, with the final consonant at the end of the last one. `+` is
+  accepted as an alias.
+  - `tokenize_line` (`g2p/lyric_parse.rs`) stops dropping these tokens and
+    emits slur tokens.
+  - The melody generator already counts `_` as a note
+    (`melody/syllables.rs:9`), so the generator, G2P and the counts now
+    agree.
+- **Counts:** `counts_mismatch` compares notes with syllables, where a
+  syllable is a sung token **or** a `_`. Notes the generator itself made
+  into holds (below) are subtracted from the note count.
+- **The `s` key** (`update/midi_editor.rs:596-626`) now edits the lyric
+  draft: it inserts or removes the `_` at that note's position. The
+  per-note `clip_lyrics` slur entries become derived from the draft, so
+  `vocal.generate` and regenerates keep user holds, because the lyrics
+  carry them.
+- **`SyllableMode` is implemented.**
+  - **Syllabic:** as today, one note per syllable.
+  - **Mixed:** the generator gives some phrase-final and long stressed
+    syllables 2–3 notes.
+  - **Melismatic:** it does that more often.
+  - **Storage:** generator-made holds are per-note slurs that are
+    regenerated each time and never written into the draft.
+  - **Readout:** `song.vocal` notes show `slur: "user" | "auto"`, and
+    pressing `s` on an auto hold converts it to a user `_`.
+
+## 7. Render state per lane
+
+- **States:** each `song.vocal` lane reports
+  `render_state: not_rendered | rendering | rendered | stale | error`, plus
+  `stale_units` and `error` (kind and message). The top-level
+  `render_state` becomes the worst lane state. `Stale` and `Error` exist in
+  the enum today (`song.rs:475-486`) but are never produced.
+- **How staleness is found:** build the lane's render plan and compare its
+  unit `content_key`s (`render_cache.rs:163`) with the units of the audio
+  that is installed.
+  - All equal means `rendered`; any difference means `stale`.
+  - The plan is memoised per lane revision.
+  - The installed audio's keys are **saved with the vocal audio**, so a
+    reopened project reads `rendered`, not `stale`. Today the cache lives
+    only in memory.
+- **When re-renders happen:**
+  - **GUI:** a lyric, note, chord, param, pronunciation or curve edit
+    triggers a debounced re-render of only the changed units, 750 ms
+    after the last edit.
+  - **MCP:** edits never auto-render, so an agent batches its edits and
+    calls `vocal.render` once.
+  - `vocal.generate` keeps its documented auto-render.
+- **Stale audio** keeps playing until the new render replaces it. The lane
+  inspector and the vocal-roll header show a stale badge.
+- **Chord edits:** `propagate_chord_change` → `regenerate_lane` →
+  `roll_vocal_melody` has its render Task dropped (`regenerate.rs:97-126`).
+  Reading the code suggests the lane is left without audio and stuck at
+  `rendering`. The Task is passed up so that chord edits follow the rule
+  above.
+
+## 8. Syllables, pronunciation sources, rests and breaths
+
+- **User breaks are exact.** `fore·get` sets the note labels and the
+  phoneme split:
+  - each piece gets one vowel nucleus;
+  - the consonant cluster between nuclei is split so that the next piece's
+    onset gets one consonant phoneme for each of its leading consonant
+    letters (digraphs `th sh ch ng ph wh ck` count as one), clamped to the
+    cluster;
+  - if the pieces don't match the vowel count, the split falls back to
+    automatic and the note shows `syllable_warning`.
+
+  Today `tokenize_line` keeps only the count and `resolve_draft_with_dict`
+  re-splits by onset maximisation.
+- **Pronunciation source:** every sung note in `song.vocal` carries
+  `g2p: "edited" | "project_dict" | "bank_dict" | "cmu" | "rules"`. This
+  splits the current `PhonemeProvenance::Auto`, which hides whether CMU or
+  the spelling rules were used (detectable via `cmu_variants`).
+- **Corpus typo:** `derive/vocal/lyrics.rs:63` `fore·get` becomes `for·get`.
+  A new test asserts every corpus word resolves through CMU, never rules.
+- **Rests:** the lane param `rest_threshold_beats` (range 0.125–4, default
+  **0.5**) replaces `SILENCE_GAP_SEC`:
+  - a gap between notes longer than the threshold, converted at the lane's
+    tempo, is silence;
+  - a shorter gap is sung legato;
+  - all three users of `SILENCE_GAP_SEC` change together (`segment/duration.rs:152`,
+    `render_cache.rs:112` and `validate.rs:228`).
+
+  At 120 bpm the default is 0.25 s, more detached than today's 0.4 s, so
+  vocal goldens are re-blessed. This is an approved sound change.
+- **Breath token:** a standalone uppercase `AP` between words.
+  - It is a breath before the next word, takes no note, and is not counted
+    as a syllable.
+  - It fills the end of the gap before the next note, up to 0.35 s. If
+    there is no gap, it takes up to 30% (at most 0.25 s) of the previous
+    note's tail.
+  - Lowercase `ap` stays a word. The bracketed phoneme block `[AP]`, which
+    occupies its own note, keeps its existing meaning.
+  - **To check first:** leading and trailing pads and rest gaps are emitted
+    as `AP` today (`segment/duration.rs:119,152,294`). If that already
+    sounds like breathing, plain rests switch to `SP` so that only written
+    or generated breaths breathe.
+
+## 9. Velocity dynamics
+
+The lane param `velocity_dynamics` (0–1, default 0.5) maps velocity to
+loudness in two parts:
+- **Bank curve:** where the bank supports it, velocity drives energy. If the
+  bank has no energy curve, it drives tension, which is today's path
+  (`segment/tension.rs`).
+- **Gain on every bank:** a per-note gain after the vocoder, ±6 dB at full
+  amount, using the same `(vel − 0.78)/0.22` shape and smoothed over 30 ms
+  at note boundaries (`vocal_svs/post.rs`). This is what makes TIGER
+  dynamic.
+
+The render-unit key already hashes velocity.
+
+## 10. Expression curves as automation lanes
+
+- **Model:** the curves are Dynamics, Tension, Breathiness and Pitch bend,
+  using the existing `compose/expression.rs` model and ranges.
+  - They move into the lane config (inside `VocalParams`, `#[serde(default)]`),
+    so they are saved and ride undo. That fixes the curve part of BUG-50.
+  - They are stored **section-relative** in beats from the section start.
+    Today they are normalised to the clip.
+- **Arrange:** a vocal track gets automation sub-rows
+  `Vocal: Dynamics | Tension | Breathiness | Pitch bend`.
+  - At every placement of a section with a vocal lane, a sub-row shows
+    that lane's curve. Editing at any placement edits the section's curve,
+    and every placement follows, like editing a section's MIDI. One render
+    per lane stays (FU-M11b).
+  - Outside placements the row is inert.
+  - Curves the bank does not support are greyed out with "not supported by
+    <bank>".
+- **Dynamics:** drives energy where the bank supports it, otherwise the same
+  post-render gain as §9. That makes it audible on every bank.
+- **Target:** a new `AutomationTarget::VocalCurve { track, curve }`. It is
+  never sent to the engine; an edit marks the affected units stale or
+  re-renders them under the §7 rule.
+- **Control API:** `automation.*` accepts the target as
+  `{vocal: {track_id, curve: dynamics | tension | breathiness | pitch_bend}}`.
+  - Point positions are song positions. They map to placement, then
+    section, then offset, and a point outside every placement is rejected.
+  - `automation.lanes` lists vocal lanes with `section_relative: true`.
+  - `song.vocal` lists which curves each lane has.
+- **What happens to the earlier designs:** the prototype's separate dock
+  (`intents/prototypes/editable-vocal-expression-curves/`) is superseded,
+  and `ExpressionDockState` goes. The breakpoint model and handlers in
+  `update/compose/expression.rs` are reused.
+
+## 11. Decisions taken (Q&A 2026-10-07)
+
+| # | Question | Answer |
+|---|---|---|
+| D1 | Params API | One `vocal.set_params` / `vocal.get_params` pair with partial patches |
+| D2 | `set_lane_generator` re-issue | Merge into the existing lane and keep lyrics and seed |
+| D3 | Wire enum names | snake_case |
+| D4 | `song.vocal` readout | Full params per lane |
+| D5 | Melisma | `_` lyric token |
+| D6 | `SyllableMode` | Implement it |
+| D7 | `s`-key slurs on regenerate | Write `_` into the lyrics |
+| D8 | `lines[]` index | Per lane |
+| D9 | Default bank | **Lilia** for now. Resonance is not commercial yet, so Lilia's generative-AI clause and the NC-SA vocoder are accepted for now and must be revisited before any commercial release. |
+| D10 | Bank facts | A hardcoded table plus a disk check, and later: derive first, built-in overrides second |
+| D11 | Scope | **Includes user-installed DiffSinger banks** |
+| D12 | Missing bank | The render fails, naming the bank |
+| D13 | Bank / speaker id | A string id and one `speaker` field |
+| D14 | Distribution | The plok.org index points at upstream URLs; no copies |
+| D15 | Library UI | An overlay from the lane inspector |
+| D16 | MCP install | Yes, `vocal.voicebank_install` as a job |
+| D17 | Vocoders | Index entries, fetched automatically |
+| D18 | Phonemes for arbitrary banks | The bank dictionary, then CMU mapped onto its inventory |
+| D19 | Staleness | Compare plan hashes |
+| D20 | Auto-render | Debounced in the GUI, explicit over MCP |
+| D21 | Chord edit | Same rule as other edits |
+| D22 | While stale | The old audio plays, with a badge |
+| D23 | User breaks | Exact labels and phoneme split |
+| D24 | Pronunciation source | A per-note `g2p` enum |
+| D25 | Rest threshold | Beat-relative, default ½ beat |
+| D26 | Breath | `AP` token in the gap, taking no note |
+| D27 | Velocity | Bank curves plus a post-render gain |
+| D28 | Expression curves | Automation sub-rows with a render-only target, section-relative |
+| D29 | Absorbed into this spec | Pronunciation persistence, expression curves, `resonance-svs` fixes, `curve_supported` fix |
+| D30 | Bank audition | A blind render script |
+| D31 | SoulX-Singer | A separate intent ([soulx-singer-backend](soulx-singer-backend.md)) |
+| D32 | Spec home and landing | This document; each slice lands on master separately |
+
+Pronunciation persistence (slice 11) keys per-syllable overrides by
+`(definition, track, syllable index)` and drops an override whose syllable
+text changed. That is the existing intent's recommendation and was not
+asked again.
+
+## 12. Slices
+
+Each slice is a vertical slice that lands on master on its own: wire,
+handler, MCP tool, GUI, tests, and the feature doc with its
+`Verified against master @` line (see
+[control-API conventions](../../guides/control-api-conventions.md)).
+
+1. **Default and description fixes.**
+   - Lilia becomes the code default (`params.rs:663`, `VoiceType::default_singer`).
+   - The Lilia remap in `vocal.render` goes (`update/control/vocal.rs:428-432`,
+     `:633`), which fixes BUG-52.
+   - The wrong "four vocal tracks" text is fixed (`arrange.rs:134-136`,
+     `section.rs:169-177`), along with every description that names a
+     default bank.
+   - `lines[]` moves to per lane.
+2. **`resonance-svs` honesty.**
+   - `curve_supported` reads the `use_*_embed` flags.
+   - The `rocm` feature is replaced by MIGraphX (ONNX Runtime 1.23 removed
+     ROCm).
+   - A requested GPU backend uses `error_on_failure`, and the active backend
+     is logged and reported in `control.hello`.
+   - Measure `speedup` 20 against 50 (render time and a listen) with
+     `examples/render_resonance_vocal.rs`, then decide.
+3. **Params API.** The wire patch and view types, `vocal.get_params`,
+   `vocal.set_params`, the `set_lane_generator` merge, `song.vocal` params,
+   snake_case, and `PROTOCOL_VERSION` 2 with the lockstep update.
+4. **Bank registry.**
+   - The string id and `speaker`, with old-project mapping.
+   - `VoicebankRegistry` with derived facts and the built-in table, and the
+     user voicebank and vocoder directories.
+   - The `voicebank_missing` error.
+   - `vocal.voicebanks`, installed list only.
+5. **Any-bank phonemisation.** The bank dictionary, then CMU mapped onto
+   the inventory; generalised substitutions and language ids; the
+   `english` flag.
+6. **Bank audition script.**
+   - A `resonance-svs` example renders one committed test song on every
+     installed bank and speaker into `target/audition/`, with names hidden
+     behind a key file.
+   - Jorrit listens blind, and the results pick which banks go in the index:
+     Peiton, LUNAI Katyusha / Keiro / Liam and Meiji v170 against the
+     current three.
+7. **plok.org install.** Index entries, shared `plok_download`, the library
+   overlay, `vocal.voicebank_install`, and the available list in
+   `vocal.voicebanks`.
+8. **Melisma.** The `_` token, counts, the `s` key editing the draft,
+   `SyllableMode`, and `slur: user | auto`.
+9. **Render state.**
+   - Per-lane state from plan hashes, with keys saved with the audio.
+   - The debounced GUI re-render and the stale badge.
+   - The chord-edit Task fix.
+10. **Syllables and pronunciation source.** Exact user breaks, `g2p` per
+    note, and the corpus fix and test.
+11. **Pronunciation persistence.** The project dictionary and overrides in
+    `ProjectFile`; reconcile restores them instead of clearing them
+    (`reconcile/globals.rs:161-162`). This fixes BUG-50's pronunciation
+    part.
+12. **Rests and breaths.** `rest_threshold_beats`, the `AP` token, the AP/SP
+    check, and re-blessed goldens.
+13. **Velocity dynamics.** `velocity_dynamics`, the bank curve, and the
+    post-render gain.
+14. **Expression curves as automation.** The curves in the lane config,
+    section-relative storage, Arrange sub-rows, `AutomationTarget::VocalCurve`,
+    and `automation.*`. This fixes BUG-50's curve part.
+
+Slices 1–3 come first, because they unblock the field report's P1. Slice 4
+must land before 5–7, and 8–14 are independent of each other.
+
+## 13. How we'd know it works
+
+- **Control tests** (`resonance-app/tests/control/`):
+  - `set_params` with one field leaves the rest unchanged, and
+    `song.vocal` echoes it;
+  - an invalid value is rejected at set time;
+  - a `set_lane_generator` re-issue keeps the lyrics;
+  - snake_case round-trips;
+  - `vocal.voicebanks` lists a temp-dir bank and drops it once it is
+    deleted, and rendering with it then fails with `voicebank_missing`;
+  - a lyric edit makes only that lane `stale`;
+  - `love _ _` gives `counts_mismatch: false` and survives `vocal.generate`.
+- **Install tests:** a local HTTP server serves an index and a zipped
+  fixture bank plus vocoder, like the drums' `download.rs` tests, covering
+  the sha256 mismatch and the vocoder auto-fetch.
+- **G2P tests** (`resonance-music-theory/tests/g2p*.rs`):
+  - `fo·rget` splits as written;
+  - a rules fallback reports `g2p: rules`;
+  - `_` gives slur tokens and `AP` gives a breath token;
+  - every corpus word resolves through CMU.
+- **Render tests** (`resonance-app/tests/vocal/`): each scenario pins its
+  params and guards against silence on its own, because a silent golden
+  matches forever.
+  - an eighth-note rest at the default threshold gives a silent gap;
+  - `AP` gives a breath segment;
+  - on TIGER, a velocity sweep changes RMS per note;
+  - a Dynamics curve changes the render on a bank without energy;
+  - curve support follows the `dsconfig` flags.
+- **Persistence:** set a pronunciation and a curve, save, reopen and undo
+  an unrelated edit. Both are still there, and the lane reads `rendered`.
+- **UI goldens:** the library overlay states, the stale badge, and the
+  vocal automation sub-rows (`tests/snapshots/`).
+- **Live:** an MCP session installs a bank, sets params, writes a melisma
+  and breaths, renders, and nothing goes through the GUI.

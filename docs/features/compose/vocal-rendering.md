@@ -60,7 +60,7 @@ installed, the lane quietly keeps playing its MIDI.
   `ExpressionCurves` (dynamics, tension, breathiness, pitch bend; TIGER
   accepts neither tension nor breathiness). No GUI or control path edits
   them yet — see
-  [vocal-expression-curves](../../intents/compose/vocal-expression-curves.md).
+  [vocal MCP control and quality §10](../../intents/compose/vocal-mcp-control-and-quality.md).
 - **Comfortable ranges** (warnings only, `comfortable_pitch_range`):
   TIGER C3–E5, Lilia D3–G5, Meiji A2–D5.
 
@@ -130,7 +130,7 @@ results.
 ## Known gaps
 
 - Expression curves have no editor, no persistence and no control method —
-  [vocal-expression-curves](../../intents/compose/vocal-expression-curves.md).
+  [vocal MCP control and quality §10](../../intents/compose/vocal-mcp-control-and-quality.md).
 - No harmony / doubled voices —
   [vocal-harmony-doubling](../../intents/compose/vocal-harmony-doubling.md).
 - Inference is CPU-only in the app (`ExecutionProvider::Cpu` is hard-coded

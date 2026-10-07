@@ -12,12 +12,12 @@ Each intent follows [`../_template.md`](../_template.md).
 | [Drum material per drum track](drum-material-per-track.md) | idea | Two drum tracks in one project get the same derived drum clip. |
 | [EmbellishmentStyle control in the melody inspector](embellishment-style-ui.md) | partly built | `MelodyParams::embellishment` changes the melody style but has no control in the melody inspector. |
 | [Share the phrase plan between harmony and melody](harmony-melody-phrase-plan.md) | idea | Melody and harmony each plan phrases on their own instead of sharing one plan. |
+| [SoulX-Singer as a second singing backend](soulx-singer-backend.md) | idea | The only open 2026 English score-to-singing model with permissive weights; worth a sidecar experiment against DiffSinger. |
 | [Theme-driven lyric generation](lyric-theme-generation.md) | partly built | The lyric generator ignores the theme brief, point of view and "avoid clichés"; it samples a fixed corpus. |
 | [Make motif augmentation audible (or drop it)](motif-augment-washout.md) | idea | `Augment` sounds the same as `Identity` because durations are normalised to fill each chord. |
 | [Pop/jazz cadence colour](pop-jazz-cadence-color.md) | idea | Generated endings are always classical cadences, whatever the style. |
 | [Pronunciation editing, dictionary and persistence](pronunciation-editing.md) | partly built | Pronunciation fixes exist only over the control API and are lost on reload and undo. |
 | [Section placement editing (fill on place, move, place-again)](section-placement-editing.md) | partly built | Placing a section with generated parts gives a silent, empty placement. |
-| [Editable vocal expression curves (dock UI, persistence, control)](vocal-expression-curves.md) | partly built | Expression curves feed the vocal render, but nothing edits them, they are not saved, and there is no control method. |
-| [Vocal control over MCP, correctness and expressiveness](vocal-mcp-control-and-quality.md) | idea | Over MCP only lyrics and voicebank are settable; no melisma, voicebank list or accurate per-lane render state; no staccato, breaths or audible velocity on TIGER. |
+| [Vocals: MCP control, voicebank library, correctness and expression](vocal-mcp-control-and-quality.md) | designed | Over MCP only lyrics and voicebank are settable; banks are three hardcoded; no melisma, rests, breaths, audible velocity or saved expression curves; render state is per track and never stale. |
 | [Vocal harmony and doubling generator](vocal-harmony-doubling.md) | designed | A single synthesized lead sounds thin; there is no harmony or double generator. |
 | [Vocal pitch editor (graphical tuning of recorded vocals)](vocal-pitch-editor.md) | partly built | Pitch detection and retune render exist, but no editor view opens, so tuning is unreachable. |
