@@ -21,7 +21,8 @@ impl ResonanceMcp {
                        in the project, orphans included; each filter narrows: track_id / \
                        bus_id / master: true (the lanes that owner carries, including lanes \
                        on its plugins), control (\"volume\" | \"pan\" | \"mute\" | \"device\"), \
-                       param (name, numeric id or string key), plugin_id / occurrence. range \
+                       param (name, numeric id or string key), plugin_id / occurrence, vocal \
+                       {track_id, curve} (one vocal expression-curve lane). range \
                        {start, end} (half-open) windows the points; each point keeps its \
                        whole-lane index. \
                        \
@@ -41,6 +42,19 @@ impl ResonanceMcp {
                        point at bar 17 stays at bar 17. The global_* tempo and signature \
                        events do NOT: lanes keep their sample position like clips and markers, \
                        so their bar position moves — re-read after such an edit. \
+                       \
+                       VOCAL CURVES: a vocal track's Dynamics, Tension, Breathiness and Pitch bend are \
+                       lanes too — target {vocal: {track_id, curve: \"dynamics\" | \"tension\" | \
+                       \"breathiness\" | \"pitch_bend\"}} INSTEAD of owner + control / param. \
+                       Each curve is stored once per SECTION, relative to its start, and lists \
+                       at every placement (section_relative: true): a point you write at a \
+                       song position lands on that placement's section, so every placement \
+                       follows; a point outside every placement of a section with a vocal lane \
+                       on the track is refused, as are two different values for one section \
+                       beat; deleting a point at one placement deletes it at all. Units: \
+                       dynamics / tension / breathiness 0..=1 (0.5 = unchanged), pitch_bend \
+                       cents -50..=50. Vocal lanes have no Read flag, never reach the mixer, \
+                       and are heard only after vocal_render (song_vocal then reads stale). \
                        \
                        You cannot hear automation: verify with automation_lanes; measure with \
                        meter_measure over the range. Read-only.",
@@ -81,6 +95,19 @@ impl ResonanceMcp {
                        arrangement_insert/remove_bars keep a point at its bar; global_* tempo \
                        and signature events keep its sample, so its bar moves. \
                        \
+                       VOCAL CURVES: a vocal track's Dynamics, Tension, Breathiness and Pitch bend are \
+                       lanes too — target {vocal: {track_id, curve: \"dynamics\" | \"tension\" | \
+                       \"breathiness\" | \"pitch_bend\"}} INSTEAD of owner + control / param. \
+                       Each curve is stored once per SECTION, relative to its start, and lists \
+                       at every placement (section_relative: true): a point you write at a \
+                       song position lands on that placement's section, so every placement \
+                       follows; a point outside every placement of a section with a vocal lane \
+                       on the track is refused, as are two different values for one section \
+                       beat; deleting a point at one placement deletes it at all. Units: \
+                       dynamics / tension / breathiness 0..=1 (0.5 = unchanged), pitch_bend \
+                       cents -50..=50. Vocal lanes have no Read flag, never reach the mixer, \
+                       and are heard only after vocal_render (song_vocal then reads stale). \
+                       \
                        A plugin lane on a FROZEN track is refused (unfreeze first); volume / \
                        pan / mute lanes stay writable. Returns {revision, lane} — the lane \
                        exactly as it reads back. You cannot hear it: verify with \
@@ -112,6 +139,19 @@ impl ResonanceMcp {
                        its own min..=max or a choice label. curve \"linear\" (default) or \
                        \"stepped\". Bars and beats are 1-based and meter-aware. \
                        \
+                       VOCAL CURVES: a vocal track's Dynamics, Tension, Breathiness and Pitch bend are \
+                       lanes too — target {vocal: {track_id, curve: \"dynamics\" | \"tension\" | \
+                       \"breathiness\" | \"pitch_bend\"}} INSTEAD of owner + control / param. \
+                       Each curve is stored once per SECTION, relative to its start, and lists \
+                       at every placement (section_relative: true): a point you write at a \
+                       song position lands on that placement's section, so every placement \
+                       follows; a point outside every placement of a section with a vocal lane \
+                       on the track is refused, as are two different values for one section \
+                       beat; deleting a point at one placement deletes it at all. Units: \
+                       dynamics / tension / breathiness 0..=1 (0.5 = unchanged), pitch_bend \
+                       cents -50..=50. Vocal lanes have no Read flag, never reach the mixer, \
+                       and are heard only after vocal_render (song_vocal then reads stale). \
+                       \
                        A plugin lane on a FROZEN track is refused (unfreeze first); volume / \
                        pan / mute lanes stay writable. Returns {revision, lane, replaced} — the \
                        lane exactly as it reads back. Undoable, one undo entry. You cannot hear \
@@ -139,6 +179,9 @@ impl ResonanceMcp {
                        automation_lanes), which is the ONLY way to reach an orphaned lane (a \
                        plugin lane whose instance is gone, from an older project file: it has \
                        no owner to name). Give exactly one of lane_id or a target, never both. \
+                       A vocal curve ({vocal: {track_id, curve}}) lists each section point once \
+                       per placement; deleting any copy deletes the point at every placement \
+                       (deleted counts the copies). \
                        \
                        Deleting every point in the lane removes the lane entirely and requires \
                        confirm: true; without it the call is refused with a summary (point \
@@ -167,7 +210,9 @@ impl ResonanceMcp {
                        one of control (\"volume\" | \"pan\" | \"mute\") or param (a plugin \
                        parameter). A plugin lane on a FROZEN track is refused (unfreeze first); \
                        volume / pan / mute lanes stay writable. A lane that does not exist is \
-                       not_found — automation_set_lane / automation_add_points create one. \
+                       not_found — automation_set_lane / automation_add_points create one. A \
+                       vocal expression-curve lane ({vocal: {track_id, curve}}) always plays \
+                       and is refused here. \
                        Returns {revision, lane}. Verify with automation_lanes.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<automation::LaneEditResult>()
@@ -192,7 +237,8 @@ impl ResonanceMcp {
                        refused with a summary (point count and bar range) and the lane is left \
                        untouched. An empty lane is removed without confirm. Returns {revision, \
                        lane: null, removed: true}. Undoable, one undo entry — edit_undo brings \
-                       the lane straight back.",
+                       the lane straight back. On a vocal curve ({vocal: {track_id, curve}}) \
+                       this clears that curve in every section of the track.",
         annotations(destructive_hint = true, idempotent_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<automation::LaneEditResult>()
     )]
@@ -209,7 +255,10 @@ impl ResonanceMcp {
                        — and write it into the lane (created if missing; undoable, one undo \
                        entry). Target as in automation_set_lane: exactly one owner (track_id, \
                        bus_id or master: true) and exactly one of control (\"volume\" | \"pan\" \
-                       | \"mute\") or param (plugin_id omitted = the track's instrument). \
+                       | \"mute\") or param (plugin_id omitted = the track's instrument), or a \
+                       vocal curve {vocal: {track_id, curve}} (the range must lie inside \
+                       placements of the track's vocal sections; every generated point maps \
+                       onto its section, see automation_set_lane). \
                        \
                        start / end: {bar, beat} | {sample}; bars and beats are 1-based and \
                        meter-aware. The curve starts at start holding from and INCLUDES a point \

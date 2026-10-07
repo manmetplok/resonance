@@ -13,8 +13,6 @@ use super::drumroll::{
     default_drum_patterns, default_kit_pads, DrumGroup, DrumPattern, DrumrollViewState,
     KitPadInfo,
 };
-use super::expression::ExpressionCurves;
-use super::expression_edit::ExpressionDockState;
 use super::lane_generator::{LaneGeneratorConfig, LaneGeneratorKind};
 use super::section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
@@ -259,20 +257,6 @@ pub struct ComposeState {
     /// Lazily populated from the lane's current `params.draft` on first
     /// use, and re-synced when per-line edits or re-rolls happen.
     pub vocal_bulk_lyrics: HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
-    /// Per-vocal-lane editable expression curves (dynamics, tension,
-    /// breathiness, pitch bend), keyed `(definition_id, track_id)` — the
-    /// same lane scope as `vocal_bulk_lyrics` and the render epoch. Each
-    /// bundle layers the user's overlay over the generator's auto-derived
-    /// baseline (doc #154, epic #17). Lanes with no entry yet behave as
-    /// untouched (`ExpressionCurves::default`). Wiring into the segment
-    /// builder and project file lands in later todos; this just holds the
-    /// model.
-    pub expression_curves: HashMap<(u64, TrackId), ExpressionCurves>,
-    /// Transient tool state for the vocal Expression dock — active curve,
-    /// pen mode, and snap-to-syllables. Runtime-only UI state (never
-    /// persisted), shared by whichever vocal lane is open in the dock. See
-    /// [`ExpressionDockState`](super::expression_edit::ExpressionDockState).
-    pub expression_dock: ExpressionDockState,
     /// Project-scoped drum pattern bank. Each pattern bundles its own
     /// [`DrumGroup`] list, so a project can carry multiple kit/snare/hat
     /// arrangements and the section picker assigns one pattern per
@@ -348,8 +332,6 @@ impl Default for ComposeState {
             vocal_audio: VocalAudioRegistry::default(),
             pronunciation: crate::compose::vocal_svs::PronunciationState::default(),
             vocal_bulk_lyrics: HashMap::new(),
-            expression_curves: HashMap::new(),
-            expression_dock: ExpressionDockState::default(),
             drum_patterns,
             default_drum_pattern_id: default_pattern_id,
             kit_pads: default_kit_pads(),
@@ -413,29 +395,6 @@ impl ComposeState {
     /// onto ids already in use.
     pub fn set_next_id(&mut self, next_id: u64) {
         self.next_id = self.next_id.max(next_id);
-    }
-
-    /// Expression curves for the vocal lane `(definition_id, track_id)`, or
-    /// `None` if the lane has no entry yet (treat as untouched).
-    pub fn expression_curves(
-        &self,
-        definition_id: u64,
-        track_id: TrackId,
-    ) -> Option<&ExpressionCurves> {
-        self.expression_curves.get(&(definition_id, track_id))
-    }
-
-    /// Mutable expression curves for the vocal lane, inserting a default
-    /// (untouched) bundle if the lane doesn't have one yet. Use this before
-    /// applying a user edit.
-    pub fn expression_curves_mut(
-        &mut self,
-        definition_id: u64,
-        track_id: TrackId,
-    ) -> &mut ExpressionCurves {
-        self.expression_curves
-            .entry((definition_id, track_id))
-            .or_default()
     }
 
     /// The user deleted `clip_id` from the timeline: drop every derived
@@ -694,11 +653,8 @@ impl ComposeState {
         // Pronunciation is persisted (BUG-50): the `pronunciation`
         // reconcile domain, right after this one, restores it from the
         // file instead of it being cleared here.
-        // Expression-curve overlays have no project persistence yet (that
-        // arrives in todo #335); start each load with untouched curves and
-        // the dock tool state reset.
-        self.expression_curves.clear();
-        self.expression_dock = ExpressionDockState::default();
+        // Expression curves live in each vocal lane's params (§10), so
+        // they arrive with the definitions below.
         let definitions = &self.definitions;
         self.placements = placements
             .iter()

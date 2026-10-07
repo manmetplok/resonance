@@ -470,9 +470,7 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
             ArrangeRowKind::AutomationLane { lane, .. } => {
                 let label = r
                     .automation
-                    .lanes
-                    .values()
-                    .find(|l| l.id == lane)
+                    .lane_by_id(lane)
                     .map(|l| {
                         crate::view::timeline::automation::target_label(
                             &l.target,

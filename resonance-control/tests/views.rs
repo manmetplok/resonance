@@ -383,6 +383,11 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
                     phonemes: vec!["hh".to_owned(), "eh".to_owned()],
                 }],
             }],
+            curves: vec![resonance_control::methods::song::VocalCurveSummary {
+                curve: resonance_control::methods::automation::VocalCurve::PitchBend,
+                points: 3,
+                supported: true,
+            }],
         }],
         pronunciation_overrides: overrides,
         render_state: VocalRenderState::Error,
@@ -397,6 +402,11 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
     assert_eq!(wire["pronunciation_overrides"]["lilia"], json!(["l", "ih"]));
     assert_eq!(wire["lanes"][0]["definition_id"], json!(3));
     assert_eq!(wire["lanes"][0]["counts_mismatch"], json!(true));
+    // Expression curves (§10): which ones the lane has, snake_case.
+    assert_eq!(
+        wire["lanes"][0]["curves"],
+        json!([{"curve": "pitch_bend", "points": 3, "supported": true}])
+    );
     // Lines are per lane (protocol 2), indexed within it; no top-level list.
     assert_eq!(wire["lanes"][0]["lines"][0]["index"], json!(0));
     assert!(wire.get("lines").is_none());

@@ -6,7 +6,7 @@ when_to_use: >-
   buried", "too much low end", "why does this sound muddy", "check the mix",
   "the drums are too loud", "make it warmer", "it sounds harsh", "too
   digital", "more analog".
-allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_tracks mcp__resonance__song_sections mcp__resonance__meter_stems mcp__resonance__meter_measure mcp__resonance__meter_snapshot mcp__resonance__meter_compare mcp__resonance__meter_probe mcp__resonance__master_summary mcp__resonance__track_plugin_params mcp__resonance__bus_plugin_params mcp__resonance__automation_lanes mcp__resonance__automation_set_lane
+allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_tracks mcp__resonance__song_sections mcp__resonance__meter_stems mcp__resonance__meter_measure mcp__resonance__meter_snapshot mcp__resonance__meter_compare mcp__resonance__meter_probe mcp__resonance__master_summary mcp__resonance__track_plugin_params mcp__resonance__bus_plugin_params mcp__resonance__automation_lanes mcp__resonance__automation_set_lane mcp__resonance__automation_add_points mcp__resonance__vocal_render
 ---
 
 # Mixing in resonance
@@ -37,6 +37,7 @@ when one is missing:
 | Busses | `bus.create`, `track.set_output` |
 | Character (3b) | `meter.snapshot`, `meter.compare`, `meter.probe`, `bus.add_effect`, `bus.load_plugin_preset`, `bus.set_plugin_param` |
 | Level rides and fades | `automation.set_lane`, `automation.lanes` |
+| Vocal expression rides | `automation.add_points`, `vocal.render` |
 
 Then `mcp__resonance__song_summary` and `mcp__resonance__song_tracks` for the
 track list and ids. If `edit_status` shows unsaved work you did not make, ask
@@ -100,6 +101,7 @@ In this order, and only as far down as the problem requires:
 | A part that will not sit still | `com.resonance.compressor` on the track |
 | One part ducking under another | `mcp__resonance__track_set_sidechain` |
 | A fader move that has to happen over time (a fade, a level ride) | `mcp__resonance__automation_set_lane`, read back with `mcp__resonance__automation_lanes` |
+| A synthesized vocal phrase that should swell, push or bend inside itself (not the whole track's level) | `mcp__resonance__automation_add_points` on `{vocal: {track_id, curve: "dynamics" \| "pitch_bend" \| ...}}` — section-relative, so writing it at one placement shapes every placement of that section; Tension and Breathiness only sound on banks that take them (`song_vocal` lists each curve's `supported`); then `mcp__resonance__vocal_render`, since the curve is rendered into the take, not mixed |
 | A starting sound for any plugin (a vocal compressor, a warm plate) | `mcp__resonance__track_plugin_presets` (or `bus_`/`master_`) filtered by `instrument`, `character`, `genres` or a query like `"for:vocal char:warm"` rather than guessing names; load it by `preset_id`, or pass it as `preset` to `mcp__resonance__track_add_effect` / `track_add_instrument` / `bus_add_effect` / `master_add_effect` so the plugin arrives with that sound in one undo step; `current` and `modified` in the preset list say what is loaded and whether it was edited (`modified_known: false` means only host edits are counted). Save what you design with `meta` (category, instrument, character, genres, tags) so it is findable next session, and star keepers with `mcp__resonance__presets_set_marks`; `mcp__resonance__presets_vocabulary` has the seeded values |
 | The wrong guitar or bass amp tone on Resonance Amp | `mcp__resonance__amp_models_list` for the installed NAM models, then `mcp__resonance__track_set_plugin_param` on its Model Select with the model's slot (a name works only when unique); star the keeper with `mcp__resonance__amp_models_set_marks`. Model Select's `text` is only fresh after a set you made — a change in the amp's own editor is not echoed, so re-read `amp_models_list` and the slot number |
 

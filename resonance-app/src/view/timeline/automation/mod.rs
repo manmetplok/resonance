@@ -28,6 +28,9 @@
 mod draw;
 mod geometry;
 mod input;
+mod vocal;
+
+pub use vocal::vocal_rows_hash;
 
 pub use geometry::*;
 pub use input::BREAKPOINT_HIT_RADIUS;

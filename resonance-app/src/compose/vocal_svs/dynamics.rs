@@ -6,13 +6,17 @@
 //! smoothed by a centred moving average [`DYNAMICS_SMOOTH_SEC`] wide, so a
 //! change of gain at a note boundary is a 30 ms ramp rather than a click.
 //!
-//! Note velocity feeds it today ([`velocity_gain_spans`]): each note gets
-//! up to ±[`VELOCITY_GAIN_MAX_DB`] at `velocity_dynamics` 1, on the same
-//! `(vel − 0.78) / 0.22` shape the tension curve uses. This is what makes a
-//! bank without an energy input (TIGER) follow velocity at all. The
-//! function takes spans rather than notes so a per-frame source (the
-//! expression Dynamics curve on a bank without energy) can feed it too:
-//! one span per frame, smoothed the same way.
+//! Two sources feed it, each as its own layer of spans:
+//!
+//! - **Note velocity** ([`velocity_gain_spans`]): each note gets up to
+//!   ±[`VELOCITY_GAIN_MAX_DB`] at `velocity_dynamics` 1, on the same
+//!   `(vel − 0.78) / 0.22` shape the tension curve uses. This is what makes
+//!   a bank without an energy input (TIGER) follow velocity at all.
+//! - **The Dynamics expression curve** on a bank without energy (§10): one
+//!   span per curve frame, up to ±[`DYNAMICS_CURVE_MAX_DB`].
+//!
+//! Layers add in dB (their gains multiply); [`dynamics_gain_envelope_layers`]
+//! sums them before the smoothing.
 
 use resonance_audio::types::MidiNote;
 
@@ -32,6 +36,10 @@ pub const DYNAMICS_SMOOTH_SEC: f64 = 0.030;
 /// Gain of a note at full velocity (or its negative at the softest) with
 /// `velocity_dynamics` 1.
 pub const VELOCITY_GAIN_MAX_DB: f32 = 6.0;
+
+/// Gain of the Dynamics curve at `1.0` (and its negative at `0.0`) on a
+/// bank without an energy input; `0.5` is 0 dB.
+pub const DYNAMICS_CURVE_MAX_DB: f32 = 12.0;
 
 /// The velocity both dynamics paths treat as neutral: `derive_vocal`'s
 /// ordinary syllable. The tension curve shares it.
@@ -112,7 +120,20 @@ pub fn dynamics_gain_envelope(
     sample_rate: u32,
     smooth_sec: f64,
 ) -> Option<Vec<f32>> {
-    if len == 0 || spans.iter().all(|s| s.gain_db == 0.0) {
+    dynamics_gain_envelope_layers(&[spans], len, sample_rate, smooth_sec)
+}
+
+/// [`dynamics_gain_envelope`] over several independent layers of spans:
+/// each layer is laid out on its own (later spans win inside a layer),
+/// then the layers' dB add up — their gains multiply — before the one
+/// smoothing pass. `None` when every span of every layer is 0 dB.
+pub fn dynamics_gain_envelope_layers(
+    layers: &[&[GainSpan]],
+    len: usize,
+    sample_rate: u32,
+    smooth_sec: f64,
+) -> Option<Vec<f32>> {
+    if len == 0 || layers.iter().all(|spans| spans.iter().all(|s| s.gain_db == 0.0)) {
         return None;
     }
     let sr = sample_rate as f64;
@@ -124,10 +145,17 @@ pub fn dynamics_gain_envelope(
         }
     };
     let mut db = vec![0.0f64; len];
-    for s in spans {
-        let (a, b) = (index(s.start_sec), index(s.end_sec));
-        for v in &mut db[a..b.max(a)] {
-            *v = s.gain_db as f64;
+    let mut layer = vec![0.0f64; len];
+    for spans in layers {
+        layer.iter_mut().for_each(|v| *v = 0.0);
+        for s in spans.iter() {
+            let (a, b) = (index(s.start_sec), index(s.end_sec));
+            for v in &mut layer[a..b.max(a)] {
+                *v = s.gain_db as f64;
+            }
+        }
+        for (total, v) in db.iter_mut().zip(&layer) {
+            *total += v;
         }
     }
     // Centred moving average over the dB steps: a step becomes a linear
@@ -163,7 +191,18 @@ pub fn dynamics_gain_envelope(
 /// Apply [`dynamics_gain_envelope`] to `mono` in place. Returns whether
 /// anything changed (all-0 dB spans leave the buffer untouched).
 pub fn apply_dynamics_gain(mono: &mut [f32], spans: &[GainSpan], sample_rate: u32) -> bool {
-    let Some(env) = dynamics_gain_envelope(spans, mono.len(), sample_rate, DYNAMICS_SMOOTH_SEC)
+    apply_dynamics_gain_layers(mono, &[spans], sample_rate)
+}
+
+/// [`apply_dynamics_gain`] over several layers, combined as in
+/// [`dynamics_gain_envelope_layers`].
+pub fn apply_dynamics_gain_layers(
+    mono: &mut [f32],
+    layers: &[&[GainSpan]],
+    sample_rate: u32,
+) -> bool {
+    let Some(env) =
+        dynamics_gain_envelope_layers(layers, mono.len(), sample_rate, DYNAMICS_SMOOTH_SEC)
     else {
         return false;
     };

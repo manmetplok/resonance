@@ -22,7 +22,7 @@ pub use melody::{count_syllables, derive_vocal_with_holds, vocal_phrase_spans, V
 pub use params::{
     SyllableMode, VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov,
     VocalRhymeScheme, VocalStyle, VocalTimbre, VoicebankId,
-    VoiceType,
+    VocalCurvePoint, VocalCurves, VoiceType,
 };
 
 use crate::g2p::SyllableStress;

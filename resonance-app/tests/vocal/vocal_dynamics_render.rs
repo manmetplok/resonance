@@ -6,7 +6,6 @@
 //! pins its notes, lyrics, tempo and params and checks on its own that
 //! what should sound does — a silent render must never pass.
 
-use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
     build_segment, render_vocal_clip, resolve_clip, validate_for_voicebank, BankProfile,
     SvsRenderCache, VoicebankRegistry, VoicebankRoots,
@@ -88,7 +87,6 @@ fn render(
         notes,
         p,
         &assign(text, notes.len(), bank),
-        &ExpressionCurves::default(),
         TPQ,
         BPM,
         SR,
@@ -117,7 +115,6 @@ fn an_ap_rest_breathes_and_an_sp_rest_does_not() {
             &notes,
             &p,
             &assign("la la", 2, &bank),
-            &ExpressionCurves::default(),
             TPQ,
             BPM,
             &bank,
@@ -212,4 +209,49 @@ fn on_tiger_a_velocity_sweep_changes_rms_per_note() {
     let delta: Vec<f64> = swept.iter().zip(&flat).map(|(s, f)| s - f).collect();
     assert!((delta[1] - delta[0] - 6.0).abs() < 1.0, "soft note −6 dB: {delta:.2?}");
     assert!((delta[2] - delta[1] - 6.0).abs() < 1.0, "loud note +6 dB: {delta:.2?}");
+}
+
+/// The Dynamics expression curve on TIGER (no energy input) reaches the
+/// take as post-render gain (§10): ±12 dB at the curve's ends, `0.5`
+/// unity. Velocity dynamics is off so the curve is the only gain; a
+/// stepped curve gives the first note 0.25 (−6 dB) and the second 0.75
+/// (+6 dB).
+#[test]
+fn on_tiger_a_dynamics_curve_changes_the_take_through_gain() {
+    let Some(bank) = real_bank("tiger") else {
+        eprintln!("RESONANCE_SVS_MODELS_DIR unset; skipped");
+        return;
+    };
+    let notes = [note(0, 2 * Q, 0.8), note(2 * Q, 2 * Q, 0.8)];
+    let flat = params(&bank, "tiger", 0.0);
+    let mut shaped = flat.clone();
+    shaped.curves.dynamics = vec![
+        resonance_music_theory::VocalCurvePoint {
+            beat: 0.0,
+            value: 0.25,
+            stepped: true,
+        },
+        resonance_music_theory::VocalCurvePoint {
+            beat: 2.0,
+            value: 0.75,
+            stepped: false,
+        },
+    ];
+    let per_note = |p: &VocalParams| -> Vec<f64> {
+        let out = render(&bank, p, &notes, "la la");
+        (0..2)
+            .map(|i| {
+                let a = 0.3 + i as f64 + 0.2;
+                rms_db(&window(&out.samples_stereo, out.sample_rate, a, a + 0.6))
+            })
+            .collect()
+    };
+    let (plain, curved) = (per_note(&flat), per_note(&shaped));
+    eprintln!("tiger per-note dBFS: plain {plain:.1?}, curve {curved:.1?}");
+    for (i, db) in plain.iter().chain(&curved).enumerate() {
+        assert!(*db > -45.0, "note window {i} sings: {db:.1} dBFS");
+    }
+    // The safety gain may move the whole take; the spread is the curve.
+    let delta: Vec<f64> = curved.iter().zip(&plain).map(|(c, p)| c - p).collect();
+    assert!((delta[1] - delta[0] - 12.0).abs() < 1.0, "−6 dB then +6 dB: {delta:.2?}");
 }

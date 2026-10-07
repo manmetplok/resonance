@@ -5,8 +5,7 @@ use resonance_music_theory::{
     VocalRhymeScheme, VocalStyle, VocalTimbre, VoiceType, VoicebankId,
 };
 
-use crate::compose::vocal_svs::CurveKind;
-use crate::compose::{EntryLength, LaneGeneratorKindTag, PenMode, RailPanelKey, SelectedLane};
+use crate::compose::{EntryLength, LaneGeneratorKindTag, RailPanelKey, SelectedLane};
 
 /// The two workspace group banners in the Compose lane column. Carried
 /// by [`ComposeMessage::ToggleWorkspaceGroup`].
@@ -306,15 +305,6 @@ pub enum ComposeMessage {
         msg: LaneInspectorMsg,
     },
 
-    /// Vocal Expression-dock edits for the lane `(definition_id, track_id)`:
-    /// active-curve select, pen/snap tool state, breakpoint add/move/remove,
-    /// depth/smoothing, and reset-to-generated. See [`ExpressionMessage`].
-    Expression {
-        definition_id: u64,
-        track_id: TrackId,
-        msg: ExpressionMessage,
-    },
-
     /// SVS rendering completed off-thread — install the WAV as an audio
     /// clip on every placement the renderer was launched for. Boxed
     /// because the payload is large (samples vec).
@@ -406,7 +396,6 @@ impl ComposeMessage {
             // The nested editors classify themselves.
             Self::DrumGroups(m) => m.undo_action(),
             Self::Arrangement(m) => m.undo_action(),
-            Self::Expression { msg, .. } => msg.undo_action(),
             // Keyed by lane (definition + track) so a lane-inspector text
             // field can coalesce (FU-A10a) — `LaneInspectorMsg` itself
             // doesn't carry the lane identity.
@@ -491,76 +480,6 @@ pub struct VocalAudioReadyData {
     /// lane's render state can tell when the take stops matching its
     /// content (vocal-mcp-control-and-quality.md §7).
     pub unit_keys: Vec<u64>,
-}
-
-// ---------------------------------------------------------------------------
-// Vocal Expression-dock sub-messages
-// ---------------------------------------------------------------------------
-
-/// Edits to a vocal lane's expression curves, dispatched by
-/// [`ComposeMessage::Expression`] (doc #154, todo #336). The tool-state
-/// arms (`SelectCurve` / `SetPenMode` / `SetSnap`) touch only the
-/// [`ExpressionDockState`](crate::compose::ExpressionDockState); the rest
-/// mutate the lane's
-/// [`ExpressionCurves`](crate::compose::ExpressionCurves) and request a
-/// vocal re-render so the WAV reflects the edit.
-///
-/// Each curve-mutating arm names its [`CurveKind`] explicitly rather than
-/// relying on the dock's active curve, so the transition is deterministic
-/// and unit-testable.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ExpressionMessage {
-    /// Make `kind` the active curve in the dock (canvas + inspector).
-    SelectCurve(CurveKind),
-    /// Switch the pen mode used for canvas edits.
-    SetPenMode(PenMode),
-    /// Toggle snap-to-syllables. When on, breakpoint times quantise to the
-    /// lane's note onsets on add/move.
-    SetSnap(bool),
-    /// Add a breakpoint to `kind`'s overlay at normalised time `t` (snapped
-    /// when snap is on) and `value`.
-    AddBreakpoint { kind: CurveKind, t: f32, value: f32 },
-    /// Move `kind`'s overlay breakpoint at `index` to (`t`, `value`); `t`
-    /// snaps when snap is on and clamps to its neighbours so the index is
-    /// stable.
-    MoveBreakpoint {
-        kind: CurveKind,
-        index: usize,
-        t: f32,
-        value: f32,
-    },
-    /// Remove `kind`'s overlay breakpoint at `index`.
-    RemoveBreakpoint { kind: CurveKind, index: usize },
-    /// Set `kind`'s depth-over-baseline inspector value.
-    SetDepth { kind: CurveKind, depth: f32 },
-    /// Set `kind`'s smoothing window, in milliseconds.
-    SetSmoothing { kind: CurveKind, smoothing: f32 },
-    /// Reset `kind` to its generated baseline: drop the overlay and depth/
-    /// smoothing, flipping the curve's status back to `Auto`.
-    Reset { kind: CurveKind },
-}
-
-impl ExpressionMessage {
-    /// How this message interacts with the undo history (`undo::classify`
-    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
-    /// variant does not compile until someone decides what undo does with
-    /// it (ARCH-06 A6-4).
-    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
-        use crate::undo::UndoAction;
-        match self {
-            // The Expression dock's tool state (active curve, pen, snap) is
-            // view state (code review VIEW-18): recording it wiped the redo
-            // stack.
-            Self::SelectCurve(..) | Self::SetPenMode(..) | Self::SetSnap(..) => UndoAction::Skip,
-            // Every breakpoint / depth / smoothing edit mutates the lane.
-            Self::AddBreakpoint { .. }
-            | Self::MoveBreakpoint { .. }
-            | Self::RemoveBreakpoint { .. }
-            | Self::SetDepth { .. }
-            | Self::SetSmoothing { .. }
-            | Self::Reset { .. } => UndoAction::Record,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

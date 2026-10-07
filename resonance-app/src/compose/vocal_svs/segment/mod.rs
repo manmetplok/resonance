@@ -24,8 +24,6 @@ use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::{VocalParams, VocalTimbre};
 use resonance_svs::ds::{DsSegment, SampleCurve};
 
-use crate::compose::expression::ExpressionCurves;
-
 mod duration;
 mod energy;
 mod f0;
@@ -35,73 +33,51 @@ mod tension;
 use duration::build_phoneme_track;
 use energy::build_energy_curve;
 use f0::{build_f0_curve, F0_TIMESTEP};
+use overlay::{curve_gain_db, overlay_envelope, CurveClock};
 use tension::build_tension_curve;
 
+use super::paths::CurveKind;
 use super::registry::BankProfile;
 
-/// Build a single `DsSegment` covering every note in the clip from the
+/// Build a single `DsSegment` covering every note in `notes` from the
 /// pre-resolved, voicebank-validated `assigned` syllable stream (one
 /// entry per note). See the module docs for the stage breakdown and
 /// [`super::resolve_clip_with_bank`] / [`super::validate_for_voicebank`]
 /// for how `assigned` is produced.
 ///
-/// `curves` carries the lane's editable expression overlay (doc #154); an
-/// edited curve is layered over the auto-derived baseline and emitted as
-/// the matching per-frame curve (dynamics → energy, breathiness, tension,
-/// pitch bend → f0 cents offset). A curve in its `Auto` state leaves the
-/// auto-derived result untouched. Pass [`ExpressionCurves::default`] for a
-/// lane with no edits. `bank` spells the phonemes and language ids and
-/// decides which curves reach the model.
+/// The lane's expression curves (`params.curves`, §10) are layered over
+/// the auto-derived result where they have points: Dynamics → energy,
+/// Breathiness, Tension, Pitch bend → f0 cents offset (a bank without an
+/// energy input gets Dynamics as a post-render gain instead — see
+/// [`unit_curve_gain_db`]). `notes` carry section-relative ticks, which is
+/// how a curve point's section beat finds its frame. `bank` spells the
+/// phonemes and language ids and decides which curves reach the model.
 pub fn build_segment(
     notes: &[MidiNote],
     params: &VocalParams,
     assigned: &[AssignedSyllable],
-    curves: &ExpressionCurves,
     ticks_per_quarter: u32,
     bpm: f32,
     bank: &BankProfile,
 ) -> DsSegment {
-    let window = (0.0, 1.0);
-    build_segment_windowed(notes, params, assigned, curves, window, ticks_per_quarter, bpm, bank)
-}
-
-/// As [`build_segment`], but `window` maps this segment's local frame span
-/// onto the clip-normalised time the overlay breakpoints live in (see
-/// [`overlay::overlay_envelope`]). A whole-clip build passes `(0.0, 1.0)`;
-/// the render-unit splitter passes each unit's clip-relative fraction so a
-/// multi-unit clip doesn't re-stretch the overlay onto every unit.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn build_segment_windowed(
-    notes: &[MidiNote],
-    params: &VocalParams,
-    assigned: &[AssignedSyllable],
-    curves: &ExpressionCurves,
-    window: (f32, f32),
-    ticks_per_quarter: u32,
-    bpm: f32,
-    bank: &BankProfile,
-) -> DsSegment {
+    let clock = segment_clock(notes, ticks_per_quarter, bpm);
     let track = build_phoneme_track(notes, params, assigned, ticks_per_quarter, bpm, bank);
-    let f0_curve = build_f0_curve(&track, params, &curves.pitch_bend, window);
+    let f0_curve = build_f0_curve(&track, params, clock);
     let n_frames = f0_curve.samples.len();
 
     // Dynamics → energy. Only a bank whose acoustic model takes `energy`
-    // (`curve_supported`; no shipped bank does) gets it: the user's
-    // overlay when shaped, else velocity scaled by `velocity_dynamics`.
-    let energy =
-        overlay::overlay_envelope(&curves.dynamics, bank, n_frames, window)
-            .unwrap_or_else(|| build_energy_curve(&f0_curve, params, bank));
-    // Breathiness → breathiness. Same gate: no shipped bank takes it, so
-    // today this is a no-op on every bank, not just TIGER.
-    let breathiness =
-        overlay::overlay_envelope(&curves.breathiness, bank, n_frames, window)
-            .unwrap_or_default();
-    // Tension → tension. An edited+supported overlay replaces the
-    // auto-derived velocity/contour tension; otherwise keep the baseline
-    // (which itself no-ops on TIGER).
-    let tension =
-        overlay::overlay_envelope(&curves.tension, bank, n_frames, window)
-            .unwrap_or_else(|| build_tension_curve(&f0_curve, params, bank));
+    // (`curve_supported`; no shipped bank does) gets it: the curve when
+    // shaped, else velocity scaled by `velocity_dynamics`.
+    let energy = overlay_envelope(params, CurveKind::Dynamics, bank, n_frames, clock)
+        .unwrap_or_else(|| build_energy_curve(&f0_curve, params, bank));
+    // Breathiness → breathiness. Same gate: no shipped bank takes it.
+    let breathiness = overlay_envelope(params, CurveKind::Breathiness, bank, n_frames, clock)
+        .unwrap_or_default();
+    // Tension → tension. A shaped curve on a bank that takes tension
+    // replaces the auto-derived velocity/contour tension; otherwise keep
+    // the baseline (which itself no-ops on TIGER).
+    let tension = overlay_envelope(params, CurveKind::Tension, bank, n_frames, clock)
+        .unwrap_or_else(|| build_tension_curve(&f0_curve, params, bank));
     let gender = build_gender_curve(params, n_frames);
 
     DsSegment {
@@ -166,3 +142,27 @@ fn build_gender_curve(params: &VocalParams, curve_len: usize) -> SampleCurve {
         timestep: F0_TIMESTEP,
     }
 }
+
+/// The frame → section-beat clock of a segment singing `notes`.
+fn segment_clock(notes: &[MidiNote], ticks_per_quarter: u32, bpm: f32) -> CurveClock {
+    let first = notes.first().map_or(0, |n| n.start_tick);
+    CurveClock::new(first, ticks_per_quarter, bpm)
+}
+
+/// The post-render gain (dB per `F0_TIMESTEP` frame from the segment
+/// start) the Dynamics curve asks of a segment of `n_frames` singing
+/// `notes`, on a bank with no energy input; empty when there is none to
+/// apply (no curve, or the bank takes energy).
+pub(super) fn unit_curve_gain_db(
+    notes: &[MidiNote],
+    params: &VocalParams,
+    ticks_per_quarter: u32,
+    bpm: f32,
+    bank: &BankProfile,
+    n_frames: usize,
+) -> Vec<f32> {
+    curve_gain_db(params, bank, n_frames, segment_clock(notes, ticks_per_quarter, bpm))
+}
+
+/// Seconds per curve frame (the f0 grid).
+pub(super) const CURVE_FRAME_SEC: f64 = F0_TIMESTEP;

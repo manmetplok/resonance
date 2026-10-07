@@ -67,7 +67,6 @@ fn ph_seq(
         &one_note(),
         &params(vb, text),
         assigned,
-        &resonance_app::compose::ExpressionCurves::default(),
         TICKS_PER_QUARTER_NOTE as u32,
         120.0,
         &BankProfile::not_installed(vb),

@@ -427,6 +427,24 @@ pub struct VocalLaneView {
     /// successful render or any edit to the lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<VocalRenderErrorView>,
+    /// The expression curves this lane has points on (Dynamics, Tension,
+    /// Breathiness, Pitch bend; empty curves are left out). Edit them with
+    /// `automation.*` on the target `{vocal: {track_id, curve}}`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curves: Vec<VocalCurveSummary>,
+}
+
+/// One expression curve of a vocal lane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VocalCurveSummary {
+    pub curve: crate::methods::automation::VocalCurve,
+    /// Points the section's curve holds.
+    pub points: u32,
+    /// Whether the lane's voicebank renders this curve. Tension and
+    /// Breathiness need a bank whose model takes them; Dynamics and Pitch
+    /// bend play on every bank.
+    pub supported: bool,
 }
 
 /// Why a vocal lane's last render failed.

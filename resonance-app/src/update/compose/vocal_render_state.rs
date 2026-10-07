@@ -6,8 +6,8 @@
 //!   current content plans to. Planning builds every unit's segment, so
 //!   the expected keys are memoised by a **fingerprint** of everything
 //!   the plan reads — the clip's notes and lyrics, the lane's params,
-//!   pronunciation overrides, the project dictionary, expression curves,
-//!   the section tempo and the bank that renders it — and rebuilt only
+//!   pronunciation overrides, the project dictionary (the expression
+//!   curves ride in the params), the section tempo and the bank that renders it — and rebuilt only
 //!   when that changes.
 //! - **Origin.** [`settle`] runs once after every outermost
 //!   `Resonance::update`; the caller says whether that update came from
@@ -132,9 +132,8 @@ pub(crate) fn lane_fingerprint(r: &crate::Resonance, lane: VocalLaneKey) -> u64 
     }
     let _ = write!(
         DebugHasher(&mut h),
-        "{:?}|{:?}",
+        "{:?}",
         r.compose.pronunciation.project_dictionary,
-        r.compose.expression_curves(definition_id, track_id),
     );
     super::section_meter(r, definition_id).bpm.to_bits().hash(&mut h);
     h.finish()
@@ -177,17 +176,11 @@ pub(crate) fn expected_unit_keys(r: &crate::Resonance, lane: VocalLaneKey) -> Op
         project_dictionary: &r.compose.pronunciation.project_dictionary,
     })
     .ok()?;
-    let curves = r
-        .compose
-        .expression_curves(definition_id, track_id)
-        .cloned()
-        .unwrap_or_default();
     Some(
         crate::compose::vocal_svs::plan_unit_keys(
             &clip.notes,
             params,
             &planned.assigned,
-            &curves,
             TICKS_PER_QUARTER_NOTE as u32,
             super::section_meter(r, definition_id).bpm,
             &bank,

@@ -1,462 +1,148 @@
-//! Editable vocal expression curves — the per-lane data model (doc #154).
+//! Vocal expression curves — the app side of the curves a vocal lane
+//! carries in its config (`VocalParams::curves`,
+//! vocal-mcp-control-and-quality.md §10).
 //!
-//! A vocal lane carries an [`ExpressionCurves`] bundle of four curves —
-//! **dynamics/energy, tension, breathiness, and pitch bend** — that let a
-//! singer hand-shape the vocal's expression over time. Every curve is the
-//! sum of two layers:
+//! A lane has four curves — **Dynamics, Tension, Breathiness and Pitch
+//! bend** — each a list of section-relative points: `beat` in quarter
+//! notes from the section start, `value` the normalized `0..=1` lane
+//! value. They are edited as `Vocal:` automation sub-rows on the Arrange
+//! view (every placement of the section shows, and edits, the same curve;
+//! see [`super::expression_lanes`]) and through `automation.*`, saved with
+//! the project and undone with it.
 //!
-//! 1. an auto-derived **baseline** (provenance) — evenly-spaced samples
-//!    produced by the generator, kept around so an edit is always
-//!    resettable, and
-//! 2. a user **overlay** of editable breakpoints (time normalised to the
-//!    clip/segment, plus a value). An empty overlay means the curve simply
-//!    follows its baseline.
-//!
-//! [`ExpressionCurve::evaluate`] samples the effective curve at a
-//! normalised time `t ∈ [0, 1]`; it is the single sampler shared by the UI
-//! (sparklines, canvas) and the SVS segment builder (todo #334). A curve's
-//! derived [`CurveStatus`] is `Auto` while untouched, `Edited` once the
-//! user adds breakpoints, or `Na` when the active voicebank's acoustic
-//! model doesn't accept it (see [`BankProfile::curve_supported`]).
-//!
-//! This is **data only** — no UI or render wiring lives here. The model is
-//! `serde`-serializable so it can later persist with the project file
-//! (todo #335); persistence into the project schema and the segment-build
-//! feed are separate todos.
+//! This module is the shared vocabulary: the real units a normalized value
+//! means ([`real_value`]), the sampler the segment builder reads
+//! ([`sample_at_beat`]), which curves a bank honours ([`curve_audible`]),
+//! and the point edits the update handlers apply. An empty curve leaves the
+//! render on its own derivation, so a lane nobody shaped renders exactly as
+//! before the curves existed.
 
-use serde::{Deserialize, Serialize};
+use resonance_music_theory::{VocalCurvePoint, VocalCurves};
 
 use super::vocal_svs::{BankProfile, CurveKind};
 
-/// Neutral depth-over-baseline: the overlay is applied exactly as drawn,
-/// with no extra deviation scaled in. The range is symmetric about zero so
-/// the inspector can surface a signed offset ("+0.32" / "−0.10"); the
-/// segment builder (#334) decides how depth scales the curve on render.
-pub const DEPTH_DEFAULT: f32 = 0.0;
-/// Inclusive `(min, max)` range for [`ExpressionCurve::set_depth`].
-pub const DEPTH_RANGE: (f32, f32) = (-1.0, 1.0);
-/// Neutral smoothing — the curve is fed frame-accurate. Measured in
-/// milliseconds; the segment builder (#334) turns this into a moving-
-/// average window when it samples the curve.
-pub const SMOOTHING_DEFAULT_MS: f32 = 0.0;
-/// Inclusive `(min, max)` millisecond range for
-/// [`ExpressionCurve::set_smoothing`].
-pub const SMOOTHING_RANGE_MS: (f32, f32) = (0.0, 200.0);
+/// The normalized value every curve treats as "no change": unity gain,
+/// the model-neutral tension / breathiness, zero cents of bend.
+pub const NEUTRAL: f32 = 0.5;
 
-/// One editable point in a curve's user overlay.
-///
-/// `t` is normalised to the clip/segment (`0.0` = start, `1.0` = end);
-/// `value` is in the curve kind's [`CurveKind::value_range`].
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Breakpoint {
-    /// Normalised time within the clip/segment, in `[0, 1]`.
-    pub t: f32,
-    /// Curve value at this point, in the owning kind's value range.
-    pub value: f32,
+/// Two beats closer than this are the same position (beats are stored as
+/// whole ticks over the tick rate, so real distinct positions are at least
+/// a tick — 1/480 beat — apart).
+const BEAT_EPSILON: f64 = 1e-6;
+
+/// The curve of `kind` in `curves`.
+pub fn curve(curves: &VocalCurves, kind: CurveKind) -> &[VocalCurvePoint] {
+    curves.get(kind.index()).map(Vec::as_slice).unwrap_or(&[])
 }
 
-impl Breakpoint {
-    /// A breakpoint at normalised time `t` with `value`. Neither field is
-    /// clamped here — the owning [`ExpressionCurve`] clamps on insertion so
-    /// it can apply its kind's range.
-    pub fn new(t: f32, value: f32) -> Self {
-        Breakpoint { t, value }
-    }
+/// Mutable [`curve`].
+pub fn curve_mut(curves: &mut VocalCurves, kind: CurveKind) -> &mut Vec<VocalCurvePoint> {
+    curves
+        .get_mut(kind.index())
+        .expect("VocalCurves holds one curve per CurveKind")
 }
 
-/// Derived display/render status of a single curve (doc #154).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CurveStatus {
-    /// Untouched — the curve follows its auto-derived baseline.
-    Auto,
-    /// The user has shaped the curve with overlay breakpoints.
-    Edited,
-    /// The active voicebank's model doesn't accept this curve; it's a
-    /// no-op on render and shown as `n/a` in the rail.
-    Na,
+/// The real value a normalized `norm` stands for on `kind`: the `0..=1`
+/// envelopes as themselves, pitch bend in cents (`-50..=50`).
+pub fn real_value(kind: CurveKind, norm: f32) -> f32 {
+    let (lo, hi) = kind.value_range();
+    lo + norm.clamp(0.0, 1.0) * (hi - lo)
 }
 
-/// A single expression curve: an auto-derived baseline plus an optional
-/// user overlay of breakpoints layered on top.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ExpressionCurve {
-    /// Which expression this curve shapes. Drives the value range used to
-    /// clamp baseline and overlay values.
-    kind: CurveKind,
-    /// Auto-derived baseline — evenly-spaced samples over normalised time
-    /// `[0, 1]`. Kept as provenance and as the reset target; never cleared
-    /// by editing.
-    baseline: Vec<f32>,
-    /// User overlay, sorted ascending by `t`. Empty means the curve
-    /// follows its baseline (the `Auto` status).
-    overlay: Vec<Breakpoint>,
-    /// Depth of the shaped curve over its baseline (doc #154 inspector).
-    /// [`DEPTH_DEFAULT`] is neutral; a non-default value alone marks the
-    /// curve `Edited`. Defaults to `0.0` on older project files that
-    /// predate the field, which matches [`DEPTH_DEFAULT`].
-    #[serde(default)]
-    depth: f32,
-    /// Smoothing window in milliseconds applied when the curve is sampled
-    /// for render (doc #154 inspector). [`SMOOTHING_DEFAULT_MS`] is neutral;
-    /// a non-default value alone marks the curve `Edited`. Defaults to
-    /// `0.0` on older project files, matching [`SMOOTHING_DEFAULT_MS`].
-    #[serde(default)]
-    smoothing: f32,
+/// Inverse of [`real_value`], clamped to `0..=1`.
+pub fn normalized_value(kind: CurveKind, real: f32) -> f32 {
+    let (lo, hi) = kind.value_range();
+    ((real - lo) / (hi - lo)).clamp(0.0, 1.0)
 }
 
-impl ExpressionCurve {
-    /// A curve of `kind` with no baseline samples and no overlay. Evaluates
-    /// to the neutral value for the kind until a baseline is seeded.
-    pub fn new(kind: CurveKind) -> Self {
-        ExpressionCurve {
-            kind,
-            baseline: Vec::new(),
-            overlay: Vec::new(),
-            depth: DEPTH_DEFAULT,
-            smoothing: SMOOTHING_DEFAULT_MS,
-        }
-    }
-
-    /// A curve seeded from the generator's auto-derived `baseline` samples
-    /// (evenly spaced over the clip). Out-of-range samples are clamped to
-    /// the kind's [`CurveKind::value_range`]. The overlay starts empty, so
-    /// the curve's status is [`CurveStatus::Auto`].
-    pub fn from_baseline(kind: CurveKind, baseline: Vec<f32>) -> Self {
-        let (lo, hi) = kind.value_range();
-        let baseline = baseline.into_iter().map(|v| v.clamp(lo, hi)).collect();
-        ExpressionCurve {
-            kind,
-            baseline,
-            overlay: Vec::new(),
-            depth: DEPTH_DEFAULT,
-            smoothing: SMOOTHING_DEFAULT_MS,
-        }
-    }
-
-    /// The curve's kind.
-    pub fn kind(&self) -> CurveKind {
-        self.kind
-    }
-
-    /// The auto-derived baseline samples (evenly spaced over `[0, 1]`).
-    pub fn baseline(&self) -> &[f32] {
-        &self.baseline
-    }
-
-    /// The user overlay breakpoints, sorted ascending by `t`.
-    pub fn overlay(&self) -> &[Breakpoint] {
-        &self.overlay
-    }
-
-    /// Replace the baseline with freshly auto-derived `samples` (clamped to
-    /// range). The overlay is left untouched, so a user edit survives a
-    /// regenerate that only refreshes provenance.
-    pub fn set_baseline(&mut self, samples: Vec<f32>) {
-        let (lo, hi) = self.kind.value_range();
-        self.baseline = samples.into_iter().map(|v| v.clamp(lo, hi)).collect();
-    }
-
-    /// The depth-over-baseline inspector value (see [`DEPTH_DEFAULT`]).
-    pub fn depth(&self) -> f32 {
-        self.depth
-    }
-
-    /// The smoothing window in milliseconds (see [`SMOOTHING_DEFAULT_MS`]).
-    pub fn smoothing(&self) -> f32 {
-        self.smoothing
-    }
-
-    /// True once the user has shaped this curve: either it carries overlay
-    /// breakpoints, or its depth / smoothing differs from neutral. Any of
-    /// these means the effective curve no longer simply follows the
-    /// auto-derived baseline.
-    pub fn is_edited(&self) -> bool {
-        !self.overlay.is_empty()
-            || self.depth != DEPTH_DEFAULT
-            || self.smoothing != SMOOTHING_DEFAULT_MS
-    }
-
-    /// Reset the curve to its auto-derived baseline: drop the user overlay
-    /// and return depth / smoothing to neutral. The baseline (provenance)
-    /// is preserved, so the curve's status falls back to `Auto`.
-    pub fn reset_to_baseline(&mut self) {
-        self.overlay.clear();
-        self.depth = DEPTH_DEFAULT;
-        self.smoothing = SMOOTHING_DEFAULT_MS;
-    }
-
-    /// Set the depth-over-baseline, clamped to [`DEPTH_RANGE`]. A
-    /// non-[`DEPTH_DEFAULT`] value flips the curve to `Edited`.
-    pub fn set_depth(&mut self, depth: f32) {
-        let (lo, hi) = DEPTH_RANGE;
-        self.depth = depth.clamp(lo, hi);
-    }
-
-    /// Set the smoothing window in milliseconds, clamped to
-    /// [`SMOOTHING_RANGE_MS`]. A non-[`SMOOTHING_DEFAULT_MS`] value flips
-    /// the curve to `Edited`.
-    pub fn set_smoothing(&mut self, smoothing_ms: f32) {
-        let (lo, hi) = SMOOTHING_RANGE_MS;
-        self.smoothing = smoothing_ms.clamp(lo, hi);
-    }
-
-    /// Replace the entire overlay. Each point's `t` is clamped to `[0, 1]`
-    /// and its `value` to the kind's range; the result is sorted by `t`.
-    /// Passing an empty vec is equivalent to [`Self::reset_to_baseline`].
-    pub fn set_overlay(&mut self, points: Vec<Breakpoint>) {
-        let (lo, hi) = self.kind.value_range();
-        self.overlay = points
-            .into_iter()
-            .map(|p| Breakpoint {
-                t: p.t.clamp(0.0, 1.0),
-                value: p.value.clamp(lo, hi),
-            })
-            .collect();
-        self.overlay
-            .sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
-    }
-
-    /// Add one breakpoint to the overlay (clamped to range/time), keeping
-    /// the overlay sorted by `t`. Turns an `Auto` curve into `Edited`.
-    pub fn add_breakpoint(&mut self, t: f32, value: f32) {
-        let (lo, hi) = self.kind.value_range();
-        let bp = Breakpoint {
-            t: t.clamp(0.0, 1.0),
-            value: value.clamp(lo, hi),
-        };
-        let idx = self
-            .overlay
-            .partition_point(|p| p.t <= bp.t);
-        self.overlay.insert(idx, bp);
-    }
-
-    /// Move the overlay breakpoint at `index` to (`t`, `value`). `value` is
-    /// clamped to the kind's range; `t` is clamped both to `[0, 1]` and to
-    /// the gap between its neighbours, so the overlay stays sorted and the
-    /// breakpoint keeps its index — a drag can never reorder points. An
-    /// out-of-bounds `index` is a no-op.
-    pub fn move_breakpoint(&mut self, index: usize, t: f32, value: f32) {
-        let len = self.overlay.len();
-        if index >= len {
-            return;
-        }
-        let (lo, hi) = self.kind.value_range();
-        let min_t = if index > 0 {
-            self.overlay[index - 1].t
-        } else {
-            0.0
-        };
-        let max_t = if index + 1 < len {
-            self.overlay[index + 1].t
-        } else {
-            1.0
-        };
-        let bp = &mut self.overlay[index];
-        bp.t = t.clamp(0.0, 1.0).clamp(min_t, max_t);
-        bp.value = value.clamp(lo, hi);
-    }
-
-    /// Remove the overlay breakpoint at `index`. An out-of-bounds `index`
-    /// is a no-op. Removing the last breakpoint makes the curve follow its
-    /// baseline again (status falls back to `Auto` unless depth / smoothing
-    /// are still non-default).
-    pub fn remove_breakpoint(&mut self, index: usize) {
-        if index < self.overlay.len() {
-            self.overlay.remove(index);
-        }
-    }
-
-    /// Effective curve value at normalised time `t ∈ [0, 1]` (clamped).
-    ///
-    /// When the overlay is non-empty the value is a piecewise-linear
-    /// interpolation of the breakpoints (held flat past the first/last
-    /// point); otherwise the baseline is linearly sampled. With neither a
-    /// baseline nor an overlay the neutral value for the kind is returned.
-    /// This is the shared sampler for both the UI and the segment builder.
-    pub fn evaluate(&self, t: f32) -> f32 {
-        let t = t.clamp(0.0, 1.0);
-        if !self.overlay.is_empty() {
-            sample_breakpoints(&self.overlay, t)
-        } else if !self.baseline.is_empty() {
-            sample_uniform(&self.baseline, t)
-        } else {
-            neutral_value(self.kind)
-        }
-    }
-
-    /// Derived [`CurveStatus`] given whether the active voicebank accepts
-    /// this curve. Unsupported curves are `Na` regardless of edits.
-    pub fn status(&self, supported: bool) -> CurveStatus {
-        if !supported {
-            CurveStatus::Na
-        } else if self.is_edited() {
-            CurveStatus::Edited
-        } else {
-            CurveStatus::Auto
-        }
-    }
-}
-
-/// The four editable expression curves for one vocal lane/clip (doc #154).
-///
-/// Construct from the generator's auto-derived baselines with
-/// [`ExpressionCurves::from_baselines`]; [`ExpressionCurves::default`]
-/// gives an empty bundle (flat curves, no overlay) for a lane that hasn't
-/// been generated yet.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ExpressionCurves {
-    /// Dynamics / energy envelope (loudness over time).
-    pub dynamics: ExpressionCurve,
-    /// Vocal tension (relaxed ↔ belted).
-    pub tension: ExpressionCurve,
-    /// Breathiness (added air in the delivery).
-    pub breathiness: ExpressionCurve,
-    /// Pitch bend — f0 offset / portamento in cents.
-    pub pitch_bend: ExpressionCurve,
-}
-
-impl Default for ExpressionCurves {
-    fn default() -> Self {
-        ExpressionCurves {
-            dynamics: ExpressionCurve::new(CurveKind::Dynamics),
-            tension: ExpressionCurve::new(CurveKind::Tension),
-            breathiness: ExpressionCurve::new(CurveKind::Breathiness),
-            pitch_bend: ExpressionCurve::new(CurveKind::PitchBend),
-        }
-    }
-}
-
-impl ExpressionCurves {
-    /// Seed every curve from its generator-derived baseline samples. Each
-    /// vec is evenly spaced over the clip; pass an empty vec for a curve
-    /// with no derivation yet (it evaluates to the kind's neutral value).
-    pub fn from_baselines(
-        dynamics: Vec<f32>,
-        tension: Vec<f32>,
-        breathiness: Vec<f32>,
-        pitch_bend: Vec<f32>,
-    ) -> Self {
-        ExpressionCurves {
-            dynamics: ExpressionCurve::from_baseline(CurveKind::Dynamics, dynamics),
-            tension: ExpressionCurve::from_baseline(CurveKind::Tension, tension),
-            breathiness: ExpressionCurve::from_baseline(CurveKind::Breathiness, breathiness),
-            pitch_bend: ExpressionCurve::from_baseline(CurveKind::PitchBend, pitch_bend),
-        }
-    }
-
-    /// Shared reference to the curve of `kind`.
-    pub fn curve(&self, kind: CurveKind) -> &ExpressionCurve {
-        match kind {
-            CurveKind::Dynamics => &self.dynamics,
-            CurveKind::Tension => &self.tension,
-            CurveKind::Breathiness => &self.breathiness,
-            CurveKind::PitchBend => &self.pitch_bend,
-        }
-    }
-
-    /// Mutable reference to the curve of `kind`.
-    pub fn curve_mut(&mut self, kind: CurveKind) -> &mut ExpressionCurve {
-        match kind {
-            CurveKind::Dynamics => &mut self.dynamics,
-            CurveKind::Tension => &mut self.tension,
-            CurveKind::Breathiness => &mut self.breathiness,
-            CurveKind::PitchBend => &mut self.pitch_bend,
-        }
-    }
-
-    /// Evaluate the curve of `kind` at normalised time `t`.
-    pub fn evaluate(&self, kind: CurveKind, t: f32) -> f32 {
-        self.curve(kind).evaluate(t)
-    }
-
-    /// Whether the user has shaped the curve of `kind`.
-    pub fn is_edited(&self, kind: CurveKind) -> bool {
-        self.curve(kind).is_edited()
-    }
-
-    /// Whether any of the four curves carries a user overlay.
-    pub fn any_edited(&self) -> bool {
-        CurveKind::ALL.iter().any(|&k| self.is_edited(k))
-    }
-
-    /// Reset the curve of `kind` back to its baseline (drops the overlay).
-    pub fn reset(&mut self, kind: CurveKind) {
-        self.curve_mut(kind).reset_to_baseline();
-    }
-
-    /// Reset every curve back to its baseline.
-    pub fn reset_all(&mut self) {
-        for &k in &CurveKind::ALL {
-            self.reset(k);
-        }
-    }
-
-    /// Derived [`CurveStatus`] of the curve of `kind` on `bank`,
-    /// resolving support via [`BankProfile::curve_supported`].
-    pub fn status(&self, kind: CurveKind, bank: &BankProfile) -> CurveStatus {
-        self.curve(kind).status(bank.curve_supported(kind))
-    }
-}
-
-/// Neutral resting value for a kind with neither baseline nor overlay.
-/// The `0..=1` envelopes rest at `0.0`; pitch bend rests at `0` cents.
-/// Every kind's neutral happens to be the low end of its range except
-/// pitch bend (whose range is symmetric about `0`), so resolve it
-/// explicitly per kind rather than from the range bounds.
-fn neutral_value(kind: CurveKind) -> f32 {
+/// Whether `bank` renders `kind`. Pitch bend is an f0 edit every bank
+/// takes; Dynamics drives the bank's energy input where it has one and a
+/// post-render gain everywhere else, so it is audible on every bank too.
+/// Tension and Breathiness need the matching acoustic-model input.
+pub fn curve_audible(kind: CurveKind, bank: &BankProfile) -> bool {
     match kind {
-        CurveKind::Dynamics | CurveKind::Tension | CurveKind::Breathiness => 0.0,
-        CurveKind::PitchBend => 0.0,
+        CurveKind::PitchBend | CurveKind::Dynamics => true,
+        CurveKind::Tension | CurveKind::Breathiness => bank.curve_supported(kind),
     }
 }
 
-/// Linearly sample an array of evenly-spaced `samples` at normalised time
-/// `t ∈ [0, 1]`. `samples[0]` sits at `t = 0` and `samples[len-1]` at
-/// `t = 1`.
-fn sample_uniform(samples: &[f32], t: f32) -> f32 {
-    match samples.len() {
-        0 => 0.0,
-        1 => samples[0],
-        n => {
-            let pos = t.clamp(0.0, 1.0) * (n - 1) as f32;
-            let i = pos.floor() as usize;
-            if i >= n - 1 {
-                return samples[n - 1];
-            }
-            let frac = pos - i as f32;
-            samples[i] * (1.0 - frac) + samples[i + 1] * frac
-        }
+/// The normalized value of `points` at `beat`: linear between points
+/// (held after a `stepped` one), flat before the first and after the last.
+/// `None` for an empty curve.
+pub fn sample_at_beat(points: &[VocalCurvePoint], beat: f64) -> Option<f32> {
+    let first = points.first()?;
+    let last = points.last()?;
+    if beat <= first.beat {
+        return Some(first.value);
+    }
+    if beat >= last.beat {
+        return Some(last.value);
+    }
+    let right = points.partition_point(|p| p.beat <= beat);
+    let (a, b) = (&points[right - 1], &points[right]);
+    if a.stepped {
+        return Some(a.value);
+    }
+    let span = b.beat - a.beat;
+    if span <= 0.0 {
+        return Some(b.value);
+    }
+    let t = ((beat - a.beat) / span) as f32;
+    Some(a.value + (b.value - a.value) * t)
+}
+
+/// Insert `point`, keeping the curve sorted; a point already at the same
+/// beat is replaced. Returns the index it landed at.
+pub fn upsert_point(points: &mut Vec<VocalCurvePoint>, point: VocalCurvePoint) -> usize {
+    let point = VocalCurvePoint {
+        beat: point.beat.max(0.0),
+        value: point.value.clamp(0.0, 1.0),
+        stepped: point.stepped,
+    };
+    if let Some(i) = points
+        .iter()
+        .position(|p| (p.beat - point.beat).abs() < BEAT_EPSILON)
+    {
+        points[i] = point;
+        return i;
+    }
+    let idx = points.partition_point(|p| p.beat < point.beat);
+    points.insert(idx, point);
+    idx
+}
+
+/// Move the point at `index` to (`beat`, `value`). The beat is clamped
+/// between its neighbours (and to `0..=max_beat`), so a drag never
+/// reorders the curve and the index stays put. Out of range: no-op.
+pub fn move_point(
+    points: &mut [VocalCurvePoint],
+    index: usize,
+    beat: f64,
+    value: f32,
+    max_beat: f64,
+) {
+    if index >= points.len() {
+        return;
+    }
+    let lo = if index > 0 { points[index - 1].beat } else { 0.0 };
+    let hi = points
+        .get(index + 1)
+        .map_or(max_beat.max(lo), |p| p.beat);
+    let p = &mut points[index];
+    p.beat = beat.clamp(lo, hi.max(lo));
+    p.value = value.clamp(0.0, 1.0);
+}
+
+/// Remove the point at `index` (out of range: no-op).
+pub fn remove_point(points: &mut Vec<VocalCurvePoint>, index: usize) {
+    if index < points.len() {
+        points.remove(index);
     }
 }
 
-/// Piecewise-linear interpolation of overlay `points` (sorted ascending by
-/// `t`) at normalised time `t`. The value is held flat before the first
-/// and after the last breakpoint.
-fn sample_breakpoints(points: &[Breakpoint], t: f32) -> f32 {
-    match points {
-        [] => 0.0,
-        [only] => only.value,
-        _ => {
-            let first = &points[0];
-            let last = &points[points.len() - 1];
-            if t <= first.t {
-                return first.value;
-            }
-            if t >= last.t {
-                return last.value;
-            }
-            for w in points.windows(2) {
-                let (a, b) = (&w[0], &w[1]);
-                if t >= a.t && t <= b.t {
-                    let span = b.t - a.t;
-                    if span <= 0.0 {
-                        return b.value;
-                    }
-                    let frac = (t - a.t) / span;
-                    return a.value * (1.0 - frac) + b.value * frac;
-                }
-            }
-            last.value
-        }
+/// Set whether the point at `index` holds its value to the next point.
+pub fn set_stepped(points: &mut [VocalCurvePoint], index: usize, stepped: bool) {
+    if let Some(p) = points.get_mut(index) {
+        p.stepped = stepped;
     }
 }

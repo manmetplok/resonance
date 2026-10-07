@@ -30,11 +30,10 @@ use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::VocalParams;
 use resonance_svs::ds::{DsSegment, SampleCurve};
 
-use crate::compose::expression::ExpressionCurves;
-
+use super::dynamics::GainSpan;
 use super::registry::BankProfile;
 use super::rests::RestRule;
-use super::segment::build_segment_windowed;
+use super::segment::{build_segment, unit_curve_gain_db, CURVE_FRAME_SEC};
 
 /// One independently-renderable slice of a vocal clip: a contiguous run
 /// of notes delimited by genuine silences. Carries its own `DsSegment`
@@ -67,6 +66,12 @@ pub struct RenderUnit {
     ///
     /// [`key`]: RenderUnit::key
     pub state_key: u64,
+    /// The Dynamics curve's post-render gain over this unit, on a bank
+    /// with no energy input (§10): one span per curve frame, in seconds
+    /// from the start of the unit's audio. Applied after the cache, so
+    /// [`state_key`](RenderUnit::state_key) hashes it. Empty when there is
+    /// none.
+    pub curve_gain: Vec<GainSpan>,
 }
 
 /// Seconds-per-tick at the given tempo. Mirrors the duration builder so
@@ -92,7 +97,6 @@ pub fn split_render_units(
     notes: &[MidiNote],
     params: &VocalParams,
     assigned: &[AssignedSyllable],
-    curves: &ExpressionCurves,
     ticks_per_quarter: u32,
     bpm: f32,
     bank: &BankProfile,
@@ -102,16 +106,6 @@ pub fn split_render_units(
     }
     let spt = seconds_per_tick(ticks_per_quarter, bpm);
     let base_tick = notes[0].start_tick;
-    // Tick span of the whole clip (first note's start → last note's end),
-    // used to map each unit onto the clip-normalised time the expression
-    // overlay breakpoints live in, so the overlay isn't re-stretched onto
-    // every unit. Falls back to a full window if the clip is zero-length.
-    let clip_end_tick = notes
-        .iter()
-        .map(|n| n.start_tick + n.duration_ticks)
-        .max()
-        .unwrap_or(base_tick);
-    let clip_span = clip_end_tick.saturating_sub(base_tick) as f32;
     let model = model_identity(params, bank);
     let lane = lane_identity(params);
     let rest_rule = RestRule::new(params, bpm);
@@ -141,30 +135,38 @@ pub fn split_render_units(
         if lo >= hi {
             continue;
         }
-        // This unit's clip-relative time window for the expression overlay.
-        let window = if clip_span > 0.0 {
-            let w0 = notes[lo].start_tick.saturating_sub(base_tick) as f32 / clip_span;
-            let w1 = (notes[hi - 1].start_tick + notes[hi - 1].duration_ticks)
-                .saturating_sub(base_tick) as f32
-                / clip_span;
-            (w0, w1)
-        } else {
-            (0.0, 1.0)
-        };
-        let segment = build_segment_windowed(
+        // Each unit's segment samples the expression curves from its own
+        // first note (section-relative ticks), so a curve point lands on
+        // the same beat whichever unit sings it.
+        let segment = build_segment(
             &notes[lo..hi],
             params,
             &assigned[lo..hi],
-            curves,
-            window,
             ticks_per_quarter,
             bpm,
             bank,
         );
+        let gain_db = unit_curve_gain_db(
+            &notes[lo..hi],
+            params,
+            ticks_per_quarter,
+            bpm,
+            bank,
+            segment.f0.samples.len(),
+        );
         let start_sec = (notes[lo].start_tick.saturating_sub(base_tick)) as f64 * spt;
         let syllable_range = assigned[lo].syllable_index..assigned[hi - 1].syllable_index + 1;
         let key = content_key(&segment, &model, &lane);
-        let state_key = state_key(key, &notes[lo..hi], params.velocity_dynamics);
+        let state_key = state_key(key, &notes[lo..hi], params.velocity_dynamics, &gain_db);
+        let curve_gain = gain_db
+            .iter()
+            .enumerate()
+            .map(|(i, &gain_db)| GainSpan {
+                start_sec: i as f64 * CURVE_FRAME_SEC,
+                end_sec: (i + 1) as f64 * CURVE_FRAME_SEC,
+                gain_db,
+            })
+            .collect();
         units.push(RenderUnit {
             segment,
             start_sec,
@@ -172,6 +174,7 @@ pub fn split_render_units(
             syllable_range,
             key,
             state_key,
+            curve_gain,
         });
     }
     units
@@ -249,8 +252,10 @@ fn content_key(seg: &DsSegment, model: &str, lane: &str) -> u64 {
 /// carries both the unit's offset from the first note and the lead-in.
 /// With `velocity_dynamics` above 0 it hashes the notes' velocities too:
 /// the post-vocoder gain reads them after the cache, so on a bank whose
-/// segment ignores velocity a velocity edit changes no cache key.
-fn state_key(key: u64, notes: &[MidiNote], velocity_dynamics: f32) -> u64 {
+/// segment ignores velocity a velocity edit changes no cache key. Same for
+/// the Dynamics curve's post-render gain (`curve_gain_db`, empty when it
+/// has none): a curve edit on a bank without energy moves no cache key.
+fn state_key(key: u64, notes: &[MidiNote], velocity_dynamics: f32, curve_gain_db: &[f32]) -> u64 {
     let mut h = Fnv::new();
     h.bytes(&key.to_le_bytes());
     let first_tick = notes.first().map_or(0, |n| n.start_tick);
@@ -258,6 +263,12 @@ fn state_key(key: u64, notes: &[MidiNote], velocity_dynamics: f32) -> u64 {
     if velocity_dynamics > 0.0 {
         for n in notes {
             h.bytes(&n.velocity.to_bits().to_le_bytes());
+        }
+    }
+    if !curve_gain_db.is_empty() {
+        h.bytes(&[0xfc]);
+        for g in curve_gain_db {
+            h.bytes(&g.to_bits().to_le_bytes());
         }
     }
     h.finish()
@@ -404,12 +415,11 @@ pub fn plan_unit_keys(
     notes: &[MidiNote],
     params: &VocalParams,
     assigned: &[AssignedSyllable],
-    curves: &ExpressionCurves,
     ticks_per_quarter: u32,
     bpm: f32,
     bank: &BankProfile,
 ) -> Vec<u64> {
-    split_render_units(notes, params, assigned, curves, ticks_per_quarter, bpm, bank)
+    split_render_units(notes, params, assigned, ticks_per_quarter, bpm, bank)
         .into_iter()
         .map(|u| u.state_key)
         .collect()

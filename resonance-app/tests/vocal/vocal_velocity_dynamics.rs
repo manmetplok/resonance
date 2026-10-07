@@ -7,7 +7,6 @@
 //! Hermetic: no model runs. The real-bank render checks are in
 //! `vocal_dynamics_render.rs`.
 
-use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
     apply_dynamics_gain, breath_lead_secs, build_segment, dynamics_gain_envelope, resolve_clip,
     split_render_units, validate_for_voicebank, velocity_gain_db, velocity_gain_spans,
@@ -66,7 +65,6 @@ fn segment(bank: &BankProfile, p: &VocalParams, velocities: [f32; 3]) -> DsSegme
         &notes,
         p,
         &assign(notes.len(), bank),
-        &ExpressionCurves::default(),
         TPQ,
         BPM,
         bank,
@@ -199,7 +197,7 @@ fn the_content_key_changes_with_rest_threshold_and_velocity_dynamics() {
     let notes = notes([0.8, 0.8, 0.8]);
     let syl = assign(3, &bank);
     let keys = |p: &VocalParams| -> Vec<u64> {
-        split_render_units(&notes, p, &syl, &ExpressionCurves::default(), TPQ, BPM, &bank)
+        split_render_units(&notes, p, &syl, TPQ, BPM, &bank)
             .iter()
             .map(|u| u.key)
             .collect()
@@ -210,7 +208,7 @@ fn the_content_key_changes_with_rest_threshold_and_velocity_dynamics() {
     let vel = VocalParams { velocity_dynamics: 0.9, ..base.clone() };
     let rest = VocalParams { rest_threshold_beats: 1.0, ..base.clone() };
     // Legato notes: neither change moves the segment on TIGER...
-    let seg = |p: &VocalParams| build_segment(&notes, p, &syl, &ExpressionCurves::default(), TPQ, BPM, &bank);
+    let seg = |p: &VocalParams| build_segment(&notes, p, &syl, TPQ, BPM, &bank);
     assert_eq!(seg(&base).ph_dur, seg(&vel).ph_dur);
     assert_eq!(seg(&base).ph_dur, seg(&rest).ph_dur);
     // ...but both move the key.

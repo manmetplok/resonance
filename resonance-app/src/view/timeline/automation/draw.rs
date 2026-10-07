@@ -40,12 +40,13 @@ impl TimelineCanvas<'_> {
         y_off: f32,
         bounds: Rectangle,
     ) {
-        if self.automation.lanes.is_empty() {
+        if self.automation.lanes.is_empty() && self.automation.vocal.is_empty() {
             return;
         }
         for track in self.visible_tracks_sorted() {
             let lanes = track_lanes_sorted(self.automation, track);
-            if lanes.is_empty() {
+            let vocal_lanes = self.automation.vocal.track_lanes(track.id);
+            if lanes.is_empty() && vocal_lanes.is_empty() {
                 continue;
             }
 
@@ -74,6 +75,29 @@ impl TimelineCanvas<'_> {
                         frame,
                         lane,
                         1,
+                        band_top,
+                        band_height,
+                        bounds.width,
+                    );
+                }
+                // A vocal track's expression-curve rows (§10), after its
+                // engine lanes — live only at its sections' placements.
+                for vocal in vocal_lanes {
+                    let Some((row_y_top, row_height)) =
+                        layout.automation_row_rect(track.id, vocal.lane.id)
+                    else {
+                        continue;
+                    };
+                    let row_y = header_height + row_y_top - y_off;
+                    if row_y + row_height < header_height || row_y > bounds.height {
+                        continue;
+                    }
+                    let (band_top, band_height) = lane_row_band(row_y, row_height);
+                    self.draw_vocal_curve_row(
+                        frame,
+                        vocal,
+                        row_y,
+                        row_height,
                         band_top,
                         band_height,
                         bounds.width,

@@ -42,6 +42,12 @@ pub(super) fn delete_points(app: &mut Resonance, request: &Request) -> (Response
         Ok(set) => set,
         Err(e) => return reject(request, e),
     };
+    // A vocal curve point is one section point shown at every placement:
+    // deleting any copy deletes them all.
+    let to_delete = match app.automation.vocal.get(&target) {
+        Some(vocal) => vocal.copies_of(&to_delete),
+        None => to_delete,
+    };
     let deleted = to_delete.len() as u32;
     if to_delete.is_empty() {
         // Nothing matched: an ack with the lane unchanged, no dispatch —

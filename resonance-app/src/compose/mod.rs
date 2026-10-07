@@ -4,7 +4,7 @@
 pub mod arrangement;
 pub mod drumroll;
 pub mod expression;
-pub mod expression_edit;
+pub mod expression_lanes;
 pub mod generate;
 pub mod invariants;
 pub mod messages;
@@ -29,8 +29,7 @@ pub use drumroll::{
     apply_density, builtin_pattern_catalog, builtin_pattern_names, instantiate_builtin,
     is_builtin_pattern, DrumGroup, DrumGroupPad, DrumPattern, DrumrollViewState,
 };
-pub use expression::{Breakpoint, CurveStatus, ExpressionCurve, ExpressionCurves};
-pub use expression_edit::{ExpressionDockState, PenMode};
+pub use expression_lanes::{project_vocal_lanes, VocalLane, VocalLanes};
 pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{
     DrumVoiceMode, LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag,

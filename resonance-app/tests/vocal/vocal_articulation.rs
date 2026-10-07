@@ -11,7 +11,6 @@
 //! floor when it can, and [`articulation_report_for`] flags the note when it
 //! cannot.
 
-use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
     articulation_report_for, build_segment, floor_duration_sec,
     min_articulation_sec, resolve_clip, validate_for_voicebank,
@@ -200,7 +199,6 @@ fn a_roomy_note_gives_every_phoneme_its_floor() {
         &notes(1, 2.0, 64),
         &params(),
         &assigned,
-        &ExpressionCurves::default(),
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
@@ -226,7 +224,6 @@ fn fricatives_get_more_time_than_stops() {
         &notes(1, 2.0, 64),
         &params(),
         &assigned,
-        &ExpressionCurves::default(),
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
@@ -251,7 +248,6 @@ fn phoneme_durations_fill_the_note_exactly() {
                 &ns,
                 &params(),
                 &assigned,
-                &ExpressionCurves::default(),
                 TPQ,
                 BPM,
                 &BankProfile::not_installed("lilia"),
@@ -280,7 +276,6 @@ fn onset_lead_in_moves_the_boundary_without_changing_the_total() {
         &ns,
         &params(),
         &assigned,
-        &ExpressionCurves::default(),
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),

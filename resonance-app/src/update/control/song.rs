@@ -347,6 +347,10 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             render_state,
             stale_units,
             error: render_error,
+            curves: crate::update::control::automation::vocal::curve_summaries(
+                vocal_params,
+                &profile,
+            ),
             params: view_model::vocal_params_view(vocal_params),
             // Indexed per lane, the way `vocal.set_line` addresses them
             // (spec D8); one song-wide list with a global index could not

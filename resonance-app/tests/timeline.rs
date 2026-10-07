@@ -117,6 +117,8 @@ mod timeline_automation_device_lanes;
 mod timeline_automation_group;
 #[path = "timeline/timeline_automation_input.rs"]
 mod timeline_automation_input;
+#[path = "timeline/timeline_vocal_curve_rows.rs"]
+mod timeline_vocal_curve_rows;
 #[path = "timeline/timeline_automation_lane_rows.rs"]
 mod timeline_automation_lane_rows;
 #[path = "timeline/timeline_automation_lane_selector.rs"]

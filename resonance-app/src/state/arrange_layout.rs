@@ -147,9 +147,18 @@ impl ArrangeAutomationRows {
             // exactly one ordering source: the chip cycle, the default
             // shown lane, and row 0 of an expanded stack can never
             // disagree (reconciliation of todos #1095 + #1096).
+            // A vocal track's four expression-curve rows (§10) come after
+            // its engine lanes; they never join the collapsed overlay.
             let lanes: Vec<LaneId> = track_lanes_sorted(automation, track)
                 .into_iter()
                 .map(|lane| lane.id)
+                .chain(
+                    automation
+                        .vocal
+                        .track_lanes(track.id)
+                        .into_iter()
+                        .map(|v| v.lane.id),
+                )
                 .collect();
             if lanes.is_empty() {
                 continue;

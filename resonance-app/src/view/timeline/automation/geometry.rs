@@ -145,6 +145,7 @@ pub fn target_label(
         AutomationTarget::TrackPan(_) => "Pan".to_string(),
         AutomationTarget::TrackMute(_) => "Mute".to_string(),
         AutomationTarget::PluginParam { param_id, .. } => format!("Param {param_id}"),
+        AutomationTarget::VocalCurve { curve, .. } => format!("Vocal: {}", curve.label()),
         AutomationTarget::DeviceParam { param_id, .. } => device_labels
             .get(target)
             .cloned()
@@ -287,5 +288,9 @@ pub fn format_real_value(target: AutomationTarget, real: f32) -> String {
         AutomationTarget::PluginParam { .. } | AutomationTarget::DeviceParam { .. } => {
             format!("{real:.2}")
         }
+        AutomationTarget::VocalCurve { curve, .. } => match curve {
+            resonance_common::VocalCurveKind::PitchBend => format!("{real:+.0} ct"),
+            _ => format!("{real:.2}"),
+        },
     }
 }

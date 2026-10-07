@@ -43,6 +43,9 @@ struct AutomationBandHit<'l> {
     /// `true` for a dedicated 44 px lane sub-row; `false` for the
     /// in-track overlay band of a collapsed (non-expanded) track.
     dedicated_row: bool,
+    /// The projection behind a vocal expression-curve row (§10): where the
+    /// row is live. `None` for an engine lane.
+    vocal: Option<&'l crate::compose::VocalLane>,
 }
 
 impl TimelineCanvas<'_> {
@@ -84,7 +87,7 @@ impl TimelineCanvas<'_> {
     /// the clip lane. Group-header rows and hidden collapsed-group members
     /// resolve to `None` as always.
     fn automation_row_at(&self, y: f32) -> Option<AutomationBandHit<'_>> {
-        if self.automation.lanes.is_empty() {
+        if self.automation.lanes.is_empty() && self.automation.vocal.is_empty() {
             return None;
         }
         let header_height = self.fixed_header_height();
@@ -111,6 +114,7 @@ impl TimelineCanvas<'_> {
                     band_top,
                     band_height,
                     dedicated_row: false,
+                    vocal: None,
                 })
             }
             ArrangeRowKind::AutomationLane { track, lane } => {
@@ -120,9 +124,8 @@ impl TimelineCanvas<'_> {
                     .find(|t| t.id == track)?;
                 let lane = self
                     .automation
-                    .lanes
-                    .values()
-                    .find(|l| l.id == lane && target_belongs_to_track(&l.target, track))?;
+                    .lane_by_id(lane)
+                    .filter(|l| target_belongs_to_track(&l.target, track))?;
                 let (band_top, band_height) = lane_row_band(row_y, row.height);
                 Some(AutomationBandHit {
                     track,
@@ -130,6 +133,7 @@ impl TimelineCanvas<'_> {
                     band_top,
                     band_height,
                     dedicated_row: true,
+                    vocal: self.automation.vocal.get(&lane.target),
                 })
             }
             // A take sub-row carries alternate recordings, not envelopes —
@@ -182,7 +186,7 @@ impl TimelineCanvas<'_> {
                 continue;
             }
             if self.automation_expanded_tracks.contains(&track.id) {
-                let lane = self.automation.lanes.get(target)?;
+                let lane = self.automation.lane_for(target)?;
                 let (row_y_top, row_height) = layout.automation_row_rect(track.id, lane.id)?;
                 let row_y = header_height + row_y_top - y_off;
                 return Some(lane_row_band(row_y, row_height));
@@ -212,6 +216,18 @@ impl TimelineCanvas<'_> {
             |frames| self.sample_to_x(frames),
             BREAKPOINT_HIT_RADIUS,
         )?;
+        // A vocal curve point at a placement whose bank ignores the curve
+        // is drawn greyed and does not take edits.
+        if let Some(vocal) = hit.vocal {
+            let live = vocal
+                .origins
+                .get(idx)
+                .and_then(|o| vocal.window_of(o.placement_id))
+                .is_some_and(|w| w.supported);
+            if !live {
+                return None;
+            }
+        }
         Some(BreakpointHit {
             target: hit.lane.target.clone(),
             index: idx,
@@ -232,11 +248,15 @@ impl TimelineCanvas<'_> {
             return None;
         }
         let value = value_from_y(pos.y, hit.band_top, hit.band_height);
-        Some((
-            hit.lane.target.clone(),
-            self.x_to_frames_snapped(pos.x),
-            value,
-        ))
+        let frames = self.x_to_frames_snapped(pos.x);
+        // A vocal curve row is inert outside every placement of a section
+        // with a vocal lane, and where the bank ignores the curve.
+        if let Some(vocal) = hit.vocal {
+            if !vocal.window_at(frames).is_some_and(|w| w.supported) {
+                return None;
+            }
+        }
+        Some((hit.lane.target.clone(), frames, value))
     }
 
     /// New `(frame, value)` for a breakpoint drag to `pos`: value from the
@@ -253,10 +273,20 @@ impl TimelineCanvas<'_> {
     ) -> Option<(u64, f32)> {
         let (band_top, band_height) = self.target_band(&target)?;
         let value = value_from_y(pos.y, band_top, band_height);
-        let lane = self.automation.lanes.get(&target)?;
+        let lane = self.automation.lane_for(&target)?;
         if index >= lane.points.len() {
             return None;
         }
+        // A vocal curve point stays inside its own placement.
+        let (window_lo, window_hi) = self
+            .automation
+            .vocal
+            .get(&target)
+            .and_then(|v| {
+                let origin = v.origins.get(index)?;
+                v.window_of(origin.placement_id)
+            })
+            .map_or((0, u64::MAX), |w| (w.start_frame, w.end_frame));
         let left = if index > 0 {
             lane.points[index - 1].time_frames
         } else {
@@ -267,7 +297,9 @@ impl TimelineCanvas<'_> {
         } else {
             u64::MAX
         };
-        let frames = self.x_to_frames(pos.x).clamp(left, right);
+        let frames = self
+            .x_to_frames(pos.x)
+            .clamp(left.max(window_lo), right.min(window_hi).max(left.max(window_lo)));
         Some((frames, value))
     }
 
@@ -281,8 +313,7 @@ impl TimelineCanvas<'_> {
     ) -> CurveKind {
         let current = self
             .automation
-            .lanes
-            .get(&target)
+            .lane_for(&target)
             .and_then(|l| l.points.get(index))
             .map(|p| p.curve)
             .unwrap_or_default();

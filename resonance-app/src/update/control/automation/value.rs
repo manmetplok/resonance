@@ -11,7 +11,7 @@
 use crate::update::control::track::resolve_param_value;
 use resonance_common::{
     lane_value_to_plugin_param, lane_value_to_real, plugin_param_to_lane_value, real_to_lane_value,
-    AutomationTarget, CurveKind, GAIN_MAX_DB, GAIN_MIN_DB,
+    AutomationTarget, CurveKind, VocalCurveKind, GAIN_MAX_DB, GAIN_MIN_DB,
 };
 use resonance_control::methods::automation::AutomationValue;
 use resonance_control::methods::track::{ParamValue, PluginParamView};
@@ -31,6 +31,9 @@ pub(in crate::update::control) enum ValueDomain {
     /// The range is unknown — a device lane, an orphan, a plugin that is
     /// missing or still initializing. Values read back normalized.
     Normalized,
+    /// A vocal expression curve: `0..=1`, or cents for pitch bend
+    /// ([`VocalCurveKind::value_range`]).
+    Vocal(VocalCurveKind),
 }
 
 impl ValueDomain {
@@ -46,6 +49,7 @@ impl ValueDomain {
             AutomationTarget::PluginParam { .. } | AutomationTarget::DeviceParam { .. } => {
                 Self::Normalized
             }
+            AutomationTarget::VocalCurve { curve, .. } => Self::Vocal(*curve),
         }
     }
 
@@ -55,7 +59,8 @@ impl ValueDomain {
             Self::Gain => "dB".to_owned(),
             Self::Mute => "bool".to_owned(),
             Self::Plugin(p) => p.unit.clone(),
-            Self::Pan | Self::Normalized => String::new(),
+            Self::Vocal(VocalCurveKind::PitchBend) => "cents".to_owned(),
+            Self::Pan | Self::Normalized | Self::Vocal(_) => String::new(),
         }
     }
 
@@ -66,6 +71,7 @@ impl ValueDomain {
             Self::Pan => Some(-1.0),
             Self::Mute => Some(0.0),
             Self::Plugin(p) => Some(p.min),
+            Self::Vocal(kind) => Some(f64::from(kind.value_range().0)),
             Self::Normalized => None,
         }
     }
@@ -76,6 +82,7 @@ impl ValueDomain {
             Self::Gain => Some(f64::from(GAIN_MAX_DB)),
             Self::Pan | Self::Mute => Some(1.0),
             Self::Plugin(p) => Some(p.max),
+            Self::Vocal(kind) => Some(f64::from(kind.value_range().1)),
             Self::Normalized => None,
         }
     }
@@ -150,6 +157,24 @@ impl ValueDomain {
                 let real = resolve_param_value(param, &requested)?;
                 Ok(plugin_param_to_lane_value(real, param.min, param.max))
             }
+            Self::Vocal(kind) => {
+                let (lo, hi) = kind.value_range();
+                let v = number(value)
+                    .filter(|v| v.is_finite() && (f64::from(lo)..=f64::from(hi)).contains(v))
+                    .ok_or_else(|| {
+                        RpcError::invalid_params(format!(
+                            "{} must be within {lo}..={hi}{} (got {})",
+                            kind.label(),
+                            if *kind == VocalCurveKind::PitchBend {
+                                " cents"
+                            } else {
+                                ""
+                            },
+                            describe(value)
+                        ))
+                    })?;
+                Ok(real_to_lane_value(target, v as f32))
+            }
             Self::Normalized => Err(RpcError::invalid_params(
                 "this lane's real range is unknown (its plugin is missing or still \
                  initializing); pass normalized: true with values in 0..=1",
@@ -210,6 +235,19 @@ impl ValueDomain {
                     AutomationValue::Number(value),
                     with_unit(value, &param.unit),
                 )
+            }
+            Self::Vocal(kind) => {
+                let (lo, hi) = kind.value_range();
+                let v = round_to_span(
+                    f64::from(lane_value_to_real(target, norm)),
+                    f64::from(hi - lo),
+                );
+                let text = if *kind == VocalCurveKind::PitchBend {
+                    format!("{v} cents")
+                } else {
+                    format!("{v}")
+                };
+                (AutomationValue::Number(v), text)
             }
             Self::Normalized => {
                 let n = f64::from(norm);

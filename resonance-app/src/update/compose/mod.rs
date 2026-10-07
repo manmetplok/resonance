@@ -10,8 +10,8 @@
 //! - [`regenerate`] — derive notes for one lane and the cascade helpers
 //!   that fan chord changes / motif-seed bumps to every dependent lane.
 //! - [`expand`] — expanded piano-roll viewport (open track, scroll, zoom).
-//! - [`expression`] — vocal Expression-dock curve edits (breakpoints, pen/
-//!   snap tool state, depth/smoothing, reset-to-generated).
+//! - [`expression`] — vocal expression-curve edits from the `Vocal:`
+//!   automation sub-rows and `automation.*` (section-relative curves).
 
 use iced::Task;
 
@@ -22,7 +22,7 @@ mod chord;
 mod chord_inspector;
 pub(crate) mod drum_groups;
 mod expand;
-mod expression;
+pub(crate) mod expression;
 mod lane_inspector;
 pub(crate) mod regenerate;
 mod section;
@@ -284,7 +284,6 @@ pub(crate) fn forget_track(r: &mut crate::Resonance, track_id: resonance_audio::
         r.compose.vocal_audio.forget_deleted_clip(clip_id);
     }
     r.compose.vocal_bulk_lyrics.retain(|(_, t), _| *t != track_id);
-    r.compose.expression_curves.retain(|(_, t), _| *t != track_id);
     if r.compose.expanded_track_id == Some(track_id) {
         r.compose.expanded_track_id = None;
     }
@@ -528,12 +527,6 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             track_id,
             msg,
         } => return lane_inspector::handle(r, definition_id, track_id, msg),
-
-        ComposeMessage::Expression {
-            definition_id,
-            track_id,
-            msg,
-        } => return expression::handle(r, definition_id, track_id, msg),
 
         // Vocal render results and the debounced GUI re-render.
         ComposeMessage::VocalAudioReady(data) => return vocal_render_events::ready(r, data),

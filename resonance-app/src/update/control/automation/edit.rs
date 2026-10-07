@@ -28,7 +28,7 @@ pub(in crate::update::control) fn current_lane<'a>(
     app: &'a Resonance,
     target: &AutomationTarget,
 ) -> Option<&'a AutomationLane> {
-    app.automation.lanes.get(target)
+    app.automation.lane_for(target)
 }
 
 /// A wire position as a sample: the bar goes through the shared
@@ -146,6 +146,9 @@ pub(in crate::update::control) fn commit_points(
             points.len()
         )));
     }
+    // A vocal curve maps onto its sections; refuse what they cannot hold
+    // before dispatching anything.
+    super::vocal::check_set_lane(app, target, &points, enabled)?;
     let enabled = enabled
         .or_else(|| current_lane(app, target).map(|l| l.enabled))
         .unwrap_or(true);

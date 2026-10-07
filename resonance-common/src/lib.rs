@@ -47,7 +47,7 @@ pub use atomic_file::{atomic_write, quarantine_corrupt, AtomicWriteError};
 pub use automation::{
     lane_value_to_plugin_param, lane_value_to_real, plugin_param_to_lane_value,
     real_to_lane_value, sample_lane, AutomationLane, AutomationTarget, Breakpoint, BusId,
-    CurveKind, LaneId, PluginInstanceId, TrackId, GAIN_MAX_DB, GAIN_MIN_DB,
+    CurveKind, LaneId, PluginInstanceId, TrackId, VocalCurveKind, GAIN_MAX_DB, GAIN_MIN_DB,
 };
 #[cfg(feature = "model")]
 pub use automation_shape::{

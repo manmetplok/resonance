@@ -209,8 +209,10 @@ pub(crate) fn view_track_header(
     // mirrors the overlay chip's "N lanes" discoverability hint. Laneless
     // tracks collapse the cluster to a zero-size spacer, leaving the
     // pre-#1098 layout (and its alignment snapshots) untouched.
+    // A vocal track's four expression-curve rows (§10) count too.
     let lane_count =
-        crate::view::timeline::automation::track_lanes_sorted(&r.automation, track).len();
+        crate::view::timeline::automation::track_lanes_sorted(&r.automation, track).len()
+            + r.automation.vocal.track_lanes(track.id).len();
     let automation_expanded = r
         .ui
         .interaction

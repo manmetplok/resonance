@@ -602,6 +602,8 @@ impl<'a> TimelineCanvas<'a> {
             }
             automation_hash ^= lh.finish();
         }
+        // Vocal curve rows (§10): their points and placement windows.
+        automation_hash ^= automation::vocal_rows_hash(&self.automation.vocal);
         // The band's label chip renders resolved device-param names (todo
         // #1094), so a preset change that renames a lane's label must also
         // invalidate the cached lane layer even though the lane itself is

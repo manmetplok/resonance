@@ -71,7 +71,6 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-50 | compose | Vocal expression curves vanish on project open and on every undo/redo (never persisted, cleared by reconcile). The pronunciation part is fixed (slice 11). | `app/compose/state.rs` `load_from_project` (`expression_curves.clear()`), called from `app/update/project_io/reconcile/globals.rs` `ComposeSections` | intent [compose/vocal-mcp-control-and-quality.md](compose/vocal-mcp-control-and-quality.md) slice 14 |
 | BUG-51 | compose | Drum group Swing, Humanize and "Fills (last bar)" sliders change nothing in the generated drums. | sliders `app/view/compose/lane_inspector/drums/rhythm.rs:44-97`; stored at `app/update/compose/drum_groups.rs:315-324`; never read | intent [compose/drum-groove-feel.md](compose/drum-groove-feel.md) |
 
 ## Project, save and export

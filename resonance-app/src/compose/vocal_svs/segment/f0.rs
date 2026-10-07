@@ -15,10 +15,8 @@
 
 use resonance_music_theory::VocalParams;
 
-use crate::compose::expression::ExpressionCurve;
-
 use super::duration::PhonemeTrack;
-use super::overlay::overlay_pitch_cents;
+use super::overlay::{overlay_pitch_cents, CurveClock};
 
 /// Sampling interval for the f0 / gender / tension `SampleCurve`s.
 /// The pipeline resamples to its internal frame rate; we just need a
@@ -37,32 +35,31 @@ pub(super) struct F0Curve {
 /// Build the f0 curve and per-frame metadata, then apply portamento,
 /// vibrato, and the user pitch-bend overlay in-place.
 ///
-/// `pitch_bend` is the lane's editable pitch-bend curve (doc #154); when
-/// the user has shaped an overlay it's folded in as an additive per-frame
-/// cents offset *after* portamento + vibrato, so it bends the final pitch
-/// the singer would otherwise hit. An un-edited curve leaves f0 untouched.
-/// `window` maps frames to clip-normalised time (see [`super::overlay`]).
+/// The lane's Pitch bend curve (`params.curves`, §10), when it has
+/// points, is folded in as an additive per-frame cents offset *after*
+/// portamento + vibrato, so it bends the final pitch the singer would
+/// otherwise hit. An empty curve leaves f0 untouched. `clock` maps frames
+/// to section beats (see [`super::overlay`]).
 pub(super) fn build_f0_curve(
     track: &PhonemeTrack,
     params: &VocalParams,
-    pitch_bend: &ExpressionCurve,
-    window: (f32, f32),
+    clock: CurveClock,
 ) -> F0Curve {
     let mut curve = sample_piecewise_constant(track);
     fill_unvoiced(&mut curve.samples);
     apply_portamento(&mut curve.samples, params.portamento_ms);
     apply_vibrato(&mut curve, params);
-    apply_pitch_bend(&mut curve.samples, pitch_bend, window);
+    apply_pitch_bend(&mut curve.samples, params, clock);
     curve
 }
 
-/// Step 5: fold the user's pitch-bend overlay into the f0 curve as an
+/// Step 5: fold the lane's Pitch bend curve into the f0 curve as an
 /// additive cents offset. Applied last so it rides on top of the
 /// portamento slides and vibrato wobble. Voiced frames only (the fill
-/// keeps every frame > 0, but guard anyway); a curve with no overlay is a
-/// no-op, leaving the auto-derived pitch identical.
-fn apply_pitch_bend(samples: &mut [f64], pitch_bend: &ExpressionCurve, window: (f32, f32)) {
-    let Some(cents) = overlay_pitch_cents(pitch_bend, samples.len(), window) else {
+/// keeps every frame > 0, but guard anyway); an empty curve is a no-op,
+/// leaving the auto-derived pitch identical.
+fn apply_pitch_bend(samples: &mut [f64], params: &VocalParams, clock: CurveClock) {
+    let Some(cents) = overlay_pitch_cents(params, samples.len(), clock) else {
         return;
     };
     for (v, c) in samples.iter_mut().zip(cents) {
