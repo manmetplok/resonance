@@ -133,7 +133,7 @@ pub(super) fn roll_vocal_melody(
             )
         })
         .unwrap_or_default();
-    let notes = resonance_music_theory::derive_vocal_with_motif(
+    let derived = resonance_music_theory::derive_vocal_with_holds(
         &timed,
         &params,
         TICKS_PER_QUARTER_NOTE as u32,
@@ -141,6 +141,7 @@ pub(super) fn roll_vocal_melody(
         Some(&motif_intervals),
         cfg.seed,
     );
+    let notes = &derived.notes;
     if notes.is_empty() {
         return Task::none();
     }
@@ -178,7 +179,8 @@ pub(super) fn roll_vocal_melody(
         .iter()
         .map(|(pid, start_bar)| (*pid, r.tempo_map.bar_to_sample(*start_bar)))
         .collect();
-    let initial_lyrics: Vec<String> = vec![String::new(); midi_notes.len()];
+    // The generator's own melisma holds ride in the per-note side table.
+    let initial_lyrics = super::vocal_midi_install::auto_hold_annotations(&derived.auto_holds);
     VocalMidiInstall {
         definition_id,
         track_id,

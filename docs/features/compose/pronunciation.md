@@ -1,6 +1,6 @@
 # Lyric pronunciation (G2P and dictionary)
 
-> Verified against master @ `cb3b1d6a` + vocal phase 2 on 2026-10-07.
+> Verified against master @ `ce484ad3` + vocal phase 3 on 2026-10-07.
 > Spec history: prototype `docs/intents/prototypes/svs-pronunciation-control/index.html` (design #173, notes #174).
 
 Every sung syllable becomes a list of ARPAbet phonemes before it reaches
@@ -52,15 +52,18 @@ and a global user dictionary, but nothing sets those yet.
   spelling fallback). Serde writes it snake_case (`"project_dict"`), and
   `G2pSource::as_str` gives the same string. Slur notes inherit the held
   syllable's source. `g2p::word_g2p_source(word)` answers CMU-or-rules for
-  a single word. Nothing in the app reads `source` yet (`song.vocal`'s
-  `g2p` field is slice 10 of
-  [vocal-mcp-control-and-quality](../../intents/compose/vocal-mcp-control-and-quality.md)).
+  a single word. `song.vocal` reports it per note as `g2p`
+  (`VocalG2pSource`; hold notes report the held syllable's, a note past
+  the end of the lyrics none), resolved through `resolve_lane` so a
+  per-syllable edit reads `edited` (`view_model/vocal_notes.rs`).
 - **Syllable split.** A word's phonemes are split at the user's `·`
   breaks exactly (see
   [lyrics and melody](vocal-lyrics-and-melody.md#behaviour)); a mismatch
   between pieces and vowels first tries the word's other CMU variants
   (when no `(N)` hint is given), then falls back to the automatic split
-  and sets `syllable_warning`.
+  and sets `syllable_warning`, which `song.vocal` reports per note
+  (omitted when false) and the vocal roll marks with a `BAD` underline
+  and corner tick.
 - **Project dictionary.** `vocal.set_pronunciation` stores a word →
   phonemes entry (word cleaned and lower-cased by `clean_word`; phonemes
   canonicalized, unknown symbols rejected, empty list rejected);
@@ -138,6 +141,7 @@ and a global user dictionary, but nothing sets those yet.
 | Control set/clear | `tests/control/control_vocal.rs` | same |
 | Save → reopen, undo/redo, override text check, legacy file, orphan overrides dropped on load (read back through `song.vocal`'s notes) | `tests/control/control_vocal_pronunciation_persistence.rs` | same |
 | `song.vocal` lines, counts and notes agree on a bank-dictionary word | `tests/control/control_voicebanks.rs` | same |
+| `song.vocal` per-note `g2p` (cmu / rules / project_dict) and `syllable_warning` | `tests/control/control_vocal_holds.rs` | same |
 | G2P | `resonance-music-theory/tests/g2p.rs`, `g2p_apis.rs` | `./scripts/run-tests.py -p resonance-music-theory` |
 | `G2pSource`, exact breaks, corpus all-CMU | `resonance-music-theory/tests/g2p_apis/lyric_markers.rs` | same |
 | Bank-dictionary layer precedence and lexical stress | `resonance-music-theory/tests/g2p_apis/bank_dictionary.rs` | same |

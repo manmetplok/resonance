@@ -270,7 +270,7 @@ pub fn resolve_draft_with_layers(
                     });
                 }
             }
-            LyricToken::Word { cleaned, pieces, variant_idx } => {
+            LyricToken::Word { cleaned, pieces, holds, variant_idx } => {
                 let (phonemes, provenance, source) = match dictionary.get(&cleaned) {
                     Some(dict_phonemes) => (
                         dict_phonemes
@@ -323,7 +323,9 @@ pub fn resolve_draft_with_layers(
                         stress,
                         provenance,
                         source,
-                        slurs_after: 0,
+                        // In-word holds (`a·_·ma`); standalone `_` tokens
+                        // after the word add to the last piece's count.
+                        slurs_after: holds.get(i).copied().unwrap_or(0),
                         breath_before: std::mem::take(&mut pending_breath),
                         syllable_warning: warning,
                     });

@@ -40,6 +40,7 @@ mod lane;
 mod position;
 mod section;
 mod track;
+mod vocal_notes;
 mod vocal_params;
 mod voicebanks;
 
@@ -52,6 +53,7 @@ pub(in crate::update::control) use lane::{
     lane_articulation, lane_note_count, vocal_render_state,
 };
 pub(in crate::update::control) use position::{song_end_sample, song_position, transport_state};
+pub(in crate::update::control) use vocal_notes::lane_note_lyrics;
 pub(in crate::update::control) use vocal_params::*;
 pub(in crate::update::control) use voicebanks::voicebank_list;
 pub(in crate::update::control) use section::{definitions_in_placement_order, placement_views};

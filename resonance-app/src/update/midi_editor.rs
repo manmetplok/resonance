@@ -7,6 +7,8 @@ use crate::state::{GridChoice, GrooveSelection};
 use crate::update::clips;
 use crate::Resonance;
 
+mod vocal_slur;
+
 #[derive(Debug, Clone)]
 pub enum MidiEditorMessage {
     OpenMidiEditor(ClipId),
@@ -586,13 +588,14 @@ fn remove_selected_notes(r: &mut crate::Resonance, clip_id: resonance_audio::typ
     }
 }
 
-/// Toggle the OpenUtau slur marker on the i-th note of `clip_id`. The
-/// lyric side-table treats `""` as "use the next syllable from the
-/// draft", so flipping to `""` reinstates the cursor-driven label
-/// flow — every subsequent non-slur note slides its syllable one slot
-/// left, and the now-spare syllable at the tail returns to the draft.
-/// Flipping to `"+"` does the reverse: the trailing syllables slide
-/// right.
+/// The vocal roll's `s` key on the i-th note of `clip_id`. On a vocal
+/// lane's clip the hold is written into (or taken out of) the lane's
+/// lyric draft as a `_` — see [`vocal_slur`]. A vocal clip that belongs
+/// to no lane has no draft to edit, so there it toggles the per-note
+/// slur marker: the lyric side-table treats `""` as "use the next
+/// syllable from the draft", so flipping to `""` reinstates the
+/// cursor-driven label flow — every subsequent non-slur note slides its
+/// syllable one slot left — and flipping to `"+"` does the reverse.
 fn toggle_slur(
     r: &mut crate::Resonance,
     clip_id: resonance_audio::types::ClipId,
@@ -607,6 +610,10 @@ fn toggle_slur(
         return;
     }
     let note_count = clip.notes.len();
+    if let Some(lane) = vocal_slur::lane_for_clip(r, clip_id) {
+        vocal_slur::toggle_draft_hold(r, lane, clip_id, note_index);
+        return;
+    }
 
     let entry = r
         .compose

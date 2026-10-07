@@ -175,6 +175,8 @@ mod control_view_model_shared;
 mod control_vocal;
 #[path = "control/control_vocal_generate.rs"]
 mod control_vocal_generate;
+#[path = "control/control_vocal_holds.rs"]
+mod control_vocal_holds;
 #[path = "control/control_vocal_lanes.rs"]
 mod control_vocal_lanes;
 #[path = "control/control_vocal_params.rs"]

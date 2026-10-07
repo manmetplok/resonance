@@ -39,12 +39,13 @@ pub(super) fn sync_bulk_lyrics_from_draft(
 
 /// Render the draft as a `\n`-joined plain-text body for the bulk editor.
 /// Strips the typographic syllable-separator (`·`) so users see clean
-/// prose; per-line entries can still hold the separator since we only
-/// re-derive on bulk-side edits.
+/// prose — except next to an in-word `_` hold, which would otherwise
+/// fuse into the word; per-line entries can still hold the separator
+/// since we only re-derive on bulk-side edits.
 fn draft_to_text(draft: &[resonance_music_theory::LyricLine]) -> String {
     draft
         .iter()
-        .map(|l| l.text.replace('\u{00B7}', "").replace("  ", " "))
+        .map(|l| resonance_music_theory::g2p::strip_syllable_marks(&l.text))
         .collect::<Vec<_>>()
         .join("\n")
 }

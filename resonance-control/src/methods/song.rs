@@ -373,7 +373,9 @@ pub struct VocalLaneView {
     /// The lane has lyrics whose syllable count does not match its note
     /// count — the condition that makes an SVS render fail or mis-align.
     ///
-    /// True when `syllable_count > 0 && note_count != syllable_count`,
+    /// True when `syllable_count > 0` and the notes minus the generator's
+    /// own melisma holds (`slur: "auto"` in [`Self::notes`] — they are not
+    /// lyric units) differ from `syllable_count`,
     /// so a lane with lyrics and **no** notes flags too: that is the
     /// case that renders nothing the client expects, and it used to be
     /// reported as `false`. Distinguish "not generated yet" by
@@ -457,6 +459,51 @@ pub struct VocalNoteView {
     pub too_short: bool,
     /// Outside [`VocalLaneView::comfortable_range`].
     pub out_of_range: bool,
+    /// Why this note holds the previous syllable — `null` on a note that
+    /// sings its own syllable. `user`: a `_` in the lyrics (typed, or the
+    /// vocal roll's `s` key). `auto`: a melisma the melody generator made
+    /// (`syllable_mode` mixed / melismatic); it is not in the lyrics and
+    /// the next `vocal.generate` replaces it.
+    #[serde(default)]
+    pub slur: Option<VocalSlurKind>,
+    /// Where this note's phonemes came from; a hold note reports the held
+    /// syllable's source. Absent on a note no lyric reaches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub g2p: Option<VocalG2pSource>,
+    /// The lyric breaks this note's word with `·` into pieces that do
+    /// not match its vowels, so its phonemes were split automatically
+    /// and may not line up with the written pieces. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub syllable_warning: bool,
+}
+
+/// Why a vocal note is a hold ([`VocalNoteView::slur`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalSlurKind {
+    /// A `_` hold written in the lane's lyrics.
+    User,
+    /// A melisma the melody generator made; not in the lyrics.
+    Auto,
+}
+
+/// Where a vocal note's phonemes came from ([`VocalNoteView::g2p`]), in
+/// lookup order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalG2pSource {
+    /// A per-syllable pronunciation edit or an inline `[..]` block.
+    Edited,
+    /// The project pronunciation dictionary (`vocal.set_pronunciation`).
+    ProjectDict,
+    /// The voicebank's own English dictionary.
+    BankDict,
+    /// The CMU Pronouncing Dictionary.
+    Cmu,
+    /// Spelling rules — the word is in no dictionary; check it.
+    Rules,
 }
 
 /// One lyric line with its per-syllable phonemes.
