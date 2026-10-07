@@ -2005,7 +2005,7 @@ fn reference_monitor_toggles_are_not_snapshot_state() {
 // (every project saved before A-6) still gets the positional rebuild. The
 // derived-clip id counter is not undo state: it is session-monotonic, so
 // an undo never re-issues an id the redo stack still names. See
-// `docs/design/A-6-derived-clips.md`.
+// `docs/history/refactor/A-6-derived-clips.md`.
 
 type DerivedMap = HashMap<(u64, u64, TrackId), ClipId>;
 

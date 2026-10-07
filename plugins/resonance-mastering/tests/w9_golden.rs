@@ -37,7 +37,7 @@ const TAU: f32 = std::f32::consts::TAU;
 // Re-blessed once, for W12. The de-harsh stage delays everything after
 // the corrective EQ by 2048 samples, even when off. The full pre- and
 // post-W12 streams were compared after aligning them by 2048 samples
-// (`docs/design/deharsh-resonance-suppressor.md` §5.2). No scenario here
+// (`docs/history/specs/deharsh-resonance-suppressor.md` §5.2). No scenario here
 // uses dither.
 // - Static scenarios: at most −121.7 dB re peak, which is float
 //   rounding from the moved FIR hop grid, with two exceptions:

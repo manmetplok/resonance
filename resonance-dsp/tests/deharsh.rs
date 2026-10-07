@@ -1,5 +1,5 @@
 //! Tests for the de-harsh resonance suppressor
-//! (`docs/design/deharsh-resonance-suppressor.md` §6, T1–T12).
+//! (`docs/history/specs/deharsh-resonance-suppressor.md` §6, T1–T12).
 //!
 //! Own test binary with a counting `#[global_allocator]` for the
 //! no-allocation guard (per thread, so parallel tests don't pollute it).

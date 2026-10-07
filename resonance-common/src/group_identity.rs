@@ -68,7 +68,7 @@ pub enum GroupIdentityColor {
 
 impl GroupIdentityColor {
     /// Base RGB for this identity. Matches the prototype palette
-    /// (`design/track-grouping-folder-tracks/index.html`).
+    /// (`docs/intents/prototypes/track-grouping-folder-tracks/index.html`).
     pub const fn color(self) -> GroupColor {
         match self {
             GroupIdentityColor::Drum => GroupColor::new(0xc9, 0x8f, 0x5f),

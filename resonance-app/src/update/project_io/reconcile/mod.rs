@@ -1,4 +1,4 @@
-//! The `Reconcile` driver (ARCH-01 A-13, design `docs/design/A-13-reconcile.md`).
+//! The `Reconcile` driver (ARCH-01 A-13, design `docs/history/refactor/A-13-reconcile.md`).
 //!
 //! A project reaches the app through [`reconcile_all`], from two callers:
 //! a disk load (or template instantiate) after `ClearAll`

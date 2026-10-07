@@ -48,7 +48,7 @@ const BLOCK_SIZES: [usize; 3] = [480, 512, 333];
 /// - `PROJECT_FULL` (16-bit shaped dither) differs by at most
 ///   1.22e-4 = 4 LSB at 16 bits (−77.3 dB re peak): the dither sequence
 ///   now meets different samples.
-/// (`docs/design/deharsh-resonance-suppressor.md` §5.2.)
+/// (`docs/history/specs/deharsh-resonance-suppressor.md` §5.2.)
 const PRIME_BLOCKS: usize = 56;
 /// Blocks stored in the golden.
 const CAPTURE_BLOCKS: usize = 20;

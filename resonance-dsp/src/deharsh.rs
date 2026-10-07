@@ -1,6 +1,6 @@
 //! De-harsh resonance suppressor: many narrow, time-varying cuts on
 //! peaks that stand out of a smoothed spectrum (the soothe-style
-//! "resonance suppressor", `docs/design/deharsh-resonance-suppressor.md`).
+//! "resonance suppressor", `docs/history/specs/deharsh-resonance-suppressor.md`).
 //!
 //! Structure, per the design note:
 //!

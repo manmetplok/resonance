@@ -1,5 +1,5 @@
 //! FU-A13g: a live `RemoveTrack` of a parent multi-output instrument
-//! drops its sub-tracks (`docs/design/A-13-reconcile.md` §14, "Found, not
+//! drops its sub-tracks (`docs/history/refactor/A-13-reconcile.md` §14, "Found, not
 //! fixed" — sub-track plugin chains leak on a live parent delete), but
 //! before this fix it left every plugin instance living on those
 //! sub-tracks in `ctx.plugins`: never removed from the map, never

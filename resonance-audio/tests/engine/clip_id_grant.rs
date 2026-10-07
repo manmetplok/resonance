@@ -1,5 +1,5 @@
 //! The engine's standing clip-id grant (ARCH-04 D-7d, design doc
-//! `docs/design/D-6-engine-created-ids.md` §4.2 / §6 D-7d).
+//! `docs/history/refactor/D-6-engine-created-ids.md` §4.2 / §6 D-7d).
 //!
 //! Recordings (C3), cycle-record passes (C4), live-MIDI captures (C5) and
 //! realtime bounces draw their clip ids from ranges the app granted, in

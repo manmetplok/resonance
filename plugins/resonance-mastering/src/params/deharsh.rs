@@ -3,7 +3,7 @@
 //!
 //! Every value maps 1:1 onto `resonance_dsp::deharsh::SuppressorConfig`;
 //! the precise meaning of each is in
-//! `docs/design/deharsh-resonance-suppressor.md` §4. The defaults are the
+//! `docs/history/specs/deharsh-resonance-suppressor.md` §4. The defaults are the
 //! suppressor's own, so the two can never disagree.
 
 use std::sync::Arc;
