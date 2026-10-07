@@ -121,7 +121,10 @@ fn lane_onsets(r: &crate::Resonance, definition_id: u64, track_id: TrackId) -> V
     normalized_onsets(&clip.notes, clip.duration_ticks)
 }
 
-/// Request a vocal re-render so the freshly-edited curves reach the WAV.
-fn rerender(r: &mut crate::Resonance, definition_id: u64, track_id: TrackId) -> Task<Message> {
-    super::vocal_render::rerender_vocal_audio(r, definition_id, track_id)
+/// A curve edit re-renders nothing by itself: the curves are part of the
+/// lane's render fingerprint, so the edit leaves the lane `stale` and
+/// `vocal_render_state::settle` arms the debounced re-render once the
+/// dragging stops (spec §7) — instead of one render per breakpoint move.
+fn rerender(_: &mut crate::Resonance, _: u64, _: TrackId) -> Task<Message> {
+    Task::none()
 }

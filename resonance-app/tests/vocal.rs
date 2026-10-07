@@ -42,3 +42,9 @@ mod voicebank_curve_support;
 mod voicebank_registry;
 #[path = "vocal/bank_phonemisation.rs"]
 mod bank_phonemisation;
+#[path = "vocal/vocal_rests_breaths.rs"]
+mod vocal_rests_breaths;
+#[path = "vocal/vocal_velocity_dynamics.rs"]
+mod vocal_velocity_dynamics;
+#[path = "vocal/vocal_dynamics_render.rs"]
+mod vocal_dynamics_render;

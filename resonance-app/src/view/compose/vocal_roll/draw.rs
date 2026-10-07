@@ -111,6 +111,8 @@ impl VocalRollCanvas<'_> {
         let resolved = g2p::resolve_draft_with_layers(self.params.draft.as_slice(), layers);
         let assigned =
             g2p::assign_syllables_to_notes(&resolved, self.lyrics, self.clip.notes.len());
+        // Which holds the lyrics write (`_`) and which the generator made.
+        let origins = g2p::hold_origins(&resolved, self.lyrics, self.clip.notes.len());
 
         // Background
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
@@ -153,7 +155,7 @@ impl VocalRollCanvas<'_> {
         self.draw_grid_lines(frame, grid_x, grid_w, grid_top, grid_h);
 
         // Notes — drawn before slurs/pitch curve so those overlay on top.
-        self.draw_notes(frame, grid_x, grid_top, grid_h, &assigned);
+        self.draw_notes(frame, grid_x, grid_top, grid_h, &assigned, &origins);
 
         // Slur arcs between adjacent flowing notes.
         self.draw_slurs(frame, grid_x, grid_top, grid_h, &assigned);

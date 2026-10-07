@@ -66,6 +66,7 @@ fn ready(definition: u64, placement: u64, queued_start: u64) -> Message {
         lead_ticks: 0,
         render_epoch: 1,
         bpm: 120.0,
+        unit_keys: Vec::new(),
     })))
 }
 

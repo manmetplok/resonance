@@ -1,30 +1,32 @@
-//! Post-processing applied to the rendered mono waveform: AP/SP gating
-//! (to turn neural-vocoder hiss into actual silence), peak-aware safety
-//! gain, mono→stereo expansion, optional resample to the engine rate,
-//! and the public WAV writer.
+//! Post-processing applied to the rendered mono waveform: rest gating
+//! (to turn neural-vocoder hiss into actual silence), the dynamics gain
+//! ([`super::dynamics`]), peak-aware safety gain, mono→stereo expansion,
+//! optional resample to the engine rate, and the public WAV writer.
 
-/// Compute (start_sec, end_sec) intervals for every `AP`/`SP` phoneme
-/// in the segment. The segment builder uses voicebank-specific names
-/// for silence markers (`AP`, `SP` on TIGER/Lilia; same un-prefixed on
-/// Meiji), so a plain string compare works regardless of voicebank.
-pub(super) fn collect_ap_intervals(ph_seq: &[String], ph_dur: &[f64]) -> Vec<(f64, f64)> {
-    let mut ap_intervals: Vec<(f64, f64)> = Vec::new();
+use super::rests::REST_PHONEME;
+
+/// Compute (start_sec, end_sec) intervals for every rest (`SP`) phoneme
+/// in the segment: the pads and the rests between notes. `AP` is a
+/// written breath and stays audible. The silence markers are un-prefixed
+/// on every bank (Meiji included), so a plain string compare works.
+pub(super) fn collect_rest_intervals(ph_seq: &[String], ph_dur: &[f64]) -> Vec<(f64, f64)> {
+    let mut intervals: Vec<(f64, f64)> = Vec::new();
     let mut t_cursor = 0.0_f64;
     for (ph, dur) in ph_seq.iter().zip(ph_dur.iter()) {
         let start = t_cursor;
         t_cursor += *dur;
-        if ph == "AP" || ph == "SP" {
-            ap_intervals.push((start, t_cursor));
+        if ph == REST_PHONEME {
+            intervals.push((start, t_cursor));
         }
     }
-    ap_intervals
+    intervals
 }
 
-/// Mute the AP intervals in `mono` and apply a ~5 ms linear fade on
+/// Mute the rest intervals in `mono` and apply a ~5 ms linear fade on
 /// each side so the voiced → silence → voiced transition doesn't click.
 /// Operates in place at the model's native sample rate (`model_sr`).
 ///
-/// The neural vocoder doesn't produce true silence during AP — it
+/// The neural vocoder doesn't produce true silence during a rest — it
 /// emits a ~-50 dB hiss that the user perceives as constant noise
 /// between vocal lines. Hard-muting plus a short fade is what turns
 /// the gap into actual silence.

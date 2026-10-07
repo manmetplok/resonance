@@ -230,8 +230,21 @@ impl VocalRollCanvas<'_> {
             } else {
                 theme::WARM
             };
+            // The label stays inside its pill and stops short of the next
+            // note's: cut to what fits at the mono advance, with an
+            // ellipsis, and left out when not even two characters fit.
+            let next_x = self
+                .clip
+                .notes
+                .get(i + 1)
+                .map_or(f32::INFINITY, |nx| grid_x + self.tick_to_x(nx.start_tick));
+            let avail = pill_w.min(next_x - x) - 6.0;
+            let max_chars = (avail / PHONEME_MONO_ADVANCE).floor().max(0.0) as usize;
+            let Some(content) = fit_label(&display, max_chars) else {
+                continue;
+            };
             frame.fill_text(canvas::Text {
-                content: display,
+                content,
                 position: Point::new(x + 4.0, strip_y + 1.0),
                 color: text_color,
                 size: 9.5.into(),
@@ -240,4 +253,22 @@ impl VocalRollCanvas<'_> {
             });
         }
     }
+}
+
+/// Width of one character of the phoneme strip's 9.5 px mono label.
+const PHONEME_MONO_ADVANCE: f32 = 9.5 * 0.6;
+
+/// `label` cut to at most `max_chars` characters, the last replaced by an
+/// ellipsis when it had to be cut; `None` when fewer than two fit.
+fn fit_label(label: &str, max_chars: usize) -> Option<String> {
+    if max_chars < 2 {
+        return None;
+    }
+    if label.chars().count() <= max_chars {
+        return Some(label.to_owned());
+    }
+    let mut cut: String = label.chars().take(max_chars - 1).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('\u{2026}');
+    Some(cut)
 }

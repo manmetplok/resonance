@@ -2,9 +2,11 @@
 //! The mirror of [`vocal_midi_install`](super::vocal_midi_install) on
 //! the audio side, split out of `vocal_render` (ba todo #1259).
 //!
-//! Both halves of the lane's clip lifecycle live here so the epoch
-//! check that discards a stale render and the tear-down that precedes a
-//! fresh one stay next to each other.
+//! The epoch check that discards a stale render and the swap that
+//! replaces the previous take stay next to each other: the old take is
+//! torn down only as the new one is installed, never when the render is
+//! queued, so it keeps playing while the lane is `rendering` or `stale`
+//! (vocal-mcp-control-and-quality.md §7, D22).
 
 use resonance_audio::types::TrackId;
 
@@ -36,6 +38,7 @@ pub(super) fn handle_vocal_audio_ready(
         lead_ticks,
         render_epoch,
         bpm: _,
+        unit_keys,
     } = data;
 
     if render_epoch != current_render_epoch(r, definition_id, track_id) {
@@ -43,6 +46,10 @@ pub(super) fn handle_vocal_audio_ready(
         return false;
     }
 
+    // The previous take played until now (spec §7, D22); it goes as the
+    // new one arrives, placement by placement (a placement deleted while
+    // the render ran took its clip with it: `purge_placement_outputs`).
+    let unit_keys: std::sync::Arc<[u64]> = unit_keys.into();
     for (placement_id, _queued_start) in placements {
         // The placement was deleted while the render ran — installing
         // audio for it would resurrect the section's vocal (VIEW-04).
@@ -67,6 +74,7 @@ pub(super) fn handle_vocal_audio_ready(
         {
             let _ = r.engine
                 .send(AudioCommand::DeleteClip { clip_id: old_id });
+            r.compose.vocal_audio.status.clip_unit_keys.remove(&old_id);
             // Never the saved project's `clip_<id>.wav`, nor a take
             // another placement still plays (FU-C1a).
             let installed = r.compose.vocal_audio.clips.values().map(|(_, p)| p);
@@ -87,7 +95,13 @@ pub(super) fn handle_vocal_audio_ready(
             (definition_id, placement_id, track_id),
             (audio_clip_id, wav_path.clone()),
         );
+        r.compose
+            .vocal_audio
+            .status
+            .clip_unit_keys
+            .insert(audio_clip_id, unit_keys.clone());
     }
+    super::vocal_render_state::note_render_installed(r, (definition_id, track_id));
     true
 }
 
@@ -141,35 +155,4 @@ pub(super) fn current_render_epoch(
         .get(&(definition_id, track_id))
         .copied()
         .unwrap_or(0)
-}
-
-/// Drop every previously-installed vocal audio clip on this (def, track)
-/// pair from the engine, and unlink the rendered takes that backed them
-/// once nothing else plays them. Run before the new audio is installed so
-/// we don't leak WAV files. A loaded clip's `clip_<id>.wav` is kept: the
-/// saved project and the undo history still name it (FU-C1a).
-pub(super) fn tear_down_old_vocal_audio(
-    r: &mut crate::Resonance,
-    definition_id: u64,
-    track_id: TrackId,
-) {
-    use resonance_audio::types::{AudioCommand, ClipId};
-    type VocalAudioKey = (u64, u64, TrackId);
-    type VocalAudioEntry = (ClipId, std::path::PathBuf);
-    let stale: Vec<(VocalAudioKey, VocalAudioEntry)> = r
-        .compose
-        .vocal_audio
-        .clips
-        .iter()
-        .filter(|((d, _p, t), _)| *d == definition_id && *t == track_id)
-        .map(|(k, v)| (*k, v.clone()))
-        .collect();
-    for (key, (clip_id, _)) in &stale {
-        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id: *clip_id });
-        r.compose.vocal_audio.clips.remove(key);
-    }
-    for (_, (_, path)) in &stale {
-        let installed = r.compose.vocal_audio.clips.values().map(|(_, p)| p);
-        unlink_superseded_take(path, installed);
-    }
 }

@@ -420,6 +420,8 @@ pub(super) fn apply_params_patch(
     set(&mut p.portamento_ms, patch.portamento_ms);
     set(&mut p.articulation, patch.articulation);
     set(&mut p.consonant_emphasis, patch.consonant_emphasis);
+    set(&mut p.rest_threshold_beats, patch.rest_threshold_beats);
+    set(&mut p.velocity_dynamics, patch.velocity_dynamics);
 
     // Melody generator.
     if let Some(v) = patch.voice {
@@ -757,7 +759,7 @@ fn render(
     // once — several ONNX sessions and their working sets alive together
     // on a machine that is also playing audio. Chaining renders them one
     // after another, which is what a client looping over lanes by hand
-    // already did. The synchronous half (tear-down, epoch bump) has
+    // already did. The synchronous half (planning, epoch bump) has
     // already run for every lane either way.
     let task = tasks
         .into_iter()

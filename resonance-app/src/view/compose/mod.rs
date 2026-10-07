@@ -19,6 +19,7 @@ pub mod scale_stripe;
 pub mod strip;
 pub mod tracks;
 pub mod vocal_lane;
+pub(crate) mod vocal_render_badge;
 pub mod vocal_roll;
 
 pub use layout::{

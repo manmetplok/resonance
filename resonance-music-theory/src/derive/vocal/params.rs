@@ -363,6 +363,17 @@ pub struct VocalParams {
     pub portamento_ms: f32,
     pub articulation: f32,
     pub consonant_emphasis: f32,
+    /// How long a gap between two notes must be, in beats at the lane's
+    /// tempo, to be sung as a rest (silence) rather than legato. A gap of
+    /// at least this many beats is silence; a shorter one is bridged by
+    /// the previous note. Range [`Self::REST_THRESHOLD_BEATS`], default
+    /// ½ beat (vocal-mcp-control-and-quality.md §8, D25).
+    pub rest_threshold_beats: f32,
+    /// How strongly note velocity drives loudness, 0..1 (default 0.5;
+    /// §9, D27): through the bank's energy curve where it has one, and on
+    /// every bank through a per-note gain of up to ±6 dB after the
+    /// vocoder.
+    pub velocity_dynamics: f32,
     /// The voicebank's speaker (voice mode), as the bank's speaker id
     /// (`disco` on TIGER, `phantom` on Meiji, ...); `None` sings with the
     /// bank's default speaker, and is all a single-voice bank (Lilia)
@@ -423,6 +434,8 @@ impl Default for VocalParams {
             // similar-sounding endings. Default to the middle for a
             // safety margin from either cliff.
             consonant_emphasis: 0.50,
+            rest_threshold_beats: default_rest_threshold_beats(),
+            velocity_dynamics: default_velocity_dynamics(),
             speaker: None,
             voicebank: VoicebankId::default(),
         }
@@ -455,6 +468,13 @@ impl VocalParams {
     /// Longest lyric theme, in characters. The lane inspector truncates
     /// to it; the control API refuses longer text.
     pub const THEME_MAX_CHARS: usize = 240;
+
+    /// Inclusive range of [`Self::rest_threshold_beats`]: a 32nd note up
+    /// to a whole bar of 4/4.
+    pub const REST_THRESHOLD_BEATS: (f32, f32) = (0.125, 4.0);
+
+    /// Default [`Self::rest_threshold_beats`]: half a beat.
+    pub const DEFAULT_REST_THRESHOLD_BEATS: f32 = 0.5;
 
     /// Switch to `voicebank`, resetting the speaker to `default_speaker`
     /// (the new bank's default, which the caller looks up: the app's
@@ -502,6 +522,7 @@ impl VocalParams {
             ("consonant_emphasis", self.consonant_emphasis),
             ("tension_velocity_amount", self.tension_velocity_amount),
             ("tension_contour_amount", self.tension_contour_amount),
+            ("velocity_dynamics", self.velocity_dynamics),
         ] {
             if !(0.0..=1.0).contains(&value) {
                 return Err(VocalParamsError::OutOfRange {
@@ -532,6 +553,16 @@ impl VocalParams {
                 value: self.vibrato_rate,
                 lo: 1.0,
                 hi: 20.0,
+            });
+        }
+
+        let (lo, hi) = Self::REST_THRESHOLD_BEATS;
+        if !(lo..=hi).contains(&self.rest_threshold_beats) {
+            return Err(VocalParamsError::OutOfRange {
+                field: "rest_threshold_beats",
+                value: self.rest_threshold_beats,
+                lo,
+                hi,
             });
         }
 
@@ -577,6 +608,14 @@ fn default_tension_contour_amount() -> f32 {
 
 fn default_portamento_ms() -> f32 {
     40.0
+}
+
+fn default_rest_threshold_beats() -> f32 {
+    VocalParams::DEFAULT_REST_THRESHOLD_BEATS
+}
+
+fn default_velocity_dynamics() -> f32 {
+    0.5
 }
 
 /// Seeded preview lines that mirror the prototype's draft.

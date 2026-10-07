@@ -6,7 +6,7 @@
 //! to the acoustic + vocoder pipeline wholesale — so editing a single
 //! syllable re-ran the model over every note. This module splits the
 //! clip into independently-renderable [`RenderUnit`]s at the same genuine
-//! silences (`AP` rests) the duration builder already inserts, renders
+//! silences (`SP` rests) the duration builder already inserts, renders
 //! only the units whose content changed, reuses cached audio for the
 //! rest, and stitches everything back onto one timeline by sample
 //! offset. Because units only ever abut at silence, concatenating their
@@ -33,12 +33,12 @@ use resonance_svs::ds::{DsSegment, SampleCurve};
 use crate::compose::expression::ExpressionCurves;
 
 use super::registry::BankProfile;
+use super::rests::RestRule;
 use super::segment::build_segment_windowed;
-use super::SILENCE_GAP_SEC;
 
 /// One independently-renderable slice of a vocal clip: a contiguous run
 /// of notes delimited by genuine silences. Carries its own `DsSegment`
-/// (with leading/trailing `AP` pads, same as the whole-clip builder), the
+/// (with leading/trailing `SP` pads, same as the whole-clip builder), the
 /// note/syllable ranges it covers, the clip-relative start time its first
 /// phoneme should land at, and the content [`key`](RenderUnit::key) that
 /// addresses it in the cache.
@@ -58,6 +58,15 @@ pub struct RenderUnit {
     pub syllable_range: Range<usize>,
     /// Content hash addressing this unit's rendered audio in the cache.
     pub key: u64,
+    /// What the lane's render state records for this unit: [`key`] plus
+    /// what the take depends on that the cache key leaves out — where the
+    /// unit sits (its first note's clip tick, so moving the whole line
+    /// moves the installed audio out of place) and, when
+    /// `velocity_dynamics` is on, its notes' raw velocities (the post gain
+    /// reads them after the cache).
+    ///
+    /// [`key`]: RenderUnit::key
+    pub state_key: u64,
 }
 
 /// Seconds-per-tick at the given tempo. Mirrors the duration builder so
@@ -69,9 +78,11 @@ fn seconds_per_tick(ticks_per_quarter: u32, bpm: f32) -> f64 {
 /// Split a vocal clip into render units at genuine silences.
 ///
 /// A boundary is placed between note `i` and `i+1` whenever the gap to
-/// the next note exceeds the note's own sing duration by more than
-/// [`SILENCE_GAP_SEC`] — exactly the condition under which
-/// [`super::segment`]'s duration builder emits a trailing `AP` rest. Each
+/// the next note is at least the lane's rest threshold
+/// ([`RestRule`], `rest_threshold_beats`) — exactly the condition under
+/// which [`super::segment`]'s duration builder emits a trailing rest —
+/// unless the next note's syllable asks for a breath, which then fills
+/// the end of that rest inside the same unit. Each
 /// resulting unit is a self-contained `DsSegment` built from its slice of
 /// notes/syllables. A clip with no internal silence yields a single unit
 /// whose segment is identical to the old whole-clip build, so the
@@ -102,17 +113,23 @@ pub fn split_render_units(
         .unwrap_or(base_tick);
     let clip_span = clip_end_tick.saturating_sub(base_tick) as f32;
     let model = model_identity(params, bank);
+    let lane = lane_identity(params);
+    let rest_rule = RestRule::new(params, bpm);
 
     // Boundaries between consecutive notes: split where the duration
     // builder would insert a real rest.
     let mut starts = vec![0usize];
     for i in 0..notes.len().saturating_sub(1) {
         // Unfloored, like the duration builder (VIEW-34); a slot under
-        // the floor can never exceed `sing_cap + SILENCE_GAP_SEC` anyway.
+        // the floor can never hold a rest anyway.
         let slot_sec =
             (notes[i + 1].start_tick.saturating_sub(notes[i].start_tick)) as f64 * spt;
         let sing_cap = (notes[i].duration_ticks as f64 * spt).max(0.05);
-        if slot_sec > sing_cap + SILENCE_GAP_SEC {
+        // A rest ending in a written breath stays inside one unit, so the
+        // breath can take the end of the gap (up to 0.35 s) rather than
+        // only the next unit's leading pad.
+        let breath_next = assigned.get(i + 1).is_some_and(|a| a.breath_before);
+        if rest_rule.is_rest(slot_sec, sing_cap) && !breath_next {
             starts.push(i + 1);
         }
     }
@@ -146,13 +163,15 @@ pub fn split_render_units(
         );
         let start_sec = (notes[lo].start_tick.saturating_sub(base_tick)) as f64 * spt;
         let syllable_range = assigned[lo].syllable_index..assigned[hi - 1].syllable_index + 1;
-        let key = content_key(&segment, &model);
+        let key = content_key(&segment, &model, &lane);
+        let state_key = state_key(key, &notes[lo..hi], params.velocity_dynamics);
         units.push(RenderUnit {
             segment,
             start_sec,
             note_range: lo..hi,
             syllable_range,
             key,
+            state_key,
         });
     }
     units
@@ -165,7 +184,7 @@ pub fn split_render_units(
 /// reusing audio from the old one. A bank that is not installed cannot
 /// render; its id and speaker stand in (the render fails before the cache
 /// is consulted).
-fn model_identity(params: &VocalParams, bank: &BankProfile) -> String {
+pub(crate) fn model_identity(params: &VocalParams, bank: &BankProfile) -> String {
     match bank.render_target(params.speaker.as_deref(), params.voice, None) {
         Ok(target) => format!(
             "{}|{}|{:?}|{:?}",
@@ -178,17 +197,31 @@ fn model_identity(params: &VocalParams, bank: &BankProfile) -> String {
     }
 }
 
+/// The lane params a unit's audio depends on beyond what its segment
+/// arrays show: `rest_threshold_beats` (where the unit's rests fall) and
+/// `velocity_dynamics` (the post-vocoder gain and, on a bank with energy,
+/// the energy curve). Hashed into every unit's key, so changing either
+/// re-renders the lane and its plan hash moves.
+fn lane_identity(params: &VocalParams) -> String {
+    format!(
+        "rest={}|vel_dyn={}",
+        params.rest_threshold_beats.to_bits(),
+        params.velocity_dynamics.to_bits()
+    )
+}
+
 /// FNV-1a hash of everything that determines a unit's rendered audio:
 /// the phoneme/note/duration arrays, every per-frame curve, and the
 /// [`model_identity`] that renders them (the acoustic/vocoder model, the
 /// speaker embedding and the bank version — not captured by the segment
 /// arrays themselves). Two units with the same key render bit-identical
 /// audio, so a cache hit is always safe to reuse.
-fn content_key(seg: &DsSegment, model: &str) -> u64 {
+fn content_key(seg: &DsSegment, model: &str, lane: &str) -> u64 {
     let mut h = Fnv::new();
     // The segment arrays already fold in the voicebank's phoneme
     // substitutions, but not which model renders them.
     h.str(model);
+    h.str(lane);
     for s in &seg.ph_seq {
         h.str(s);
     }
@@ -204,6 +237,28 @@ fn content_key(seg: &DsSegment, model: &str) -> u64 {
     h.curve(&seg.tension);
     for &l in &seg.languages {
         h.bytes(&l.to_le_bytes());
+    }
+    h.finish()
+}
+
+/// The render-state key of a unit whose cache key is `key` and whose
+/// notes are `notes`: the cache key is position-free (a unit moved in time
+/// reuses its audio), but the installed take is not — its units are
+/// stitched at their offsets and the take is placed by the lane's first
+/// note — so the state key also hashes the unit's first clip tick, which
+/// carries both the unit's offset from the first note and the lead-in.
+/// With `velocity_dynamics` above 0 it hashes the notes' velocities too:
+/// the post-vocoder gain reads them after the cache, so on a bank whose
+/// segment ignores velocity a velocity edit changes no cache key.
+fn state_key(key: u64, notes: &[MidiNote], velocity_dynamics: f32) -> u64 {
+    let mut h = Fnv::new();
+    h.bytes(&key.to_le_bytes());
+    let first_tick = notes.first().map_or(0, |n| n.start_tick);
+    h.bytes(&first_tick.to_le_bytes());
+    if velocity_dynamics > 0.0 {
+        for n in notes {
+            h.bytes(&n.velocity.to_bits().to_le_bytes());
+        }
     }
     h.finish()
 }
@@ -242,6 +297,11 @@ pub struct SvsRenderCache {
     /// Tally from the most recent [`render_units_cached`] pass, for the
     /// UI overlay to read. `None` until the clip has been rendered once.
     last_plan: Option<RenderPlan>,
+    /// The unit state keys ([`RenderUnit::state_key`]) of the most recent
+    /// pass, in unit order: the take it stitched, by content and
+    /// position. Recorded with the installed audio so the lane's render
+    /// state can tell whether that take is still current.
+    last_keys: Vec<u64>,
 }
 
 impl SvsRenderCache {
@@ -253,6 +313,12 @@ impl SvsRenderCache {
     /// if this clip hasn't been rendered yet.
     pub fn last_plan(&self) -> Option<RenderPlan> {
         self.last_plan
+    }
+
+    /// The unit state keys of the take the last pass stitched, in unit
+    /// order.
+    pub fn last_keys(&self) -> &[u64] {
+        &self.last_keys
     }
 
     /// Number of cached unit buffers currently held.
@@ -320,12 +386,33 @@ pub fn render_units_cached(
     cache.entries.retain(|k, _| live.contains(k));
     cache.model_sr = Some(sr);
     cache.last_plan = Some(plan);
+    cache.last_keys = units.iter().map(|u| u.state_key).collect();
 
     Ok(StitchedRender {
         mono,
         sample_rate: sr,
         plan,
     })
+}
+
+/// The unit state keys a render of this clip would record, in unit order
+/// — [`split_render_units`]'s [`RenderUnit::state_key`]s without keeping
+/// the segments. What the lane's render state compares with the installed
+/// take's [`SvsRenderCache::last_keys`].
+#[allow(clippy::too_many_arguments)]
+pub fn plan_unit_keys(
+    notes: &[MidiNote],
+    params: &VocalParams,
+    assigned: &[AssignedSyllable],
+    curves: &ExpressionCurves,
+    ticks_per_quarter: u32,
+    bpm: f32,
+    bank: &BankProfile,
+) -> Vec<u64> {
+    split_render_units(notes, params, assigned, curves, ticks_per_quarter, bpm, bank)
+        .into_iter()
+        .map(|u| u.state_key)
+        .collect()
 }
 
 /// Mix each unit's audio onto a single mono timeline at the sample offset

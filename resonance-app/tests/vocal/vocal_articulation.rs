@@ -8,12 +8,12 @@
 //! and the word is heard as a smear. Nothing errors — the render
 //! succeeds and simply cannot be understood. So we assert both halves of
 //! the fix: the duration allocator protects each phone's audibility
-//! floor when it can, and [`articulation_report`] flags the note when it
+//! floor when it can, and [`articulation_report_for`] flags the note when it
 //! cannot.
 
 use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
-    articulation_report, build_segment, floor_duration_sec,
+    articulation_report_for, build_segment, floor_duration_sec,
     min_articulation_sec, resolve_clip, validate_for_voicebank,
 };
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
@@ -78,12 +78,13 @@ fn crammed_word_on_one_short_note_is_flagged() {
     let assigned = assign("resolution", 1);
     assert_eq!(assigned[0].phonemes.len(), 9, "{:?}", assigned[0].phonemes);
 
-    let report = articulation_report(
+    let report = articulation_report_for(
         &notes(1, 0.5, 64),
         &assigned,
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     assert_eq!(report.len(), 1);
     assert_eq!(report[0].phonemes.len(), 9);
@@ -109,12 +110,13 @@ fn the_same_word_split_across_notes_is_not_flagged() {
         "a note was left with nothing to sing: {assigned:?}"
     );
 
-    let report = articulation_report(
+    let report = articulation_report_for(
         &notes(4, 0.5, 64),
         &assigned,
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     assert_eq!(report.len(), 4);
     for n in &report {
@@ -139,12 +141,13 @@ fn out_of_range_notes_are_flagged_against_the_voicebank() {
     ns[1].note = lo - 12;
     ns[2].note = hi + 12;
 
-    let report = articulation_report(
+    let report = articulation_report_for(
         &ns,
         &assigned,
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     assert!(!report[0].out_of_range, "mid-range note flagged");
     assert!(report[1].out_of_range, "an octave below the range");
@@ -157,12 +160,13 @@ fn report_durations_follow_the_note_grid() {
     // the arithmetic a caller would do by hand, or its `too_short`
     // verdict is unactionable.
     let assigned = assign("go", 1);
-    let report = articulation_report(
+    let report = articulation_report_for(
         &notes(1, 0.5, 64),
         &assigned,
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     let expected = 60.0 / BPM as f64 * 0.5;
     assert!(

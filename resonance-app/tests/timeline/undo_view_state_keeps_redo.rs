@@ -73,6 +73,7 @@ fn ready(epoch: u64) -> Message {
         lead_ticks: 0,
         render_epoch: epoch,
         bpm: 120.0,
+        unit_keys: Vec::new(),
     })))
 }
 

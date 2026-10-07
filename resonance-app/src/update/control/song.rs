@@ -265,9 +265,21 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             project: &dictionary,
             bank: bank_dictionary.as_deref(),
         };
-        let syllable_count =
-            g2p::note_unit_count(&g2p::resolve_draft_with_layers(&vocal_params.draft, layers));
+        let resolved = g2p::resolve_draft_with_layers(&vocal_params.draft, layers);
+        let syllable_count = g2p::note_unit_count(&resolved);
         let note_count = view_model::lane_note_count(app, definition.id, track.id);
+        // Per note: hold origin (`_` vs generator melisma), G2P source and
+        // the syllable-split warning. Generator holds are not lyric units,
+        // so they leave the count comparison (spec §6).
+        let note_lyrics = view_model::lane_note_lyrics(
+            app,
+            definition.id,
+            track.id,
+            vocal_params,
+            &resolved,
+            bank_dictionary.as_deref(),
+        );
+        let lyric_notes = note_count - note_lyrics.auto_holds.min(note_count);
         // Intelligibility pre-flight: per note, can the phonemes assigned
         // to it actually be articulated in the time it has, and is it
         // pitched where the voicebank sings clearly? Both failures render
@@ -279,6 +291,8 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
         let out_of_range_note_count = articulation.iter().filter(|n| n.out_of_range).count();
         let range = profile.comfortable_range(vocal_params.speaker.as_deref());
         let (range_lo, range_hi) = (range.low, range.high);
+        let (render_state, stale_units, render_error) =
+            view_model::lane_render_view(app, definition.id, track.id);
         lanes.push(song::VocalLaneView {
             definition_id: definition.id.into(),
             name: definition.name.clone(),
@@ -299,7 +313,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             // guard hid, reporting `counts_mismatch: false` and giving
             // false confidence right before a render (ba doc #271).
             // "Not generated yet" stays legible as `note_count == 0`.
-            counts_mismatch: syllable_count > 0 && note_count != syllable_count,
+            counts_mismatch: syllable_count > 0 && lyric_notes != syllable_count,
             voicebank: Some(vocal_params.voicebank.to_string()),
             comfortable_range: Some(song::PitchRangeView {
                 low: range_lo,
@@ -309,21 +323,30 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             }),
             notes: articulation
                 .iter()
-                .map(|a| song::VocalNoteView {
-                    index: a.note_index,
-                    syllable: a.label.clone(),
-                    phonemes: a.phonemes.iter().map(|p| (*p).to_owned()).collect(),
-                    phoneme_count: a.phonemes.len(),
-                    pitch: a.pitch,
-                    pitch_name: midi_note_name(a.pitch),
-                    duration_ms: (a.duration_sec * 1000.0).round(),
-                    min_duration_ms: (a.min_duration_sec * 1000.0).round(),
-                    too_short: a.too_short,
-                    out_of_range: a.out_of_range,
+                .map(|a| {
+                    let lyric = note_lyrics.notes.get(a.note_index);
+                    song::VocalNoteView {
+                        index: a.note_index,
+                        syllable: a.label.clone(),
+                        phonemes: a.phonemes.iter().map(|p| (*p).to_owned()).collect(),
+                        phoneme_count: a.phonemes.len(),
+                        pitch: a.pitch,
+                        pitch_name: midi_note_name(a.pitch),
+                        duration_ms: (a.duration_sec * 1000.0).round(),
+                        min_duration_ms: (a.min_duration_sec * 1000.0).round(),
+                        too_short: a.too_short,
+                        out_of_range: a.out_of_range,
+                        slur: lyric.and_then(|l| l.slur),
+                        g2p: lyric.and_then(|l| l.g2p),
+                        syllable_warning: lyric.is_some_and(|l| l.syllable_warning),
+                    }
                 })
                 .collect(),
             short_note_count,
             out_of_range_note_count,
+            render_state,
+            stale_units,
+            error: render_error,
             params: view_model::vocal_params_view(vocal_params),
             // Indexed per lane, the way `vocal.set_line` addresses them
             // (spec D8); one song-wide list with a global index could not
@@ -347,11 +370,12 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
         });
     }
 
+    let render_state = view_model::track_render_state(lanes.iter().map(|l| l.render_state));
     let result = VocalView {
         track_id: resonance_control::ids::TrackId(track.id),
         lanes,
         pronunciation_overrides,
-        render_state: view_model::vocal_render_state(app, track.id),
+        render_state,
         revision: app.revision(),
     };
     super::success(request, &result)

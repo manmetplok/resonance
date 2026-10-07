@@ -15,7 +15,9 @@
 //! - [`cadence`] — the per-line goal-cadence formula pass;
 //! - [`spans`] — the public `vocal_phrase_spans` helper for the synth
 //!   fill;
-//! - [`cleanup`] — the post-walk overlap trim.
+//! - [`cleanup`] — the post-walk overlap trim;
+//! - [`melisma`] — the `SyllableMode` pass that splits notes into
+//!   melismas, run by `derive_vocal_with_holds` after everything else.
 //!
 //! `super::derive_vocal_with_motif` runs the passes in that order
 //! (motif → srdc → per-line climax → section climax → cadence →
@@ -25,6 +27,7 @@
 
 mod cadence;
 mod cleanup;
+mod melisma;
 mod climax;
 mod motif;
 mod primitives;
@@ -32,6 +35,7 @@ mod spans;
 mod srdc;
 mod syllables;
 
+pub use melisma::{derive_vocal_with_holds, VocalDerivation};
 pub use spans::vocal_phrase_spans;
 pub use syllables::count_syllables;
 pub(in crate::derive::vocal) use syllables::line_note_stresses;

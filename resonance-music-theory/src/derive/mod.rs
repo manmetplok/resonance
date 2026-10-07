@@ -36,7 +36,8 @@ pub use motif_source::{
 };
 pub use pad::{derive_pad, PadParams};
 pub use vocal::{
-    count_syllables, derive_vocal, derive_vocal_with_meter, derive_vocal_with_motif,
+    count_syllables, derive_vocal, derive_vocal_with_holds, derive_vocal_with_meter,
+    derive_vocal_with_motif, VocalDerivation,
     generate_lyrics, lyric_corpus_lines, vocal_phrase_spans, LyricLine, SyllableMode,
     VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov, VocalRhymeScheme,
     VocalStyle, VocalTimbre, VoicebankId, VoiceType,

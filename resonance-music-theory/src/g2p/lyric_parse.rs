@@ -15,8 +15,16 @@ pub(crate) enum LyricToken {
     /// (or between-letter `-`) breaks, each piece reduced to letters and
     /// apostrophes; an unbroken word is one piece. `cleaned` is the
     /// pieces joined — the dictionary key. `variant_idx` is the `(N)`
-    /// pronunciation hint, `None` when the word carries none.
-    Word { cleaned: String, pieces: Vec<String>, variant_idx: Option<usize> },
+    /// pronunciation hint, `None` when the word carries none. `holds[i]`
+    /// counts the in-word melisma holds written straight after piece `i`
+    /// (`a·_·ma·zing` holds `a` onto one more note); same length as
+    /// `pieces`.
+    Word {
+        cleaned: String,
+        pieces: Vec<String>,
+        holds: Vec<usize>,
+        variant_idx: Option<usize>,
+    },
     /// Pre-segmented phoneme groups, one inner vec per syllable.
     /// User-typed overrides carry no stress, so the syllable stress
     /// defaults to `None`.
@@ -114,6 +122,10 @@ pub(crate) fn tokenize_line(text: &str) -> Vec<LyricToken> {
         // `re·so·lu·tion`; normalise before counting so a lyric written
         // with plain ASCII hyphens splits across notes too.
         let word_body = super::syllabify::normalize_hyphen_marks(&word_body);
+        let (word_body, leading_holds, segment_holds) = split_in_word_holds(&word_body);
+        if sung_seen {
+            tokens.extend(std::iter::repeat_with(|| LyricToken::Slur).take(leading_holds));
+        }
         let trimmed = word_body.trim_matches(|c: char| {
             !c.is_alphabetic() && c != '\'' && c != '\u{00B7}'
         });
@@ -123,11 +135,45 @@ pub(crate) fn tokenize_line(text: &str) -> Vec<LyricToken> {
             .collect();
         let cleaned: String = pieces.concat();
         if !cleaned.is_empty() {
-            tokens.push(LyricToken::Word { cleaned, pieces, variant_idx });
+            // Trimming only drops edge punctuation, so the piece count
+            // normally equals the segment count; clamp anyway.
+            let mut holds = vec![0usize; pieces.len()];
+            for (i, h) in segment_holds.into_iter().enumerate() {
+                holds[i.min(pieces.len() - 1)] += h;
+            }
+            tokens.push(LyricToken::Word { cleaned, pieces, holds, variant_idx });
             sung_seen = true;
+        } else if sung_seen {
+            // A token of holds only (`_·_`) holds the previous syllable.
+            let n: usize = segment_holds.iter().sum();
+            tokens.extend(std::iter::repeat_with(|| LyricToken::Slur).take(n));
         }
     }
     tokens
+}
+
+/// Pull in-word melisma holds out of a `·`-broken word: a `·` segment
+/// that is exactly `_` (or `+`) holds the piece before it onto one more
+/// note (`a·_·ma·zing`). Returns the word without its hold segments, the
+/// number of holds before the first real piece (they hold the previous
+/// word's last syllable, like a standalone `_`), and per real segment the
+/// holds written after it.
+fn split_in_word_holds(word: &str) -> (String, usize, Vec<usize>) {
+    let mut real: Vec<&str> = Vec::new();
+    let mut holds: Vec<usize> = Vec::new();
+    let mut leading = 0usize;
+    for segment in word.split('\u{00B7}') {
+        if is_slur_token(segment) {
+            match holds.last_mut() {
+                Some(h) => *h += 1,
+                None => leading += 1,
+            }
+        } else {
+            real.push(segment);
+            holds.push(0);
+        }
+    }
+    (real.join("\u{00B7}"), leading, holds)
 }
 
 /// Strip a trailing `(N)` from `word` and return `(stripped, variant)`.
@@ -160,7 +206,9 @@ pub(crate) fn note_units(text: &str) -> usize {
     text.split('\n')
         .flat_map(tokenize_line)
         .map(|token| match token {
-            LyricToken::Word { pieces, .. } => pieces.len(),
+            LyricToken::Word { pieces, holds, .. } => {
+                pieces.len() + holds.iter().sum::<usize>()
+            }
             LyricToken::PhonemeBlock(groups) => groups.len(),
             LyricToken::Slur => 1,
             LyricToken::Breath => 0,

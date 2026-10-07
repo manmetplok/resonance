@@ -175,6 +175,8 @@ mod control_view_model_shared;
 mod control_vocal;
 #[path = "control/control_vocal_generate.rs"]
 mod control_vocal_generate;
+#[path = "control/control_vocal_holds.rs"]
+mod control_vocal_holds;
 #[path = "control/control_vocal_lanes.rs"]
 mod control_vocal_lanes;
 #[path = "control/control_vocal_params.rs"]
@@ -183,5 +185,9 @@ mod control_vocal_params;
 mod control_vocal_pronunciation_persistence;
 #[path = "control/control_vocal_render_all_lanes.rs"]
 mod control_vocal_render_all_lanes;
+#[path = "control/control_vocal_render_state.rs"]
+mod control_vocal_render_state;
+#[path = "control/control_vocal_render_state_edits.rs"]
+mod control_vocal_render_state_edits;
 #[path = "control/control_voicebanks.rs"]
 mod control_voicebanks;

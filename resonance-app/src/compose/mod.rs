@@ -8,6 +8,7 @@ pub mod expression_edit;
 pub mod generate;
 pub mod invariants;
 pub mod messages;
+pub mod vocal_render_status;
 pub mod vocal_svs;
 
 mod lane_generator;
@@ -40,6 +41,9 @@ pub use section::{
     SectionPlacementState, SelectedLane,
 };
 pub use state::{ComposeState, RailPanelKey};
+pub use vocal_render_status::{
+    VocalLaneErrorKind, VocalLaneKey, VocalLaneRenderState, VocalLaneRenderStatus,
+};
 
 /// A section whose one vocal render does not fit every bar it plays at
 /// (code review FU-M11b): see `update::compose::vocal_tempo_mismatch`.

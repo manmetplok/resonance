@@ -164,6 +164,8 @@ pub enum LaneParamKnob {
     VocalPortamentoMs,
     VocalArticulation,
     VocalConsonantEmphasis,
+    VocalRestThresholdBeats,
+    VocalVelocityDynamics,
 }
 
 /// Which of the chord inspector's numeric sliders a coalesce run is for —

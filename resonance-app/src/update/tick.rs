@@ -118,7 +118,11 @@ fn export_render_in_flight(r: &Resonance) -> bool {
 /// Handle the per-frame subscription tick.
 pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     let mut tasks = Vec::new();
+    r.tick_drained_state_events = false;
     while let Some(event) = r.engine.try_recv() {
+        if !matches!(event, resonance_audio::types::AudioEvent::PlayheadMoved(..)) {
+            r.tick_drained_state_events = true;
+        }
         let task = crate::engine_events::handle_engine_event(r, event);
         tasks.push(task);
     }

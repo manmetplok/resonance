@@ -205,8 +205,8 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
             }
 
             // Registry keys (§4.3): Delete removes the selected note; `s`
-            // / `+` flip its lyric between the slur marker and the
-            // auto-syllabified surface form (OpenUtau-style).
+            // / `+` make it hold the previous syllable, or stop holding —
+            // a `_` written into / taken out of the lane's lyrics.
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }) => {
                 use crate::commands::{CommandId, KeyChord};
                 let chord = KeyChord::from_event(event)?;

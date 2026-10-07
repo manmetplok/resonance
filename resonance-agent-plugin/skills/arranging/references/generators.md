@@ -100,7 +100,10 @@ same vocal track**, each addressed by passing its section as `section_id` to the
 (`{"style": "folk", "range": {"low": 55, "high": 72}}`) that merges into the
 lane and keeps its lyrics and seed. To change a lane's voice or generator later,
 read it with `vocal_get_params` and patch it with `vocal_set_params`; neither
-renders, so follow with `vocal_generate` or `vocal_render`. `vocal_voicebanks`
+renders, so follow with `vocal_generate` or `vocal_render`. No edit you make
+re-renders a lane by itself: it reads `stale` in `song_vocal` (per lane, with
+the track's render state the worst lane's) until one `vocal_render` after
+your last edit brings it back to `rendered`. `vocal_voicebanks`
 lists the installed voicebanks with their speaker ids, comfortable ranges and
 which expression curves they take; a lane on a bank that is not installed
 renders nothing (`voicebank_missing`), so pick one from that list. When you

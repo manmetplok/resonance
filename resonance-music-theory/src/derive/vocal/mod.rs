@@ -18,7 +18,7 @@ mod params;
 mod style;
 
 pub use lyrics::{generate_lyrics, lyric_corpus_lines, LyricLine};
-pub use melody::{count_syllables, vocal_phrase_spans};
+pub use melody::{count_syllables, derive_vocal_with_holds, vocal_phrase_spans, VocalDerivation};
 pub use params::{
     SyllableMode, VocalContour, VocalMood, VocalParams, VocalParamsError, VocalPov,
     VocalRhymeScheme, VocalStyle, VocalTimbre, VoicebankId,
@@ -40,9 +40,8 @@ use style::derive_with_profile;
 /// generator chosen by `params.style`; each style is its own per-
 /// syllable walk with distinct pitch and rhythm strategies.
 ///
-/// All styles share the same one-note-per-syllable invariant — the SVS
-/// pipeline indexes syllable phonemes by note position, so a melismatic
-/// style would need pipeline changes too (see vocal_svs.rs).
+/// One note per lyric unit whatever `params.syllable_mode` says;
+/// [`derive_vocal_with_holds`] adds the mode's melismas.
 pub fn derive_vocal(
     chords: &[TimedChord],
     params: &VocalParams,

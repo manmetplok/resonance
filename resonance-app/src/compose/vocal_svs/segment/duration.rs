@@ -1,7 +1,8 @@
 //! Phoneme sequence + per-phoneme duration construction. Walks the
 //! clip's MIDI notes back-to-back, runs each note's syllable through
 //! G2P, and lays out consonant/vowel timings — plus the leading and
-//! trailing AP pads, optional word-boundary SP, and optional stop
+//! trailing `SP` pads, rests and written breaths (`AP`, see
+//! [`super::super::rests`]), optional word-boundary SP, and optional stop
 //! closure injections — into the parallel arrays the f0 / tension
 //! stages downstream consume.
 
@@ -11,6 +12,10 @@ use resonance_music_theory::{g2p, VocalParams};
 
 use super::super::registry::BankProfile;
 use super::super::phonemes::{floor_duration_sec, min_articulation_sec, target_duration_sec};
+use super::super::rests::{
+    RestRule, BREATH_MAX_SEC, BREATH_PAD_LEAD_SEC, BREATH_PHONEME, BREATH_TAIL_FRACTION,
+    BREATH_TAIL_MAX_SEC, REST_PHONEME,
+};
 use super::super::SEGMENT_PAD_SEC;
 
 /// Output of [`build_phoneme_track`]: every parallel array the
@@ -114,10 +119,7 @@ pub(super) fn build_phoneme_track(
         entry_note_start_offset: Vec::new(),
     };
 
-    // Leading silence pad. The hand-crafted reference fixtures all
-    // start with a 0.3 s `AP` so the model has time to ramp up cleanly;
-    // skipping this produces an attack click on the first phoneme.
-    push_rest_entry(&mut track, bank, "AP", SEGMENT_PAD_SEC);
+    let rest_rule = RestRule::new(params, bpm);
 
     let note_name_cache: Vec<String> = notes
         .iter()
@@ -130,9 +132,9 @@ pub(super) fn build_phoneme_track(
     // the model handle syllable boundaries naturally. Each note's
     // effective sing duration is the time *until the next note* (or
     // its stated `duration_ticks` for the final note), so any
-    // articulation-trim gap is absorbed automatically. Real silences
-    // (gaps > 0.4 s between consecutive notes, which only happens at
-    // genuine breath / rest points) still become an explicit AP.
+    // articulation-trim gap shorter than the lane's rest threshold is
+    // sung legato. A gap of at least the threshold is a rest: the note
+    // sings its own length and the gap becomes an explicit `SP`.
     let mut plans: Vec<NotePlan> = Vec::with_capacity(notes.len());
     for (i, n) in notes.iter().enumerate() {
         let next_start_tick = notes
@@ -145,12 +147,10 @@ pub(super) fn build_phoneme_track(
         let slot_ticks = next_start_tick.saturating_sub(n.start_tick);
         let slot_sec = slot_ticks as f64 * seconds_per_tick;
 
-        // For genuine silences (long gaps to the next note), cap the
-        // sing duration and put the rest into a trailing AP. Threshold
-        // chosen so half-bar pauses become rests but typical syllable
-        // spacing doesn't.
+        // For rests (gaps of at least `rest_threshold_beats`), cap the
+        // sing duration and put the gap into a trailing rest.
         let sing_sec_cap = (n.duration_ticks as f64 * seconds_per_tick).max(0.05);
-        let (sing_sec, ap_sec) = if slot_sec > sing_sec_cap + super::super::SILENCE_GAP_SEC {
+        let (sing_sec, ap_sec) = if rest_rule.is_rest(slot_sec, sing_sec_cap) {
             (sing_sec_cap, slot_sec - sing_sec_cap)
         } else {
             (slot_sec, 0.0)
@@ -197,6 +197,7 @@ pub(super) fn build_phoneme_track(
             sing_sec,
             ap_sec,
             sp_sec,
+            breath_sec: 0.0,
             velocity: stressed_velocity,
         });
     }
@@ -204,6 +205,17 @@ pub(super) fn build_phoneme_track(
     // Pass 1b: lift slots under the minimum by borrowing from their
     // neighbours, so the segment still spans exactly the notes' ticks.
     borrow_min_slot(&mut plans, MIN_NOTE_SEC);
+
+    // Pass 1c: written breaths take the end of the gap before their note
+    // (and, when that is short, some of the previous note's tail).
+    place_breaths(&mut plans, assigned);
+
+    // Leading silence pad. The hand-crafted reference fixtures all
+    // start with 0.3 s of silence so the model has time to ramp up
+    // cleanly; skipping this produces an attack click on the first
+    // phoneme. A breath on the first note takes the end of it.
+    let lead_breath = plans.first().map_or(0.0, |p| p.breath_sec);
+    push_rest_entry(&mut track, bank, REST_PHONEME, SEGMENT_PAD_SEC - lead_breath);
 
     // Pass 2: pull each syllable's onset consonants back across the
     // preceding note boundary (see `onset_lead_in` above). Purely a
@@ -220,6 +232,10 @@ pub(super) fn build_phoneme_track(
         // No floor here: the slot was already floored by borrowing, and
         // a floor at this point would add time (VIEW-34).
         let phon_sing_sec = (sing_sec - sp_sec).max(0.0);
+
+        if plan.breath_sec > 0.0 {
+            push_rest_entry(&mut track, bank, BREATH_PHONEME, plan.breath_sec);
+        }
 
         // Split `phon_sing_sec` across phonemes with per-class targets
         // and audibility floors — see [`allocate_phoneme_durations`].
@@ -288,12 +304,12 @@ pub(super) fn build_phoneme_track(
         }
 
         if ap_sec > 0.0 {
-            push_rest_entry(&mut track, bank, "AP", ap_sec);
+            push_rest_entry(&mut track, bank, REST_PHONEME, ap_sec);
         }
     }
 
-    // Trailing silence pad, mirroring the leading AP.
-    push_rest_entry(&mut track, bank, "AP", SEGMENT_PAD_SEC);
+    // Trailing silence pad, mirroring the leading one.
+    push_rest_entry(&mut track, bank, REST_PHONEME, SEGMENT_PAD_SEC);
 
     track
 }
@@ -386,6 +402,10 @@ struct NotePlan<'a> {
     ap_sec: f64,
     /// Word-boundary SP reserved at the end of `sing_sec`.
     sp_sec: f64,
+    /// Written breath sung right before this note's phonemes, taken from
+    /// the previous rest / note tail (or, on the first note, the leading
+    /// pad) by [`place_breaths`].
+    breath_sec: f64,
     velocity: f32,
 }
 
@@ -435,7 +455,7 @@ fn apply_onset_lead_in(plans: &mut [NotePlan], emphasis: f32, scale: f64) {
             continue;
         }
         let prev = &plans[i - 1];
-        if prev.ap_sec > 0.0 || prev.sp_sec > 0.0 {
+        if prev.ap_sec > 0.0 || prev.sp_sec > 0.0 || plans[i].breath_sec > 0.0 {
             continue;
         }
         let prev_phoneme_sec = prev.phoneme_sec();
@@ -448,6 +468,38 @@ fn apply_onset_lead_in(plans: &mut [NotePlan], emphasis: f32, scale: f64) {
         }
         plans[i - 1].sing_sec -= lead;
         plans[i].sing_sec += lead;
+    }
+}
+
+/// Give every note whose syllable asks for a breath (`breath_before`) a
+/// [`BREATH_PHONEME`] of up to [`BREATH_MAX_SEC`] in front of it.
+///
+/// The breath fills the end of the rest before the note; when the rest is
+/// shorter than that, or the join is legato, it also takes up to
+/// [`BREATH_TAIL_FRACTION`] of the previous note's phonemes (at most
+/// [`BREATH_TAIL_MAX_SEC`]). On the first note it takes the end of the
+/// leading pad, keeping [`BREATH_PAD_LEAD_SEC`] of silence before it. Time
+/// only moves between neighbours, so the segment's length is unchanged.
+fn place_breaths(plans: &mut [NotePlan], assigned: &[AssignedSyllable]) {
+    for i in 0..plans.len() {
+        if !assigned.get(i).is_some_and(|a| a.breath_before && !a.is_slur) {
+            continue;
+        }
+        if i == 0 {
+            plans[0].breath_sec = BREATH_MAX_SEC.min(SEGMENT_PAD_SEC - BREATH_PAD_LEAD_SEC);
+            continue;
+        }
+        let prev = &mut plans[i - 1];
+        let from_gap = prev.ap_sec.min(BREATH_MAX_SEC);
+        prev.ap_sec -= from_gap;
+        let from_tail = (BREATH_MAX_SEC - from_gap)
+            .min(prev.phoneme_sec() * BREATH_TAIL_FRACTION)
+            .min(BREATH_TAIL_MAX_SEC)
+            // Never under the minimum slot `borrow_min_slot` just secured.
+            .min(prev.phoneme_sec() - MIN_NOTE_SEC)
+            .max(0.0);
+        prev.sing_sec -= from_tail;
+        plans[i].breath_sec = from_gap + from_tail;
     }
 }
 
@@ -547,9 +599,8 @@ fn allocate_phoneme_durations(phonemes: &[&str], slot_sec: f64, emphasis: f32) -
     out
 }
 
-/// Append a rest entry (`AP`/`SP`) to every parallel array in `track`.
-/// The leading pad, trailing pad, and long-gap rest insertions all
-/// shared the same boilerplate before this helper.
+/// Append a rest or breath entry (`SP`/`AP`) to every parallel array in
+/// `track`: the leading and trailing pads, rests and written breaths.
 fn push_rest_entry(track: &mut PhonemeTrack, bank: &BankProfile, kind: &str, dur: f64) {
     track.ph_seq.push(bank.phoneme_name(kind));
     track.ph_dur.push(dur);

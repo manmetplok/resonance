@@ -1,5 +1,6 @@
 //! Voice & delivery group — timbre / voicebank / speaker / vibrato /
-//! tension / portamento / articulation / consonant emphasis.
+//! tension / portamento / articulation / consonant emphasis / rest
+//! threshold / velocity dynamics.
 //!
 //! The Voicebank and Speaker pickers are driven by the voicebank registry
 //! (vocal-mcp-control-and-quality.md §4): the options are the installed
@@ -180,6 +181,39 @@ pub(super) fn voice_group<'a>(
     .step(0.01)
     .width(Length::Fill);
 
+    // Rest threshold: a gap of at least this many beats is silence, a
+    // shorter one is sung legato (spec §8).
+    let (rest_lo, rest_hi) = VocalParams::REST_THRESHOLD_BEATS;
+    let rest_label = dim_label(format!(
+        "Rest after gap · {:.3} beat",
+        params.rest_threshold_beats
+    ));
+    let rest_slider = slider(rest_lo..=rest_hi, params.rest_threshold_beats, move |v| {
+        Message::Compose(ComposeMessage::LaneInspector {
+            definition_id,
+            track_id,
+            msg: LaneInspectorMsg::SetVocalRestThresholdBeats(v),
+        })
+    })
+    .step(0.125)
+    .width(Length::Fill);
+
+    // Velocity → loudness: the bank's energy curve where it has one, and
+    // a ±6 dB per-note gain on every bank (spec §9).
+    let dynamics_label = dim_label(format!(
+        "Velocity \u{2192} loudness · {:.2}",
+        params.velocity_dynamics
+    ));
+    let dynamics_slider = slider(0.0..=1.0, params.velocity_dynamics, move |v| {
+        Message::Compose(ComposeMessage::LaneInspector {
+            definition_id,
+            track_id,
+            msg: LaneInspectorMsg::SetVocalVelocityDynamics(v),
+        })
+    })
+    .step(0.05)
+    .width(Length::Fill);
+
     // Slider math is `trim = 0.98 - 0.48 * articulation`, so low =
     // notes fill the slot (legato) and high = notes are short with
     // gaps (staccato). Labels reflect that direction.
@@ -244,7 +278,15 @@ pub(super) fn voice_group<'a>(
         .push(Space::new().height(6))
         .push(consonant_label)
         .push(Space::new().height(2))
-        .push(consonant_slider);
+        .push(consonant_slider)
+        .push(Space::new().height(6))
+        .push(rest_label)
+        .push(Space::new().height(2))
+        .push(rest_slider)
+        .push(Space::new().height(6))
+        .push(dynamics_label)
+        .push(Space::new().height(2))
+        .push(dynamics_slider);
 
     group_card(body.into())
 }

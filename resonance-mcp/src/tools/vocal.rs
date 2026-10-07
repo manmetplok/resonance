@@ -28,7 +28,12 @@ impl ResonanceMcp {
                        has chords. section_id picks the lane; seed makes the result \
                        reproducible. Pass lyrics: false to keep lyrics you wrote with \
                        vocal_set_lyrics — the default regenerates them. Returns the clip_id to \
-                       inspect with song_notes and edit with notes_*, then vocal_render. When \
+                       inspect with song_notes and edit with notes_*, then vocal_render. The \
+                       lane's syllable_mode shapes the melody: syllabic sings one note per \
+                       lyric unit; mixed gives some line-final and long stressed syllables 2-3 \
+                       notes; melismatic does so more often. Those generator holds read \
+                       slur: \"auto\" in song_vocal and are regenerated each time; holds you \
+                       want to keep belong in the lyrics as _. When \
                        the lane's voicebank is not installed the melody is still generated \
                        and render_error {kind: voicebank_missing, message} says so; pick an \
                        installed bank (vocal_voicebanks) with vocal_set_params, then \
@@ -46,7 +51,8 @@ impl ResonanceMcp {
     #[tool(
         description = "Read a vocal lane's full settings: voicebank and speaker, timbre, \
                        vibrato, vibrato_rate, tension, tension_velocity_amount, \
-                       tension_contour_amount, portamento_ms, articulation, consonant_emphasis; \
+                       tension_contour_amount, portamento_ms, articulation, consonant_emphasis, \
+                       rest_threshold_beats, velocity_dynamics; \
                        the melody generator's voice, range {low, high}, style, contour, \
                        syllable_mode, chord_tone_anchor, leap_range, phrase_length_bars, breath, \
                        stay_in_scale, avoid_clashes, use_section_motif; and the lyric \
@@ -80,6 +86,9 @@ impl ResonanceMcp {
                        result is validated before anything \
                        changes and a bad value is rejected naming the field (0..1 sliders, \
                        tension -1..1, vibrato_rate 1..20 Hz, portamento_ms 0..500, \
+                       rest_threshold_beats 0.125..4 — a gap between notes of at least that \
+                       many beats is sung as silence, a shorter one legato; velocity_dynamics \
+                       0..1 — how much note velocity changes loudness, \
                        syllables_min <= syllables_max, range.low < range.high). One undo step; \
                        returns the full params. Lyrics are NOT here (vocal_set_lyrics / \
                        vocal_set_line). It never renders or regenerates: call vocal_generate \
@@ -114,7 +123,8 @@ impl ResonanceMcp {
                        Two standalone markers (separated by spaces): _ holds the previous \
                        syllable onto the next note — a melisma, \"love _ _\" is one syllable \
                        over three notes, its final consonant sung at the end of the hold (+ \
-                       is an alias; a spaced - is just a dash and is ignored). AP (uppercase) \
+                       is an alias; a spaced - is just a dash and is ignored). Inside a broken \
+                       word a _ piece holds the piece before it: \"a·_·ma·zing\". AP (uppercase) \
                        marks a breath before the next word and takes no note; it is not yet \
                        rendered as a breath sound. \
                        \
@@ -220,9 +230,11 @@ impl ResonanceMcp {
                        stores it on every lane the call covers. A lane whose bank or vocoder \
                        is not installed fails the whole call with voicebank_missing, naming \
                        the bank, before anything renders. \
-                       Caution: song_vocal's render_state reports `rendered` when ANY lane \
-                       on the track has audio, so it is not proof that every lane is \
-                       current. Runs as a job — this tool waits up \
+                       Edits made through these tools (lyrics, notes, chords, params, \
+                       pronunciation) never re-render on their own: the lane turns `stale` \
+                       in song_vocal (its old audio keeps playing), so batch your edits and \
+                       call this once; song_vocal then reads `rendered` per lane, and the \
+                       track-level render_state is the worst lane's. Runs as a job — this tool waits up \
                        to 2 minutes and returns the final status; if still running, poll \
                        job_status with the returned job_id. Needs a vocal lane \
                        (section_set_lane_generator kind \"vocal\") with notes AND lyrics — \

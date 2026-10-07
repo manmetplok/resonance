@@ -581,3 +581,50 @@ fn a_render_that_switches_the_bank_resets_the_speaker() {
     render(&mut app, "meiji");
     assert_eq!(get_params(&mut app, def).params.speaker.as_deref(), Some("standard"));
 }
+
+/// `rest_threshold_beats` and `velocity_dynamics` (spec §8, §9): default,
+/// set, echoed by `get_params` and `song.vocal`, range-checked.
+#[test]
+fn rest_threshold_and_velocity_dynamics_round_trip_and_are_range_checked() {
+    let (mut app, def) = one_lane_app();
+    let before = get_params(&mut app, def);
+    assert_eq!(before.params.rest_threshold_beats, 0.5);
+    assert_eq!(before.params.velocity_dynamics, 0.5);
+
+    let reply: proto::ParamsResult = set_params(
+        &mut app,
+        def,
+        json!({ "rest_threshold_beats": 1.5, "velocity_dynamics": 0.8 }),
+    )
+    .result()
+    .expect("vocal.set_params succeeds");
+    assert_eq!(reply.params.rest_threshold_beats, 1.5);
+    assert_eq!(reply.params.velocity_dynamics, 0.8);
+    let mut expected = before.params.clone();
+    expected.rest_threshold_beats = 1.5;
+    expected.velocity_dynamics = 0.8;
+    assert_eq!(reply.params, expected, "nothing else moved");
+    assert_eq!(get_params(&mut app, def).params, expected);
+    assert_eq!(vocal_view(&mut app).lanes[0].params, expected);
+
+    // The ends of the ranges are accepted.
+    for (field, value) in [
+        ("rest_threshold_beats", 0.125),
+        ("rest_threshold_beats", 4.0),
+        ("velocity_dynamics", 0.0),
+        ("velocity_dynamics", 1.0),
+    ] {
+        set_params(&mut app, def, json!({ field: value }))
+            .result::<proto::ParamsResult>()
+            .unwrap_or_else(|e| panic!("{field} = {value} is in range: {e:?}"));
+    }
+    for (field, value) in [
+        ("rest_threshold_beats", 0.1),
+        ("rest_threshold_beats", 4.5),
+        ("velocity_dynamics", -0.1),
+        ("velocity_dynamics", 1.1),
+    ] {
+        let message = expect_invalid(set_params(&mut app, def, json!({ field: value })));
+        assert!(message.contains(field), "{field} = {value} names the field: {message}");
+    }
+}
