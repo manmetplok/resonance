@@ -121,7 +121,13 @@ impl ResonanceMcp {
 
     #[tool(
         description = "A vocal track's lanes, the project's pronunciation overrides, and the \
-                       SVS render state (not_rendered/rendering/rendered/stale/error). Omit \
+                       SVS render state (not_rendered/rendering/rendered/stale/error) — per \
+                       lane (`render_state`, with `stale_units` when stale and `error {kind, \
+                       message}` when the last render failed) and for the track as the worst \
+                       lane (error > rendering > stale > not_rendered > rendered). `stale` \
+                       means the lane changed since its audio was rendered; the old audio \
+                       plays until vocal_render replaces it, and edits made over MCP never \
+                       re-render on their own. Omit \
                        track_id for the first vocal track. `lanes` lists the track's vocal \
                        lanes — one per (section, track) — each with the section's \
                        definition_id and name, its start_bar, its full params (the \

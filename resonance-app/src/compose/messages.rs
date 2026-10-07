@@ -350,6 +350,15 @@ pub enum ComposeMessage {
         track_id: TrackId,
         render_epoch: u64,
     },
+    /// The debounce timer of a GUI edit to a vocal lane ran out: re-render
+    /// the lane, unless a later edit re-armed it (`generation` no longer
+    /// the lane's) or nothing is stale any more. Only GUI edits arm it;
+    /// control-API edits leave the lane `stale` (spec §7, D20).
+    VocalAutoRender {
+        definition_id: u64,
+        track_id: TrackId,
+        generation: u64,
+    },
 }
 
 impl ComposeMessage {
@@ -391,7 +400,9 @@ impl ComposeMessage {
             // its handler: it changed the project's clips.
             Self::VocalAudioReady(..)
             | Self::VocalAudioFailed { .. }
-            | Self::VocalAudioUnavailable { .. } => UndoAction::Skip,
+            | Self::VocalAudioUnavailable { .. }
+            // The tail of the edit that armed it, like a render result.
+            | Self::VocalAutoRender { .. } => UndoAction::Skip,
             // The nested editors classify themselves.
             Self::DrumGroups(m) => m.undo_action(),
             Self::Arrangement(m) => m.undo_action(),
@@ -475,6 +486,11 @@ pub struct VocalAudioReadyData {
     /// re-renders on a mismatch rather than installing audio at the wrong
     /// tempo (FU-V2d).
     pub bpm: f32,
+    /// The unit content keys of the take, in unit order
+    /// (`SvsRenderCache::last_keys`): recorded per installed clip so the
+    /// lane's render state can tell when the take stops matching its
+    /// content (vocal-mcp-control-and-quality.md §7).
+    pub unit_keys: Vec<u64>,
 }
 
 // ---------------------------------------------------------------------------

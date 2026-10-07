@@ -1,6 +1,6 @@
 # Vocals: MCP control, voicebank library, correctness and expression
 
-> Status: **partly built** (slices 1–5, 8, 10 and 11 built; progress per slice in §12)
+> Status: **partly built** (slices 1–5 and 8–13 built; progress per slice in §12)
 > Area: compose (vocals) + control-api + plugins-instruments (library)
 > Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
 > (every decision below was put to him as a multiple-choice question; §11
@@ -485,7 +485,17 @@ handler, MCP tool, GUI, tests, and the feature doc with its
    generator hold converts the generator holds before it too;
    `SyllableMode` is a post-pass splitting the finished syllabic notes
    (Syllabic unchanged), called through `derive_vocal_with_holds`.
-9. **Render state.**
+9. **Render state.** ✅ built (phase 3; see
+   [vocal rendering § render state](../../features/compose/vocal-rendering.md#render-state)).
+   Deviations: the GUI debounce re-renders only lanes that already have
+   audio, a render in flight or a failed render (a never-rendered lane
+   waits for Generate / Re-render), and not when the edit changes no unit
+   key; the plan memo is keyed by a fingerprint of the plan's inputs, not
+   a lane revision counter; the top-level order is `error > rendering >
+   stale > not_rendered > rendered`; the badge also shows `RENDERING` and
+   an error card; a take saved before keys existed reads `stale`; chord
+   and length edits no longer render at all (they re-derive the melody
+   and leave the lane stale), which replaces plumbing the dropped Task.
    - Per-lane state from plan hashes, with keys saved with the audio.
    - The debounced GUI re-render and the stale badge.
    - The chord-edit Task fix.

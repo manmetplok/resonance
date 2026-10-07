@@ -56,7 +56,7 @@ mod grid;
 mod keyboard;
 mod notes;
 
-pub use build::build_canvas;
+pub use build::{build_canvas, lane_for_clip};
 
 /// Width of the piano keyboard column.
 pub const VR_KEYBOARD_WIDTH: f32 = 56.0;

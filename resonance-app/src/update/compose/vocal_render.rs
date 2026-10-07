@@ -3,8 +3,8 @@
 //! side-effects of producing audible vocals — deriving the MIDI clip,
 //! queuing the off-thread SVS render, installing the resulting WAV at
 //! every section placement, and the lifecycle bookkeeping (epochs,
-//! tear-downs) that keeps back-to-back regen presses from stacking
-//! clips.
+//! the swap at install) that keeps back-to-back regen presses from
+//! stacking clips.
 //!
 //! Collaborators carry the pieces that aren't orchestration
 //! (ba todo #1259):
@@ -27,7 +27,6 @@ use resonance_audio::types::TrackId;
 use crate::compose::{ComposeMessage, LaneGeneratorKind};
 use crate::message::Message;
 
-use super::vocal_audio_install::tear_down_old_vocal_audio;
 use super::vocal_audio_io;
 use super::vocal_midi_install::VocalMidiInstall;
 use super::vocal_render_plan::{self as plan, VocalRenderPlan};
@@ -93,26 +92,57 @@ pub(super) fn roll_vocal_melody(
     definition_id: u64,
     track_id: TrackId,
 ) -> Task<Message> {
+    match derive_vocal_melody(r, definition_id, track_id) {
+        Some(request) => enqueue_vocal_render(r, request),
+        None => Task::none(),
+    }
+}
+
+/// [`roll_vocal_melody`] without the render: the lane's MIDI is re-derived
+/// and installed, and its audio is left as it is — now stale. What a
+/// chord or section-length edit does to a vocal lane as a side effect
+/// (spec §7, D21): a GUI edit's debounced re-render picks it up
+/// (`vocal_render_state::settle`), a control edit leaves it `stale` until
+/// `vocal.render`.
+pub(super) fn rederive_vocal_melody(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+) {
+    let _ = derive_vocal_melody(r, definition_id, track_id);
+}
+
+/// Derive the lane's melody from its section's chords and install it as
+/// the lane's MIDI clip at every placement; the render request for it, or
+/// `None` when there is nothing to derive.
+fn derive_vocal_melody(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+) -> Option<VocalRenderRequest> {
     use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 
     if !super::track_exists(r, track_id) {
-        return Task::none();
+        return None;
     }
-    let Some(mut def) = r.compose.find_definition(definition_id).cloned() else {
-        return Task::none();
-    };
-    let Some(cfg) = def.lane_generators.get(&track_id).cloned() else {
-        return Task::none();
-    };
+    let mut def = r.compose.find_definition(definition_id).cloned()?;
+    let cfg = def.lane_generators.get(&track_id).cloned()?;
     let LaneGeneratorKind::Vocal(params) = cfg.kind else {
-        return Task::none();
+        return None;
     };
     if let Err(e) = params.validate() {
-        r.compose.last_error = Some(format!("Vocal params invalid: {e}"));
-        return Task::none();
+        let message = format!("Vocal params invalid: {e}");
+        super::vocal_render_state::record_lane_error(
+            r,
+            (definition_id, track_id),
+            crate::compose::VocalLaneErrorKind::InvalidParams,
+            message.clone(),
+        );
+        r.compose.last_error = Some(message);
+        return None;
     }
     if def.chords.is_empty() || params.draft.is_empty() {
-        return Task::none();
+        return None;
     }
 
     // Constrain the vocal melody to the user's pinned chord-track harmony
@@ -143,7 +173,7 @@ pub(super) fn roll_vocal_melody(
     );
     let notes = &derived.notes;
     if notes.is_empty() {
-        return Task::none();
+        return None;
     }
 
     let duration_ticks = def.length_bars as u64 * meter.numerator as u64 * TICKS_PER_QUARTER_NOTE;
@@ -191,18 +221,15 @@ pub(super) fn roll_vocal_melody(
         name: &name,
     }
     .install(r);
-    enqueue_vocal_render(
-        r,
-        VocalRenderRequest {
-            definition_id,
-            track_id,
-            midi_notes,
-            lyrics: initial_lyrics,
-            params,
-            placement_starts,
-            clip_name: name,
-        },
-    )
+    Some(VocalRenderRequest {
+        definition_id,
+        track_id,
+        midi_notes,
+        lyrics: initial_lyrics,
+        params,
+        placement_starts,
+        clip_name: name,
+    })
 }
 
 /// One lane's request to render: what to sing, and where its audio
@@ -222,9 +249,11 @@ struct VocalRenderRequest {
 }
 
 /// Shared off-thread vocal render path: plan, check the lane's bank is
-/// installed, tear down the prior audio, bump the in-flight epoch
-/// (stale-result protection against back-to-back presses), then spawn
-/// the SVS pipeline on a blocking thread. The two
+/// installed, bump the in-flight epoch (stale-result protection against
+/// back-to-back presses), then spawn the SVS pipeline on a blocking
+/// thread. The lane's current audio stays installed and audible until the
+/// new take replaces it (`handle_vocal_audio_ready`; spec §7, D22) — a
+/// render that fails or is superseded leaves it in place. The two
 /// callers — `roll_vocal_melody` (full regenerate) and
 /// `rerender_vocal_audio` (notes-only) — differ only in how they produce
 /// `midi_notes` and `lyrics`; everything after that is identical, so it
@@ -238,16 +267,23 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
     // installed still plans (the built-in table answers for it), so a
     // blocked phoneme is reported first; the missing bank right after.
     let bank = r.voicebanks.profile(&req.params.voicebank);
+    let lane = (req.definition_id, req.track_id);
     let plan = match plan_render(r, &req, &bank) {
         Ok(plan) => plan,
         Err(message) => {
+            super::vocal_render_state::record_lane_error(
+                r,
+                lane,
+                crate::compose::VocalLaneErrorKind::UnsupportedPhonemes,
+                message.clone(),
+            );
             r.compose.last_error = Some(message);
             return Task::none();
         }
     };
     // A bank (or vocoder) that is not installed fails here, before the
-    // tear-down, like a blocked phoneme: the render job would only find
-    // it missing after the old audio was gone, leaving the lane silent.
+    // epoch bump, like a blocked phoneme: the render is never queued and
+    // the lane keeps its audio.
     if let Err(missing) = render_target_or_missing(r, &req.params, &bank) {
         let message = missing.to_string();
         r.control.jobs.fail_vocal_lane(
@@ -256,12 +292,18 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
             message.clone(),
             Some(crate::compose::vocal_svs::VocalRenderErrorKind::VoicebankMissing),
         );
+        super::vocal_render_state::record_lane_error(
+            r,
+            lane,
+            crate::compose::VocalLaneErrorKind::VoicebankMissing,
+            message.clone(),
+        );
         r.compose.last_error = Some(message);
         return Task::none();
     }
 
-    tear_down_old_vocal_audio(r, req.definition_id, req.track_id);
     let render_epoch = bump_render_epoch(r, req.definition_id, req.track_id);
+    super::vocal_render_state::note_render_queued(r, lane);
     r.compose.last_error = None;
 
     let job = vocal_audio_io::VocalRenderJob {
@@ -435,20 +477,21 @@ fn spawn_render(
                 })
         },
         move |result| match result {
-            Ok(Some((wav_path, trim_start, trim_end))) => Message::Compose(
-                ComposeMessage::VocalAudioReady(Box::new(VocalAudioReadyData {
+            Ok(Some(take)) => Message::Compose(ComposeMessage::VocalAudioReady(Box::new(
+                VocalAudioReadyData {
                     definition_id,
                     track_id,
-                    wav_path,
+                    wav_path: take.path,
                     placements: audio_starts.clone(),
                     clip_name: clip_name.clone(),
-                    trim_start_frames: trim_start,
-                    trim_end_frames: trim_end,
+                    trim_start_frames: take.trim_start_frames,
+                    trim_end_frames: take.trim_end_frames,
                     lead_ticks,
                     render_epoch,
                     bpm,
-                })),
-            ),
+                    unit_keys: take.unit_keys,
+                },
+            ))),
             Ok(None) => Message::Compose(ComposeMessage::VocalAudioUnavailable {
                 definition_id,
                 track_id,
@@ -502,23 +545,28 @@ pub(super) fn rerender_vocal_audio(
         return Task::none();
     }
 
+    let no_notes = |r: &mut crate::Resonance, message: &str| {
+        super::vocal_render_state::record_lane_error(
+            r,
+            (definition_id, track_id),
+            crate::compose::VocalLaneErrorKind::NoNotes,
+            message.to_owned(),
+        );
+        r.compose.last_error = Some(message.to_owned());
+        Task::none()
+    };
     let Some(clip_id) = lane_midi_clip(r, definition_id, track_id, &placements) else {
-        r.compose.last_error =
-            Some("Generate a vocal first \u{2014} no MIDI clip to render.".to_string());
-        return Task::none();
+        return no_notes(r, "Generate a vocal first \u{2014} no MIDI clip to render.");
     };
     let (midi_notes, clip_name) = {
         let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) else {
-            r.compose.last_error =
-                Some("Vocal MIDI clip vanished \u{2014} regenerate the melody.".to_string());
-            return Task::none();
+            return no_notes(r, "Vocal MIDI clip vanished \u{2014} regenerate the melody.");
         };
         if clip.notes.is_empty() {
-            r.compose.last_error = Some(
-                "Vocal MIDI clip has no notes \u{2014} draw or generate before rendering."
-                    .to_string(),
+            return no_notes(
+                r,
+                "Vocal MIDI clip has no notes \u{2014} draw or generate before rendering.",
             );
-            return Task::none();
         }
         let notes: Vec<MidiNote> = clip.notes.as_ref().clone();
         (notes, clip.name.clone())
@@ -558,7 +606,7 @@ pub(super) fn rerender_vocal_audio(
 /// permanently unrenderable while `song.vocal` cheerfully reports it as
 /// having notes — the two must agree. `song.vocal`'s `lane_clip` and the
 /// `lane_has_notes` pre-flight resolve it the same way.
-fn lane_midi_clip(
+pub(super) fn lane_midi_clip(
     r: &crate::Resonance,
     definition_id: u64,
     track_id: TrackId,

@@ -338,6 +338,11 @@ pub struct VocalView {
     /// (lowercase ARPAbet-style phonemes).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pronunciation_overrides: BTreeMap<String, Vec<String>>,
+    /// The worst of [`VocalLaneView::render_state`] over the track's
+    /// lanes, in the order `error > rendering > stale > not_rendered >
+    /// rendered`: `rendered` only when every lane is; `not_rendered` for
+    /// a track with no lanes. (Until protocol 2 + vocal phase 3 it read
+    /// `rendered` as soon as ANY lane had audio.)
     pub render_state: VocalRenderState,
     pub revision: u64,
 }
@@ -407,6 +412,50 @@ pub struct VocalLaneView {
     /// How many of [`Self::notes`] are `out_of_range`.
     #[serde(default)]
     pub out_of_range_note_count: usize,
+    /// Whether this lane's audio matches its notes, lyrics and settings.
+    /// `stale`: something the render reads changed since the audio was
+    /// rendered — the old audio keeps playing until `vocal.render`
+    /// replaces it (control edits never re-render on their own).
+    #[serde(default)]
+    pub render_state: VocalRenderState,
+    /// When `stale`: how many render units (phrases between rests) the
+    /// next render re-synthesises; the rest come from the render cache.
+    /// `0` otherwise, and when an edit only removed units.
+    #[serde(default)]
+    pub stale_units: usize,
+    /// When `error`: why the lane's last render failed. Cleared by a
+    /// successful render or any edit to the lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<VocalRenderErrorView>,
+}
+
+/// Why a vocal lane's last render failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VocalRenderErrorView {
+    pub kind: VocalRenderErrorKind,
+    /// The failure as the app reported it.
+    pub message: String,
+}
+
+/// What kind of failure stopped a vocal render, snake_case on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalRenderErrorKind {
+    /// The lane's voicebank, or its vocoder, is not installed
+    /// (`vocal_voicebanks` lists what is).
+    VoicebankMissing,
+    /// Every phrase resolved to no phonemes: check the lyrics.
+    NothingToSing,
+    /// The lane has no notes to sing (`vocal.generate` writes them).
+    NoNotes,
+    /// A syllable has a phoneme the voicebank cannot sing.
+    UnsupportedPhonemes,
+    /// The lane's settings do not validate.
+    InvalidParams,
+    /// The synthesis itself failed.
+    RenderFailed,
 }
 
 /// An inclusive MIDI pitch range with human-readable note names.
@@ -526,19 +575,22 @@ pub struct SyllableView {
     pub phonemes: Vec<String>,
 }
 
-/// SVS render state of a vocal track, lowercase on the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// SVS render state of a vocal lane (or, summarised, a track),
+/// snake_case on the wire.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum VocalRenderState {
-    /// No render exists yet.
+    /// No audio and no failed render.
+    #[default]
     NotRendered,
-    /// A render job is queued or running.
+    /// A render is queued or running; any older audio plays until it lands.
     Rendering,
-    /// The rendered audio is up to date with lyrics/notes.
+    /// The audio is what the lane's notes, lyrics and settings render to.
     Rendered,
-    /// Lyrics/notes changed since the last render.
+    /// Something the render reads changed since the audio was rendered;
+    /// the old audio keeps playing until a render replaces it.
     Stale,
-    /// The last render failed.
+    /// The last render failed (see the lane's `error`).
     Error,
 }

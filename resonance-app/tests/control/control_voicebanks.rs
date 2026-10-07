@@ -464,7 +464,7 @@ fn generate_reports_the_missing_bank_instead_of_succeeding_silently() {
 
 /// A render that would fail on a missing bank must not take the lane's
 /// old audio with it: the GUI re-render and `vocal.generate`'s
-/// auto-render both check the bank before the tear-down. `generate`
+/// auto-render both check the bank before queuing anything. `generate`
 /// still writes its melody and reports the bank as `render_error`.
 #[test]
 fn a_render_with_a_missing_bank_keeps_the_old_audio() {
@@ -498,11 +498,16 @@ fn a_render_with_a_missing_bank_keeps_the_old_audio() {
     );
     assert_eq!(app.test_vocal_audio_clips(TRACK), [(def, 900_777)], "still kept");
 
-    // Installed, the same render replaces it.
+    // Installed, the same render is queued; the old take plays until the
+    // new one lands, and is replaced then (spec §7, D22).
     app.test_install_shipped_voicebanks();
     let _ = app.update(rerender);
-    assert!(app.test_vocal_audio_clips(TRACK).is_empty(), "torn down for the new take");
     assert_ne!(app.test_vocal_render_epoch(def, TRACK), epoch, "a render is queued");
+    assert_eq!(app.test_vocal_audio_clips(TRACK), [(def, 900_777)], "plays while rendering");
+    assert!(app.test_finish_vocal_render(def, TRACK));
+    let now = app.test_vocal_audio_clips(TRACK);
+    assert_eq!(now.len(), 1, "{now:?}");
+    assert_ne!(now[0].1, 900_777, "the new take replaced the old one");
 }
 
 #[test]

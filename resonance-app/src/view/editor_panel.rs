@@ -62,9 +62,14 @@ impl crate::Resonance {
         let variant = self.classify_editor_variant(editor_state.track_id);
         // The piano roll carries the Quantize panel (todo #392); the vocal
         // roll has its own timing affordances, so it gets `None`.
+        let mut render_chip = None;
         let (body, toolbar_label, toolbar_accent, panel_height, quantize_panel) = match variant {
             EditorVariant::Vocal => {
                 let vocal_canvas = vocal_roll::build_canvas(self, clip)?;
+                // The lane's stale / error badge (vocal render state §7).
+                render_chip = vocal_roll::lane_for_clip(self, clip)
+                    .and_then(|lane| self.compose.vocal_audio.status.lanes.get(&lane))
+                    .and_then(crate::view::compose::vocal_render_badge::render_chip);
                 let label = format!("Vocal: {}  ·  {}", clip.name, vocal_canvas.voice_label);
                 let extra_ticks: u64 =
                     4 * (self.transport.time_sig_num as u64) * TICKS_PER_QUARTER_NOTE;
@@ -147,20 +152,23 @@ impl crate::Resonance {
             .size(11)
             .color(theme::TEXT_3)
             .font(theme::MONO_FONT);
-        let editor_toolbar = container(
-            row![
-                editor_label,
-                Space::new().width(Length::Fixed(12.0)),
-                note_count,
-                Space::new().width(Length::Fill),
-                close_btn,
-            ]
+        let mut toolbar_row = row![
+            editor_label,
+            Space::new().width(Length::Fixed(12.0)),
+            note_count,
+        ];
+        if let Some(chip) = render_chip {
+            toolbar_row = toolbar_row.push(chip);
+        }
+        let toolbar_row = toolbar_row
+            .push(Space::new().width(Length::Fill))
+            .push(close_btn)
             .spacing(8)
             .align_y(alignment::Vertical::Center)
-            .padding([4, 8]),
-        )
-        .width(Length::Fill)
-        .style(theme::panel_outlined);
+            .padding([4, 8]);
+        let editor_toolbar = container(toolbar_row)
+            .width(Length::Fill)
+            .style(theme::panel_outlined);
 
         let editor_panel = match quantize_panel {
             Some(panel) => column![editor_toolbar, panel, body].spacing(0),

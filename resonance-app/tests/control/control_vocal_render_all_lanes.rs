@@ -110,8 +110,9 @@ fn three_lane_app() -> (Resonance, Vec<u64>) {
         singing_lane(&mut app, "Outro", 9, TRACK),
     ];
     // Audio a previous session rendered, one clip per lane. A re-render
-    // tears its lane's entry down; a lane that is never dispatched keeps
-    // pointing at this stale clip — the exact symptom reported.
+    // replaces its lane's entry when it lands; a lane that is never
+    // dispatched keeps pointing at this stale clip — the exact symptom
+    // reported.
     for (i, def) in lanes.iter().enumerate() {
         let placement = app
             .test_placements()
@@ -186,11 +187,18 @@ fn a_track_level_render_reaches_every_lane() {
              a track-level render must reach every lane, not just the first"
         );
     }
+    // The previous audio plays until each lane's new take lands (spec §7,
+    // D22), then every lane's is replaced.
+    let old = app.test_vocal_audio_clips(TRACK);
+    assert_eq!(old.len(), lanes.len(), "kept while rendering: {old:?}");
+    for def in &lanes {
+        assert!(app.test_finish_vocal_render(*def, TRACK));
+    }
+    let new = app.test_vocal_audio_clips(TRACK);
+    assert_eq!(new.len(), lanes.len());
     assert!(
-        app.test_vocal_audio_clips(TRACK).is_empty(),
-        "every lane's previous audio is torn down before the new render lands; \
-         a lane left here is one still pointing at stale audio: {:?}",
-        app.test_vocal_audio_clips(TRACK)
+        new.iter().all(|clip| !old.contains(clip)),
+        "a lane still points at its old audio: {old:?} -> {new:?}"
     );
 }
 

@@ -3,8 +3,8 @@
 //!
 //! On load, `rebuild_vocal_audio_clips` maps each vocal lane to the clip
 //! the project file names — `audio/clip_<id>.wav`, the only name a save,
-//! an autosave or an undo snapshot records. The re-render paths (the
-//! tear-down when a render is queued, and the swap when it lands) then
+//! an autosave or an undo snapshot records. The re-render paths (once
+//! the tear-down when a render was queued, now the swap when it lands) then
 //! `unlink`ed that path as if it were a superseded render, deleting the
 //! file the saved `project.json` and every undo snapshot reference: undo
 //! the re-render, or reopen the saved project, and the vocal was gone.
@@ -147,6 +147,7 @@ fn saved_project() -> Saved {
         fade_out_curve: "equal_power".to_owned(),
         gain_db: 0.0,
         warp: None,
+        vocal_render_units: Vec::new(),
     });
     let saved = Saved {
         _root: root,
@@ -192,8 +193,8 @@ fn regenerating_after_a_reload_keeps_the_saved_vocal_wav() {
         "precondition: the load claims the saved clip as the lane's audio"
     );
 
-    // Re-roll + re-render the lane: the render request tears the old
-    // clip down before the new take is queued.
+    // Re-roll + re-render the lane, and let the new take land: that is
+    // when the loaded clip is torn down (it plays until then, spec §7).
     call(
         &mut app,
         "vocal.generate",
@@ -206,9 +207,12 @@ fn regenerating_after_a_reload_keeps_the_saved_vocal_wav() {
     )
     .result::<proto::GenerateResult>()
     .expect("vocal.generate succeeds");
+    assert!(app.test_finish_vocal_render(saved.definition, TRACK));
     assert!(
-        app.test_vocal_audio_clips(TRACK).is_empty(),
-        "precondition: the re-render tore the loaded clip down"
+        !app.test_vocal_audio_clips(TRACK)
+            .iter()
+            .any(|(_, clip)| *clip == SAVED_CLIP),
+        "precondition: the re-render replaced the loaded clip"
     );
 
     assert!(saved.clip_wav().exists(), "re-render deleted {}", saved.clip_wav().display());
@@ -238,6 +242,7 @@ fn installing_a_render_over_a_reloaded_clip_keeps_the_saved_vocal_wav() {
             lead_ticks: 0,
             render_epoch: 1,
             bpm: 120.0,
+            unit_keys: Vec::new(),
         },
     ))));
     let installed = app.test_vocal_audio_clips(TRACK);
@@ -300,6 +305,7 @@ fn a_superseded_take_is_unlinked_only_once_nothing_references_it() {
             lead_ticks: 0,
             render_epoch: 1,
             bpm: 120.0,
+            unit_keys: Vec::new(),
         })))
     };
     let _ = app.update(ready(&fresh));

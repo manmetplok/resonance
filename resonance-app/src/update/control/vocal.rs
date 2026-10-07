@@ -759,7 +759,7 @@ fn render(
     // once — several ONNX sessions and their working sets alive together
     // on a machine that is also playing audio. Chaining renders them one
     // after another, which is what a client looping over lanes by hand
-    // already did. The synchronous half (tear-down, epoch bump) has
+    // already did. The synchronous half (planning, epoch bump) has
     // already run for every lane either way.
     let task = tasks
         .into_iter()

@@ -57,8 +57,10 @@ pub use pronunciation::{
     DictionaryScope, PhonemeProvenance, PronunciationState, SyllableOverride,
 };
 pub use render_cache::{
-    render_units_cached, split_render_units, RenderPlan, RenderUnit, SvsRenderCache,
+    plan_unit_keys, render_units_cached, split_render_units, RenderPlan, RenderUnit,
+    SvsRenderCache,
 };
+pub(crate) use render_cache::model_identity;
 pub use segment::build_segment;
 pub use validate::{
     articulation_report, articulation_report_for, validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable,

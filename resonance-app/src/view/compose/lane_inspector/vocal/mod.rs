@@ -13,6 +13,7 @@ use crate::compose::messages::LaneInspectorMsg;
 use crate::compose::ComposeMessage;
 use crate::message::*;
 use crate::theme;
+use crate::view::compose::vocal_render_badge::render_card;
 
 mod common;
 mod draft_group;
@@ -174,8 +175,14 @@ pub(in crate::view::compose::lane_inspector) fn vocal_controls<'a>(
         Some(w) => column![tempo_warning_card(w), Space::new().height(18)].into(),
         None => Space::new().height(0).into(),
     };
+    let badge = vocal.render_status.as_ref().and_then(render_card);
+    let badge: Element<'a, Message> = match badge {
+        Some(card) => column![card, Space::new().height(18)].into(),
+        None => Space::new().height(0).into(),
+    };
 
     column![
+        badge,
         warning,
         lyrics_group,
         Space::new().height(18),

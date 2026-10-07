@@ -238,7 +238,13 @@ line, re-rolled from a small template corpus, or set by an agent.
   - `song.vocal` → `song_vocal`: per lane its `params` (the
     `vocal.get_params` shape), its `lines` (indexed within the lane) with
     syllables and phonemes, notes, out-of-range notes, comfortable range
-    and voicebank id; the track's render state. Per note: `slur`
+    and voicebank id; per lane its render state (`render_state`,
+    `stale_units`, `error {kind, message}`) and the track's (the worst
+    lane's) — see [vocal rendering](vocal-rendering.md#render-state).
+    Lyric, note, chord, param and pronunciation edits made through the
+    control API leave the lane `stale`; only `vocal.render` (or
+    `vocal.generate`) renders.
+    Per note: `slur`
     (`"user"` — a `_` in the lyrics, `"auto"` — a generator melisma,
     `null` on a sung note), `g2p` (`edited`, `project_dict`, `bank_dict`,
     `cmu`, `rules`; holds inherit the held syllable's) and

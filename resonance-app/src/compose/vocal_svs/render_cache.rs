@@ -173,7 +173,7 @@ pub fn split_render_units(
 /// reusing audio from the old one. A bank that is not installed cannot
 /// render; its id and speaker stand in (the render fails before the cache
 /// is consulted).
-fn model_identity(params: &VocalParams, bank: &BankProfile) -> String {
+pub(crate) fn model_identity(params: &VocalParams, bank: &BankProfile) -> String {
     match bank.render_target(params.speaker.as_deref(), params.voice, None) {
         Ok(target) => format!(
             "{}|{}|{:?}|{:?}",
@@ -264,6 +264,10 @@ pub struct SvsRenderCache {
     /// Tally from the most recent [`render_units_cached`] pass, for the
     /// UI overlay to read. `None` until the clip has been rendered once.
     last_plan: Option<RenderPlan>,
+    /// The unit keys of the most recent pass, in unit order: the take it
+    /// stitched, by content. Recorded with the installed audio so the
+    /// lane's render state can tell whether that take is still current.
+    last_keys: Vec<u64>,
 }
 
 impl SvsRenderCache {
@@ -275,6 +279,11 @@ impl SvsRenderCache {
     /// if this clip hasn't been rendered yet.
     pub fn last_plan(&self) -> Option<RenderPlan> {
         self.last_plan
+    }
+
+    /// The unit keys of the take the last pass stitched, in unit order.
+    pub fn last_keys(&self) -> &[u64] {
+        &self.last_keys
     }
 
     /// Number of cached unit buffers currently held.
@@ -342,12 +351,33 @@ pub fn render_units_cached(
     cache.entries.retain(|k, _| live.contains(k));
     cache.model_sr = Some(sr);
     cache.last_plan = Some(plan);
+    cache.last_keys = units.iter().map(|u| u.key).collect();
 
     Ok(StitchedRender {
         mono,
         sample_rate: sr,
         plan,
     })
+}
+
+/// The unit keys a render of this clip would stitch, in unit order —
+/// [`split_render_units`]'s keys without keeping the segments. What the
+/// lane's render state compares with the installed take's
+/// [`SvsRenderCache::last_keys`].
+#[allow(clippy::too_many_arguments)]
+pub fn plan_unit_keys(
+    notes: &[MidiNote],
+    params: &VocalParams,
+    assigned: &[AssignedSyllable],
+    curves: &ExpressionCurves,
+    ticks_per_quarter: u32,
+    bpm: f32,
+    bank: &BankProfile,
+) -> Vec<u64> {
+    split_render_units(notes, params, assigned, curves, ticks_per_quarter, bpm, bank)
+        .into_iter()
+        .map(|u| u.key)
+        .collect()
 }
 
 /// Mix each unit's audio onto a single mono timeline at the sample offset

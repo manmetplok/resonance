@@ -424,6 +424,14 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             fade_out_curve: fade_curve_tag(c.fade_out_curve).to_string(),
             gain_db: c.gain_db,
             warp: project_clip_warp(&c.warp),
+            vocal_render_units: r
+                .compose
+                .vocal_audio
+                .status
+                .clip_unit_keys
+                .get(&c.id)
+                .map(|keys| keys.to_vec())
+                .unwrap_or_default(),
         })
         .collect();
 

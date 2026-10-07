@@ -39,6 +39,7 @@ fn audio_clip(id: ClipId, track_id: TrackId) -> ProjectClip {
         fade_out_curve: "linear".to_owned(),
         gain_db: 0.0,
         warp: None,
+        vocal_render_units: Vec::new(),
     }
 }
 
