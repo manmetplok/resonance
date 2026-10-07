@@ -91,6 +91,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::Relink(m) => m.undo_action(),
         Message::Ui(m) => m.undo_action(),
         Message::Browser(m) => m.undo_action(),
+        Message::VoicebankLibrary(m) => m.undo_action(),
         Message::Drag(m) => m.undo_action(),
         Message::Control(m) => m.undo_action(),
     }

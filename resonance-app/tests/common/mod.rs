@@ -35,6 +35,11 @@
 
 use iced_test::simulator::Snapshot;
 
+/// A loopback plok.org index and upstream hosts for the voicebank install
+/// tests.
+#[allow(dead_code)]
+pub mod plok_server;
+
 /// Returns `true` when golden-image pixel comparisons should be skipped in this
 /// environment.
 ///

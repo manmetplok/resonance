@@ -4,26 +4,66 @@
 use resonance_control::methods::vocal as wire;
 use resonance_music_theory::VoicebankId;
 
-use crate::compose::vocal_svs::registry::{ComfortableRange, VoicebankRegistry};
+use crate::compose::vocal_svs::registry::{
+    ComfortableRange, PlokIndex, PlokVoicebank, VoicebankRegistry,
+};
 use crate::compose::vocal_svs::{BankProfile, CurveKind, PhonemeFate, VoicebankPhonemes};
 
-/// Every installed bank, by id. `available` stays empty until the plok.org
-/// index lists voicebanks (spec slice 7).
+/// What the plok.org index looked like when `vocal.voicebanks` answered.
+pub(in crate::update::control) struct IndexView<'a> {
+    pub index: Option<&'a PlokIndex>,
+    /// `fresh`, `cached`, `fetching` or `unavailable`.
+    pub status: &'static str,
+    pub error: Option<String>,
+}
+
+/// Every installed bank, by id, and the index's banks that are not
+/// installed (spec §4.5).
 pub(in crate::update::control) fn voicebank_list(
     registry: &VoicebankRegistry,
+    index: IndexView<'_>,
 ) -> wire::VoicebankList {
+    let available = index
+        .index
+        .map(|i| {
+            i.voicebanks
+                .iter()
+                .filter(|b| registry.get(&b.id).is_none())
+                .map(available_entry)
+                .collect()
+        })
+        .unwrap_or_default();
     wire::VoicebankList {
         installed: registry
             .installed()
             .map(|bank| voicebank_entry(&registry.profile(&VoicebankId::new(&bank.id))))
             .collect(),
-        available: Vec::new(),
+        available,
+        index_status: Some(index.status.to_owned()),
+        index_error: index.error,
+    }
+}
+
+fn available_entry(b: &PlokVoicebank) -> wire::AvailableVoicebank {
+    wire::AvailableVoicebank {
+        id: b.id.clone(),
+        name: b.name.clone(),
+        version: b.version.clone(),
+        terms_url: b.terms_url.clone(),
+        credit: b.credit.clone(),
+        commercial: b.commercial.clone(),
+        languages: b.languages.clone(),
+        speakers: b.speakers.clone(),
+        size: b.size_text(),
+        vocoder: b.vocoder.clone(),
+        url: Some(b.url.clone()),
     }
 }
 
 fn voicebank_entry(profile: &BankProfile) -> wire::VoicebankEntry {
     let bank = profile.installed();
     let builtin = profile.builtin();
+    let plok = bank.and_then(|b| b.plok.as_ref());
     let phonemes = VoicebankPhonemes::new(profile);
     let missing = profile.missing_phonemes();
     let substitutions = missing
@@ -48,7 +88,11 @@ fn voicebank_entry(profile: &BankProfile) -> wire::VoicebankEntry {
     wire::VoicebankEntry {
         id: profile.id().to_string(),
         name: profile.name(),
-        version: bank.and_then(|b| b.version.clone()),
+        version: bank.and_then(|b| {
+            b.version
+                .clone()
+                .or_else(|| b.plok.as_ref().and_then(|p| p.version.clone()))
+        }),
         english: profile.english(),
         speakers,
         default_speaker: profile.default_speaker(resonance_music_theory::VoiceType::Alto),
@@ -61,9 +105,17 @@ fn voicebank_entry(profile: &BankProfile) -> wire::VoicebankEntry {
             breathiness: profile.curve_supported(CurveKind::Breathiness),
             pitch_bend: profile.curve_supported(CurveKind::PitchBend),
         },
-        credit: builtin.and_then(|b| b.credit).map(str::to_owned),
-        terms_url: builtin.and_then(|b| b.terms_url).map(str::to_owned),
-        commercial: builtin.and_then(|b| b.commercial).map(str::to_owned),
+        // What a plok.org install recorded wins over the built-in table:
+        // it is the terms the user accepted.
+        credit: plok
+            .and_then(|p| p.credit.clone())
+            .or_else(|| builtin.and_then(|b| b.credit).map(str::to_owned)),
+        terms_url: plok
+            .and_then(|p| p.terms_url.clone())
+            .or_else(|| builtin.and_then(|b| b.terms_url).map(str::to_owned)),
+        commercial: plok
+            .and_then(|p| p.commercial.clone())
+            .or_else(|| builtin.and_then(|b| b.commercial).map(str::to_owned)),
         vocoder: bank.and_then(|b| b.vocoder_name.clone()),
         vocoder_installed: bank.is_some_and(|b| b.vocoder_config.is_some()),
     }

@@ -27,6 +27,11 @@ decode = ["dep:symphonia"]
 # default so a plugin or the app that never unpacks a kit does not compile
 # `zip` + its deflate backends; the drums plugin turns it on.
 drumkit-zip = ["dep:zip"]
+# The plok.org download transport (`plok_download`): index fetch, resumable
+# download, sha256 verify — and, with `drumkit-zip`, the package install.
+# Shared by the drums plugin's kit worker and the app's voicebank library;
+# off by default so nothing else compiles `ureq`.
+plok-download = ["dep:ureq"]
 
 [dependencies]
 symphonia = { workspace = true, optional = true }
@@ -43,6 +48,9 @@ sha2.workspace = true
 # same build the drums plugin's downloader uses, so the workspace compiles
 # one zip.
 zip = { workspace = true, optional = true }
+# The plok.org downloads (`plok_download`, feature `plok-download`); the
+# one HTTP client the drums plugin already used.
+ureq = { workspace = true, optional = true }
 
 # The import disk check (`drumkit_library::free_space`, statvfs).
 [target.'cfg(unix)'.dependencies]

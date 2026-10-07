@@ -16,7 +16,9 @@ editor = [
     "dep:plugin-gui-core",
     "dep:rfd",
     "dep:ureq",
-    "dep:sha2",
+    # The plok.org transport (index, resumable download, sha256 verify) is
+    # shared with the app's voicebank library.
+    "resonance-common/plok-download",
     # the shared preset bar (ba todo #1358) lives behind this feature
     "resonance-plugin/editor-widgets",
 ]
@@ -51,16 +53,15 @@ rfd = { workspace = true, optional = true }
 # Drumkit download — gated behind the `editor` feature so headless builds
 # stay lean.
 ureq = { workspace = true, optional = true }
-# The sha256 of a download, hashed as it streams in (and seeded from the
-# kept bytes on a resume) — never by re-reading the zip. Extraction is the
-# kit library's (`resonance-common`, `drumkit-zip`).
-sha2 = { workspace = true, optional = true }
+# Extraction is the kit library's (`resonance-common`, `drumkit-zip`); the
+# download itself, sha256 included, is `resonance_common::plok_download`.
 
 [dev-dependencies]
 # The tests reach the isolation hooks (feature `test-hooks`).
 resonance-drums = { path = ".", features = ["test-hooks"] }
-# The download and library tests build kit zips.
+# The download and library tests build kit zips and hash them.
 zip.workspace = true
+sha2.workspace = true
 criterion.workspace = true
 resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
 # `tests/state_upgrade.rs` drives the plugin through a real (in-process)

@@ -68,7 +68,7 @@ use crate::content_index::{
 };
 pub use crate::content_index::{LIBRARY_FILE, LOCK_FILE, MAX_SLOT, SLOT_COUNT};
 
-mod install;
+pub(crate) mod install;
 mod manifest;
 mod sidecar;
 

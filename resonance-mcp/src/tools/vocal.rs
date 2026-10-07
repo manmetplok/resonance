@@ -17,6 +17,10 @@ use resonance_control::methods::vocal;
 /// project I/O before handing back the job id.
 const VOCAL_RENDER_WAIT_MS: u64 = 120_000;
 
+/// A voicebank download is hundreds of megabytes: wait a while, then hand
+/// back the job id to poll.
+const VOICEBANK_INSTALL_WAIT_MS: u64 = 120_000;
+
 #[tool_router(router = router_vocal, vis = "pub(crate)")]
 impl ResonanceMcp {
     #[tool(
@@ -206,13 +210,49 @@ impl ResonanceMcp {
                        reach the model — a curve the bank lacks does nothing), credit, \
                        terms_url and commercial (free_with_credit | paid | permission) — tell \
                        the user the credit line when you use a bank — and vocoder with \
-                       vocoder_installed. available is empty for now. Rescans the folders on \
-                       every call, so a bank dropped in shows up. Read-only.",
+                       vocoder_installed. available lists the plok.org index's banks that are \
+                       not installed (id, name, version, languages, speakers, size, vocoder, \
+                       url, credit, terms_url, commercial) — install one with \
+                       vocal_voicebank_install; index_status says whether that list is fresh, \
+                       cached, still fetching (call again shortly) or unavailable (see \
+                       index_error). Rescans the folders on every call, so a bank dropped in \
+                       shows up. Read-only.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<vocal::VoicebankList>()
     )]
     async fn vocal_voicebanks(&self) -> Result<CallToolResult, McpError> {
         self.invoke_structured(vocal::VOICEBANKS, &()).await
+    }
+
+    #[tool(
+        description = "Install a voicebank from the plok.org index: id is one of \
+                       vocal_voicebanks' available ids (or an installed bank's id, to update it \
+                       to the index's version). Downloads the creator's own file (plok.org \
+                       lists it, never hosts it), checks its sha256 against the index, unpacks \
+                       it into the user's voicebank folder, and also fetches the vocoder the \
+                       bank names when it ships none and none is installed. No project needs \
+                       to be open; it creates no undo entry and bumps no revision. Running it \
+                       ACCEPTS THE BANK'S TERMS on the user's behalf: the job's result carries \
+                       terms_url, credit and commercial (free_with_credit | paid | permission) \
+                       — tell the user the credit line and the terms. The result also has id \
+                       (what vocal_set_params takes as voicebank), name, version, vocoder, \
+                       vocoder_installed (false: the bank cannot render until its vocoder is \
+                       installed), vocoder_fetched and already_installed (nothing was \
+                       downloaded). Refuses an id the index does not list (not_found) and a \
+                       bank that is already installing (busy); a download whose sha256 differs \
+                       fails with \"upstream file changed; the index needs updating\" and \
+                       installs nothing. Runs as a job — this tool waits up to 2 minutes and \
+                       returns the final status; if still running, block on job_wait or poll \
+                       job_status with the returned job_id.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = true),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn vocal_voicebank_install(
+        &self,
+        Parameters(params): Parameters<vocal::VoicebankInstallParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(vocal::VOICEBANK_INSTALL, &params, VOICEBANK_INSTALL_WAIT_MS)
+            .await
     }
 
     #[tool(

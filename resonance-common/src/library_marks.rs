@@ -84,6 +84,9 @@ pub mod kind {
     pub const PLUGIN_PRESET: &str = "plugin-preset";
     /// A drum kit; the id is the sha256 of its `drum_samples.json` bytes.
     pub const DRUMKIT: &str = "drumkit";
+    /// An SVS voicebank; the id is the bank id (`lilia`, the folder name
+    /// in the user voicebank library).
+    pub const VOICEBANK: &str = "voicebank";
 }
 
 /// Build the store key `"<kind>:<id>"`.

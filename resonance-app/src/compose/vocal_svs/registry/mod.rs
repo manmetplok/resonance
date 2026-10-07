@@ -24,6 +24,12 @@
 //!   (`singer/extracted` = `tiger`, `voicebanks/lilia`, `voicebanks/meiji`).
 //!   A user bank with the same id wins. A test app scans none of these
 //!   unless it opts in ([`VoicebankRoots::hermetic`]).
+//!
+//! Installing from plok.org ([`VoicebankLibrary`], §5): the index's
+//! `voicebanks[]` / `vocoders[]` ([`plok_index`]), and installs that run
+//! on their own threads ([`library`], `install`) into the user folders.
+//! Hidden folders (an install's staging, a delete in progress) are never
+//! scanned as banks.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -33,7 +39,10 @@ use resonance_music_theory::VoicebankId;
 
 pub mod builtin;
 mod dict;
+mod install;
 mod installed;
+pub mod library;
+pub mod plok_index;
 mod profile;
 mod roots;
 mod scan;
@@ -41,6 +50,11 @@ mod stamp;
 
 pub use builtin::{BuiltinBank, BuiltinSpeaker, BUILTIN_BANKS};
 pub use installed::InstalledBank;
+pub use library::{
+    InstallError, InstallErrorKind, InstallJob, InstallOutcome, InstallPhase, LibraryConfig,
+    LibraryState, VoicebankLibrary,
+};
+pub use plok_index::{PlokIndex, PlokSidecar, PlokVocoder, PlokVoicebank};
 pub use profile::{
     BankProfile, ComfortableRange, RangeSource, RenderTarget, SpeakerInfo, VoicebankMissing,
 };
@@ -52,6 +66,10 @@ pub use stamp::BankStamp;
 pub struct VoicebankRegistry {
     roots: VoicebankRoots,
     banks: BTreeMap<String, Arc<InstalledBank>>,
+    /// The plok.org index's banks, by id, with whether each sings English
+    /// (its `languages` name `en`, or name nothing) — what the typo guard
+    /// accepts besides installed and built-in banks.
+    index_banks: BTreeMap<String, bool>,
 }
 
 impl VoicebankRegistry {
@@ -60,6 +78,7 @@ impl VoicebankRegistry {
         let mut registry = Self {
             roots,
             banks: BTreeMap::new(),
+            index_banks: BTreeMap::new(),
         };
         registry.rescan();
         registry
@@ -82,6 +101,24 @@ impl VoicebankRegistry {
     /// one of the built-in banks (which an install can provide).
     pub fn is_known(&self, id: &str) -> bool {
         self.banks.contains_key(id) || builtin::builtin(id).is_some()
+    }
+
+    /// Remember the index's banks (see [`Self::in_index`]).
+    pub fn set_index(&mut self, index: &PlokIndex) {
+        self.index_banks = index
+            .voicebanks
+            .iter()
+            .map(|b| {
+                let english = b.languages.is_empty()
+                    || b.languages.iter().any(|l| l.eq_ignore_ascii_case("en"));
+                (b.id.clone(), english)
+            })
+            .collect();
+    }
+
+    /// `Some(sings English)` when the plok.org index lists bank `id`.
+    pub fn in_index(&self, id: &str) -> Option<bool> {
+        self.index_banks.get(id).copied()
     }
 
     /// The facts for bank `id`, installed or not.

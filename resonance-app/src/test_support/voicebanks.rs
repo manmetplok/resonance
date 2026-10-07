@@ -5,7 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::compose::vocal_svs::registry::{LibraryConfig, VoicebankLibrary};
 use crate::compose::vocal_svs::{BankProfile, VoicebankRoots};
+use crate::state::voicebank_library::LibraryOverlay;
 use crate::Resonance;
 
 /// What [`write_voicebank_fixture`] writes.
@@ -19,6 +21,10 @@ pub struct VoicebankFixture {
     pub english_dict: Vec<(String, Vec<String>)>,
     /// Write a bundled `dsvocoder/` (config + empty model file)?
     pub vocoder: bool,
+    /// Without a bundled vocoder: the shared vocoder the acoustic config
+    /// names (`vocoder: <name>`), as a bank that relies on the vocoder
+    /// library does.
+    pub vocoder_name: Option<String>,
     pub use_tension_embed: bool,
     /// `use_energy_embed: true` (no shipped bank has it).
     pub use_energy_embed: bool,
@@ -43,6 +49,7 @@ impl Default for VoicebankFixture {
             phonemes,
             english_dict: Vec::new(),
             vocoder: true,
+            vocoder_name: None,
             use_tension_embed: false,
             use_energy_embed: false,
             languages: None,
@@ -118,7 +125,10 @@ pub fn write_voicebank_fixture(dir: &Path, spec: &VoicebankFixture) {
         std::fs::write(path, body).unwrap();
     };
     let mut cfg = String::from("phonemes: phonemes.txt\nacoustic: acoustic.onnx\n");
-    cfg.push_str("vocoder: dsvocoder\n");
+    match (&spec.vocoder_name, spec.vocoder) {
+        (Some(name), false) => cfg.push_str(&format!("vocoder: {name}\n")),
+        _ => cfg.push_str("vocoder: dsvocoder\n"),
+    }
     if spec.use_energy_embed {
         cfg.push_str("use_energy_embed: true\n");
     }
@@ -242,5 +252,82 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_installed_voicebanks(&self) -> Vec<String> {
         self.voicebanks.installed().map(|b| b.id.clone()).collect()
+    }
+
+    /// Test-only: point the voicebank library at the index `url` (a local
+    /// server: plain HTTP allowed, a short stall limit).
+    #[doc(hidden)]
+    pub fn test_set_voicebank_index(&mut self, url: &str) {
+        self.voicebank_library.lib.set_config(LibraryConfig {
+            index_url: Some(url.to_owned()),
+            http: resonance_common::plok_download::HttpConfig {
+                https_only: false,
+                read_timeout: std::time::Duration::from_secs(5),
+            },
+            free_space: None,
+        });
+    }
+
+    /// Test-only: the voicebank library (its shared state, installs).
+    #[doc(hidden)]
+    pub fn test_voicebank_library(&self) -> &VoicebankLibrary {
+        &self.voicebank_library.lib
+    }
+
+    /// Test-only: the open voicebank library overlay.
+    #[doc(hidden)]
+    pub fn test_voicebank_overlay(&self) -> Option<&LibraryOverlay> {
+        self.voicebank_library.overlay.as_ref()
+    }
+
+    /// Test-only: what the tick does for the library — collect finished
+    /// installs (rescan, resolve their jobs) and rebuild the overlay rows.
+    #[doc(hidden)]
+    pub fn test_poll_voicebank_library(&mut self) {
+        crate::update::voicebank_library::poll(self);
+    }
+
+    /// Test-only: show bank `id` as installing at `phase` without running
+    /// anything (a frozen progress state for a golden image).
+    #[doc(hidden)]
+    pub fn test_show_voicebank_installing(
+        &mut self,
+        id: &str,
+        phase: crate::compose::vocal_svs::registry::InstallPhase,
+    ) {
+        {
+            let mut s = self.voicebank_library.lib.state();
+            s.jobs.retain(|j| j.bank_id != id);
+            s.jobs.push(crate::compose::vocal_svs::registry::InstallJob {
+                bank_id: id.to_owned(),
+                name: id.to_owned(),
+                phase,
+                cancel: Default::default(),
+                control_job: None,
+                result: None,
+            });
+            s.revision += 1;
+        }
+        self.voicebank_library_changed();
+    }
+
+    /// Test-only: poll the library until no install runs, none waits to
+    /// be collected and no index fetch runs, or `timeout` passes. Returns
+    /// whether it settled.
+    #[doc(hidden)]
+    pub fn test_settle_voicebank_library(&mut self, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            self.test_poll_voicebank_library();
+            let lib = &self.voicebank_library.lib;
+            let busy = lib.has_live_installs() || lib.has_finished() || lib.state().fetching_index;
+            if !busy {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 }

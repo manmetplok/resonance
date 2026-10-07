@@ -55,7 +55,7 @@ pub(in crate::update::control) use lane::{
 pub(in crate::update::control) use position::{song_end_sample, song_position, transport_state};
 pub(in crate::update::control) use vocal_notes::lane_note_lyrics;
 pub(in crate::update::control) use vocal_params::*;
-pub(in crate::update::control) use voicebanks::voicebank_list;
+pub(in crate::update::control) use voicebanks::{voicebank_list, IndexView};
 pub(in crate::update::control) use section::{definitions_in_placement_order, placement_views};
 pub(in crate::update::control) use track::{
     bus_plugin_entries, master_plugin_entries, param_view, plugin_entries, track_detail,

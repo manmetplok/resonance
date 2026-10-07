@@ -79,6 +79,9 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || !r.control.pending_tracks.is_empty()
         || !r.control.pending_labels.is_empty()
         || r.control.jobs.has_live_offline_measure()
+        // A voicebank download's progress, and the job it resolves.
+        || r.voicebank_library.lib.has_live_installs()
+        || r.voicebank_library.lib.has_finished()
 }
 
 /// Any VU level not yet settled to exactly `0.0`. This is the
@@ -136,6 +139,7 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     }
     refresh_midi_devices_if_stale(r);
     crate::update::plugin_preset_ui::poll_visible_lists(r);
+    crate::update::voicebank_library::poll(r);
     crate::update::plugin::flush_step_state(r, false);
     poll_engine_health(r);
     poll_cpu_load(r);
