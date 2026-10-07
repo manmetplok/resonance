@@ -1,6 +1,6 @@
 # Project file format
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `cb3b1d6a` + pronunciation persistence on 2026-10-07.
 > Spec history: none as one spec; the format grew field by field. Leads:
 > `docs/history/refactor/arch-migration-plan.md` (ARCH-01 A1-2 folded every
 > undo side-car into the file), `docs/history/reviews/code-review-todo.md`
@@ -55,7 +55,9 @@ routes, compose section definitions and placements, the derived-clip map,
 tempo and signature events, MIDI clock settings, drum pattern bank, track
 groups, references and their settings, arrangement markers, pool assets,
 groove library and quantize settings, automation lanes, MIDI bindings,
-performance-mode footer state, take groups and the chord track. The model
+performance-mode footer state, take groups, the chord track and the vocal
+pronunciation dictionary + per-syllable overrides (`pronunciation`, left out
+when empty; see [pronunciation](../compose/pronunciation.md)). The model
 types for takes, automation, MIDI maps, freeze, track groups and external
 instruments come from `resonance-common` (behind its default `model`
 feature).
@@ -111,7 +113,7 @@ is no side-car undo state any more (guarded by the undo fixed-point test).
 |---|---|---|
 | Atomic writes | `resonance-app/tests/io/project_atomic_write.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Lossless MIDI round-trip | `resonance-app/tests/io/midi_clip_lossless_roundtrip.rs` | same |
-| Per-domain persistence | `tests/io/{take_lanes_persistence,clip_warp_persistence,chord_track_persistence,pool_persistence,loop_record_mode_persistence,project_track_groups_persist,track_color_persist,reference_disk_round_trip}.rs` | same |
+| Per-domain persistence | `tests/io/{take_lanes_persistence,clip_warp_persistence,chord_track_persistence,pool_persistence,loop_record_mode_persistence,project_track_groups_persist,track_color_persist,reference_disk_round_trip}.rs`, `tests/control/control_vocal_pronunciation_persistence.rs` | same |
 | File ⇄ state fixed point | `resonance-app/tests/io/undo_snapshot_fixed_point.rs` | same |
 
 Not covered: loading a file with a lower `version` than 2, and a fuzz /

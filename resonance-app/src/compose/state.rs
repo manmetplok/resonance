@@ -240,7 +240,7 @@ pub struct ComposeState {
     /// lyric annotations, and per-`(def, track)` render epochs. See
     /// [`VocalAudioRegistry`] for the rationale on keying asymmetries.
     pub vocal_audio: VocalAudioRegistry,
-    /// Pronunciation control: per-clip per-syllable phoneme overrides and
+    /// Pronunciation control: per-lane per-syllable phoneme overrides and
     /// the project pronunciation dictionary. The resolver folds these (plus
     /// the global user dictionary, supplied at resolve time) over the CMU
     /// transcription so the strip and the `.ds` build agree on what each
@@ -685,7 +685,9 @@ impl ComposeState {
         // never reset (D-7b, `EntityIds::clips`).
         self.derived_clips.clear();
         self.vocal_audio.clear();
-        self.pronunciation.clear();
+        // Pronunciation is persisted (BUG-50): the `pronunciation`
+        // reconcile domain, right after this one, restores it from the
+        // file instead of it being cleared here.
         // Expression-curve overlays have no project persistence yet (that
         // arrives in todo #335); start each load with untouched curves and
         // the dock tool state reset.

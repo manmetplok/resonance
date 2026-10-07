@@ -58,6 +58,7 @@ fn make_minimal_project() -> ProjectFile {
         take_groups: Vec::new(),
         chord_track: Default::default(),
         derived_clips: None,
+        pronunciation: Default::default(),
     }
 }
 

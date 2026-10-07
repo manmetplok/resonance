@@ -29,6 +29,7 @@
 /// | [`take_audio`] | Reading a cycle-record take's WAV back out of the bundle |
 /// | [`session`] | Session marker + crash-recovery probe (FU-M12a) |
 /// | [`clip_gc`] | Save-time reaping of unreferenced clip WAVs (FU-V5a) |
+/// | [`pronunciation`] | Project dictionary + per-syllable overrides (BUG-50) |
 
 pub mod sections;
 pub mod model;
@@ -36,6 +37,11 @@ pub mod io;
 pub mod take_audio;
 pub mod session;
 pub mod clip_gc;
+pub mod pronunciation;
+
+pub use pronunciation::{
+    ProjectPronunciation, ProjectPronunciationEntry, ProjectSyllableOverride,
+};
 
 // Re-export section types (existing public surface).
 pub use sections::{

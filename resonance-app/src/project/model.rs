@@ -228,6 +228,11 @@ pub struct ProjectFile {
     /// `Resonance::restore_derived_clips`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derived_clips: Option<Vec<crate::project::sections::ProjectDerivedClip>>,
+    /// The project pronunciation dictionary and per-syllable overrides
+    /// (BUG-50). Left out of the file when empty; legacy projects load
+    /// with none.
+    #[serde(default, skip_serializing_if = "crate::project::ProjectPronunciation::is_empty")]
+    pub pronunciation: crate::project::ProjectPronunciation,
 }
 
 /// An empty project at the current format version with neutral
@@ -280,6 +285,7 @@ impl Default for ProjectFile {
             take_groups: Vec::new(),
             chord_track: ProjectChordTrack::default(),
             derived_clips: None,
+            pronunciation: crate::project::ProjectPronunciation::default(),
         }
     }
 }

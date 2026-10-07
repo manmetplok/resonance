@@ -1,6 +1,6 @@
 # Reconcile: restoring a project into app and engine
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `cb3b1d6a` + pronunciation persistence on 2026-10-07.
 > Spec history: `docs/history/refactor/A-13-reconcile.md` (design, §15 is the
 > final state), `docs/history/refactor/arch-migration-plan.md` → "A-13j
 > landed", `docs/history/refactor/A-6-derived-clips.md`.
@@ -17,12 +17,12 @@ project and only the differences are sent.
   `AllCleared`; called by `replay_loaded_project`) and `Origin::Undo`
   (`old = Some(current file)`, no `ClearAll`, synchronous; called by
   `restore_from_snapshot_against`).
-- **One table.** `DOMAINS` lists 36 domains, each a `Reconcile` impl, run in
+- **One table.** `DOMAINS` lists 37 domains, each a `Reconcile` impl, run in
   table order by `reconcile_all`. The table is grouped by `Stage`:
 
 | Stage | Domains (in order) | Why here |
 |---|---|---|
-| Globals | Transport, TransientUi, ComposeSections, DrumPatterns | `SetBpm` before the tempo map; sections reset the derived map |
+| Globals | Transport, TransientUi, ComposeSections, Pronunciation, DrumPatterns | `SetBpm` before the tempo map; sections reset the derived map; pronunciation is app-side and replaced wholesale |
 | Timeline | TempoEvents, ChordTrack, Markers, SectionChordTrim | tempo map before any clip; chord trim reads the meter |
 | Removals (undo only) | RoutingRemovals, ClipRemovals, EntityRemovals | edges before endpoints, clips before tracks, entities before a re-add under the same id |
 | Entities | Tracks, Busses, Master, TrackOutputs, PluginState, EntityOrder | outputs once every bus exists; blob → bypass → params; order last |
@@ -61,7 +61,7 @@ project and only the differences are sent.
 | Concern | Location | Key items |
 |---|---|---|
 | Driver + table | `resonance-app/src/update/project_io/reconcile/mod.rs` | `Reconcile`, `ReconcileCtx`, `Stage`, `DOMAINS`, `reconcile_all`, `domain_order` |
-| Globals / timeline | `reconcile/globals.rs`, `reconcile/app_side.rs` | `Transport`, `TransientUi`, `ComposeSections`, `DrumPatterns`, `SectionChordTrim`, `TempoEvents`, `ChordTrack`, `Markers` |
+| Globals / timeline | `reconcile/globals.rs`, `reconcile/app_side.rs` | `Transport`, `TransientUi`, `ComposeSections`, `Pronunciation`, `DrumPatterns`, `SectionChordTrim`, `TempoEvents`, `ChordTrack`, `Markers` |
 | Removals | `reconcile/removals.rs` | `RoutingRemovals`, `ClipRemovals`, `EntityRemovals` |
 | Entities | `reconcile/entities.rs`, `reconcile/plugin_state.rs` | `Tracks`, `Busses`, `Master`, `TrackOutputs`, `EntityOrder`, `PluginState`, `kept_tracks`, `kept_plugins` |
 | Routing / clips | `reconcile/routing.rs`, `reconcile/clips.rs` | `Sends`, `SidechainRoutes`, `AudioClips`, `MidiClips`, `VocalAudioClips` |

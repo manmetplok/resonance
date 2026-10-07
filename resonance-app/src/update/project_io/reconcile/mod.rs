@@ -141,9 +141,10 @@ pub(crate) const DOMAINS: &[Domain] = &[
     // scalars, and `SetBpm` must precede `SetTempoEvents`.
     domain::<globals::Transport>(Stage::Globals),
     domain::<globals::TransientUi>(Stage::Globals),
-    // Before `Clips`: the load resets the derived map `DerivedClips`
-    // restores. The drum bank's legacy promotion edits the definitions.
+    // Before `Clips`: the load resets the derived map `DerivedClips` restores.
+    // Pronunciation is app-side; the drum bank's promotion edits the sections.
     domain::<globals::ComposeSections>(Stage::Globals),
+    domain::<globals::Pronunciation>(Stage::Globals),
     domain::<globals::DrumPatterns>(Stage::Globals),
     // Before the chord trim and every clip (derived-clip bar recovery
     // reads the tempo map).
@@ -203,8 +204,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<restored::MissingPlugins>(Stage::Tail),
     // Last: a disk load's baseline fingerprints everything above.
     domain::<restored::Freeze>(Stage::Tail),
-    // The replay's closing command (ARCH-04 D-7d): the engine's fresh
-    // clip-id grant, from a counter every domain above has seeded.
+    // The replay's closing command (ARCH-04 D-7d): the fresh clip-id grant.
     domain::<restored::ClipIdGrant>(Stage::Tail),
 ];
 

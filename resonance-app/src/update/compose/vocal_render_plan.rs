@@ -47,8 +47,8 @@ pub struct VocalRenderPlanInputs<'a> {
     pub midi_notes: &'a [MidiNote],
     /// `(placement_id, section_start_sample)` for every placement.
     pub placement_starts: &'a [(u64, u64)],
-    /// The edited clip's per-syllable pronunciation overrides. Empty for
-    /// a fresh roll, which has no clip to have edited yet.
+    /// The lane's per-syllable pronunciation overrides, keyed by the
+    /// syllable's index in the resolved draft.
     pub overrides: &'a HashMap<usize, SyllableOverride>,
     pub project_dictionary: &'a [DictionaryEntry],
 }
@@ -132,8 +132,8 @@ pub fn next_render_epoch(current: Option<u64>) -> u64 {
 /// syllables that can't be sung. (#494)
 ///
 /// Precedence is `override > project-dict > global-dict > bank-dict >
-/// CMU-auto`: the clip's overrides (only present for a re-render of an
-/// edited clip) win, then the project dictionary, then the bank's own.
+/// CMU-auto`: the lane's overrides (those still on the syllable text they
+/// were made for) win, then the project dictionary, then the bank's own.
 /// The global (user-config) dictionary has no on-disk store yet — a later
 /// todo wires it; until then it is empty.
 fn resolve_and_validate(
