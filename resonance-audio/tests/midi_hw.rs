@@ -20,6 +20,8 @@ mod live_arrival_offset;
 mod live_note_retry_order;
 #[path = "midi_hw/midi_clock_parse.rs"]
 mod midi_clock_parse;
+#[path = "midi_hw/enumerate_clients.rs"]
+mod enumerate_clients;
 #[path = "midi_hw/midi_hardware_emit.rs"]
 mod midi_hardware_emit;
 #[path = "midi_hw/midi_hardware_parse.rs"]
