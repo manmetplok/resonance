@@ -14,6 +14,7 @@
 //! each `AudioCommand` to the appropriate category handler.
 
 mod dispatch;
+mod load_report;
 #[cfg(feature = "test-internals")]
 pub(crate) mod test_support;
 
@@ -485,8 +486,7 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
 
     let mut last_playhead_report = std::time::Instant::now();
     let mut last_audition_report = std::time::Instant::now();
-    // Sequence of the last DSP-load report printed (see `cycle_load`).
-    let mut cycle_report_seen = 0u64;
+    let mut load_report = load_report::LoadReporter::default();
     let mut render_pool_reported = None;
     // Coalesce cpal stream underruns into one line per
     // `UNDERRUN_REPORT_INTERVAL` (see `stream_errors`); the counts come
@@ -690,9 +690,7 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         // Print the DSP-load summary the audio thread published since
         // the last tick (it only stores atomics; formatting and stderr
         // are this thread's job — code review ARCH-02 A2-1 / ARCH-05).
-        if let Some(report) = ctx.shared.cycle_report.take_new(&mut cycle_report_seen) {
-            tracing::info!("{}", crate::cycle_load::format_cycle_load_line(&report));
-        }
+        load_report.poll(&ctx);
         // The render pool's thread count / realtime status, once it has
         // rendered, and again on any change (a fallback to serial).
         report_render_pool(&ctx, &mut render_pool_reported);

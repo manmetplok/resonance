@@ -186,6 +186,14 @@ pub struct SharedState {
     /// audible as a click/stutter in the monitored signal only.
     /// Counted by `mix_audio`, folded into the load meter's report.
     pub monitor_shortfall_cycles: AtomicU64,
+    /// Lifetime graph cycles the native output stream's callback missed:
+    /// the driver clock moved more than one quantum between two of its
+    /// callbacks. Counted by `output_pipewire::on_process`, folded into
+    /// the load meter's report.
+    pub graph_missed_cycles: AtomicU64,
+    /// Lifetime output callbacks that rendered nothing (no buffer, no
+    /// mapped data, a misaligned one) — a quantum of silence each.
+    pub output_dropped_cycles: AtomicU64,
     /// The load meter's report hand-off to the engine loop, which
     /// formats and prints it — never the audio thread.
     pub cycle_report: crate::cycle_load::CycleReportSlot,
@@ -474,6 +482,8 @@ impl Default for SharedState {
             dsp_load_peak_bits: AtomicU32::new(0),
             dsp_overrun_cycles: AtomicU64::new(0),
             monitor_shortfall_cycles: AtomicU64::new(0),
+            graph_missed_cycles: AtomicU64::new(0),
+            output_dropped_cycles: AtomicU64::new(0),
             cycle_report: crate::cycle_load::CycleReportSlot::default(),
             oversize_buffer: crate::cycle_load::OversizeBufferLatch::default(),
             render_pool: parking_lot::Mutex::new(None),

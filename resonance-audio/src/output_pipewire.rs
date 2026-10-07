@@ -126,6 +126,11 @@ struct UserData {
     /// One-shot signal so the builder can wait for the first
     /// `param_changed` to land before returning.
     notify: Arc<(Mutex<bool>, Condvar)>,
+    /// The driver clock (`pw_time.ticks`) and the frames rendered at the
+    /// previous callback, for spotting graph cycles that went by without
+    /// one ([`crate::cycle_load::missed_graph_cycles`]). 0 = none yet.
+    last_ticks: u64,
+    last_frames: usize,
 }
 
 /// Build a PipeWire playback stream on the default sink (or
@@ -193,6 +198,8 @@ pub(crate) fn build(
         channels: Arc::clone(&channels_atomic),
         rate: Arc::clone(&rate_atomic),
         notify: Arc::clone(&notify),
+        last_ticks: 0,
+        last_frames: 0,
     };
 
     let listener = stream
@@ -425,9 +432,35 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
                 .shared
                 .playback_latency_samples
                 .store(samples, Ordering::Relaxed);
+            // A stutter that no load figure shows: the graph ran a cycle
+            // without calling us (a late wakeup, a driver xrun).
+            let missed = crate::cycle_load::missed_graph_cycles(
+                user_data.last_ticks,
+                time.ticks,
+                user_data.last_frames,
+                time.rate.num,
+                time.rate.denom,
+                engine_rate,
+            );
+            if missed > 0 {
+                user_data
+                    .shared
+                    .graph_missed_cycles
+                    .fetch_add(missed, Ordering::Relaxed);
+            }
+            user_data.last_ticks = time.ticks;
         }
     }
+    // Every early return below leaves the graph playing silence for the
+    // cycle, so each counts as a dropped output cycle.
+    let dropped = |user_data: &UserData| {
+        user_data
+            .shared
+            .output_dropped_cycles
+            .fetch_add(1, Ordering::Relaxed);
+    };
     let Some(mut buffer) = stream.dequeue_buffer() else {
+        dropped(user_data);
         return;
     };
     // Frames the graph wants this cycle (0 = driver didn't say; fall
@@ -435,6 +468,7 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
     let requested = buffer.requested() as usize;
     let datas = buffer.datas_mut();
     if datas.is_empty() {
+        dropped(user_data);
         return;
     }
     let channels = user_data.channels.load(Ordering::Relaxed).max(1) as usize;
@@ -443,12 +477,14 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
     let data = &mut datas[0];
     let max_bytes = data.as_raw().maxsize as usize;
     let Some(bytes) = data.data() else {
+        dropped(user_data);
         return;
     };
     let capacity = bytes.len().min(max_bytes) / stride;
     let frames = if requested > 0 { requested.min(capacity) } else { capacity }
         .min(user_data.max_frames);
     if frames == 0 {
+        dropped(user_data);
         return;
     }
     let byte_len = frames * stride;
@@ -459,10 +495,12 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
         *data.chunk_mut().offset_mut() = 0;
         *data.chunk_mut().stride_mut() = stride as i32;
         *data.chunk_mut().size_mut() = 0;
+        dropped(user_data);
         return;
     };
 
     (user_data.mix)(samples, channels);
+    user_data.last_frames = frames;
 
     *data.chunk_mut().offset_mut() = 0;
     *data.chunk_mut().stride_mut() = stride as i32;
