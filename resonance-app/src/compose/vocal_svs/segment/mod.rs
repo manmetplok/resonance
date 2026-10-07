@@ -38,7 +38,7 @@ use super::registry::BankProfile;
 /// Build a single `DsSegment` covering every note in the clip from the
 /// pre-resolved, voicebank-validated `assigned` syllable stream (one
 /// entry per note). See the module docs for the stage breakdown and
-/// [`super::resolve_clip_pronunciation`] / [`super::validate_for_voicebank`]
+/// [`super::resolve_clip_with_bank`] / [`super::validate_for_voicebank`]
 /// for how `assigned` is produced.
 ///
 /// `curves` carries the lane's editable expression overlay (doc #154); an

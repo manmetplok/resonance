@@ -14,7 +14,7 @@
 use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
     articulation_report, build_segment, floor_duration_sec,
-    min_articulation_sec, resolve_clip_pronunciation, validate_for_voicebank,
+    min_articulation_sec, resolve_clip, validate_for_voicebank,
 };
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::derive::LyricLine;
@@ -52,7 +52,7 @@ fn notes(count: usize, beats: f64, pitch: u8) -> Vec<MidiNote> {
 /// Resolve `text` onto `n` notes the way the render path does.
 fn assign(text: &str, n: usize) -> Vec<AssignedSyllable> {
     let resolved =
-        resolve_clip_pronunciation(&draft(text), &[], n, &Default::default(), &[], &[]);
+        resolve_clip(&draft(text), &[], n, &Default::default(), &[], &[]);
     validate_for_voicebank(
         &resolved,
         &BankProfile::not_installed("lilia"),

@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use resonance_app::compose::vocal_svs::{
-    build_segment, resolve_clip_pronunciation, validate_for_voicebank, DictionaryEntry,
+    build_segment, resolve_clip, validate_for_voicebank, DictionaryEntry,
     DictionaryScope, InvalidPhonemeReason, PhonemeProvenance, SyllableOverride,
 };
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
@@ -89,7 +89,7 @@ fn project_dictionary_entry_changes_ph_seq() {
     // the segment builder lays the dictionary phonemes into ph_seq.
     let draft = line("vee");
     let dict = vec![DictionaryEntry::new("vee", &["v", "iy"], DictionaryScope::Project)];
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &dict, &[]);
+    let assigned = resolve_clip(&draft, &[], 1, &HashMap::new(), &dict, &[]);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Dict);
 
     let validated = validate_for_voicebank(
@@ -110,7 +110,7 @@ fn override_changes_ph_seq() {
     let draft = line("go");
     let mut overrides = HashMap::new();
     overrides.insert(0usize, SyllableOverride::new("go", &["m", "ow"]));
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &overrides, &[], &[]);
+    let assigned = resolve_clip(&draft, &[], 1, &overrides, &[], &[]);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Edited);
 
     let validated = validate_for_voicebank(
@@ -130,7 +130,7 @@ fn override_changes_ph_seq() {
 fn lilia_substitutes_v_to_f_in_ph_seq() {
     let draft = line("vee");
     let dict = vec![DictionaryEntry::new("vee", &["v", "iy"], DictionaryScope::Project)];
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &dict, &[]);
+    let assigned = resolve_clip(&draft, &[], 1, &HashMap::new(), &dict, &[]);
 
     let validated = validate_for_voicebank(
         &assigned,
@@ -150,7 +150,7 @@ fn lilia_substitutes_v_to_f_in_ph_seq() {
 fn tiger_keeps_v_unsubstituted() {
     let draft = line("vee");
     let dict = vec![DictionaryEntry::new("vee", &["v", "iy"], DictionaryScope::Project)];
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &dict, &[]);
+    let assigned = resolve_clip(&draft, &[], 1, &HashMap::new(), &dict, &[]);
 
     let validated = validate_for_voicebank(
         &assigned,
@@ -170,7 +170,7 @@ fn non_arpabet_phoneme_blocks_render() {
     // Inject a garbage symbol that bypassed canonicalisation. The
     // voicebank accessor's denylist would wave it through, so the ARPAbet
     // gate (#491) is the safety net that keeps it off the model.
-    let mut assigned = resolve_clip_pronunciation(
+    let mut assigned = resolve_clip(
         &line("hello"),
         &[],
         1,
@@ -192,7 +192,7 @@ fn all_invalid_phonemes_are_reported_with_note_indices() {
     // Two notes, both with a bad phoneme: every offender is collected so
     // the UI can badge each affected note, not just the first.
     let mut assigned =
-        resolve_clip_pronunciation(&line("go go"), &[], 2, &HashMap::new(), &[], &[]);
+        resolve_clip(&line("go go"), &[], 2, &HashMap::new(), &[], &[]);
     assert_eq!(assigned.len(), 2);
     assigned[0].phonemes = vec!["qq"];
     assigned[1].phonemes = vec!["xx"];
@@ -206,7 +206,7 @@ fn all_invalid_phonemes_are_reported_with_note_indices() {
 #[test]
 fn valid_resolution_is_not_blocked() {
     // The ordinary auto path clears both gates on every shipped bank.
-    let assigned = resolve_clip_pronunciation(&line("hello"), &[], 1, &HashMap::new(), &[], &[]);
+    let assigned = resolve_clip(&line("hello"), &[], 1, &HashMap::new(), &[], &[]);
     for vb in ["tiger", "lilia", "meiji"] {
         assert!(
             validate_for_voicebank(&assigned, &BankProfile::not_installed(vb)).is_ok(),

@@ -74,12 +74,6 @@ pub(in crate::update::control) fn lane_articulation(
     if clip.notes.is_empty() {
         return Vec::new();
     }
-    let empty = std::collections::HashMap::new();
-    let overrides = app
-        .compose
-        .pronunciation
-        .lane_overrides(definition_id, track_id)
-        .unwrap_or(&empty);
     let annotations = app
         .compose
         .vocal_audio
@@ -89,12 +83,12 @@ pub(in crate::update::control) fn lane_articulation(
         .unwrap_or_else(|| vec![String::new(); clip.notes.len()]);
     let bank = app.voicebanks.profile(&params.voicebank);
     let bank_dictionary = bank.dictionary();
-    let resolved = crate::compose::vocal_svs::resolve_clip_with_bank(
+    let resolved = app.compose.pronunciation.resolve_lane(
+        definition_id,
+        track_id,
         &params.draft,
         &annotations,
         clip.notes.len(),
-        overrides,
-        &app.compose.pronunciation.project_dictionary,
         &[],
         bank_dictionary.as_deref(),
     );

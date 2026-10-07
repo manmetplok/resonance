@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use resonance_app::compose::vocal_svs::{
-    canonicalize_phonemes, clean_word, resolve_clip_pronunciation, DictionaryEntry,
+    canonicalize_phonemes, clean_word, resolve_clip, DictionaryEntry,
     DictionaryScope, PhonemeProvenance, PronunciationState, SyllableOverride,
 };
 use resonance_app::project::{
@@ -49,7 +49,7 @@ fn bare_resolution_is_auto() {
     // No overrides, no dictionaries: the single note resolves straight
     // from CMU / rule-based g2p and reports Auto.
     let draft = line("hello");
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &[], &[]);
+    let assigned = resolve_clip(&draft, &[], 1, &HashMap::new(), &[], &[]);
     assert_eq!(assigned.len(), 1);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Auto);
     assert!(
@@ -62,7 +62,7 @@ fn bare_resolution_is_auto() {
 fn project_dictionary_beats_auto() {
     let draft = line("hello");
     let dict = vec![project("hello", &["k", "ae", "t"])];
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &dict, &[]);
+    let assigned = resolve_clip(&draft, &[], 1, &HashMap::new(), &dict, &[]);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Dict);
     assert_eq!(assigned[0].phonemes, vec!["k", "ae", "t"]);
 }
@@ -71,7 +71,7 @@ fn project_dictionary_beats_auto() {
 fn global_dictionary_used_when_no_project_entry() {
     let draft = line("hello");
     let glob = vec![global("hello", &["g", "uh"])];
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &[], &glob);
+    let assigned = resolve_clip(&draft, &[], 1, &HashMap::new(), &[], &glob);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Dict);
     assert_eq!(assigned[0].phonemes, vec!["g", "uh"]);
 }
@@ -83,7 +83,7 @@ fn project_dictionary_beats_global() {
     let draft = line("hello");
     let proj = vec![project("hello", &["p", "iy"])];
     let glob = vec![global("hello", &["g", "uh"])];
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &HashMap::new(), &proj, &glob);
+    let assigned = resolve_clip(&draft, &[], 1, &HashMap::new(), &proj, &glob);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Dict);
     assert_eq!(assigned[0].phonemes, vec!["p", "iy"]);
 }
@@ -94,7 +94,7 @@ fn override_beats_dictionary_and_auto() {
     let proj = vec![project("hello", &["p", "iy"])];
     let mut overrides = HashMap::new();
     overrides.insert(0usize, SyllableOverride::new("hello", &["m", "ow"]));
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &overrides, &proj, &[]);
+    let assigned = resolve_clip(&draft, &[], 1, &overrides, &proj, &[]);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Edited);
     assert_eq!(assigned[0].phonemes, vec!["m", "ow"]);
 }
@@ -107,7 +107,7 @@ fn empty_override_is_inert_and_falls_through() {
     let proj = vec![project("hello", &["p", "iy"])];
     let mut overrides = HashMap::new();
     overrides.insert(0usize, SyllableOverride::new::<&str>("hello", &[]));
-    let assigned = resolve_clip_pronunciation(&draft, &[], 1, &overrides, &proj, &[]);
+    let assigned = resolve_clip(&draft, &[], 1, &overrides, &proj, &[]);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Dict);
     assert_eq!(assigned[0].phonemes, vec!["p", "iy"]);
 }
@@ -124,7 +124,7 @@ fn override_targets_the_right_syllable_among_several() {
     let annotations = vec![String::new(), String::new()];
     let mut overrides = HashMap::new();
     overrides.insert(1usize, SyllableOverride::new("lo", &["z", "z"]));
-    let assigned = resolve_clip_pronunciation(&draft, &annotations, 2, &overrides, &[], &[]);
+    let assigned = resolve_clip(&draft, &annotations, 2, &overrides, &[], &[]);
     assert_eq!(assigned.len(), 2);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Auto);
     assert_eq!(assigned[1].provenance, PhonemeProvenance::Edited);
@@ -139,7 +139,7 @@ fn override_follows_its_syllable_past_a_hold() {
     let draft = line("go _ now");
     let mut overrides = HashMap::new();
     overrides.insert(1usize, SyllableOverride::new("now", &["n", "aa"]));
-    let assigned = resolve_clip_pronunciation(&draft, &[], 3, &overrides, &[], &[]);
+    let assigned = resolve_clip(&draft, &[], 3, &overrides, &[], &[]);
     assert_eq!(assigned.len(), 3);
     assert!(assigned[1].is_slur);
     assert_ne!(assigned[1].provenance, PhonemeProvenance::Edited);
@@ -153,12 +153,12 @@ fn override_whose_syllable_text_changed_is_dropped() {
     // the same index, so it no longer applies.
     let mut overrides = HashMap::new();
     overrides.insert(0usize, SyllableOverride::new("hello", &["m", "ow"]));
-    let assigned = resolve_clip_pronunciation(&line("yellow"), &[], 1, &overrides, &[], &[]);
+    let assigned = resolve_clip(&line("yellow"), &[], 1, &overrides, &[], &[]);
     assert_ne!(assigned[0].provenance, PhonemeProvenance::Edited);
     assert_ne!(assigned[0].phonemes, vec!["m", "ow"]);
 
     // Text matching ignores case and surrounding space.
-    let assigned = resolve_clip_pronunciation(&line("Hello"), &[], 1, &overrides, &[], &[]);
+    let assigned = resolve_clip(&line("Hello"), &[], 1, &overrides, &[], &[]);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Edited);
 }
 
@@ -166,7 +166,7 @@ fn override_whose_syllable_text_changed_is_dropped() {
 fn override_past_the_end_of_the_draft_is_dropped() {
     let mut overrides = HashMap::new();
     overrides.insert(3usize, SyllableOverride::new("lo", &["k"]));
-    let assigned = resolve_clip_pronunciation(&line("hel·lo"), &[], 2, &overrides, &[], &[]);
+    let assigned = resolve_clip(&line("hel·lo"), &[], 2, &overrides, &[], &[]);
     assert!(assigned.iter().all(|a| a.provenance != PhonemeProvenance::Edited));
 }
 
@@ -246,21 +246,21 @@ fn state_resolve_lane_applies_its_own_overrides_and_dictionary() {
     state.project_dictionary.push(project("hello", &["p", "iy"]));
 
     // Dictionary hit via the method.
-    let assigned = state.resolve_lane(def, track, &draft, &[], 1, &[]);
+    let assigned = state.resolve_lane(def, track, &draft, &[], 1, &[], None);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Dict);
     assert_eq!(assigned[0].phonemes, vec!["p", "iy"]);
 
     // Add an override on the lane — now it wins.
     state.set_override(def, track, 0, SyllableOverride::new("hello", &["m", "ow"]));
-    let assigned = state.resolve_lane(def, track, &draft, &[], 1, &[]);
+    let assigned = state.resolve_lane(def, track, &draft, &[], 1, &[], None);
     assert_eq!(assigned[0].provenance, PhonemeProvenance::Edited);
     assert_eq!(assigned[0].phonemes, vec!["m", "ow"]);
 
     // Another lane (same section, other track; other section, same
     // track) is unaffected.
-    let other = state.resolve_lane(def, 99, &draft, &[], 1, &[]);
+    let other = state.resolve_lane(def, 99, &draft, &[], 1, &[], None);
     assert_eq!(other[0].provenance, PhonemeProvenance::Dict);
-    let other = state.resolve_lane(99, track, &draft, &[], 1, &[]);
+    let other = state.resolve_lane(99, track, &draft, &[], 1, &[], None);
     assert_eq!(other[0].provenance, PhonemeProvenance::Dict);
 }
 

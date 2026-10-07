@@ -35,9 +35,9 @@ pub(super) struct PhonemeTrack {
 /// Build the phoneme + note duration track for one section.
 ///
 /// `assigned` is the per-note resolved + voicebank-validated syllable
-/// stream (override > project-dict > global-dict > CMU-auto, with the
+/// stream (override > project-dict > global-dict > bank-dict > CMU-auto, with the
 /// active voicebank's substitutions already applied — see
-/// [`super::super::resolve_clip_pronunciation`] and
+/// [`super::super::resolve_clip_with_bank`] and
 /// [`super::super::validate_for_voicebank`]). It carries exactly one
 /// entry per note; the note's duration is split across its phonemes with
 /// consonants getting a short slice and the vowel(s) absorbing the

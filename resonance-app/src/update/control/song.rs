@@ -216,7 +216,8 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
     // The project pronunciation dictionary, both as the resolver input
     // and as the view's override map. (A global user dictionary has no
     // on-disk store yet — same as the render path.)
-    let dictionary: resonance_music_theory::g2p::PhonemeDictionary = app
+    use resonance_music_theory::g2p;
+    let dictionary: g2p::PhonemeDictionary = app
         .compose
         .pronunciation
         .project_dictionary
@@ -254,10 +255,18 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
         // Notes the draft fills, not sung syllables: a `_` hold takes a
         // note without being a syllable, so `love _ _` on three notes is
         // not a mismatch.
-        let syllable_count = {
-            use resonance_music_theory::g2p;
-            g2p::note_unit_count(&g2p::resolve_draft_with_dict(&vocal_params.draft, &dictionary))
+        // One set of dictionary layers per lane — the project's, then the
+        // lane's bank's own — for the counts, the lines and (through
+        // `lane_articulation`) the notes, so the three agree with each
+        // other and with what the render sings.
+        let profile = app.voicebanks.profile(&vocal_params.voicebank);
+        let bank_dictionary = profile.dictionary();
+        let layers = g2p::DictionaryLayers {
+            project: &dictionary,
+            bank: bank_dictionary.as_deref(),
         };
+        let syllable_count =
+            g2p::note_unit_count(&g2p::resolve_draft_with_layers(&vocal_params.draft, layers));
         let note_count = view_model::lane_note_count(app, definition.id, track.id);
         // Intelligibility pre-flight: per note, can the phonemes assigned
         // to it actually be articulated in the time it has, and is it
@@ -268,10 +277,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             view_model::lane_articulation(app, definition.id, track.id, vocal_params);
         let short_note_count = articulation.iter().filter(|n| n.too_short).count();
         let out_of_range_note_count = articulation.iter().filter(|n| n.out_of_range).count();
-        let range = app
-            .voicebanks
-            .profile(&vocal_params.voicebank)
-            .comfortable_range(vocal_params.speaker.as_deref());
+        let range = profile.comfortable_range(vocal_params.speaker.as_deref());
         let (range_lo, range_hi) = (range.low, range.high);
         lanes.push(song::VocalLaneView {
             definition_id: definition.id.into(),
@@ -329,10 +335,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
                 .map(|(index, line)| LyricLineView {
                     index,
                     text: line.text.clone(),
-                    syllables: resonance_music_theory::g2p::resolve_draft_with_dict(
-                        std::slice::from_ref(line),
-                        &dictionary,
-                    )
+                    syllables: g2p::resolve_draft_with_layers(std::slice::from_ref(line), layers)
                     .into_iter()
                     .map(|s| SyllableView {
                         text: s.label,

@@ -9,18 +9,17 @@
 
 use std::path::PathBuf;
 
-use resonance_app::compose::vocal_svs::PhonemeProvenance;
-use resonance_app::compose::LaneGeneratorKind;
 use resonance_app::project::{load_project, save_project, ProjectFile};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::types::TrackType;
+use resonance_audio::types::{AudioEvent, TrackType};
 use resonance_control::ids::TrackId as ProtoTrackId;
 use resonance_control::methods::edit::{RedoResult, UndoResult};
 use resonance_control::methods::section as section_proto;
+use resonance_control::methods::song::VocalView;
+use resonance_control::methods::track as track_proto;
 use resonance_control::methods::vocal as proto;
 use resonance_control::{MutationAck, Request, Response};
-use resonance_music_theory::g2p::AssignedSyllable;
 
 use crate::common::roundtrip;
 
@@ -99,20 +98,47 @@ fn redo(app: &mut Resonance) -> RedoResult {
         .expect("edit.redo succeeds")
 }
 
-/// The lane's pronunciation the way the render resolves it: the lane's
-/// draft, its overrides and the project dictionary.
-fn resolve_lane(app: &Resonance, def: u64, note_count: usize) -> Vec<AssignedSyllable> {
-    let compose = app.compose_state();
-    let config = compose
-        .find_definition(def)
-        .and_then(|d| d.lane_generators.get(&TRACK))
-        .expect("vocal lane");
-    let LaneGeneratorKind::Vocal(params) = &config.kind else {
-        panic!("not a vocal lane");
-    };
-    compose
-        .pronunciation
-        .resolve_lane(def, TRACK, &params.draft, &[], note_count, &[])
+/// Give the lane `notes` quarter notes at its placement — the clip
+/// `song.vocal`'s per-note readout resolves against.
+fn add_clip(app: &mut Resonance, track: u64, notes: usize) {
+    use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
+    let bar = app.compose_state().placements[0].start_bar;
+    let start_sample = app.test_tempo_map().bar_to_sample(bar);
+    app.test_apply_engine_event(AudioEvent::MidiClipCreated {
+        clip_id: 900_000 + track,
+        track_id: track,
+        start_sample,
+        duration_ticks: 4 * 4 * TICKS_PER_QUARTER_NOTE,
+        name: "Verse · Vox".to_owned(),
+        notes: (0..notes as u64)
+            .map(|i| MidiNote {
+                note: 64,
+                velocity: 0.8,
+                start_tick: i * TICKS_PER_QUARTER_NOTE,
+                duration_ticks: TICKS_PER_QUARTER_NOTE,
+            })
+            .collect(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+}
+
+/// The lane's per-note phonemes as `song.vocal` reports them — the
+/// production resolve (`PronunciationState::resolve_lane` with the
+/// lane's bank dictionary, then the bank's gate), the same one the render
+/// plans with.
+fn sung(app: &mut Resonance, track: u64) -> Vec<Vec<String>> {
+    let view: VocalView = roundtrip(
+        app,
+        Request::new(9, "song.vocal", &serde_json::json!({ "track_id": track })).unwrap(),
+    )
+    .result()
+    .expect("song.vocal succeeds");
+    view.lanes[0].notes.iter().map(|n| n.phonemes.clone()).collect()
+}
+
+fn strings(phonemes: &[&str]) -> Vec<String> {
+    phonemes.iter().map(|p| (*p).to_owned()).collect()
 }
 
 fn dictionary(app: &Resonance) -> Vec<(String, Vec<String>)> {
@@ -153,14 +179,20 @@ fn dictionary_and_overrides_survive_save_and_reopen() {
     set_pronunciation(&mut app, "Tomato", &TOMATO);
     app.test_set_syllable_override(def, TRACK, 1, "red", &["r", "iy", "d"]);
 
-    let reopened = reopen(&app, "save-reopen");
+    let mut reopened = reopen(&app, "save-reopen");
+    reopened.test_set_active_project(true);
 
     assert_eq!(dictionary(&reopened), tomato_entry());
-    let resolved = resolve_lane(&reopened, def, 2);
-    assert_eq!(resolved[0].provenance, PhonemeProvenance::Dict);
-    assert_eq!(resolved[0].phonemes, TOMATO.to_vec());
-    assert_eq!(resolved[1].provenance, PhonemeProvenance::Edited);
-    assert_eq!(resolved[1].phonemes, vec!["r", "iy", "d"]);
+    assert!(reopened
+        .compose_state()
+        .pronunciation
+        .lane_overrides(def, TRACK)
+        .is_some());
+    add_clip(&mut reopened, TRACK, 2);
+    assert_eq!(
+        sung(&mut reopened, TRACK),
+        vec![strings(&TOMATO), strings(&["r", "iy", "d"])]
+    );
 }
 
 #[test]
@@ -177,9 +209,12 @@ fn undo_of_an_unrelated_edit_keeps_pronunciation() {
     undo(&mut app);
 
     assert_eq!(dictionary(&app), tomato_entry());
-    let resolved = resolve_lane(&app, def, 2);
-    assert_eq!(resolved[0].provenance, PhonemeProvenance::Dict);
-    assert_eq!(resolved[1].provenance, PhonemeProvenance::Edited);
+    assert!(app.compose_state().pronunciation.lane_overrides(def, TRACK).is_some());
+    add_clip(&mut app, TRACK, 2);
+    assert_eq!(
+        sung(&mut app, TRACK),
+        vec![strings(&TOMATO), strings(&["r", "iy", "d"])]
+    );
 
     redo(&mut app);
     assert_eq!(dictionary(&app), tomato_entry(), "and on redo");
@@ -222,18 +257,17 @@ fn an_override_is_dropped_when_its_syllable_text_changes() {
     let def = vocal_lane(&mut app);
     set_lyrics(&mut app, "tomato red");
     app.test_set_syllable_override(def, TRACK, 1, "red", &["r", "iy", "d"]);
-    assert_eq!(resolve_lane(&app, def, 2)[1].provenance, PhonemeProvenance::Edited);
+    add_clip(&mut app, TRACK, 2);
+    assert_eq!(sung(&mut app, TRACK)[1], strings(&["r", "iy", "d"]));
 
     // Same syllable index, different text: the override was made for
     // other lyrics and no longer applies.
     set_lyrics(&mut app, "tomato blue");
-    let resolved = resolve_lane(&app, def, 2);
-    assert_ne!(resolved[1].provenance, PhonemeProvenance::Edited);
-    assert_ne!(resolved[1].phonemes, vec!["r", "iy", "d"]);
+    assert_eq!(sung(&mut app, TRACK)[1], strings(&["b", "l", "uw"]));
 
     // Writing the old text back revives it (it is kept, just inert).
     set_lyrics(&mut app, "tomato red");
-    assert_eq!(resolve_lane(&app, def, 2)[1].provenance, PhonemeProvenance::Edited);
+    assert_eq!(sung(&mut app, TRACK)[1], strings(&["r", "iy", "d"]));
 }
 
 #[test]
@@ -252,4 +286,92 @@ fn a_project_without_the_field_loads_with_no_pronunciation() {
     app.test_replay_loaded_project(file);
     assert!(dictionary(&app).is_empty());
     assert!(app.compose_state().pronunciation.overrides.is_empty());
+}
+
+/// A deleted lane's overrides stay in the live state (undoing the delete
+/// brings them back) and so in a save, but a reopen drops them: otherwise
+/// a new vocal track, which takes the freed highest id back, would sing
+/// them on its own lane.
+#[test]
+fn a_deleted_lanes_overrides_do_not_revive_on_a_reused_track_id() {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_set_project_path(PathBuf::from("/tmp/control-vocal-pronunciation-orphan.rprj"));
+    // `track.add`, then the engine's reply that registers the track.
+    let add = |app: &mut Resonance, kind: &str| -> u64 {
+        let id: u64 = call(app, track_proto::ADD, &serde_json::json!({ "kind": kind }))
+            .result::<track_proto::AddResult>()
+            .expect("track.add")
+            .track_id
+            .into();
+        app.test_apply_engine_event(match kind {
+            "vocal" => AudioEvent::VocalTrackAdded { track_id: id },
+            _ => AudioEvent::TrackAdded { track_id: id },
+        });
+        id
+    };
+    let _kept = add(&mut app, "audio");
+    let section_id = call(
+        &mut app,
+        "section.create",
+        &section_proto::CreateParams {
+            name: "Verse".to_owned(),
+            length_bars: 4,
+            scale: None,
+            place: true,
+        },
+    )
+    .result::<section_proto::CreateResult>()
+    .expect("section.create")
+    .section_id;
+    let def = u64::from(section_id);
+    let lane_on = |app: &mut Resonance| -> u64 {
+        let track = add(app, "vocal");
+        app.test_install_vocal_lane(def, track);
+        let _: MutationAck = call(
+            app,
+            "vocal.set_lyrics",
+            &proto::SetLyricsParams {
+                syllabify: false,
+                track_id: ProtoTrackId(track),
+                section_id: None,
+                text: "tomato red".to_owned(),
+            },
+        )
+        .result()
+        .expect("vocal.set_lyrics succeeds");
+        track
+    };
+    let vocal = lane_on(&mut app);
+    app.test_set_syllable_override(def, vocal, 1, "red", &["r", "iy", "d"]);
+
+    let deleted = call(
+        &mut app,
+        track_proto::DELETE,
+        &serde_json::json!({ "track_id": vocal, "confirm": true }),
+    );
+    assert!(deleted.error.is_none(), "{:?}", deleted.error);
+    // Undo keeps them: the delete's undo brings the lane back with them.
+    undo(&mut app);
+    assert!(app
+        .compose_state()
+        .pronunciation
+        .lane_overrides(def, vocal)
+        .is_some());
+    redo(&mut app);
+
+    let mut reopened = reopen(&app, "orphan");
+    reopened.test_set_active_project(true);
+    assert!(
+        reopened.compose_state().pronunciation.overrides.is_empty(),
+        "the deleted track's override was dropped on load"
+    );
+    let reused = lane_on(&mut reopened);
+    assert_eq!(reused, vocal, "precondition: the new track takes the freed id");
+    add_clip(&mut reopened, reused, 2);
+    assert_eq!(
+        sung(&mut reopened, reused)[1],
+        strings(&["r", "eh", "d"]),
+        "CMU's red: no override applies"
+    );
 }

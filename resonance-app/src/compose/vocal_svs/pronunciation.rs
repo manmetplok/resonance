@@ -1,8 +1,9 @@
 //! App-side data model for **pronunciation control** (design #173, notes
 //! #174): per-syllable phoneme overrides and a word→phonemes dictionary,
 //! plus the pure resolver that folds them — together with the global
-//! (user) dictionary supplied at resolve time — into the per-note
-//! [`AssignedSyllable`] stream the vocal roll and the `.ds` builder share.
+//! (user) dictionary and the voicebank's own, both supplied at resolve
+//! time — into the per-note [`AssignedSyllable`] stream the vocal roll
+//! and the `.ds` builder share.
 //!
 //! This module owns *only* the types, the [`ComposeState`]-resident state
 //! ([`PronunciationState`]), its conversion to and from the persisted
@@ -12,15 +13,21 @@
 //! ## Precedence
 //!
 //! Resolution per syllable is `override > project-dict > global-dict >
-//! CMU-auto`. The actual phoneme work is delegated to
-//! [`resonance_music_theory::g2p`]:
+//! bank-dict > CMU > rules` (vocal-mcp-control-and-quality.md §4.4). The
+//! actual phoneme work is delegated to [`resonance_music_theory::g2p`]:
 //!
-//! * the **dictionary** layers are merged (project overlays global) into a
-//!   single [`g2p::PhonemeDictionary`] and fed to
-//!   [`g2p::resolve_draft_with_dict`], which reports
-//!   [`PhonemeProvenance::Dict`] for any hit — g2p does not distinguish
-//!   project from global, matching the three-way strip palette
-//!   (`auto` / `EDIT` / `DICT`);
+//! * the **user dictionary** layers are merged (project overlays global)
+//!   into a single [`g2p::PhonemeDictionary`] — g2p does not distinguish
+//!   project from global, so both report [`PhonemeProvenance::Dict`],
+//!   matching the three-way strip palette (`auto` / `EDIT` / `DICT`);
+//! * the **voicebank's own English dictionary** (its `dsdict-en.yaml`,
+//!   read by the registry and handed in by the caller as
+//!   [`BankProfile::dictionary`](super::BankProfile::dictionary)) is the
+//!   layer between the user's and CMU. Its hits report
+//!   [`PhonemeProvenance::Auto`] — the user did not choose them;
+//! * both go to [`g2p::resolve_draft_with_layers`] as
+//!   [`g2p::DictionaryLayers`] ([`resolve_clip_with_bank`]; [`resolve_clip`]
+//!   is the same without a bank layer);
 //! * the **per-syllable overrides** are keyed by vocal lane
 //!   (`(definition_id, track_id)`) and the index of the syllable in the
 //!   lane's resolved draft — g2p's own keying, so a regenerate that
@@ -29,6 +36,10 @@
 //!   lyrics changed under it) is dropped at resolve time. The survivors
 //!   are applied via [`g2p::assign_syllables_to_notes_with`], the
 //!   highest-precedence layer ([`PhonemeProvenance::Edited`]).
+//!
+//! [`PronunciationState::resolve_lane`] folds one lane's overrides and the
+//! project dictionary over a supplied global and bank dictionary; it is
+//! what `song.vocal`'s per-note readout resolves through.
 //!
 //! [`ComposeState`]: crate::compose::state::ComposeState
 
@@ -306,8 +317,11 @@ impl PronunciationState {
 
     /// Resolve one lane's per-note pronunciation, applying this state's
     /// project dictionary and the lane's overrides on top of the supplied
-    /// `global` dictionary. See the module docs for precedence. Pure:
-    /// reads `self` but mutates nothing.
+    /// `global` dictionary and the lane's `bank` dictionary
+    /// ([`BankProfile::dictionary`](super::BankProfile::dictionary)). See
+    /// the module docs for precedence. Pure: reads `self` but mutates
+    /// nothing.
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve_lane(
         &self,
         definition_id: u64,
@@ -316,16 +330,18 @@ impl PronunciationState {
         annotations: &[String],
         note_count: usize,
         global: &[DictionaryEntry],
+        bank: Option<&PhonemeDictionary>,
     ) -> Vec<AssignedSyllable> {
         let empty = HashMap::new();
         let overrides = self.lane_overrides(definition_id, track_id).unwrap_or(&empty);
-        resolve_clip(
+        resolve_clip_with_bank(
             draft,
             annotations,
             note_count,
             overrides,
             &self.project_dictionary,
             global,
+            bank,
         )
     }
 }

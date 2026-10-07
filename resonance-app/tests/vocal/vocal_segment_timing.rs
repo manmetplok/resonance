@@ -6,7 +6,7 @@
 
 use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
-    build_segment, resolve_clip_pronunciation, split_render_units, validate_for_voicebank,
+    build_segment, resolve_clip, split_render_units, validate_for_voicebank,
 };
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::derive::LyricLine;
@@ -34,7 +34,7 @@ fn assign(n: usize) -> Vec<AssignedSyllable> {
         text,
         locked: false,
     }];
-    let resolved = resolve_clip_pronunciation(&draft, &[], n, &Default::default(), &[], &[]);
+    let resolved = resolve_clip(&draft, &[], n, &Default::default(), &[], &[]);
     validate_for_voicebank(
         &resolved,
         &BankProfile::not_installed("lilia"),

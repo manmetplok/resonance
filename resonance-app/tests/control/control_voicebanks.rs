@@ -378,3 +378,72 @@ fn render_naming_an_unknown_bank_is_a_typo_not_a_missing_bank() {
     ));
     assert_eq!(kind, ErrorKind::InvalidParams);
 }
+
+/// Give the lane `notes` quarter notes at its placement.
+fn add_clip(app: &mut Resonance, notes: u64) {
+    use resonance_audio::types::{AudioEvent, MidiNote, TICKS_PER_QUARTER_NOTE};
+    let bar = app.compose_state().placements[0].start_bar;
+    let start_sample = app.test_tempo_map().bar_to_sample(bar);
+    app.test_apply_engine_event(AudioEvent::MidiClipCreated {
+        clip_id: 900_061,
+        track_id: TRACK,
+        start_sample,
+        duration_ticks: 4 * 4 * TICKS_PER_QUARTER_NOTE,
+        name: "Verse · Vox".to_owned(),
+        notes: (0..notes)
+            .map(|i| MidiNote {
+                note: 64,
+                velocity: 0.8,
+                start_tick: i * TICKS_PER_QUARTER_NOTE,
+                duration_ticks: TICKS_PER_QUARTER_NOTE,
+            })
+            .collect(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+}
+
+/// `song.vocal` resolves its lines, its counts and its notes through the
+/// same dictionary layers — the lane's bank's own dictionary included —
+/// so a word the bank reads differently from CMU reads the same in all
+/// three, and the same as the render sings it.
+#[test]
+fn song_vocal_lines_and_notes_agree_on_a_bank_dictionary_word() {
+    let mut app = app_with_project();
+    let def = vocal_lane(&mut app);
+    // CMU sings `tomato` with `ey`; this Lilia reads it with `aa`.
+    app.test_install_voicebank(
+        "lilia",
+        &VoicebankFixture {
+            english_dict: vec![(
+                "tomato".to_owned(),
+                ["t", "ah", "m", "aa", "t", "ow"].map(str::to_owned).to_vec(),
+            )],
+            ..VoicebankFixture::shipped("lilia")
+        },
+    );
+    call(
+        &mut app,
+        "vocal.set_lyrics",
+        json!({ "track_id": TRACK, "section_id": def, "text": "to·ma·to" }),
+    )
+    .result::<Value>()
+    .expect("lyrics set");
+    add_clip(&mut app, 3);
+
+    let view: resonance_control::methods::song::VocalView =
+        call(&mut app, "song.vocal", json!({ "track_id": TRACK }))
+            .result()
+            .expect("song.vocal succeeds");
+    let lane = &view.lanes[0];
+    let from_lines: Vec<Vec<String>> = lane.lines[0]
+        .syllables
+        .iter()
+        .map(|s| s.phonemes.clone())
+        .collect();
+    let from_notes: Vec<Vec<String>> = lane.notes.iter().map(|n| n.phonemes.clone()).collect();
+    assert_eq!(from_lines, from_notes);
+    assert_eq!(from_lines[1], ["m", "aa"], "the bank's reading, not CMU's");
+    assert_eq!(lane.syllable_count, 3);
+    assert!(!lane.counts_mismatch, "{lane:?}");
+}

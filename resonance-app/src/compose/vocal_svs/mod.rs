@@ -46,7 +46,7 @@ pub use phonemes::{
 };
 pub use post::write_stereo_wav;
 pub use pronunciation::{
-    canonicalize_phonemes, clean_word, resolve_clip as resolve_clip_pronunciation,
+    canonicalize_phonemes, clean_word, resolve_clip,
     resolve_clip_with_bank, DictionaryEntry, DictionaryScope, PhonemeProvenance,
     PronunciationState, SyllableOverride,
 };
@@ -122,7 +122,7 @@ pub fn vocal_audio_start(
 ///
 /// `assigned` is the per-note resolved + voicebank-validated syllable
 /// stream (one entry per note), produced on the main thread by
-/// [`resolve_clip_pronunciation`] + [`validate_for_voicebank`]. Slur notes
+/// [`resolve_clip_with_bank`] + [`validate_for_voicebank`]. Slur notes
 /// hold the previous vowel (the last one also its coda). `cache` carries
 /// per-unit rendered audio across renders of the same clip so an edit only
 /// re-renders the segments it touched (see [`render_cache`]); after the
