@@ -1,7 +1,7 @@
 # Automation lanes
 
 > Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
-> Spec history: none for the model and GUI (built under epic #14, arch doc #162; lane rows doc #256). The control API has `docs/history/specs/automation-control-api.md`, see [automation-control-api.md](./automation-control-api.md).
+> Spec history: none for the model and GUI (built under epic #14, arch doc #162; lane rows doc #256). The control API has `docs/history/specs/automation-control-api.md`, see [automation-control-api.md](./automation-control-api.md). Vocal curve rows: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §10 (slice 14).
 
 A track's volume, pan or mute, a bus's volume, pan or mute, the master
 volume, any automatable plugin parameter, or an external instrument's device
@@ -30,7 +30,7 @@ Curves are `Linear` (interpolate to the next point) or `Stepped` (hold).
 Before the first point and after the last, the lane holds that point's value.
 There is no master pan or mute lane, and no tempo automation.
 
-**Vocal expression curves** (vocal-mcp-control-and-quality.md §10).
+**Vocal expression curves** (vocal spec §10).
 `AutomationTarget::VocalCurve` is not stored as a lane: the curves live in
 each section's vocal lane config (`VocalParams::curves`, section-relative
 beats) and are saved and undone with it. `AutomationState::vocal`
@@ -39,9 +39,17 @@ for every track with a vocal lane in any section, one `VocalLane` per curve:
 an `AutomationLane` with a derived id (`vocal_lane_id`, ≥ `1 << 62`) whose
 points are each section point at each placement, the `PointOrigin` of every
 projected point, and a `CurveWindow` per placement (frames, section beat 0,
-length, whether the bank renders the curve, the bank's name). It is rebuilt
-after every outermost update (`update::compose::expression::
-refresh_vocal_lanes`) and at the start of every `automation.*` call. It is
+length, whether the bank renders the curve, the bank's name — one shared
+`Arc<str>` per bank). It is refreshed after every outermost update
+(`update::compose::expression::refresh_vocal_lanes`) and at the start of
+every `automation.*` call, but rebuilt only when a fingerprint of what it
+reads moves (`AutomationState::vocal_fingerprint`: section lengths and
+vocal lanes — track, bank, curves — the placements, the tempo and
+signature map, the sample rate and what each bank renders, which follows
+the registry). A window's length is its placement's own, so two
+placements under different meters can show the same section at different
+lengths; `plan_set_lane` maps a whole-lane replace against the longest of
+them, so a point only the longer placement shows is still deletable. It is
 never persisted, never in the undo snapshot and never sent to the engine:
 `AutomationTarget::is_engine_lane` is false for it, `store_lane`, project
 save and the undo restore filter on it, and the engine drops such a
@@ -49,7 +57,8 @@ save and the undo restore filter on it, and the engine drops such a
 goes to `update::compose::expression::handle`, which maps the frame to its
 placement → section → beat and edits that section's curve (add, drag within
 the placement, delete, curve kind, whole-lane replace via `plan_set_lane`,
-remove = clear every section). How the render uses the curves is in
+remove = clear the curve in every section with a vocal lane on the track,
+placed or not). How the render uses the curves is in
 [vocal rendering](../compose/vocal-rendering.md).
 
 **Lifetime rules.**
@@ -177,8 +186,8 @@ paths) belongs to [mixer-render-core.md](../audio-engine/mixer-render-core.md).
 | Lane rows, chip cycle, header alignment | `resonance-app/tests/timeline/timeline_automation_{lane_rows,lane_selector,group}.rs`, `track_header_automation_lane_rows.rs` | same |
 | Goldens | `resonance-app/tests/snapshots/timeline_automation_*-wgpu.png`, `track_header_automation_lane_rows_expanded-wgpu.png`, `timeline_vocal_curve_rows_expanded-wgpu.png` | `RESONANCE_BLESS=1 cargo test -p resonance-app --test timeline` |
 | Vocal curve rows: four rows on expand, unsupported placement ignores a click, golden (live / dimmed / greyed) | `resonance-app/tests/timeline/timeline_vocal_curve_rows.rs` | `./scripts/run-tests.py -p resonance-app` |
-| Vocal curve model, sampling, point edits, old configs load, `plan_set_lane` | `resonance-app/tests/vocal/expression_curves_model.rs` | same |
-| Vocal curves over the control API, persistence, undo, engine never sent | `resonance-app/tests/control/control_vocal_curves.rs` | same |
+| Vocal curve model, sampling, point edits, old configs load, `plan_set_lane` (a point only the longer of two placements shows) | `resonance-app/tests/vocal/expression_curves_model.rs` | same |
+| Vocal curves over the control API, persistence (a rendered lane with a curve reads `rendered` after save and reopen), undo, `remove_lane` in unplaced sections, engine never sent | `resonance-app/tests/control/control_vocal_curves.rs` | same |
 | Mixer picker and strip tint | `resonance-app/tests/mixer/mixer_automation_controls.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Prune on plugin remove / swap, undo | `resonance-app/tests/mixer/plugin_removal_prunes_lanes.rs` | same |
 | Engine command boundary | `resonance-audio/tests/engine/automation_handlers.rs` | `./scripts/run-tests.py -p resonance-audio` |
@@ -202,9 +211,16 @@ real hardware.
 - **Frames, not ticks.** Points are absolute. Only `CommitBpm` and bar
   insert/remove re-anchor them. Global tempo/meter events deliberately do not,
   which matches clips and markers.
-- **Vocal curves are a projection, not stored lanes.** One curve per section
-  shown at every placement could not be one engine lane in frames; storing
-  it in the lane config keeps it with the section (resize, copy, undo).
+- **Vocal curves are a projection, not stored lanes** (against spec §10's
+  "automation sub-rows": the rows are `AutomationState::vocal`, refreshed
+  after every update, with derived lane ids). One curve per section shown
+  at every placement could not be one engine lane in frames; storing it in
+  the lane config keeps it with the section (resize, copy, undo). Further
+  slice-14 deviations: the old dock model's baseline / depth / smoothing
+  are dropped (a curve is its points); a placement whose bank does not
+  take the curve is greyed and ignores pointer input, though the control
+  API still writes it; the caret counts only curves with points, so a
+  vocal track without any reads plain "auto" rather than a number.
 - **Lanes are created only in the mixer.** The inspector notes that its
   per-row "show in Arrange" jump from the mixer-cleanup spec is not built.
 

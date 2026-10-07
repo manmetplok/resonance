@@ -1,6 +1,6 @@
 # Control jobs (`job.status` / `job.wait`)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
 > Spec history: ba doc #265, todo #1149 (not in the repo).
 
 Some control calls take longer than one turn of the update loop: saving
@@ -19,6 +19,7 @@ wait a bounded time and hand back the final status.
 | `project.new`, `project.open` | engine confirms the clear and the project replays (`engine_events::project_io::all_cleared`); fails on a load/template error | 30 s |
 | `project.save`, `project.save_as` | `ProjectIoMessage::ProjectSaved` (manual saves only; autosaves never resolve a job) | 30 s |
 | `vocal.render` | the SVS audio for **every** lane in the batch has landed (one job, N lanes) | 120 s |
+| `vocal.voicebank_install` | the install thread finished **and** the tick rescanned the registry, so the bank is listed when the job resolves; fails `not_found` for an id the index does not list, without a kind for a failed index fetch or download, with the "upstream file changed" message for a hash mismatch ([voicebank library](../compose/voicebank-library.md)) | 120 s |
 | `render.mixdown` | export completion for that output path | 300 s |
 | `pool.import`, `clip.place` | the **last** asset id of the batch has reported (`clip.place` of an already-pooled file is `done` before the reply leaves) | 120 s |
 | `clip.detect_tempo` | `AudioEvent::ClipTempoDetected` for that clip; fails if no tempo is found or the clip is deleted | 60 s |

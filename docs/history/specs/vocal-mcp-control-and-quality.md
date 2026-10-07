@@ -1,5 +1,7 @@
 # Vocals: MCP control, voicebank library, correctness and expression
 
+> **Archived 2026-10-07.** Historical record; the current truth is [`features/compose/vocal-lyrics-and-melody.md`](../../features/compose/vocal-lyrics-and-melody.md), [`features/compose/vocal-rendering.md`](../../features/compose/vocal-rendering.md), [`features/compose/voicebank-library.md`](../../features/compose/voicebank-library.md), [`features/compose/pronunciation.md`](../../features/compose/pronunciation.md), [`features/timeline/automation-lanes.md`](../../features/timeline/automation-lanes.md), [`features/timeline/automation-control-api.md`](../../features/timeline/automation-control-api.md). All 14 slices are built; each slice's deviations are in those docs' "Decisions and deviations". Open items moved to [`intents/compose/vocal-followups.md`](../../intents/compose/vocal-followups.md). Code comments cite this file by name (`vocal-mcp-control-and-quality.md §N`).
+
 > Status: **partly built** (slices 1–13 built; progress per slice in §12)
 > Area: compose (vocals) + control-api + plugins-instruments (library)
 > Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
@@ -7,7 +9,7 @@
 > lists the answers); research report
 > [singing-voicebank-options-2026](../../history/research/singing-voicebank-options-2026.md).
 > Absorbs: the former `vocal-expression-curves.md` intent (deleted), slice 1
-> of [pronunciation editing](pronunciation-editing.md), BUG-50 and BUG-52.
+> of [pronunciation editing](../../intents/compose/pronunciation-editing.md), BUG-50 and BUG-52.
 
 ## 1. Why
 
@@ -414,7 +416,7 @@ The render-unit key already hashes velocity.
 | D28 | Expression curves | Automation sub-rows with a render-only target, section-relative |
 | D29 | Absorbed into this spec | Pronunciation persistence, expression curves, `resonance-svs` fixes, `curve_supported` fix |
 | D30 | Bank audition | A blind render script |
-| D31 | SoulX-Singer | A separate intent ([soulx-singer-backend](soulx-singer-backend.md)) |
+| D31 | SoulX-Singer | A separate intent ([soulx-singer-backend](../../intents/compose/soulx-singer-backend.md)) |
 | D32 | Spec home and landing | This document; each slice lands on master separately |
 
 Pronunciation persistence (slice 11) keys per-syllable overrides by

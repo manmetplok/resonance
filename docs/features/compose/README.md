@@ -20,7 +20,8 @@ from lyrics to sung audio through DiffSinger, and the pure
 | Chord track and song key | [chord-track.md](chord-track.md) | Song-wide chord regions whose pins constrain regeneration, and the song key set by `transport.set_key`. |
 | Drum patterns and section arrangement | [drum-arrangement.md](drum-arrangement.md) | Project pattern bank of polymetric drum groups, per-section arrangement with repeats and fills, built-in grooves; `generate.drums`. |
 | Vocal lyrics and melody | [vocal-lyrics-and-melody.md](vocal-lyrics-and-melody.md) | Vocal lanes: lyric draft, template lyric generator, style-based vocal melody; `vocal.set_lyrics`, `vocal.set_line`, `vocal.generate`, `song.vocal`. |
-| Vocal rendering | [vocal-rendering.md](vocal-rendering.md) | DiffSinger synthesis via `resonance-svs` (TIGER, Lilia, Meiji), cached partial re-renders, audio installed per placement; `vocal.render`. |
+| Vocal rendering | [vocal-rendering.md](vocal-rendering.md) | DiffSinger synthesis via `resonance-svs`, cached partial re-renders, rests and breaths, velocity dynamics, expression curves, per-lane render state; `vocal.render`. |
+| Voicebank library | [voicebank-library.md](voicebank-library.md) | Installed DiffSinger banks (user folder, dev roots), the plok.org index and installs with their vocoders, the library overlay; `vocal.voicebanks`, `vocal.voicebank_install`. |
 | Lyric pronunciation | [pronunciation.md](pronunciation.md) | CMU G2P with a project pronunciation dictionary and voicebank phoneme substitution; `vocal.set_pronunciation`. |
 | Music-theory library | [music-theory-library.md](music-theory-library.md) | `resonance-music-theory`: pitch, scale, chord, voicing, SATB, progression generators, G2P, fretboard. |
 | Melody and motif engine | [melody-and-motif-engine.md](melody-and-motif-engine.md) | Motif-based melody with phrase forms, sequences, cadence formulas, single climax, embellishing tones and rhythm transforms. |

@@ -1,7 +1,10 @@
 # Keep DiffSinger, rethink the voices and licences
 
 > Archived research (2026-10-07). Its decisions live in
-> [intents/compose/vocal-mcp-control-and-quality.md](../../intents/compose/vocal-mcp-control-and-quality.md)
+> [history/specs/vocal-mcp-control-and-quality.md](../specs/vocal-mcp-control-and-quality.md)
+> (built: [voicebank library](../../features/compose/voicebank-library.md),
+> [vocal rendering](../../features/compose/vocal-rendering.md); open:
+> [intents/compose/vocal-followups.md](../../intents/compose/vocal-followups.md))
 > and [intents/compose/soulx-singer-backend.md](../../intents/compose/soulx-singer-backend.md).
 > Source notes: [singing-voicebank-options-2026-notes/](singing-voicebank-options-2026-notes/).
 

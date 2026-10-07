@@ -189,8 +189,8 @@ area; the sibling areas may refine it.
 | `vocal.generate` | `vocal_generate` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | generate a vocal lane's melody (and lyrics) into its derived clip |
 | `vocal.get_params` | `vocal_get_params` | read | [compose](../compose/vocal-lyrics-and-melody.md) | read a vocal lane's full settings and seed |
 | `vocal.set_params` | `vocal_set_params` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | merge a partial patch into a vocal lane's settings (incl. `rest_threshold_beats`, `velocity_dynamics`) |
-| `vocal.voicebanks` | `vocal_voicebanks` | read | [compose](../compose/vocal-rendering.md) | list the installed voicebanks and what each can do, and the plok.org index's others (`available`) (no project needed) |
-| `vocal.voicebank_install` | `vocal_voicebank_install` | job | [compose](../compose/vocal-rendering.md) | install a voicebank from the plok.org index, and the vocoder it needs; result carries its terms (no project needed, no undo) |
+| `vocal.voicebanks` | `vocal_voicebanks` | read | [compose](../compose/voicebank-library.md) | list the installed voicebanks and what each can do, and the plok.org index's others (`available`) (no project needed) |
+| `vocal.voicebank_install` | `vocal_voicebank_install` | job | [compose](../compose/voicebank-library.md) | install a voicebank from the plok.org index, and the vocoder it needs; result carries its terms (no project needed, no undo) |
 | `render.mixdown` | `render_mixdown` | job | [audio-engine](../audio-engine/offline-render-and-export.md) | bounce the master mix to a WAV file |
 | `meter.measure` | `meter_measure` | job | [mixer](../mixer/meter-control-api.md) | measure one slice of the mix |
 | `meter.stems` | `meter_stems` | job | [mixer](../mixer/meter-control-api.md) | measure every track plus the master in one pass |

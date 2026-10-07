@@ -1,7 +1,7 @@
 # Vocal rendering (singing synthesis)
 
 > Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
-> Spec history: crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
+> Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
 turns the lane's derived MIDI clip into a DiffSinger score, runs the
@@ -16,112 +16,14 @@ only marks the lane stale.
 
 ## Behaviour
 
-- **Voicebanks are installable content** (`VoicebankRegistry`,
-  `compose/vocal_svs/registry/`). A lane names its bank by string id
-  (`VocalParams::voicebank: VoicebankId`, Lilia by default) and its voice
-  mode by `speaker: Option<String>`. The registry scans, at startup, on
-  every `vocal.voicebanks` and after an install (`rescan`):
-  - **user banks**: each folder of `$XDG_DATA_HOME/resonance/voicebanks/`
-    (`$RESONANCE_VOICEBANK_DIR`) holding an acoustic `dsconfig.yaml` (the
-    one with an `acoustic:` key) at most two levels down, which covers
-    OpenUtau layout and Meiji's `configs/configs/`; the id is the folder
-    name as a slug, or — for a folder whose name slugs to nothing — the
-    character file's name as one (a warning names it; with neither the
-    folder is skipped with a warning);
-  - **development banks**: the three shipped layouts under
-    `$RESONANCE_SVS_MODELS_DIR` and `resonance-svs/models/` (resolved from
-    the app crate's compile-time `CARGO_MANIFEST_DIR`) with fixed ids —
-    `singer/extracted` = `tiger`, `voicebanks/lilia` = `lilia`,
-    `voicebanks/meiji` = `meiji`.
-  - **precedence for one id**: the user folder beats every development
-    root; within the user folder the first folder in sorted order wins
-    and the others are skipped with a warning naming both;
-    `$RESONANCE_SVS_MODELS_DIR` beats the source tree.
-  - **vocoders**: the folder the acoustic config's `vocoder:` names next
-    to it (TIGER's and Meiji's `dsvocoder`), else a bundled
-    `dsvocoder/` (Lilia), else a shared vocoder by id in
-    `…/resonance/vocoders/<id>/` (`$RESONANCE_VOCODER_DIR`; with only
-    `$RESONANCE_VOICEBANK_DIR` set, the `vocoders/` folder beside it) or a
-    dev root's `vocoder/`, matched by folder or by the config's `name`. A
-    vocoder counts as installed when its model file exists.
-  - **rescan reuse**: a bank found in the same folder as last time keeps
-    its `Arc<InstalledBank>` (parsed configs, inventory, the lazily-read
-    dictionary) while a `BankStamp` of what the scan read — times and
-    lengths of the acoustic config, phoneme list, character file,
-    `languages.json`, dictionary and vocoder config, and the bank folder's
-    subfolders — still matches; a bank whose vocoder was missing is always
-    re-read.
-  A hermetic test app scans only a private folder under its hermetic
-  root — never the source tree and never `$RESONANCE_SVS_MODELS_DIR`, so
-  the variable cannot change a test's result. A test that wants the real
-  banks opts in with `Resonance::test_install_dev_voicebanks_from_env`.
-  `resonance-svs/scripts/download_models.sh` fetches the three shipped
-  banks. Models are git-ignored. Hidden folders in the user folder (an
-  install's staging, a delete in progress) are never scanned.
-- **Installing from plok.org** (spec §5, `registry/{plok_index,library,
-  install}.rs`, `VoicebankLibrary` on `Resonance::voicebank_library`).
-  `https://resonance.plok.org/index.json` carries optional `voicebanks[]`
-  and `vocoders[]` next to the drums' `drumkits[]`: `{id, name, version,
-  languages, speakers, size, bytes?, sha256?, url, terms_url, credit,
-  commercial: free_with_credit | paid | permission, vocoder?, added}`
-  (a vocoder entry has no languages/speakers; its `id` is the name a
-  bank's `dsconfig.yaml` gives it). `url` is the creator's own download —
-  plok.org lists, never hosts. Fields past `id`/`name`/`url` are lenient.
-  The proposed entries for TIGER, Lilia, Meiji v170 and the openvpi
-  vocoders are committed at
-  [`plok-voicebank-index.json`](plok-voicebank-index.json) for the server.
-  - The index is fetched on its own thread (never the update loop), kept
-    10 minutes, and cached in `<voicebanks>/.plok-index.json`. A hermetic
-    test app has no index URL until a test sets one.
-  - An install runs on its own thread through the shared
-    `resonance_common::plok_download` (the drums' transport: resumable
-    `.part` with `Range` + `If-Range`, free-space check at 2.1× the file,
-    10 s connect / 30 s per-read timeouts, sha256 while streaming). A
-    sha256 that is not the index's fails with "upstream file changed; the
-    index needs updating" and installs nothing. The zip unpacks through a
-    hidden staging folder into `<voicebanks>/<id>/` (one wrapper directory
-    stripped, `__MACOSX` and dotfiles skipped, an older install replaced
-    only once the new one is whole) and must then hold an acoustic
-    `dsconfig.yaml`. The install writes `.resonance-plok.json` (version,
-    URL, sha256, terms, credit, commercial); the registry reads it, and its
-    terms win over the built-in table's.
-  - Vocoder: a bank that ships one uses it. Otherwise the vocoder its
-    `dsconfig.yaml` names (or the entry's `vocoder`) is looked up in the
-    vocoder library and, when missing, fetched from `vocoders[]` into
-    `<vocoders>/<vocoder id>/` (`vocoder.yaml` at the top or one folder
-    down). A bank whose sidecar matches the index entry and whose vocoder
-    is there is not downloaded again (`already_installed`).
-  - The tick collects finished installs, rescans the registry and only
-    then resolves a control job, so a client that waited finds the bank.
-- **Facts per bank** (`BankProfile`): derived from the files when the
-  bank is installed, from the built-in table (`registry/builtin.rs`) when
-  it is a known bank that is not, and conservative defaults otherwise.
-  - *Speakers*: the acoustic config's `speakers`. The table holds TIGER's
-    allow-list (its acoustic model lists about 40 speakers, most from
-    other creators' banks; only `glam fresh disco royal electric mystic
-    vinyl` are offered, matched to `…/tiger_*`) and Meiji's four modes
-    (`standard hunter lilith phantom` → `embeds/*`). Other banks offer
-    every model speaker, id = the slug of its last path segment. A bank
-    switch resets the speaker to the bank's default (TIGER: by voice
-    type; Meiji: `standard`; others: the first; none for ≤1 speaker).
-  - *Phoneme inventory*: the acoustic phoneme dictionary; an ARPAbet
-    phone counts as present bare or `en/`-prefixed. `missing_phonemes`
-    is ARPAbet minus that. A bank missing more than 8 phones is
-    `english: false` (listed, refused by `vocal.set_params`).
-  - *Spelling and language ids*: a phone is sent under the key the bank
-    stores it as (`en/ah` on Meiji). When the model takes a language
-    input, a namespaced key reports its language's id from the bank's
-    `languages.json` (read from the path the config names, else the
-    bank root), a bare symbol 0 in a bank that namespaces English and the
-    bank's id for `en` otherwise.
-  - *Curves*: `use_energy_embed` gates Dynamics, `use_breathiness_embed`
-    Breathiness, `use_tension_embed` Tension; pitch bend always applies.
-    Read at scan time (the old process-lifetime cache is gone).
-  - *Comfortable range*, *substitution hints*, *credit / terms URL /
-    commercial use* come from the table only: TIGER C3–E5, `paid`;
-    Lilia D3–G5, `v` → `f`/`b`, credit "LIEE", `free_with_credit`;
-    Meiji A2–D5, credit "Gahata Meiji from LUNAI Project", `permission`.
-    An unknown bank gets 48–76 (`range_source: "default"`) and no terms.
+- **Voicebanks** are installable content: a lane names its bank by id
+  (`VocalParams::voicebank`, Lilia by default) and its voice mode by
+  `speaker`. Which banks exist, what each can do (speakers, phoneme
+  inventory, language ids, curve support, comfortable range, terms) and
+  how they are installed from plok.org is the
+  [voicebank library](voicebank-library.md). The render asks
+  `BankProfile` (`VoicebankRegistry::profile`) for the bank's model files
+  (`render_target`), phoneme keys, language ids and curve support.
 - **Missing bank.** `vocal.render` checks every lane it covers before
   anything starts and fails with `voicebank_missing`, naming the bank (or
   the bank's missing vocoder), where a user bank goes, and
@@ -344,8 +246,8 @@ only marks the lane stale.
     Dynamics edit on TIGER reads stale without re-running the model
     needlessly on the units it does not touch.
 - **Comfortable ranges** (warnings only, `BankProfile::comfortable_range`):
-  per bank from the built-in table (see above); per-speaker ranges are not
-  known yet, so each speaker reports its bank's.
+  per bank from the built-in table ([voicebank library](voicebank-library.md));
+  per-speaker ranges are not known yet, so each speaker reports its bank's.
 
 ## Where the logic lives
 
@@ -354,10 +256,7 @@ only marks the lane stale.
 | Render entry | `resonance-app/src/compose/vocal_svs/{mod,render,error}.rs` | `render_vocal_clip`, `RenderedVocal`, `VocalRenderError`, `vocal_audio_start`, `SEGMENT_PAD_SEC` |
 | Rests and breaths | `compose/vocal_svs/rests.rs`, `segment/duration.rs` | `RestRule`, `REST_PHONEME` (`SP`), `BREATH_PHONEME` (`AP`), `BREATH_*`, `place_breaths` |
 | Velocity dynamics | `compose/vocal_svs/dynamics.rs`, `segment/{energy,tension}.rs` | `GainSpan`, `dynamics_gain_envelope`, `apply_dynamics_gain`, `velocity_gain_spans`, `velocity_gain_spans_with_breaths`, `breath_lead_secs`, `velocity_gain_db`, `velocity_modulation`, `build_energy_curve` |
-| Voicebank registry | `compose/vocal_svs/registry/{mod,roots,scan,stamp,installed,profile,builtin,dict}.rs` | `VoicebankRegistry` (`scan`, `rescan`, `profile`, `get`, `is_known`, `user_bank_dir`), `VoicebankRoots` (`for_machine`, `from_dirs`, `hermetic`, `dev_models_from_env`), `BankStamp`, `InstalledBank`, `BankProfile` (`render_target`, `phoneme_name`, `language_id`, `curve_supported`, `speakers`, `default_speaker`, `comfortable_range`, `missing_phonemes`, `english`, `dictionary`), `VoicebankMissing`, `BUILTIN_BANKS` |
-| App state | `resonance-app/src/lib.rs`, `update/compose/vocal_control.rs` | `Resonance::voicebanks`, `Resonance::rescan_voicebanks`, `Resonance::voicebank_library` |
-| plok.org install | `compose/vocal_svs/registry/{plok_index,library,install}.rs`; shared transport `resonance-common/src/plok_download/` | `PlokIndex`, `PlokVoicebank`, `PlokVocoder`, `PlokSidecar` (`.resonance-plok.json`), `VoicebankLibrary` (`refresh_index`, `start_install`, `cancel`, `take_finished`), `InstallPhase`, `InstallOutcome`, `delete_user_bank`, `VoicebankRegistry::{set_index, in_index}` |
-| Library overlay | `state/voicebank_library.rs`, `update/voicebank_library.rs`, `view/compose/voicebank_library.rs`, `state/overlay.rs` | `VoicebankLibraryState`, `LibraryOverlay`, `VoicebankRows` (`LibraryRows` over the shared `BrowserModel`, marks key `voicebank:<id>`), `VoicebankLibraryMessage`, `poll` (from the tick), `Overlay::VoicebankLibrary` |
+| Bank facts the render reads | `compose/vocal_svs/registry/profile.rs` (registry, installs and overlay: [voicebank library](voicebank-library.md)) | `BankProfile` (`render_target`, `phoneme_name`, `language_id`, `curve_supported`, `default_speaker`, `comfortable_range`), `VoicebankMissing`, `Resonance::voicebanks` |
 | Curve kinds, backend | `compose/vocal_svs/paths.rs` | `CurveKind`, `svs_backend` |
 | Phoneme inventory + timing | `compose/vocal_svs/phonemes.rs`, `validate.rs` | `VoicebankPhonemes`, `nearest_substitutes`, `nearest_by_class`, `validate_for_voicebank`, `articulation_report_for` |
 | Segment build | `compose/vocal_svs/segment/{duration,f0,tension,energy,overlay}.rs` | `build_segment` |
@@ -368,8 +267,7 @@ only marks the lane stale.
 | Render state | `compose/vocal_render_status.rs`, `update/compose/vocal_render_state.rs`, `update/compose/vocal_render_events.rs`, `update.rs` (the `settle` call) | `VocalRenderStatus`, `VocalLaneRenderState` (`severity`, `worst`), `VocalLaneErrorKind`, `lane_fingerprint`, `expected_unit_keys`, `lane_render_status`, `settle`, `auto_render_due`, `AUTO_RENDER_DEBOUNCE`, `ComposeMessage::VocalAutoRender`; render results `ready` / `failed` / `unavailable` |
 | Badge | `view/compose/vocal_render_badge.rs`, `view/compose/lane_inspector/vocal/mod.rs`, `view/editor_panel.rs` | `render_card` (inspector), `render_chip` (vocal-roll toolbar), `VocalRailContext::render_status` |
 | Control render state | `update/control/view_model/lane.rs`, `update/control/song.rs` | `lane_render_view`, `track_render_state` |
-| Control | `resonance-app/src/update/control/vocal.rs`, `view_model/voicebanks.rs`, `gate.rs`, `control_jobs.rs` | `render`, `voicebanks`, `voicebank_install`, `voicebank_install_settled`, `checked_voicebank`, `bank_missing`, `lane_voice`, `voicebank_list`, `JobToken::VoicebankInstall` |
-| GUI pickers | `view/compose/lane_inspector/vocal/voice_group.rs`, `state/picks.rs`, `state/ui_caches.rs`, `update/compose/lane_inspector/vocal_params.rs` | `voicebank_pickers`, `VoicebankChoice`, `SpeakerChoice`, `UiViewCaches::{voicebank_choices, missing_voicebank_choices}`, `VocalRailContext`, `set_voicebank` |
+| Control | `resonance-app/src/update/control/vocal.rs`, `control_jobs.rs` | `render`, `checked_voicebank`, `bank_missing`, `lane_voice` |
 | Vocal roll | `view/compose/vocal_roll/{build,draw}.rs` | `build_canvas`, `VocalRollCanvas::fingerprint` (hashes the bank's identity and stamp, so a rescan that changes the bank repaints the phoneme strip) |
 | SVS crate | `resonance-svs/src/{pipeline,ds,config,audio}.rs`, `stages/{acoustic,vocoder,common}.rs`, `voicebank/{mod,quirks,layout,dsdict,phonetics}.rs` | `render_segments`, `PipelineArgs`, `DsSegment`, `active_backend`, `voicebank::scan`, `BankDetails`, `looks_like_bank`, `find_dsdict`, `find_library_vocoder`, `installed_vocoder_name`, `load_dsdict`, `PhonemeInventory` |
 
@@ -382,32 +280,20 @@ It depends only on `resonance-music-theory`.
 ## Surfaces
 
 - **GUI:** vocal lane right rail → Generate (renders after generating) and
-  Re-render; Voice & delivery has a **Voicebank** pick list (the installed
-  English banks, options cached in `UiViewCaches::voicebank_choices` and
-  rebuilt on every rescan; a lane on a built-in bank that is not installed
-  shows `<id> (not installed)`, from `missing_voicebank_choices` built
-  alongside, so the picker allocates nothing per frame) and a **Speaker**
-  pick list (that bank's speakers, hidden for a bank with at most one),
+  Re-render; Voice & delivery has the **Voicebank** and **Speaker** pick
+  lists and **Library…** (see [voicebank library](voicebank-library.md)),
   and **Rest after gap** (0.125–4 beats, step ⅛) and **Velocity →
   loudness** (0–1) sliders (`SetVocalRestThresholdBeats`,
-  `SetVocalVelocityDynamics`, coalesced undo);
-  tempo mismatch warning in the inspector. A missing bank surfaces as the
-  render-failure banner, and the lane keeps its audio. A lane whose audio
-  is not current shows a **badge** at the top of its inspector body and in
-  the vocal-roll toolbar: `STALE · N of M phrases changed` (warm; the
-  card adds that the old take plays until a render replaces it),
-  `RENDERING` (neutral) or `RENDER FAILED · <kind>` (`BAD`; the card adds
-  the message). GUI edits re-render the lane by themselves after 750 ms.
-  **Library…** beside the Voicebank picker opens the voicebank library
-  overlay: tabs `Installed | plok.org` with search (the shared syntax:
-  `is:fav`, `lang:en`, `is:user` / `is:dev` / `is:plok`) and ★ over the
-  shared marks (`voicebank:<id>`), a list with INSTALLED / UPDATE / %
-  chips, and a detail pane with credit, terms URL, commercial use and
-  vocoder. Download (and Update) first shows the terms and credit line
-  and starts only on **Accept & download**; a running install shows its
-  progress and **Cancel**; **Delete…** (user installs only) asks first;
-  **Use on this lane** sets the lane's bank (one undoable lane edit) and
-  closes the overlay. Esc or the backdrop closes it; installs keep going.
+  `SetVocalVelocityDynamics`, coalesced undo); tempo mismatch warning in
+  the inspector. A missing bank surfaces as the render-failure banner, and
+  the lane keeps its audio. A lane whose audio is not current shows a
+  **badge** at the top of its inspector body and in the vocal-roll
+  toolbar: `STALE · N of M phrases changed` (warm; the card adds that the
+  old take plays until a render replaces it), `RENDERING` (neutral) or
+  `RENDER FAILED · <kind>` (`BAD`; the card adds the message). GUI edits
+  re-render the lane by themselves after 750 ms. Expression curves are
+  edited as `Vocal:` automation rows on the Arrange view (see Expression
+  curves above).
 - **Control API / MCP:** `vocal.render` → `mcp__resonance__vocal_render`,
   a job (`job_status` / `job_wait`). `section_id` renders one lane;
   `track_id` alone renders **all** that track's lanes; neither renders
@@ -416,25 +302,9 @@ It depends only on `resonance-music-theory`.
   with the bank it holds; a given one (any installed or built-in id,
   case-insensitive) is stored on every lane the call covers. A lane whose
   bank or vocoder is missing fails the call with `voicebank_missing`.
-  Payload: `track_ids`, `revision`. `vocal.voicebanks` →
-  `vocal_voicebanks` (read-only, above the mutation gate, no revision):
-  `{installed: [{id, name, version, english, speakers [{id, name,
-  comfortable_range}], default_speaker, comfortable_range {low, high,
-  range_source}, missing_phonemes, substitutions [{phoneme, sung_as}],
-  curves {dynamics, tension, breathiness, pitch_bend}, credit, terms_url,
-  commercial, vocoder, vocoder_installed}], available: [{id, name, version,
-  terms_url, credit, commercial, languages, speakers, size, vocoder,
-  url}], index_status: fresh | cached | fetching | unavailable,
-  index_error?}`; it rescans first, reads the index from memory or its
-  disk cache and starts a background fetch when it is stale.
-  `vocal.voicebank_install {id}` → `vocal_voicebank_install`, a job
-  (above the mutation gate, no undo entry, no revision): installs the bank
-  and the vocoder it needs; the result is `{id, name, version, terms_url,
-  credit, commercial, vocoder, vocoder_installed, vocoder_fetched,
-  already_installed}` — running it accepts the terms, so the agent passes
-  them on. An id the known index does not list is refused `not_found`; a
-  bank already installing is `busy`; a hash mismatch fails the job with
-  the "upstream file changed" message. `song.vocal` reports render state; banks and speakers are better
+  Payload: `track_ids`, `revision`. `vocal.voicebanks` and
+  `vocal.voicebank_install` list and install banks
+  ([voicebank library](voicebank-library.md)). `song.vocal` reports render state; banks and speakers are better
   set with `vocal.set_params` ([vocal lanes](vocal-lyrics-and-melody.md)).
   `vocal.set_params` / `vocal.get_params` carry `rest_threshold_beats`
   and `velocity_dynamics` (range-checked on the merged lane).
@@ -483,26 +353,31 @@ Run once against TIGER, Lilia and Meiji (2026-10-07): 12 files (Lilia's
 one voice, Meiji's four modes, TIGER's seven), 7.85 s each, all
 non-silent (−20 to −27 dBFS). The listen itself and picking which
 candidates (Peiton, the LUNAI English singers, Meiji v170) join the index
-is Jorrit's job, not this tool's — see spec §12 slice 6 and §5.
+is Jorrit's job, not this tool's — see
+[vocal follow-ups](../../intents/compose/vocal-followups.md).
+
+The script clears only what it writes in `--out` (`*.wav`,
+`manifest.json`, `key.json`) and refuses a non-empty directory holding
+neither a `key.json` nor a `manifest.json`. It shuffles whenever a
+`manifest.json` exists — also after a failed render, before reporting the
+failure — drops plainly-named WAVs a render that died before its manifest
+left, and gives every token file the same modification time, so a listing
+by time does not reveal the render order.
 
 ## How it's tested
 
 | What | Where | Run |
 |---|---|---|
+| Registry, install, library overlay, pickers, `vocal.voicebanks` | see [voicebank library § How it's tested](voicebank-library.md#how-its-tested) | |
+| `voicebank_missing` before anything queues: GUI re-render keeps the old audio, `vocal.generate` reports `render_error`, a missing vocoder named | `tests/control/control_voicebanks.rs` (`render_with_a_missing_*`, `a_render_with_a_missing_bank_keeps_the_old_audio`, `generate_reports_the_missing_bank_…`), `control_jobs.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Plan, cache, IO, placement, timing, articulation | `resonance-app/tests/vocal/{vocal_render_plan,vocal_render_cache,vocal_audio_io,vocal_audio_placement,vocal_segment_timing,vocal_articulation,vocal_phoneme_accessor,vocal_expression_segment,voicebank_curve_support}.rs` | `./scripts/run-tests.py -p resonance-app` |
-| Expression curves: per-curve support, value mapping, section-relative sampling, Dynamics as gain on a bank without energy (same cache key, new state key), gain layers add in dB; the model and `plan_set_lane` | `tests/vocal/{vocal_expression_segment,expression_curves_model}.rs`; curve edits → stale / debounce, persistence in `tests/control/control_vocal_curves.rs` | same |
+| Expression curves: per-curve support, value mapping, section-relative sampling, Dynamics as gain on a bank without energy (same cache key, new state key), gain layers add in dB; the model and `plan_set_lane` (windows of different lengths) | `tests/vocal/{vocal_expression_segment,expression_curves_model}.rs`; curve edits → stale / debounce, persistence (a rendered lane with a curve reads `rendered` after save and reopen, the beat read back exactly) in `tests/control/control_vocal_curves.rs` | same |
 | A Dynamics curve audibly changes a TIGER take (−6 / +6 dB per note, silence guarded) | `tests/vocal/vocal_dynamics_render.rs` `on_tiger_a_dynamics_curve_changes_the_take_through_gain` (no-op unless the models are set) | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
-| Registry scans (temp-dir fixture banks: slugs, two-level layout, languages, shared vocoder, user-over-dev, rescan, built-in fallbacks) | `tests/vocal/voicebank_registry.rs`; fixtures from `resonance_app::{write_voicebank_fixture, VoicebankFixture}` | same |
-| Real banks register with the right ids, speakers, curve flags | `tests/vocal/voicebank_curve_support.rs` (`real_banks_register_…`, `installed_flags_match_…`; no-ops unless set). Nothing else reads the variable: the suite gives the same results with it set | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
-| plok.org install over a loopback server: available → installed, vocoder auto-fetch, terms in the result, no revision / undo, `already_installed`, sha mismatch installs nothing, a cut download resumes with `Range`, unknown id `not_found`, no project needed; the committed index proposal parses | `tests/control/control_voicebank_install.rs` (server: `tests/common/plok_server.rs`) | `./scripts/run-tests.py -p resonance-app` |
-| Library overlay: the Library… button opens it on the lane's bank, a download waits for Accept (Decline fetches nothing), Use sets the lane, Delete asks first, Cancel; goldens of the Installed tab, plok.org tab, accept-terms, downloading and confirm-delete states | `tests/compose/compose_voicebank_library.rs` → `compose_voicebank_library_{installed,plok,accept_terms,downloading,confirm_delete}-wgpu.png` | `RESONANCE_BLESS=1` |
-| `vocal.voicebanks`, `voicebank_missing`, set_params bank checks; hermetic roots and the explicit dev-bank opt-in; vocoders beside `$RESONANCE_VOICEBANK_DIR`; id fallback and duplicate precedence; rescan reuse; a missing bank keeps the old audio (GUI re-render and `vocal.generate`); `song.vocal` lines and notes agree on a bank-dictionary word | `tests/control/control_voicebanks.rs`, `control_jobs.rs` | same |
 | Rests (eighth rest at the default threshold, threshold flips legato/rest, articulation report follows it), breaths (gap, short gap, no gap, first note, render units keep rest + breath together) | `tests/vocal/vocal_rests_breaths.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Velocity gain shape and 30 ms ramp, a breath takes its note's gain, TIGER per-note RMS via the post gain, tension on Lilia, energy on a fixture bank with `use_energy_embed`, content key follows both params | `tests/vocal/vocal_velocity_dynamics.rs` | same |
 | Real models: AP vs SP rest level before the gate, rest gated silent and breath heard (Lilia), TIGER velocity sweep ±6 dB | `tests/vocal/vocal_dynamics_render.rs` (no-ops unless set) | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
 | Param ranges, serde defaults; wire round-trip and range errors | `resonance-music-theory/tests/vocal_params_validate.rs`, `tests/control/control_vocal_params.rs` | same |
 | Cache key follows the resolved speaker; vocal-roll fingerprint follows a rescan | `tests/vocal/vocal_render_cache.rs` (`the_key_follows_the_resolved_speaker_not_the_params`), `tests/compose/vocal_roll_fingerprint.rs` (`a_rescan_that_changes_the_bank_invalidates`) | same |
-| Inspector pickers (installed bank + speaker; `lilia (not installed)`) | `tests/compose/compose_rail_collapse.rs` → `compose_vocal_rail_installed_bank-wgpu.png`, `compose_vocal_rail_lyrics_draft_folded-wgpu.png` | `RESONANCE_BLESS=1` |
 | Render state: per-lane stale / error / rendered, control edits don't render, GUI debounce (timer generations), chord edits stale not stuck, reopen reads `rendered`, keyless take reads `stale`, worst-lane summary; a whole-line shift (control: stale, GUI: armed), a TIGER velocity edit stale only with `velocity_dynamics`, `song.vocal` articulation follows the lane's rest threshold, the debounce generation survives a load, a playhead-only tick skips the settle | `tests/control/control_vocal_render_state.rs`, `control_vocal_render_state_edits.rs` (`test_finish_vocal_render` / `test_fail_vocal_render` land or fail a render through the real messages) | same |
 | Badge goldens | `tests/compose/compose_vocal_render_badge.rs` → `compose_vocal_rail_stale_badge-wgpu.png`, `compose_vocal_rail_error_badge-wgpu.png`, `compose_vocal_roll_stale_badge-wgpu.png` | `RESONANCE_BLESS=1` |
 | In-flight / re-render safety | `tests/compose/vocal_render_inflight_placement.rs`, `vocal_rerender_keeps_saved_audio.rs`, `vocal_tempo_mismatch_warning.rs` | same |
@@ -548,17 +423,53 @@ results.
   word fall through to CMU, because everything after the resolver works in
   ARPAbet (see [pronunciation](pronunciation.md)).
 - `set_params` accepts an installed bank, one of the three built-in ids,
-  or an id the plok.org index lists (English when its `languages` name
-  `en` or nothing); the GUI picker offers installed English banks only.
-- Install, against spec §5: `vocal.voicebanks` never blocks on the
-  network — a first call answers `index_status: fetching` with an empty
-  `available`; an installed bank with no install record never reads
-  UPDATE (only plok.org installs are compared); the overlay's Delete
-  removes user-folder banks only, never development banks; there is no
-  MCP delete.
-- The model root falls back to a compile-time source path, so an installed
-  binary away from the source tree needs `RESONANCE_SVS_MODELS_DIR` (or the
-  bank in the user voicebank folder).
+  or an id the plok.org index lists; the GUI picker offers installed
+  English banks only. Install deviations are in the
+  [voicebank library](voicebank-library.md#decisions-and-deviations).
+- Render state, more against spec §7 (slice 9): the plan memo is keyed by
+  a fingerprint of the plan's inputs, not a lane revision counter; the
+  track-level order is `error > rendering > stale > not_rendered >
+  rendered`; chord and length edits no longer render at all (they
+  re-derive the melody and leave the lane stale), which replaces plumbing
+  the dropped Task up; the compared keys are unit *state* keys (cache key
+  + first clip tick + raw velocities when `velocity_dynamics` > 0, + the
+  Dynamics curve gain), so a whole-line shift or a TIGER velocity edit
+  reads stale though no cache key moves.
+- Rests and breaths, against spec §8 (slice 12): a gap of **at least** the
+  threshold is a rest (so a written eighth rest at ½ beat rests); a breath
+  on a phrase's first note takes 0.25 s of the 0.3 s leading pad; a short
+  gap lends the breath its whole length and the rest comes from the
+  previous note's tail; a rest ending in a breath no longer splits render
+  units. The "check first" was done: an `AP` rest renders as breath noise
+  (see Measurements), so rests and pads are `SP` and only written breaths
+  are `AP`. Vocal goldens were re-blessed for the shorter default rest
+  (0.25 s at 120 bpm against the old fixed 0.4 s) — an approved sound
+  change.
+- Velocity dynamics, against spec §9 (slice 13): on a bank without energy,
+  tension keeps its own `tension_velocity_amount` rather than being
+  scaled by `velocity_dynamics`; the post gain is applied to the stitched
+  take after the render cache (raw note velocity, not the stress-weighted
+  one), while the unit content key still hashes both new params, so
+  changing `velocity_dynamics` re-runs the models; energy uses the
+  overlay's signed ±1 units, not dB.
+- Expression curves, against spec §10 (slice 14): the old dock model's
+  baseline / depth / smoothing are dropped (a curve is its points); the
+  envelopes stay `0..=1` (`0.5` neutral) and pitch bend `±50` cents as in
+  `expression.rs`; Dynamics on a bank without energy is a ±12 dB post
+  gain. The Arrange rows and `automation.*` deviations are in
+  [automation lanes](../timeline/automation-lanes.md) and the
+  [automation control API](../timeline/automation-control-api.md).
+- `resonance-svs` honesty (slice 2): `speedup` stays 20 — the shipped
+  acoustic models take `steps`, so 50 is 1.7× *slower* (Measurements);
+  the `rocm` feature became `migraphx`.
+- The bank audition (slice 6, D30) is an `#[ignore]`d app test through the
+  real registry → resolver → segment → render path rather than a
+  `resonance-svs` example, so it reuses `VoicebankRoots::for_machine`
+  and can drive Meiji (the example cannot).
+- Saved floats read back exactly: the workspace builds `serde_json` with
+  `float_roundtrip`. The default parser lands one ULP off for some values
+  (a curve point 49 ticks into a section is one), which made a reopened,
+  rendered lane read `stale`.
 
 ## Known gaps
 
@@ -576,16 +487,14 @@ results.
   `migraphx` build needs `ORT_LIB_LOCATION` pointing at an ORT built with
   it (without one, registration fails and the session falls back to CPU,
   which is checked).
-- The live `resonance.plok.org/index.json` does not list voicebanks yet:
-  publishing [`plok-voicebank-index.json`](plok-voicebank-index.json) is
-  server work. TIGER's and the NSF-HiFiGAN 2024.02 entry's sha256 are not
-  pinned (GitHub publishes no digest for them), and TIGER's pack layout
-  was not inspected.
-- The real installs (hundreds of MB from GitHub) have not been run; the
-  tests use a loopback server and fixture banks.
-- Comfortable ranges are per bank; no per-speaker ranges are known.
+- Which banks a user should get (the blind listen of the audition
+  renders) and the publishing of the plok.org index are open —
+  [vocal follow-ups](../../intents/compose/vocal-followups.md); install
+  gaps are in the [voicebank library](voicebank-library.md#known-gaps).
 - The `render_resonance_vocal` example cannot drive Meiji: its G2P copy
-  emits bare ARPAbet without Meiji's `en/` prefix or language ids.
+  emits bare ARPAbet without Meiji's `en/` prefix or language ids, so the
+  `speedup` measurement has no Meiji row.
+- Breaths are rendered but not drawn in the vocal roll.
 - `speedup` is a misnomer for the shipped banks (it is the `steps` count);
   the knob is not exposed to the user.
 

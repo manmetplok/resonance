@@ -1,7 +1,7 @@
 # Lyric pronunciation (G2P and dictionary)
 
-> Verified against master @ `ce484ad3` + vocal phase 3 on 2026-10-07.
-> Spec history: prototype `docs/intents/prototypes/svs-pronunciation-control/index.html` (design #173, notes #174).
+> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
+> Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4.4, §8 (slices 5, 10, 11); prototype `docs/intents/prototypes/svs-pronunciation-control/index.html` (design #173, notes #174).
 
 Every sung syllable becomes a list of ARPAbet phonemes before it reaches
 the voicebank. By default the voicebank's own English dictionary decides
@@ -156,6 +156,18 @@ dictionary (control only), its persistence and per-unit partial re-render
 are built. The interactive phoneme strip (click a syllable, remove/reorder
 phonemes, pick a CMU variant, split/merge syllables, revert), the
 dictionary editor and the global dictionary with import/export are not.
+
+Any-bank phonemisation (slice 5, D18): the lookup order is the bank's
+own English dictionary before CMU, and CMU / rules output is mapped onto
+the bank's inventory. Deviation: bank-dictionary entries that use
+non-ARPAbet symbols (`dx`, Lilia's `L`) are skipped, so those words fall
+back to CMU — everything after the resolver works in ARPAbet.
+
+Pronunciation source (slice 10, D24): `PhonemeProvenance::Auto` was split
+into a finer per-syllable `G2pSource`; `song.vocal` notes carry `g2p` and
+`syllable_warning` (omitted when false). A note past the end of the lyrics
+reports no `g2p`. User breaks are exact (D23); the corpus typo `fore·get`
+became `for·get`, and a test keeps every corpus word on CMU.
 
 Overrides were keyed by `(ClipId, note_index)`; slice 11 re-keyed them to
 `(definition, track, syllable index)` plus the syllable text, as the

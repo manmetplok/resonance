@@ -66,7 +66,7 @@ the user imports.
 | Marks | `resonance-common/src/library_marks.rs` | `Marks`, `SharedMarks`, `kind::DRUMKIT` |
 | Browser rows | `resonance-plugin/src/kit_rows.rs`, `library_view.rs` | `KitRows`, `BrowserModel`, `parse_search` |
 | Plugin-side handle | `plugins/resonance-drums/src/library.rs`, `download.rs` | `SharedKitLibrary`, `WorkerHandle`, `ServerKit::target` |
-| Shared transport | `resonance-common/src/plok_download.rs`, `plok_download/{http,index,part,transfer,package,read_timeout}.rs` | `INDEX_URL`, `HttpConfig`, `fetch_index`, `download` + `Control` + `Target`, `PartFile`, `sweep_stale_downloads`, `DownloadError` (`ChecksumMismatch`), `package::install_package` (used by voicebanks, not kits) |
+| Shared transport | `resonance-common/src/plok_download.rs`, `plok_download/{http,index,part,transfer,package,read_timeout}.rs` | `INDEX_URL`, `HttpConfig`, `fetch_index`, `download` + `Control` + `Target`, `PartFile` (`acquire`: open without truncating, lock, then empty the file and write its `.meta`), `sweep_stale_downloads` (an unlocked part with no record is swept once it is a minute old), `DownloadError` (`ChecksumMismatch`), `is_safe_id`; `package::{install_package, aside_name, sweep_install_leftovers}` (used by [voicebanks](../compose/voicebank-library.md), not kits) |
 | Overlay UI | `plugins/resonance-drums/src/editor/{library_panel,plok_panel,jobs,missing_kit}.rs` | Installed / plok.org tabs |
 | App cache + handlers | `resonance-app/src/state/library_cache.rs` (`DrumKitLibraryCache`), `resonance-app/src/update/control/drum_kits.rs` | list, set_marks |
 

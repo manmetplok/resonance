@@ -26,7 +26,7 @@ instrument is used (on a bus or master: the first plugin in the chain).
 write target. `delete_points` and `remove_lane` also accept `lane_id`. That
 is the only way to reach an orphaned lane, whose plugin instance is gone.
 
-**Vocal expression curves** (vocal-mcp-control-and-quality.md §10). Instead
+**Vocal expression curves** ([vocal spec](../../history/specs/vocal-mcp-control-and-quality.md) §10, slice 14). Instead
 of owner + control/param, `vocal: {track_id, curve: "dynamics" | "tension" |
 "breathiness" | "pitch_bend"}` (alone) addresses one of a vocal track's four
 curve lanes. The track needs a vocal lane in at least one section, else
@@ -44,7 +44,11 @@ curve lanes. The track needs a vocal lane in at least one section, else
   it). A whole-lane replace keeps a section point while any copy of it is
   still in the list; `delete_points` and `shape` remove every copy of a point
   they remove (`deleted` counts copies). `remove_lane` clears the curve in
-  every section (confirm-gated when it has points).
+  every section with a vocal lane on the track, placed or not
+  (confirm-gated when it has points). A section beat is an `f64`; a GUI
+  edit can land on any tick (control positions are coarser), and a saved
+  beat reads back exactly (the workspace's `serde_json` has
+  `float_roundtrip`).
 - Vocal lanes always play: `set_enabled` refuses them, and `set_lane` with
   `enabled: false` is refused. They never reach the engine; the curve is
   rendered into the take, so a write leaves `song.vocal` `stale` until
@@ -197,6 +201,12 @@ From the spec, as merged (`4c6ef5fb`):
 - Adding the namespace did not bump `PROTOCOL_VERSION`, because the methods
   were added only. The vocal target (`vocal`, `section_relative`, the
   `song.vocal` `curves` list) is additive too: no bump.
+- Vocal target, against the vocal spec's §10 (slice 14): a whole-lane
+  replace keeps a section point while any copy of it survives, so
+  `delete_points` / `shape` remove every copy; two values for one section
+  beat are refused; `set_enabled` refuses vocal lanes; `song.tracks` lane
+  summaries leave them out (`song.vocal` lists `curves` per lane); a
+  placement whose bank does not take the curve is still written.
 
 ## Known gaps
 
