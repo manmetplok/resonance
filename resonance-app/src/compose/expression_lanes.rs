@@ -18,6 +18,7 @@
 //! the whole-lane replace `automation.*` writes with.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use resonance_audio::types::{TempoMap, TrackId, TICKS_PER_QUARTER_NOTE};
 use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind as Shape, LaneId};
@@ -56,8 +57,9 @@ pub struct CurveWindow {
     /// [`super::expression::curve_audible`]); an unsupported window is
     /// drawn greyed and ignores pointer input.
     pub supported: bool,
-    /// The bank's display name, for "not supported by <bank>".
-    pub bank: String,
+    /// The bank's display name, for "not supported by <bank>" (shared
+    /// by every window the bank sings, so a rebuild allocates no text).
+    pub bank: Arc<str>,
 }
 
 impl CurveWindow {
@@ -189,7 +191,7 @@ pub struct ProjectionInputs<'a> {
     pub sample_rate: u32,
     /// The lane's bank: which curves it renders (by [`CurveKind::index`])
     /// and its display name.
-    pub bank: &'a dyn Fn(&VocalParams) -> ([bool; 4], String),
+    pub bank: &'a dyn Fn(&VocalParams) -> ([bool; 4], Arc<str>),
 }
 
 /// The vocal lane config of `track` in `definition`.
@@ -385,12 +387,16 @@ pub fn plan_set_lane(
     for def in definitions {
         let old = current(def);
         // Points past the section end are not projected, so they have no
-        // copy to keep them: they survive untouched.
+        // copy to keep them: they survive untouched. A section placed
+        // under different meters is longer at some placements than at
+        // others; a point is projected wherever it fits, so the longest
+        // placement decides.
         let len = lane
             .windows
             .iter()
-            .find(|w| w.definition_id == def)
-            .map_or(f64::INFINITY, |w| w.len_beats);
+            .filter(|w| w.definition_id == def)
+            .map(|w| w.len_beats)
+            .fold(f64::NEG_INFINITY, f64::max);
         let mut curve: Vec<VocalCurvePoint> = old
             .iter()
             .enumerate()

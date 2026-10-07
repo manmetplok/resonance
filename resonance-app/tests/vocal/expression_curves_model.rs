@@ -119,7 +119,7 @@ fn window(placement_id: u64, start_bar: u64) -> CurveWindow {
         start_tick: tm.sample_to_abs_tick(start_frame, SR),
         len_beats: 16.0,
         supported: true,
-        bank: "Lilia".to_owned(),
+        bank: "Lilia".into(),
     }
 }
 
@@ -220,3 +220,48 @@ fn copies_of_a_point_are_found_across_placements() {
         "frame → section beat"
     );
 }
+
+/// A section placed under two meters is 12 beats long at its first
+/// placement (3/4) and 16 at its second (4/4). A point at beat 14 is
+/// projected only at the second; a whole-lane replace that drops that
+/// copy deletes the point — the longest placement decides what was
+/// visible, not the first one.
+#[test]
+fn a_point_only_the_longer_placement_shows_is_deletable() {
+    let mut short = window(1, 0);
+    short.end_frame = short.start_frame + 12 * BEAT;
+    short.len_beats = 12.0;
+    let long = window(2, 4);
+    let target = AutomationTarget::VocalCurve {
+        track: 3,
+        curve: CurveKind::Dynamics,
+    };
+    let mut projected = AutomationLane::new(vocal_lane_id(3, CurveKind::Dynamics), target, Vec::new());
+    // Section point 0 at beat 1 (both placements), point 1 at beat 14
+    // (only the 16-beat placement: frame 16 + 14 beats).
+    projected.points = vec![
+        Breakpoint::new(BEAT, 0.3, Shape::Linear),
+        Breakpoint::new(17 * BEAT, 0.3, Shape::Linear),
+        Breakpoint::new(30 * BEAT, 0.6, Shape::Linear),
+    ];
+    let origin = |placement_id, index| PointOrigin {
+        placement_id,
+        definition_id: 7,
+        index,
+    };
+    let lane = VocalLane {
+        lane: projected,
+        origins: vec![origin(1, 0), origin(2, 0), origin(2, 1)],
+        windows: vec![short, long],
+    };
+    let current = |_def: u64| vec![p(1.0, 0.3), p(14.0, 0.6)];
+    let keep_first = vec![Breakpoint::new(BEAT, 0.3, Shape::Linear)];
+    let out = plan_set_lane(&lane, &keep_first, &current, &tempo_map(), SR).unwrap();
+    assert_eq!(out, vec![(7, vec![p(1.0, 0.3)])], "the beat-14 point is deleted");
+
+    // A point past every placement's end still survives untouched.
+    let current = |_def: u64| vec![p(1.0, 0.3), p(20.0, 0.6)];
+    let out = plan_set_lane(&lane, &keep_first, &current, &tempo_map(), SR).unwrap();
+    assert_eq!(out, vec![(7, vec![p(1.0, 0.3), p(20.0, 0.6)])]);
+}
+
