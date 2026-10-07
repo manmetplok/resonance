@@ -1,6 +1,6 @@
 # Voicebank library (registry, plok.org install, library overlay)
 
-> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
+> Verified against master @ `c6cc8fd5` + vocal intelligibility on 2026-10-08.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4–§5 (slices 4 and 7); research [`singing-voicebank-options-2026`](../../history/research/singing-voicebank-options-2026.md).
 
 Voicebanks are content a user installs, not three banks fixed in the code.
@@ -78,7 +78,13 @@ in [pronunciation](pronunciation.md).
     minus that. A bank missing more than 8 phones is `english: false`
     (listed, refused by `vocal.set_params`).
   - *Spelling and language ids*: a phone is sent under the key the bank
-    stores it as (`en/ah` on Meiji). When the model takes a language input,
+    stores it as (`en/ah` on Meiji). The `replacements:` of the bank's
+    `dsdict-en.yaml` come first (`dsdict::load_replacements`, read at scan
+    time into `PhonemeInventory::with_replacements`): LIEE Lilia's
+    multi-language inventory spells English `w` as `L`, `t` `t0`, `d` `d0`,
+    `r` `r0`, `l` `ll`, `y` `j` and `v` as her own `w`. A replacement into a
+    symbol the inventory lacks is ignored. The built-in table carries
+    Lilia's (`shipped_replacements`) for when she is not installed. When the model takes a language input,
     a namespaced key reports its language's id from the bank's
     `languages.json` (read from the path the config names, else the bank
     root), a bare symbol 0 in a bank that namespaces English and the bank's
@@ -86,10 +92,19 @@ in [pronunciation](pronunciation.md).
   - *Curves*: `use_energy_embed` gates Dynamics, `use_breathiness_embed`
     Breathiness, `use_tension_embed` Tension; pitch bend always applies.
     Read at scan time.
-  - *Comfortable range* and *substitution hints* come from the table only:
-    TIGER C3–E5; Lilia D3–G5, `v` → `f`/`b`; Meiji A2–D5. An unknown bank
-    gets 48–76 (`range_source: "default"`). Per-speaker ranges are not
-    known, so each speaker reports its bank's.
+  - *Comfortable range* and *substitution hints* come from the table only.
+    Ranges are where a plain pop line sits, not the voice's extremes, from
+    the research notes and a Whisper transposition sweep
+    ([vocal rendering § Measurements](vocal-rendering.md#measurements)):
+    TIGER (male, A2–C♯5 at the extremes) C3–A4; Lilia (alto, optimal
+    C3–G5, clearer low) D3–A♯4; Meiji (male, A2–D5) B2–F♯4. An unknown
+    bank gets 48–76 (`range_source: "default"`). `BuiltinBank::speaker_ranges`
+    can give a speaker its own range; none is known yet, so each speaker
+    reports its bank's. No shipped bank needs a substitution hint any more
+    (Lilia's `v` is spelt, see above).
+  - *Formant swing* (`BuiltinBank::gender_scale`): how far the timbre chip
+    moves the model's `gender` input. TIGER 0.25, the others 1
+    ([vocal rendering](vocal-rendering.md)).
   - *Terms* (credit, terms URL, commercial use: `free_with_credit` |
     `paid` | `permission`): `VoicebankRegistry::terms`. The built-in table
     has TIGER "TIGER by tigermeat", `paid`; Lilia "LIEE",
