@@ -1,6 +1,6 @@
 # Control API: architecture
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `8eac71b3` + vocal-phase1 fixes (`d1b5c284`) on 2026-10-07.
 > Spec history: the original design was ba doc #265 (control protocol) and
 > #266 (MCP server), epic #200; ba is retired and those docs are not in the
 > repo. Code comments still cite them and the todo numbers (#1147–#1161).
@@ -88,7 +88,7 @@ plugin-label lookups. Each `Request` runs through `execute`, in this order:
    method. It answers `busy` when: no project is active; a load or replay
    is pending; an offline mixdown is running (except `meter.*`); a GUI
    drag gesture is open (except the read-only list in
-   `reads_open_project_only`); or a bounce in place, freeze or stem export
+   `reads_open_project_only`, which includes `vocal.get_params`); or a bounce in place, freeze or stem export
    holds the offline renderer.
 4. Gated calls run inside `with_compound_undo`, so one call makes at most
    one undo entry and one revision bump (CTL-03). Then the namespace
@@ -144,7 +144,8 @@ remote-control chip (`view/remote_indicator.rs`, fed by
 | Socket server | `resonance-app/src/control_socket.rs` | `spawn`, `ControlServer`, `serve_connection`, `job_wait_response`, `bridge_stream` |
 | Startup | `resonance-app/src/lib.rs` | `new_with_control`, `start_control_server`, `revision`, `control_client_count` |
 | Endpoint state | `resonance-app/src/state/control.rs` | `ControlEndpointState`, `ControlSession`, `ReplySender`, `PendingLabel` |
-| Dispatch + gate | `resonance-app/src/update/control/mod.rs` | `handle`, `execute`, `mutation_gate_error`, `bypasses_mutation_gate`, `reads_open_project_only`, `run_via_update` |
+| Dispatch | `resonance-app/src/update/control/mod.rs` | `handle`, `execute`, `run_via_update` |
+| Mutation gate | `resonance-app/src/update/control/gate.rs` | `mutation_gate_error`, `bypasses_mutation_gate`, `reads_open_project_only`, `offline_render_busy_error`, `is_protocol_method` |
 | Reply vocabulary | `resonance-app/src/update/control/reply.rs` | `success`, `failure`, `mutation_ack`, `ack_task`, `ack_or_compose_error`, `no_track` … |
 | One undo per call | `resonance-app/src/undo/mod.rs` | `with_compound_undo` |
 | Wire projections | `resonance-app/src/update/control/view_model/` | shared by every namespace |

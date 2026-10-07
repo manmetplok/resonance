@@ -1,6 +1,6 @@
 # Control protocol and conventions
 
-> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
+> Verified against master @ `86e5c2af` + vocal-params work + vocal-phase1 fixes (`d1b5c284`) on 2026-10-07.
 > Spec history: ba doc #265 (not in the repo). Code-review findings cited
 > below (CTL-01, CTL-03, ARCH2-06, …) are in
 > `docs/history/reviews/code-review-todo.md`.
@@ -141,7 +141,7 @@ The step-by-step rules are in
 | Handshake | `resonance-control/src/methods/control.rs` | `HELLO`, `HelloParams`, `HelloResult` |
 | Capabilities | `resonance-control/src/methods/mod.rs` | `capabilities`, `deprecated_aliases` |
 | Shared primitives | `resonance-control/src/common.rs`, `ids.rs` | `MutationAck`, `PositionSpec`, `SongPosition`, `MAX_BARS`, id newtypes |
-| Server-side hello | `resonance-app/src/update/control/mod.rs` | `hello`, `is_protocol_method` |
+| Server-side hello | `resonance-app/src/update/control/mod.rs`, `gate.rs` | `hello`, `is_protocol_method` (in `gate.rs`) |
 
 ## Surfaces
 

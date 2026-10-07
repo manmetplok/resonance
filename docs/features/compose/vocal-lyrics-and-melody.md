@@ -115,7 +115,11 @@ line, re-rolled from a small template corpus, or set by an agent.
   It never renders or regenerates. `voicebank` is an id string (`tiger`,
   `lilia`, `meiji`) and `speaker` one string that maps to `singer`
   (TIGER), `singer_meiji` (Meiji) or nothing (Lilia, which refuses one);
-  a bank switch without `speaker` resets it to the bank's default.
+  a bank switch without `speaker` resets it to the bank's default
+  (`VocalParams::switch_voicebank`, which `vocal.render {voicebank}`
+  uses too). A `theme` over 240 characters (`THEME_MAX_CHARS`, the
+  GUI's truncation limit) is refused rather than cut. `vocal.get_params`
+  stays answerable while a GUI drag is open.
   `section.set_lane_generator` vocal `options` take the same patch and
   merge into an existing lane (lyrics and seed kept; an explicit `seed`
   wins), or into the defaults for a new one.
