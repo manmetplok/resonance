@@ -147,12 +147,17 @@ def shuffle_into_key(out_dir: Path) -> int:
             "bank": entry["bank"],
             "speaker": entry.get("speaker"),
             "duration_sec": entry.get("duration_sec"),
+            # What it sings and how far it was transposed, so
+            # `scripts/vocal-intelligibility.py` can score a blind set.
+            "transpose": entry.get("transpose"),
+            "text": manifest.get("text"),
         }
     manifest_path.unlink()
     (out_dir / "key.json").write_text(json.dumps(key, indent=2, sort_keys=True) + "\n")
 
     print(f"\nwrote {len(key)} files to {out_dir}, shuffled behind random tokens.")
-    print("listen blind, then run `scripts/vocal-audition.py --reveal` to see the mapping.\n")
+    print("listen blind, then run `scripts/vocal-audition.py --reveal` to see the mapping.")
+    print(f"`scripts/vocal-intelligibility.py {out_dir}` scores each file against the lyric.\n")
     print("files:")
     for wav in sorted(out_dir.glob("*.wav")):
         print(f"  {wav}")
