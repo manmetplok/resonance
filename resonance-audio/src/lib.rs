@@ -267,7 +267,8 @@ pub mod test_support {
     /// panic.
     pub use crate::supervise::{panic_message, run_supervised};
     pub use crate::cycle_load::{
-        format_cycle_load_line, plugin_lock_misses, CycleLoadMeter, CycleLoadReport,
+        format_cycle_load_line, missed_graph_cycles, plugin_lock_misses, CycleLoadMeter,
+        CycleLoadReport,
         CycleReportSlot, PoolReport, LOAD_EMA_ALPHA, QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL,
         VERBOSE_REPORT_INTERVAL,
     };

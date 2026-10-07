@@ -31,6 +31,7 @@ mod instance;
 mod param_meta;
 mod params;
 mod process;
+mod slot_locking;
 mod preset_state;
 mod state;
 pub(crate) mod thread_check;
@@ -564,6 +565,8 @@ pub struct PluginSlot {
     /// folded into the process-wide count the DSP-load report prints
     /// ([`crate::cycle_load::plugin_lock_misses`]).
     lock_misses: AtomicU64,
+    /// See [`Self::plugin_id`] (`slot_locking.rs`).
+    plugin_id: Option<Box<str>>,
 }
 
 /// Plugin ids known to need a fixed audio thread. Empty: none of ours
@@ -603,6 +606,7 @@ impl PluginSlot {
         Self::with_serial_only(instance, bypass_param, serial_only)
     }
 
+
     /// [`Self::new`] with the serial-only flag given (tests).
     #[doc(hidden)]
     #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
@@ -620,7 +624,9 @@ impl PluginSlot {
             SERIAL_ONLY_SLOTS.fetch_add(1, Ordering::Relaxed);
         }
         let poll_pending = std::sync::Arc::clone(&instance.host_data.poll_pending);
+        let plugin_id = instance.descriptor_id().map(String::into_boxed_str);
         Self {
+            plugin_id,
             instance: Mutex::new(SyncClapInstance(instance)),
             bypass: BypassFade::new(),
             bypass_param,
@@ -652,26 +658,6 @@ impl PluginSlot {
     #[inline]
     pub fn flag_poll(&self) {
         self.poll_pending.store(true, Ordering::Release);
-    }
-
-    /// The render's `try_lock` on this slot, counting a miss (code review
-    /// RT-07): a live block that cannot take the lock skips the plugin, and
-    /// the miss is what makes that visible. Audio-thread safe: one
-    /// `try_lock`, and two relaxed increments on a miss.
-    #[inline]
-    pub fn try_lock_counted(&self) -> Option<parking_lot::MutexGuard<'_, SyncClapInstance>> {
-        let guard = self.instance.try_lock();
-        if guard.is_none() {
-            self.lock_misses.fetch_add(1, Ordering::Relaxed);
-            crate::cycle_load::record_plugin_lock_miss();
-        }
-        guard
-    }
-
-    /// Live blocks that skipped this slot on a busy lock, ever.
-    #[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
-    pub fn lock_misses(&self) -> u64 {
-        self.lock_misses.load(Ordering::Relaxed)
     }
 
     /// True when the mixer skips this slot entirely this pass: bypassed,

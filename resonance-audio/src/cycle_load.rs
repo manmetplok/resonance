@@ -82,6 +82,42 @@ pub fn plugin_lock_misses() -> u64 {
     PLUGIN_LOCK_MISSES.load(Ordering::Relaxed)
 }
 
+/// Graph cycles that went by between two output callbacks, from the
+/// driver clock: `prev_ticks` / `ticks` are `pw_time.ticks` at the two
+/// callbacks, in units of `rate_num / rate_denom` seconds, and
+/// `prev_frames` the engine frames (at `engine_rate`) the earlier one
+/// rendered — the cycle length the clock should have moved by. A gap of
+/// one and a half cycles or more counts the whole cycles beyond the
+/// first. 0 when there is nothing to compare yet, the clock went
+/// backwards, or it jumped by over a second (a stream (re)start or a
+/// suspend, not a stutter). Arithmetic only — called on the RT thread.
+pub fn missed_graph_cycles(
+    prev_ticks: u64,
+    ticks: u64,
+    prev_frames: usize,
+    rate_num: u32,
+    rate_denom: u32,
+    engine_rate: u32,
+) -> u64 {
+    if prev_ticks == 0 || prev_frames == 0 || rate_num == 0 || engine_rate == 0 {
+        return 0;
+    }
+    let Some(delta) = ticks.checked_sub(prev_ticks) else {
+        return 0;
+    };
+    // Ticks per second = denom / num.
+    let ticks_per_second = rate_denom as u64 / rate_num as u64;
+    if ticks_per_second == 0 || delta > ticks_per_second {
+        return 0;
+    }
+    let cycle = (prev_frames as u64 * ticks_per_second / engine_rate as u64).max(1);
+    if delta * 2 < cycle * 3 {
+        return 0;
+    }
+    // Round to whole cycles: 2 cycles of clock is 1 missed.
+    ((delta + cycle / 2) / cycle).saturating_sub(1)
+}
+
 /// One report-window summary, ready for formatting.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CycleLoadReport {
@@ -102,6 +138,20 @@ pub struct CycleLoadReport {
     pub lock_misses_window: u64,
     /// Plugins skipped on a busy lock since the process started.
     pub lock_misses_lifetime: u64,
+    /// Graph cycles that went by without this stream's callback in the
+    /// window: the driver clock advanced more than one quantum between
+    /// two callbacks (a late wakeup or a driver xrun). The mixer's own
+    /// busy time cannot show these — it is only measured once the
+    /// callback runs.
+    pub graph_missed_window: u64,
+    /// Lifetime graph cycles missed.
+    pub graph_missed_lifetime: u64,
+    /// Callbacks in the window that rendered nothing: no buffer to
+    /// dequeue, no mapped data, or a misaligned one. Each is a quantum of
+    /// silence the graph plays instead of the mix.
+    pub output_dropped_window: u64,
+    /// Lifetime output callbacks that rendered nothing.
+    pub output_dropped_lifetime: u64,
     /// The track pass's parallel rendering over the window
     /// (realtime-multithreading.md §6). All zero when nothing was
     /// recorded, and then left out of the line.
@@ -147,6 +197,10 @@ pub struct CycleReportSlot {
     shortfalls_lifetime: AtomicU64,
     lock_misses_window: AtomicU64,
     lock_misses_lifetime: AtomicU64,
+    graph_missed_window: AtomicU64,
+    graph_missed_lifetime: AtomicU64,
+    output_dropped_window: AtomicU64,
+    output_dropped_lifetime: AtomicU64,
     pool_threads: AtomicU32,
     pool_critical_us: AtomicU32,
     /// `track id + 1`; 0 = none.
@@ -181,6 +235,14 @@ impl CycleReportSlot {
             .store(report.lock_misses_window, Ordering::Relaxed);
         self.lock_misses_lifetime
             .store(report.lock_misses_lifetime, Ordering::Relaxed);
+        self.graph_missed_window
+            .store(report.graph_missed_window, Ordering::Relaxed);
+        self.graph_missed_lifetime
+            .store(report.graph_missed_lifetime, Ordering::Relaxed);
+        self.output_dropped_window
+            .store(report.output_dropped_window, Ordering::Relaxed);
+        self.output_dropped_lifetime
+            .store(report.output_dropped_lifetime, Ordering::Relaxed);
         let pool = &report.pool;
         self.pool_threads.store(pool.threads, Ordering::Relaxed);
         self.pool_critical_us
@@ -212,6 +274,10 @@ impl CycleReportSlot {
                 shortfalls_lifetime: self.shortfalls_lifetime.load(Ordering::Relaxed),
                 lock_misses_window: self.lock_misses_window.load(Ordering::Relaxed),
                 lock_misses_lifetime: self.lock_misses_lifetime.load(Ordering::Relaxed),
+                graph_missed_window: self.graph_missed_window.load(Ordering::Relaxed),
+                graph_missed_lifetime: self.graph_missed_lifetime.load(Ordering::Relaxed),
+                output_dropped_window: self.output_dropped_window.load(Ordering::Relaxed),
+                output_dropped_lifetime: self.output_dropped_lifetime.load(Ordering::Relaxed),
                 pool: PoolReport {
                     threads: self.pool_threads.load(Ordering::Relaxed),
                     critical_us: self.pool_critical_us.load(Ordering::Relaxed),
@@ -295,6 +361,10 @@ pub struct CycleLoadMeter {
     shortfalls_seen: u64,
     /// Lifetime plugin lock-miss count as of the last report.
     lock_misses_seen: u64,
+    /// Lifetime missed-graph-cycle and dropped-output counts as of the
+    /// last report.
+    graph_missed_seen: u64,
+    output_dropped_seen: u64,
     /// Where the lifetime lock-miss count comes from:
     /// [`plugin_lock_misses`], unless a test substitutes its own
     /// ([`Self::with_lock_miss_source`]) — the real count is process-wide,
@@ -329,6 +399,8 @@ impl CycleLoadMeter {
             window_overruns: 0,
             shortfalls_seen: 0,
             lock_misses_seen: plugin_lock_misses(),
+            graph_missed_seen: 0,
+            output_dropped_seen: 0,
             lock_misses: plugin_lock_misses,
             last_report: None,
             pass_threads: 0,
@@ -439,6 +511,8 @@ impl CycleLoadMeter {
 
         let shortfalls_lifetime = shared.monitor_shortfall_cycles.load(Ordering::Relaxed);
         let lock_misses_lifetime = (self.lock_misses)();
+        let graph_missed_lifetime = shared.graph_missed_cycles.load(Ordering::Relaxed);
+        let output_dropped_lifetime = shared.output_dropped_cycles.load(Ordering::Relaxed);
         let report = CycleLoadReport {
             avg: (self.window_sum / self.window_cycles as f64) as f32,
             peak: self.window_peak,
@@ -448,6 +522,10 @@ impl CycleLoadMeter {
             shortfalls_lifetime,
             lock_misses_window: lock_misses_lifetime.saturating_sub(self.lock_misses_seen),
             lock_misses_lifetime,
+            graph_missed_window: graph_missed_lifetime.saturating_sub(self.graph_missed_seen),
+            graph_missed_lifetime,
+            output_dropped_window: output_dropped_lifetime.saturating_sub(self.output_dropped_seen),
+            output_dropped_lifetime,
             pool: self.take_pool_report(),
         };
         self.last_report = Some(now);
@@ -457,10 +535,14 @@ impl CycleLoadMeter {
         self.window_overruns = 0;
         self.shortfalls_seen = shortfalls_lifetime;
         self.lock_misses_seen = lock_misses_lifetime;
+        self.graph_missed_seen = graph_missed_lifetime;
+        self.output_dropped_seen = output_dropped_lifetime;
 
         let noteworthy = report.overruns_window > 0
             || report.shortfalls_window > 0
             || report.lock_misses_window > 0
+            || report.graph_missed_window > 0
+            || report.output_dropped_window > 0
             || report.peak >= QUIET_PEAK_THRESHOLD;
         (self.verbose || noteworthy).then_some(report)
     }
@@ -482,6 +564,18 @@ pub fn format_cycle_load_line(report: &CycleLoadReport) -> String {
         line.push_str(&format!(
             " | plugin lock misses {} (lifetime {})",
             report.lock_misses_window, report.lock_misses_lifetime,
+        ));
+    }
+    if report.graph_missed_lifetime > 0 {
+        line.push_str(&format!(
+            " | missed graph cycles {} (lifetime {})",
+            report.graph_missed_window, report.graph_missed_lifetime,
+        ));
+    }
+    if report.output_dropped_lifetime > 0 {
+        line.push_str(&format!(
+            " | dropped output cycles {} (lifetime {})",
+            report.output_dropped_window, report.output_dropped_lifetime,
         ));
     }
     let pool = &report.pool;

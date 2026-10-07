@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use resonance_audio::test_support::{
-    format_cycle_load_line, CycleLoadMeter, CycleLoadReport, CycleReportSlot, MixAudioHarness,
+    format_cycle_load_line, missed_graph_cycles, CycleLoadMeter, CycleLoadReport, CycleReportSlot, MixAudioHarness,
     PassStats, PoolReport,
     SharedState, QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL, VERBOSE_REPORT_INTERVAL,
 };
@@ -159,6 +159,10 @@ fn report_slot_hands_each_report_to_the_engine_loop_once() {
         shortfalls_lifetime: 4,
         lock_misses_window: 5,
         lock_misses_lifetime: 6,
+        graph_missed_window: 7,
+        graph_missed_lifetime: 8,
+        output_dropped_window: 9,
+        output_dropped_lifetime: 10,
         pool: PoolReport {
             threads: 8,
             critical_us: 1_234,
@@ -198,6 +202,10 @@ fn report_slot_never_hands_out_a_torn_report() {
             shortfalls_lifetime: i,
             lock_misses_window: i,
             lock_misses_lifetime: i,
+            graph_missed_window: i,
+            graph_missed_lifetime: i,
+            output_dropped_window: i,
+            output_dropped_lifetime: i,
             pool: PoolReport {
                 threads: i as u32,
                 critical_us: i as u32,
@@ -350,6 +358,7 @@ fn line_format_is_stable() {
         lock_misses_window: 0,
         lock_misses_lifetime: 0,
         pool: PoolReport::default(),
+        ..CycleLoadReport::default()
     });
     assert_eq!(
         line,
@@ -430,4 +439,62 @@ fn pass_stats_fold_into_the_windows_report() {
         .record(t0 + std::time::Duration::from_secs(10), budget() / 2, FRAMES, RATE, &shared)
         .expect("reports again");
     assert_eq!(next.pool, PoolReport::default(), "the window's pool stats reset");
+}
+
+/// A graph cycle the output callback never saw (a late wakeup, a driver
+/// xrun) is a stutter the busy-time figures cannot show; it alone is
+/// reason for a quiet-mode line, as is a callback that rendered nothing.
+#[test]
+fn quiet_mode_reports_missed_graph_cycles_and_dropped_output() {
+    let shared = SharedState::default();
+    let mut meter = CycleLoadMeter::new(false).with_lock_miss_source(no_misses);
+    let start = Instant::now();
+    let cycles = (QUIET_REPORT_INTERVAL.as_secs_f64() / budget().as_secs_f64()) as usize + 50;
+    shared.graph_missed_cycles.store(3, Ordering::Relaxed);
+    shared.output_dropped_cycles.store(2, Ordering::Relaxed);
+    let report = drive(&mut meter, &shared, start, cycles, budget() / 100).expect("report");
+    assert_eq!((report.graph_missed_window, report.graph_missed_lifetime), (3, 3));
+    assert_eq!((report.output_dropped_window, report.output_dropped_lifetime), (2, 2));
+
+    let start2 = start + budget() * (cycles as u32 + 1);
+    let report = drive(&mut meter, &shared, start2, cycles, budget() / 100);
+    assert_eq!(report, None, "nothing new: silent again");
+}
+
+#[test]
+fn line_reports_missed_graph_cycles_and_dropped_output_once_there_are_any() {
+    let line = format_cycle_load_line(&CycleLoadReport {
+        graph_missed_window: 1,
+        graph_missed_lifetime: 5,
+        output_dropped_window: 0,
+        output_dropped_lifetime: 2,
+        ..CycleLoadReport::default()
+    });
+    assert!(
+        line.ends_with(
+            "| monitor shortfalls 0 (lifetime 0) | missed graph cycles 1 (lifetime 5) | dropped output cycles 0 (lifetime 2)"
+        ),
+        "{line}"
+    );
+}
+
+/// The driver clock moving one quantum between callbacks is the normal
+/// case; two or more quanta means cycles went by without the stream.
+#[test]
+fn missed_graph_cycles_counts_whole_cycles_beyond_the_first() {
+    // pw_time.rate is 1/48000: one tick per frame.
+    let missed = |prev: u64, now: u64| missed_graph_cycles(prev, now, 128, 1, 48_000, 48_000);
+    assert_eq!(missed(1_000, 1_128), 0, "one cycle");
+    assert_eq!(missed(1_000, 1_000 + 180), 0, "under one and a half: jitter");
+    assert_eq!(missed(1_000, 1_256), 1);
+    assert_eq!(missed(1_000, 1_000 + 128 * 5), 4);
+    // Nothing to compare against, a clock going back, or a jump of over a
+    // second (a stream restart, a suspend) are not stutters.
+    assert_eq!(missed(0, 50_000), 0);
+    assert_eq!(missed(2_000, 1_000), 0);
+    assert_eq!(missed(1_000, 1_000 + 48_001), 0);
+    assert_eq!(missed_graph_cycles(1_000, 1_256, 0, 1, 48_000, 48_000), 0);
+    // A 96 kHz driver clock under a 48 kHz engine: 128 frames = 256 ticks.
+    assert_eq!(missed_graph_cycles(1_000, 1_256, 128, 1, 96_000, 48_000), 0);
+    assert_eq!(missed_graph_cycles(1_000, 1_512, 128, 1, 96_000, 48_000), 1);
 }
