@@ -1,6 +1,6 @@
 # Vocals: MCP control, voicebank library, correctness and expression
 
-> Status: **partly built** (progress per slice in §12)
+> Status: **partly built** (slices 1–5 built; progress per slice in §12)
 > Area: compose (vocals) + control-api + plugins-instruments (library)
 > Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
 > (every decision below was put to him as a multiple-choice question; §11
@@ -448,13 +448,22 @@ handler, MCP tool, GUI, tests, and the feature doc with its
 3. **Params API.** ✅ built (phase 1). The wire patch and view types, `vocal.get_params`,
    `vocal.set_params`, the `set_lane_generator` merge, `song.vocal` params,
    snake_case, and `PROTOCOL_VERSION` 2 with the lockstep update.
-4. **Bank registry.**
+4. **Bank registry.** ✅ built (phase 2; see
+   [vocal rendering](../../features/compose/vocal-rendering.md)). Deviations:
+   `vocal.set_params` accepts installed banks plus the three built-in ids
+   until the index exists; `vocal.generate` reports the missing bank as a
+   `render_error` field of its result rather than failing (the melody is
+   written either way); a GUI render still tears the old audio down before
+   the render job finds the bank missing.
    - The string id and `speaker`, with old-project mapping.
    - `VoicebankRegistry` with derived facts and the built-in table, and the
      user voicebank and vocoder directories.
    - The `voicebank_missing` error.
    - `vocal.voicebanks`, installed list only.
-5. **Any-bank phonemisation.** The bank dictionary, then CMU mapped onto
+5. **Any-bank phonemisation.** ✅ built (phase 2; see
+   [pronunciation](../../features/compose/pronunciation.md)). Deviation: bank
+   dictionary entries that use non-ARPAbet symbols (`dx`, Lilia's `L`) are
+   skipped, so those words fall back to CMU. The bank dictionary, then CMU mapped onto
    the inventory; generalised substitutions and language ids; the
    `english` flag.
 6. **Bank audition script.**

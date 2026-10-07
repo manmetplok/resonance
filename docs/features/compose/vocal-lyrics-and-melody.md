@@ -1,6 +1,6 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `86e5c2af` + vocal-params work + vocal-phase1 fixes (`d1b5c284`) on 2026-10-07.
+> Verified against master @ `cb3b1d6a` + voicebank registry (vocal slices 4–5) on 2026-10-07.
 > Spec history: `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -112,12 +112,14 @@ line, re-rolled from a small template corpus, or set by an agent.
   merged result is validated with `VocalParams::validate()` before any
   change (`invalid_params` naming the field), and the write is one
   `SetLaneGenerator` carrying the lane's seed and draft — one undo entry.
-  It never renders or regenerates. `voicebank` is an id string (`tiger`,
-  `lilia`, `meiji`) and `speaker` one string that maps to `singer`
-  (TIGER), `singer_meiji` (Meiji) or nothing (Lilia, which refuses one);
-  a bank switch without `speaker` resets it to the bank's default
-  (`VocalParams::switch_voicebank`, which `vocal.render {voicebank}`
-  uses too). A `theme` over 240 characters (`THEME_MAX_CHARS`, the
+  It never renders or regenerates. `voicebank` is a bank id: any
+  installed bank (`vocal.voicebanks` lists them) or one of the built-in
+  `tiger`, `lilia`, `meiji`; any other id is `invalid_params` (a typo
+  guard), and so is a bank that cannot sing English. `speaker` is one of
+  that bank's speaker ids (a single-voice bank refuses one); a bank switch
+  without `speaker` resets it to the bank's default
+  (`VocalParams::switch_voicebank` with `BankProfile::default_speaker`,
+  which `vocal.render {voicebank}` and the inspector's picker use too). A `theme` over 240 characters (`THEME_MAX_CHARS`, the
   GUI's truncation limit) is refused rather than cut. `vocal.get_params`
   stays answerable while a GUI drag is open.
   `section.set_lane_generator` vocal `options` take the same patch and
@@ -125,13 +127,21 @@ line, re-rolled from a small template corpus, or set by an agent.
   wins), or into the defaults for a new one.
 - **Persistence.** `VocalParams` (draft included) persists inside the lane
   config; per-note lyric annotations of the derived clip persist through
-  the `ClipLyrics` side table.
+  the `ClipLyrics` side table. The bank is written as its id
+  (`"voicebank": "tiger"`, `VoicebankId`, lowercase) and the voice mode as
+  `"speaker": "vinyl"` (or `null`). Reading goes through
+  `params/legacy.rs` (`#[serde(from)]`): older files' enum names
+  (`"Tiger"`, `"Lilia"`, `"Meiji"`) lowercase into the ids, and their
+  per-bank `singer` (TIGER, `"Glam"` …) / `singer_meiji` (Meiji,
+  `"Standard"` …) become `speaker` from the field that belonged to the
+  lane's bank (`disco` / `standard` when absent); they are never written
+  back. A missing bank reads as `lilia`.
 
 ## Where the logic lives
 
 | Concern | Location | Key items |
 |---|---|---|
-| Params, lyrics, melody | `resonance-music-theory/src/derive/vocal/{params,lyrics,mod}.rs`, `melody/`, `style/` | `VocalParams`, `generate_lyrics`, `derive_vocal_with_motif`, `vocal_phrase_spans`, `count_syllables` |
+| Params, lyrics, melody | `resonance-music-theory/src/derive/vocal/{params,params/legacy,lyrics,mod}.rs`, `melody/`, `style/` | `VocalParams`, `VoicebankId`, `VocalParamsRepr`, `generate_lyrics`, `derive_vocal_with_motif`, `vocal_phrase_spans`, `count_syllables` |
 | G2P / syllables | `resonance-music-theory/src/g2p/` | `auto_syllabify_text`, `syllabify`, `lyric_parse`, `note_assign` |
 | Lane inspector handlers | `resonance-app/src/update/compose/lane_inspector/vocal_params.rs`, `common.rs` | `generate_all`, `generate_melody_only`, `generate_lyrics_only`, `auto_syllabify_lyrics`, `update_vocal` |
 | Lyric buffer | `resonance-app/src/update/compose/vocal_lyrics.rs` | `rebuild_draft_from_bulk`, `sync_bulk_lyrics_from_draft`, `handle_bulk_lyrics_action` |
@@ -154,9 +164,13 @@ line, re-rolled from a small template corpus, or set by an agent.
     lane, as `song.vocal` lists it).
   - `vocal.get_params` / `vocal.set_params` → `vocal_get_params` /
     `vocal_set_params` (partial snake_case patch; see Behaviour).
+  - `vocal.voicebanks` → `vocal_voicebanks`: the installed banks
+    ([vocal rendering](vocal-rendering.md)).
   - `vocal.generate` → `vocal_generate` (`seed`, `lyrics` default true —
     pass `false` to keep lyrics you set); returns the derived `clip_id`.
-    Also queues a render.
+    Also queues a render; when the lane's bank (or its vocoder) is not
+    installed the melody is still written and the result carries
+    `render_error {kind: voicebank_missing, message}`.
   - `song.vocal` → `song_vocal`: per lane its `params` (the
     `vocal.get_params` shape), its `lines` (indexed within the lane) with
     syllables and phonemes, notes, out-of-range notes, comfortable range
@@ -173,6 +187,7 @@ line, re-rolled from a small template corpus, or set by an agent.
 | Wire shapes | `resonance-control/tests/{methods,views}.rs` | `./scripts/run-tests.py -p resonance-control` |
 | Vocal roll | `tests/compose/vocal_roll_keys.rs`, `vocal_roll_key_focus.rs`, `vocal_roll_fingerprint.rs` | same |
 | Placeholder rows | `tests/compose/compose_vocal_placeholder.rs` | same |
+| Bank id / speaker and legacy migration | `resonance-music-theory/tests/vocal.rs` (`legacy_enum_bank_and_singer_fields_map_onto_id_and_speaker`, …) | `./scripts/run-tests.py -p resonance-music-theory` |
 | Theory | `resonance-music-theory/tests/{vocal,vocal_climax,vocal_syncopation,vocal_melody_golden,vocal_params_validate,vocal_enum_labels,g2p,g2p_apis}.rs` | `./scripts/run-tests.py -p resonance-music-theory` |
 | Draft markers, exact breaks, corpus all-CMU | `resonance-music-theory/tests/g2p_apis/lyric_markers.rs` (module of `g2p_apis`) | same |
 | Goldens | `tests/snapshots/compose_vocal_*-wgpu.png` (placeholder, wired up, lyrics draft folded) | `RESONANCE_BLESS=1` |
