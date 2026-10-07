@@ -183,5 +183,7 @@ mod control_vocal_params;
 mod control_vocal_pronunciation_persistence;
 #[path = "control/control_vocal_render_all_lanes.rs"]
 mod control_vocal_render_all_lanes;
+#[path = "control/control_vocal_render_state.rs"]
+mod control_vocal_render_state;
 #[path = "control/control_voicebanks.rs"]
 mod control_voicebanks;

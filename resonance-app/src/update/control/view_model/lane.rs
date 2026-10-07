@@ -1,9 +1,11 @@
 //! Vocal-lane projections: which clip a lane sings, how many notes it
 //! holds, whether those notes can actually be articulated, and whether
-//! the SVS render has run.
+//! its SVS audio is current.
 
 use crate::Resonance;
-use resonance_control::methods::song::VocalRenderState;
+use resonance_control::methods::song::{
+    VocalRenderErrorKind, VocalRenderErrorView, VocalRenderState,
+};
 
 /// Notes in a vocal lane's derived clip — what the SVS render actually
 /// sings (ba doc #269 FR-7). A lane is derived once per placement of its
@@ -106,33 +108,61 @@ pub(in crate::update::control) fn lane_articulation(
     )
 }
 
-/// SVS render state of a vocal track, from the vocal-audio registry:
-/// an installed render for any of the track's lanes -> `rendered`; a
-/// queued render epoch with nothing installed yet -> `rendering`; else
-/// `not_rendered`. (Staleness/error tracking has no persistent app
-/// state to read yet.)
-pub(in crate::update::control) fn vocal_render_state(
+/// The lane's render state on the wire: state, stale-unit count and the
+/// last failure (vocal-mcp-control-and-quality.md §7). Computed by
+/// `update::compose::vocal_render_state`, which compares the installed
+/// take's unit keys with the lane's current plan.
+pub(in crate::update::control) fn lane_render_view(
     app: &Resonance,
-    track: resonance_audio::types::TrackId,
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+) -> (VocalRenderState, usize, Option<VocalRenderErrorView>) {
+    use crate::compose::VocalLaneRenderState as S;
+    let status = crate::update::compose::vocal_render_state::lane_render_status(
+        app,
+        (definition_id, track_id),
+    );
+    let state = match status.state {
+        S::NotRendered => VocalRenderState::NotRendered,
+        S::Rendering => VocalRenderState::Rendering,
+        S::Rendered => VocalRenderState::Rendered,
+        S::Stale => VocalRenderState::Stale,
+        S::Error => VocalRenderState::Error,
+    };
+    let error = status.error.map(|(kind, message)| VocalRenderErrorView {
+        kind: error_kind(kind),
+        message,
+    });
+    (state, status.stale_units, error)
+}
+
+fn error_kind(kind: crate::compose::VocalLaneErrorKind) -> VocalRenderErrorKind {
+    use crate::compose::VocalLaneErrorKind as K;
+    match kind {
+        K::VoicebankMissing => VocalRenderErrorKind::VoicebankMissing,
+        K::NothingToSing => VocalRenderErrorKind::NothingToSing,
+        K::NoNotes => VocalRenderErrorKind::NoNotes,
+        K::UnsupportedPhonemes => VocalRenderErrorKind::UnsupportedPhonemes,
+        K::InvalidParams => VocalRenderErrorKind::InvalidParams,
+        K::RenderFailed => VocalRenderErrorKind::RenderFailed,
+    }
+}
+
+/// A track's render state: the worst of its lanes'
+/// (`VocalLaneRenderState::severity`: `error > rendering > stale >
+/// not_rendered > rendered`); `not_rendered` for a track with no lanes.
+pub(in crate::update::control) fn track_render_state(
+    lanes: impl IntoIterator<Item = VocalRenderState>,
 ) -> VocalRenderState {
-    let installed = app
-        .compose
-        .vocal_audio
-        .clips
-        .keys()
-        .any(|(_, _, t)| *t == track);
-    if installed {
-        return VocalRenderState::Rendered;
-    }
-    let queued = app
-        .compose
-        .vocal_audio
-        .render_epoch
-        .keys()
-        .any(|(_, t)| *t == track);
-    if queued {
-        VocalRenderState::Rendering
-    } else {
-        VocalRenderState::NotRendered
-    }
+    let severity = |s: &VocalRenderState| match s {
+        VocalRenderState::Rendered => 0,
+        VocalRenderState::NotRendered => 1,
+        VocalRenderState::Stale => 2,
+        VocalRenderState::Rendering => 3,
+        VocalRenderState::Error => 4,
+    };
+    lanes
+        .into_iter()
+        .max_by_key(severity)
+        .unwrap_or(VocalRenderState::NotRendered)
 }

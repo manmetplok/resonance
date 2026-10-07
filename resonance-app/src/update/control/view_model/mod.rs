@@ -49,7 +49,7 @@ mod voicebanks;
 // `track_clip_views`, `track_summary`, `lane_clip`) are ingredients the
 // entity modules combine for each other.
 pub(in crate::update::control) use lane::{
-    lane_articulation, lane_note_count, vocal_render_state,
+    lane_articulation, lane_note_count, lane_render_view, track_render_state,
 };
 pub(in crate::update::control) use position::{song_end_sample, song_position, transport_state};
 pub(in crate::update::control) use vocal_params::*;

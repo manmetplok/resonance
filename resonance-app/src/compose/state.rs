@@ -90,6 +90,10 @@ pub struct VocalAudioRegistry {
     /// per-placement install scope.
     pub render_cache:
         HashMap<(u64, TrackId), std::sync::Arc<std::sync::Mutex<SvsRenderCache>>>,
+    /// Per-lane render state: the installed takes' unit keys, failures,
+    /// the expected-keys memo and the debounced GUI re-render
+    /// (vocal-mcp-control-and-quality.md §7).
+    pub status: super::vocal_render_status::VocalRenderStatus,
 }
 
 impl VocalAudioRegistry {
@@ -99,6 +103,7 @@ impl VocalAudioRegistry {
         self.in_flight_render.clear();
         self.clip_lyrics.clear();
         self.render_cache.clear();
+        self.status.clear_for_restore();
     }
 
     /// The user deleted `clip_id` from the timeline: drop every `clips`
@@ -118,6 +123,7 @@ impl VocalAudioRegistry {
     /// rebuilds the whole map from `r.clips`) happened to clear it.
     pub fn forget_deleted_clip(&mut self, clip_id: ClipId) {
         self.clips.retain(|_, (id, _)| *id != clip_id);
+        self.status.clip_unit_keys.remove(&clip_id);
     }
 
     /// A clip's lyrics in their file form (`ProjectMidiClip::vocal_lyrics`):

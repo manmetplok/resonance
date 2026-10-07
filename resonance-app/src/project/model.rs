@@ -878,6 +878,14 @@ pub struct ProjectClip {
     /// had a UI — so `None` loads as unwarped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warp: Option<ProjectClipWarp>,
+    /// For a rendered vocal take: the unit content keys it was rendered
+    /// from (`SvsRenderCache::last_keys`), so a reopened project can tell
+    /// its vocal lanes are up to date rather than `stale`
+    /// (vocal-mcp-control-and-quality.md §7). Empty for every other clip,
+    /// and for takes saved before render state existed (those read
+    /// `stale` until re-rendered).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocal_render_units: Vec<u64>,
 }
 
 /// One clip's persisted warp state ([`ProjectClip::warp`]). Every field

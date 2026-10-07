@@ -175,13 +175,13 @@ pub(crate) struct VocalRenderJob {
 impl VocalRenderJob {
     /// Run the SVS pipeline and write the WAV. Blocking.
     ///
-    /// Returns `Ok(None)` when the clip has no notes, `Ok(Some((path,
-    /// trim_start_frames, trim_end_frames)))` on success, and an error —
+    /// Returns `Ok(None)` when the clip has no notes, the written take on
+    /// success, and an error —
     /// [`VocalRenderError::VoicebankMissing`] for a bank or vocoder that is
     /// not installed — otherwise.
     ///
     /// [`VocalRenderError::VoicebankMissing`]: vocal_svs::VocalRenderError::VoicebankMissing
-    pub(crate) fn run(&self) -> Result<Option<(PathBuf, u64, u64)>, vocal_svs::VocalRenderError> {
+    pub(crate) fn run(&self) -> Result<Option<RenderedTake>, vocal_svs::VocalRenderError> {
         let mut cache = self
             .render_cache
             .lock()
@@ -211,10 +211,21 @@ impl VocalRenderJob {
             &rendered.samples_stereo,
             rendered.sample_rate,
         )?;
-        Ok(Some((
+        Ok(Some(RenderedTake {
             path,
-            rendered.trim_start_frames,
-            rendered.trim_end_frames,
-        )))
+            trim_start_frames: rendered.trim_start_frames,
+            trim_end_frames: rendered.trim_end_frames,
+            unit_keys: cache.last_keys().to_vec(),
+        }))
     }
+}
+
+/// A rendered take on disk: the WAV, the padding to trim off its ends,
+/// and the unit content keys it stitched (what the lane's render state
+/// compares the current plan with).
+pub(crate) struct RenderedTake {
+    pub path: PathBuf,
+    pub trim_start_frames: u64,
+    pub trim_end_frames: u64,
+    pub unit_keys: Vec<u64>,
 }

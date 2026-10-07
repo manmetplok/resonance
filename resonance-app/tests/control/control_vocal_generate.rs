@@ -406,6 +406,7 @@ fn a_render_that_finishes_after_a_tempo_change_is_re_rendered() {
             lead_ticks: 0,
             render_epoch: queued,
             bpm: 120.0,
+            unit_keys: Vec::new(),
         },
     ))));
 

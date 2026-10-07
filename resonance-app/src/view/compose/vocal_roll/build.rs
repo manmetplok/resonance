@@ -59,6 +59,17 @@ pub fn build_canvas<'a>(
     })
 }
 
+/// The vocal lane `(definition, track)` the opened clip belongs to — the
+/// key of its render state (the toolbar's stale / error badge).
+pub fn lane_for_clip(
+    app: &crate::Resonance,
+    clip: &MidiClipState,
+) -> Option<(u64, TrackId)> {
+    let definition = find_definition_for_clip(app, clip)?;
+    find_vocal_params(definition, clip.track_id)?;
+    Some((definition.id, clip.track_id))
+}
+
 /// Walk the compose state to find which section definition owns the
 /// derived MIDI clip the user just opened. Falls back to scanning every
 /// definition's lane generators for one keyed to the clip's track id.

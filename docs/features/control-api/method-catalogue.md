@@ -1,6 +1,6 @@
 # Control method catalogue
 
-> Verified against master @ `cb3b1d6a` + voicebank registry (vocal slices 4–5) on 2026-10-07.
+> Verified against master @ `ce484ad3` + vocal phase 3 on 2026-10-07.
 > Source of truth: `resonance_control::methods::capabilities()` and each
 > method constant's doc comment in `resonance-control/src/methods/*.rs`.
 
@@ -40,7 +40,7 @@ area; the sibling areas may refine it.
 | `song.sections` | `song_sections` | read | [control-api](../compose/sections-and-placements.md) | section definitions + placements |
 | `song.tracks` | `song_tracks` | read | [control-api](overview.md) | per-track detail, including clips |
 | `song.notes` | `song_notes` | read | [control-api](../timeline/midi-editor.md) | notes of one MIDI clip |
-| `song.vocal` | `song_vocal` | read | [compose](../compose/vocal-lyrics-and-melody.md) | a vocal track's lanes: params, per-lane lyric lines with phonemes, render pre-flight |
+| `song.vocal` | `song_vocal` | read | [compose](../compose/vocal-lyrics-and-melody.md) | a vocal track's lanes: params, per-lane lyric lines with phonemes, render pre-flight, per-lane render state (`stale_units`, `error`) and the track's worst |
 | `project.new` | `project_new` | job | [project-core](../project-core/save-open-new.md) | start a fresh project |
 | `project.open` | `project_open` | job | [project-core](../project-core/save-open-new.md) | open a project from disk |
 | `project.save` | `project_save` | job | [project-core](../project-core/save-open-new.md) | save in place, or to `path` on first save |

@@ -307,4 +307,7 @@ pub(crate) struct VocalRailContext {
     /// The selection shown for a lane on a built-in bank that is not
     /// installed ([`UiViewCaches::missing_voicebank_choices`]).
     pub missing_voicebanks: Rc<[VoicebankChoice]>,
+    /// The lane's render state, for the stale / error badge (as settled
+    /// after the last update; `None` before the first).
+    pub render_status: Option<crate::compose::VocalLaneRenderStatus>,
 }

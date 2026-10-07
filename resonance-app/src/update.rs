@@ -96,7 +96,11 @@ impl crate::Resonance {
         let task = if outermost {
             crate::update::chain_ui::settle(self);
             let settled = crate::update::inline_rename::settle(self);
-            Task::batch([task, settled])
+            // Vocal render state follows every edit, whichever path made
+            // it; only a GUI edit arms the debounced re-render (spec §7,
+            // D20 — `grants` is exactly "not a control request").
+            let vocal = crate::update::compose::vocal_render_state::settle(self, grants);
+            Task::batch([task, settled, vocal])
         } else {
             task
         };

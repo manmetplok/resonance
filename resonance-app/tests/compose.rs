@@ -59,6 +59,8 @@ mod compose_drum_materialize_arrangement;
 mod compose_pinned_chords;
 #[path = "compose/compose_rail_collapse.rs"]
 mod compose_rail_collapse;
+#[path = "compose/compose_vocal_render_badge.rs"]
+mod compose_vocal_render_badge;
 #[path = "compose/compose_track_count.rs"]
 mod compose_track_count;
 #[path = "compose/compose_tracks_ignore_arrange_scroll.rs"]

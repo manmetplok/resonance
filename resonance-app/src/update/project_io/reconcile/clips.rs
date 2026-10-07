@@ -431,8 +431,9 @@ fn apply_midi_clip(
 /// The vocal audio-clip map (`(section, placement, track) → (clip, WAV)`),
 /// rebuilt from the restored audio clips on vocal tracks so the next
 /// Generate Vocal tears the loaded clips down instead of stacking a new one
-/// on top (the mixer would play both). Runtime-only, never saved. The same
-/// body on every origin.
+/// on top (the mixer would play both). Runtime-only, never saved — but
+/// each take's render-unit keys (`ProjectClip::vocal_render_units`) are,
+/// and come back with it here. The same body on every origin.
 ///
 /// Last in `Clips`: reads the audio clips, the section placements
 /// (`Globals`) and the tempo map (`Timeline`). The clip-id counter was
@@ -463,5 +464,15 @@ impl Reconcile for VocalAudioClips {
             &vocal_track_ids,
             &r.tempo_map,
         );
+        // Each take's unit keys travel with its clip (vocal render state,
+        // spec §7): what the restored lanes play is what they compare with.
+        let vocal_audio = &mut r.compose.vocal_audio;
+        let installed: HashSet<ClipId> = vocal_audio.clips.values().map(|(id, _)| *id).collect();
+        vocal_audio.status.clip_unit_keys = new
+            .clips
+            .iter()
+            .filter(|pc| !pc.vocal_render_units.is_empty() && installed.contains(&pc.id))
+            .map(|pc| (pc.id, pc.vocal_render_units.as_slice().into()))
+            .collect();
     }
 }

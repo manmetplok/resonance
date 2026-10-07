@@ -117,27 +117,42 @@ pub(super) fn propagate_chord_change(r: &mut crate::Resonance, definition_id: u6
         .unwrap_or_default();
 
     for tid in track_ids {
-        // Chord-change propagation runs sync from a non-Task context.
-        // The MIDI side of every lane (including vocal) updates inline
-        // inside `regenerate_lane`; we drop the off-thread vocal audio
-        // render task here — the user re-renders audio on demand via
-        // the right-rail "Generate vocal" button.
+        // Every lane's MIDI updates inline. A vocal lane's audio is not
+        // rendered here: it goes stale, and the GUI's debounced re-render
+        // or the client's `vocal.render` brings it up to date (spec §7,
+        // D21) — so the task is always empty.
         let _ = regenerate_lane_as_side_effect(r, definition_id, tid);
     }
 }
 
 /// [`regenerate_lane`] as the side effect of another edit (a chord or
-/// section-length change). A vocal lane whose bank is not installed keeps
-/// its audio either way (the render is skipped before the tear-down), but
-/// the banner that skip raises is put back: the edit itself succeeded,
-/// and the missing bank is reported when the user renders.
+/// section-length change). A vocal lane's melody is re-derived without a
+/// render ([`rederive_vocal_melody`]): its old audio keeps playing, now
+/// `stale`, and the edit's origin decides what follows — a GUI edit arms
+/// the debounced re-render (`vocal_render_state::settle`), a control edit
+/// waits for `vocal.render`. That also means a lane whose bank is not
+/// installed raises no banner here; one already showing is put back
+/// should anything have replaced it: the edit itself succeeded, and the
+/// missing bank is reported when the lane renders.
+///
+/// [`rederive_vocal_melody`]: super::vocal_render::rederive_vocal_melody
 pub(super) fn regenerate_lane_as_side_effect(
     r: &mut crate::Resonance,
     definition_id: u64,
     track_id: TrackId,
 ) -> iced::Task<crate::message::Message> {
     let banner = r.compose.last_error.clone();
-    let task = regenerate_lane(r, definition_id, track_id);
+    let is_vocal = r
+        .compose
+        .find_definition(definition_id)
+        .and_then(|d| d.lane_generators.get(&track_id))
+        .is_some_and(|cfg| matches!(cfg.kind, LaneGeneratorKind::Vocal(_)));
+    let task = if is_vocal {
+        super::vocal_render::rederive_vocal_melody(r, definition_id, track_id);
+        iced::Task::none()
+    } else {
+        regenerate_lane(r, definition_id, track_id)
+    };
     if super::vocal_render::banner_is_missing_bank(r, definition_id, track_id) {
         r.compose.last_error = banner;
     }

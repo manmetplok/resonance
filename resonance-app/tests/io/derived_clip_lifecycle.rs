@@ -476,6 +476,7 @@ fn vocal_song_with_installed_audio()
             lead_ticks: 0,
             render_epoch: 0,
             bpm: 120.0,
+            unit_keys: Vec::new(),
         },
     ))));
     let installed_clip = rx

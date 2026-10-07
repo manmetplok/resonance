@@ -220,9 +220,11 @@ impl ResonanceMcp {
                        stores it on every lane the call covers. A lane whose bank or vocoder \
                        is not installed fails the whole call with voicebank_missing, naming \
                        the bank, before anything renders. \
-                       Caution: song_vocal's render_state reports `rendered` when ANY lane \
-                       on the track has audio, so it is not proof that every lane is \
-                       current. Runs as a job — this tool waits up \
+                       Edits made through these tools (lyrics, notes, chords, params, \
+                       pronunciation) never re-render on their own: the lane turns `stale` \
+                       in song_vocal (its old audio keeps playing), so batch your edits and \
+                       call this once; song_vocal then reads `rendered` per lane, and the \
+                       track-level render_state is the worst lane's. Runs as a job — this tool waits up \
                        to 2 minutes and returns the final status; if still running, poll \
                        job_status with the returned job_id. Needs a vocal lane \
                        (section_set_lane_generator kind \"vocal\") with notes AND lyrics — \

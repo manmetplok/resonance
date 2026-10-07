@@ -13,7 +13,8 @@ use resonance_control::methods::song::{
     ChordView, ClipView, LyricLineView, NoteView, NotesView, SectionDefinitionView,
     SectionPlacementView, SectionsView, SendView, SongSummary, SyllableView, TrackDetail,
     TrackSummary,
-    PitchRangeView, TracksView, VocalLaneView, VocalNoteView, VocalRenderState, VocalView,
+    PitchRangeView, TracksView, VocalLaneView, VocalNoteView, VocalRenderErrorKind,
+    VocalRenderErrorView, VocalRenderState, VocalView,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -362,6 +363,12 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
             }],
             short_note_count: 0,
             out_of_range_note_count: 0,
+            render_state: VocalRenderState::Error,
+            stale_units: 0,
+            error: Some(VocalRenderErrorView {
+                kind: VocalRenderErrorKind::VoicebankMissing,
+                message: "voicebank lilia is not installed".to_owned(),
+            }),
             params: sample_vocal_params_view(),
             lines: vec![LyricLineView {
                 index: 0,
@@ -373,11 +380,15 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
             }],
         }],
         pronunciation_overrides: overrides,
-        render_state: VocalRenderState::NotRendered,
+        render_state: VocalRenderState::Error,
         revision: 1,
     };
     let wire = serde_json::to_value(&view).unwrap();
-    assert_eq!(wire["render_state"], json!("not_rendered"));
+    assert_eq!(wire["render_state"], json!("error"));
+    // Per lane: state, stale-unit count and the failure, snake_case.
+    assert_eq!(wire["lanes"][0]["render_state"], json!("error"));
+    assert_eq!(wire["lanes"][0]["stale_units"], json!(0));
+    assert_eq!(wire["lanes"][0]["error"]["kind"], json!("voicebank_missing"));
     assert_eq!(wire["pronunciation_overrides"]["lilia"], json!(["l", "ih"]));
     assert_eq!(wire["lanes"][0]["definition_id"], json!(3));
     assert_eq!(wire["lanes"][0]["counts_mismatch"], json!(true));

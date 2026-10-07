@@ -92,7 +92,7 @@ pub(crate) fn deleted(r: &mut Resonance, clip_id: ClipId) {
     // Drop any vocal-audio-clip side-table entries that reference
     // this clip. Without this, an engine-side delete would leave a
     // dangling `(ClipId, PathBuf)` in `vocal_audio.clips` that the
-    // next regen's `tear_down_old_vocal_audio` would try to re-delete
+    // next render's install would try to re-delete
     // (engine returns "unknown clip"; unlink fails on the already-
     // removed WAV) and then never clear, since the entry is keyed by
     // (def, placement, track) — not by clip id.

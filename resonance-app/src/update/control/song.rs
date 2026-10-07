@@ -279,6 +279,8 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
         let out_of_range_note_count = articulation.iter().filter(|n| n.out_of_range).count();
         let range = profile.comfortable_range(vocal_params.speaker.as_deref());
         let (range_lo, range_hi) = (range.low, range.high);
+        let (render_state, stale_units, render_error) =
+            view_model::lane_render_view(app, definition.id, track.id);
         lanes.push(song::VocalLaneView {
             definition_id: definition.id.into(),
             name: definition.name.clone(),
@@ -324,6 +326,9 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
                 .collect(),
             short_note_count,
             out_of_range_note_count,
+            render_state,
+            stale_units,
+            error: render_error,
             params: view_model::vocal_params_view(vocal_params),
             // Indexed per lane, the way `vocal.set_line` addresses them
             // (spec D8); one song-wide list with a global index could not
@@ -347,11 +352,12 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
         });
     }
 
+    let render_state = view_model::track_render_state(lanes.iter().map(|l| l.render_state));
     let result = VocalView {
         track_id: resonance_control::ids::TrackId(track.id),
         lanes,
         pronunciation_overrides,
-        render_state: view_model::vocal_render_state(app, track.id),
+        render_state,
         revision: app.revision(),
     };
     super::success(request, &result)
