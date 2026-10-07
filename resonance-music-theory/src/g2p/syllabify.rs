@@ -285,6 +285,14 @@ fn walk_lyric_line(text: &str, syllabify: bool) -> String {
             out.push_str(&normalize_hyphen_marks(word_raw));
             continue;
         }
+        // A token with no letters — a `_` / `+` hold, `&`, a spaced `-` —
+        // has nothing to syllabify. Copy it as is: the lead/trail split
+        // below counts its characters twice (debug: subtraction
+        // overflow; release: `_` came out as `__`, a different marker).
+        if !word_raw.chars().any(|c| c.is_alphabetic() || c == '\'') {
+            out.push_str(word_raw);
+            continue;
+        }
         // Strip leading/trailing non-letter punctuation so we can ask
         // CMU about the bare word, then put the punctuation back.
         let lead_count = word_raw
@@ -378,10 +386,19 @@ pub(crate) fn split_into_syllables(
 /// Split a word's phonemes exactly where the user broke its spelling
 /// (`for·get`, `be·cause`) — spec `vocal-mcp-control-and-quality.md` §8,
 /// D23. Each piece gets one vowel nucleus; the consonant cluster between
-/// nuclei `k` and `k+1` is cut so piece `k+1`'s onset holds one consonant
-/// phoneme per leading consonant letter of that piece (see
-/// [`leading_consonant_units`]), clamped to the cluster. The rest of the
-/// cluster stays as piece `k`'s coda.
+/// nuclei `k` and `k+1` is cut so that
+///
+/// ```text
+/// onset(k+1) = max(leading(piece k+1), cluster − trailing(piece k)).min(cluster)
+/// ```
+///
+/// where `leading` / `trailing` count the consonant sounds the written
+/// piece starts / ends with ([`leading_consonant_units`],
+/// [`trailing_consonant_units`]). The rest of the cluster stays as piece
+/// `k`'s coda. Counting both sides matters when the spelling under-counts
+/// one of them: `ev·ery` (EH V R IY) has a vowel-initial second piece, so
+/// `leading` alone would hand `v r` to the first — `ev` ends in one
+/// consonant, so only `v` stays and `r iy` is the second syllable.
 ///
 /// Returns `None` when the piece count differs from the number of vowel
 /// nuclei — the caller falls back to [`split_into_syllables`] and flags
@@ -408,7 +425,9 @@ pub(crate) fn split_at_user_breaks(
     starts.push(0);
     for k in 1..n {
         let cluster = vowels[k] - vowels[k - 1] - 1;
-        let onset = leading_consonant_units(&pieces[k]).min(cluster);
+        let onset = leading_consonant_units(&pieces[k])
+            .max(cluster.saturating_sub(trailing_consonant_units(&pieces[k - 1])))
+            .min(cluster);
         starts.push(vowels[k] - onset);
     }
     let mut out = Vec::with_capacity(n);
@@ -459,6 +478,50 @@ fn leading_consonant_units(piece: &str) -> usize {
         });
         units += 1;
         i += if digraph { 2 } else { 1 };
+    }
+    units
+}
+
+/// How many consonant sounds a spelling piece ends with, counted from its
+/// letters backwards with the same digraph rules as
+/// [`leading_consonant_units`] (`th sh ch ng ph wh ck`, plus `gh`, are one
+/// sound), a doubled letter (`ll`, `ss`) as one, and `x` as two (`k s`).
+/// `y` reads as a vowel at a piece's end (`an·y`, `ev·er·y`). A final
+/// silent `e` after a consonant (`love`, `time`) is skipped when the piece
+/// has another vowel letter before it, so `love·ly` keeps its `v`.
+///
+/// Over-counting only ever shrinks the next piece's onset towards the
+/// `leading` side of the rule, which is why the uncertain spellings
+/// (`gh`, `x`) round up.
+fn trailing_consonant_units(piece: &str) -> usize {
+    let mut chars: Vec<char> = piece
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let is_vowel_letter = |c: char| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'y');
+    // Silent final `e`: `love`, `time`, `stone` — but not `the`, `be`, `e`.
+    if chars.len() >= 3
+        && chars[chars.len() - 1] == 'e'
+        && !is_vowel_letter(chars[chars.len() - 2])
+        && chars[..chars.len() - 2].iter().any(|&c| is_vowel_letter(c))
+    {
+        chars.pop();
+    }
+    let mut units = 0;
+    let mut i = chars.len();
+    while i > 0 {
+        let c = chars[i - 1];
+        if is_vowel_letter(c) {
+            break;
+        }
+        let prev = if i >= 2 { Some(chars[i - 2]) } else { None };
+        let digraph = prev.is_some_and(|p| {
+            matches!((p, c), ('t' | 's' | 'c' | 'p' | 'w' | 'g', 'h') | ('n', 'g') | ('c', 'k'))
+                || p == c
+        });
+        units += if c == 'x' { 2 } else { 1 };
+        i -= if digraph { 2 } else { 1 };
     }
     units
 }

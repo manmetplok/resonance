@@ -1,6 +1,6 @@
 # Lyric pronunciation (G2P and dictionary)
 
-> Verified against master @ `86e5c2af` on 2026-10-07.
+> Verified against master @ `86e5c2af` + vocal-phase1 fixes (`d1b5c284`) on 2026-10-07.
 > Spec history: prototype `docs/intents/prototypes/svs-pronunciation-control/index.html` (design #173, notes #174).
 
 Every sung syllable becomes a list of ARPAbet phonemes before it reaches
@@ -22,7 +22,10 @@ global user dictionary, but nothing sets those yet.
 - **Pronunciation source.** Alongside `PhonemeProvenance`, every
   `ResolvedSyllable` and `AssignedSyllable` carries a finer
   `source: g2p::G2pSource` — `Edited` (override or `[..]` block),
-  `ProjectDict` (the caller's `PhonemeDictionary`), `BankDict` (reserved
+  `ProjectDict` (a user dictionary — project **or** global: `resolve_clip`
+  merges both into the one `PhonemeDictionary` the resolver sees, so the
+  source cannot tell them apart and reports `project_dict` for either),
+  `BankDict` (reserved
   for voicebank dictionaries, never produced yet), `Cmu` or `Rules` (the
   spelling fallback). Serde writes it snake_case (`"project_dict"`), and
   `G2pSource::as_str` gives the same string. Slur notes inherit the held
@@ -33,8 +36,9 @@ global user dictionary, but nothing sets those yet.
 - **Syllable split.** A word's phonemes are split at the user's `·`
   breaks exactly (see
   [lyrics and melody](vocal-lyrics-and-melody.md#behaviour)); a mismatch
-  between pieces and vowels falls back to the automatic split and sets
-  `syllable_warning`.
+  between pieces and vowels first tries the word's other CMU variants
+  (when no `(N)` hint is given), then falls back to the automatic split
+  and sets `syllable_warning`.
 - **Project dictionary.** `vocal.set_pronunciation` stores a word →
   phonemes entry (word cleaned and lower-cased by `clean_word`; phonemes
   canonicalized, unknown symbols rejected, empty list rejected);

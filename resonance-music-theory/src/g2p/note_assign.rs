@@ -7,7 +7,7 @@
 //! Two draft markers take part in the note walk without being sung
 //! syllables themselves:
 //!
-//! * a standalone `_` (aliases `+`, `-`) is a **melisma**: it does not
+//! * a standalone `_` (alias `+`) is a **melisma**: it does not
 //!   become a [`ResolvedSyllable`] but bumps the previous syllable's
 //!   [`ResolvedSyllable::slurs_after`], and the note walk turns each one
 //!   into a slur note holding that syllable's vowel. Keeping holds off
@@ -20,7 +20,9 @@
 use std::collections::HashMap;
 
 use super::lyric_parse::{is_slur_lyric, tokenize_line, LyricToken, SLUR_MARKER};
-use super::phonemes::{is_consonant, word_to_phonemes_sourced, G2pSource, SyllableStress};
+use super::phonemes::{
+    cmu_variant_count, is_consonant, word_to_phonemes_sourced, G2pSource, SyllableStress,
+};
 use super::syllabify::{split_at_user_breaks, split_into_syllables};
 
 /// Where a syllable's phonemes came from, so the UI can badge edited /
@@ -105,13 +107,14 @@ pub struct AssignedSyllable {
     /// user-typed string; otherwise the resolved-syllable surface.
     pub label: String,
     /// Phoneme list the SVS pipeline sings for this note. For slurs
-    /// this is the held vowel from the previous syllable (single
-    /// element vec).
+    /// this is the held vowel from the previous syllable; the *last*
+    /// slur of a hold also carries the syllable's final consonants,
+    /// which leave the head note (`love _ _` → `l ah` · `ah` · `ah v`).
     pub phonemes: Vec<&'static str>,
     pub is_slur: bool,
-    /// `true` when the underlying resolved syllable was the last in
-    /// its word *and* this note is non-slur. Slur notes never sit on
-    /// a word boundary by definition.
+    /// `true` on the note where the word ends: the note of the word's
+    /// last syllable, or — when that syllable is held — the last slur
+    /// note of the hold, which is where its final consonants are sung.
     pub is_word_end: bool,
     /// Which resolved-syllable index this note maps to. Slur notes
     /// inherit the previous non-slur note's index. Out-of-range when
@@ -240,7 +243,7 @@ pub fn resolve_draft_with_dict(
                         G2pSource::ProjectDict,
                     ),
                     None => {
-                        let (phonemes, source) = word_to_phonemes_sourced(&cleaned, variant_idx);
+                        let (phonemes, source) = auto_word_phonemes(&cleaned, &pieces, variant_idx);
                         (phonemes, PhonemeProvenance::Auto, source)
                     }
                 };
@@ -285,6 +288,33 @@ pub fn resolve_draft_with_dict(
     out
 }
 
+/// The CMU / rules transcription of a word for the resolver.
+///
+/// An explicit `(N)` hint always picks variant `N`. Without one, a word
+/// the user broke into pieces that the default variant cannot hold (its
+/// vowel count differs from the piece count) takes the first CMU variant
+/// whose vowel count does match — `ev·ery` is the two-vowel `EH V R IY`,
+/// `ev·er·y` the three-vowel `EH V ER IY` — so writing the breaks is
+/// enough to choose between a word's syllabic readings. When no variant
+/// fits, the default is used and the caller flags the mismatch.
+fn auto_word_phonemes(
+    cleaned: &str,
+    pieces: &[String],
+    variant_idx: Option<usize>,
+) -> (Vec<(&'static str, SyllableStress)>, G2pSource) {
+    let vowels = |ph: &[(&'static str, SyllableStress)]| {
+        ph.iter().filter(|(p, _)| !is_consonant(p)).count()
+    };
+    let default = word_to_phonemes_sourced(cleaned, variant_idx.unwrap_or(1));
+    if variant_idx.is_some() || pieces.len() <= 1 || vowels(&default.0) == pieces.len() {
+        return default;
+    }
+    (2..=cmu_variant_count(cleaned))
+        .map(|n| word_to_phonemes_sourced(cleaned, n))
+        .find(|(ph, _)| vowels(ph) == pieces.len())
+        .unwrap_or(default)
+}
+
 /// Map a per-note annotation vec to per-note `AssignedSyllable`s,
 /// walking a cursor through `syllables` and skipping it on slur
 /// notes. The single source of truth for the cursor model — every
@@ -302,7 +332,13 @@ pub fn resolve_draft_with_dict(
 /// honoured too: after a syllable is consumed, its next `slurs_after`
 /// notes are slur notes holding it. A per-note slur annotation that
 /// lands on one of those notes is the same hold, not an extra one, so
-/// it uses up one of the pending draft holds.
+/// it uses up one of the pending draft holds. An explicit label
+/// annotation landing on a note the draft would hold ends the remaining
+/// holds instead: that note takes the next syllable under its label.
+///
+/// A held syllable's final consonants move from its first note to the
+/// last note of the hold (see `carry_coda_to_last_hold`), together with
+/// `is_word_end`.
 ///
 /// Returns exactly `note_count` entries.
 ///
@@ -345,6 +381,13 @@ pub fn assign_syllables_to_notes_with(
     for i in 0..note_count {
         let entry = annotations.get(i).map(|s| s.trim()).unwrap_or("");
         let annotated_slur = is_slur_lyric(entry);
+        // An explicit per-note label is the user naming the syllable this
+        // note starts, so it ends any draft holds still owed: the note
+        // takes the next syllable instead of silently becoming a hold
+        // that ignores its label.
+        if !annotated_slur && !entry.is_empty() {
+            pending_slurs = 0;
+        }
         if annotated_slur || pending_slurs > 0 {
             pending_slurs = pending_slurs.saturating_sub(1);
             let phonemes: Vec<&'static str> =
@@ -424,5 +467,42 @@ pub fn assign_syllables_to_notes_with(
             syllable_warning: syl.syllable_warning,
         });
     }
+    carry_coda_to_last_hold(&mut out);
     out
+}
+
+/// A held syllable sings its final consonants at the end of the hold,
+/// not before it: `love _ _` is `l ah` · `ah` · `ah v`, not `l ah v` ·
+/// `ah` · `ah` (which closes the word on the first note and then re-opens
+/// the vowel).
+///
+/// For every non-slur note followed by slur notes of the same
+/// `syllable_index`, the phonemes after the head's last vowel move to the
+/// end of the last of those slur notes, and so does `is_word_end` — the
+/// word now ends there. Runs after overrides, so an edited syllable's
+/// coda moves the same way. A head with no vowel keeps its phonemes.
+fn carry_coda_to_last_hold(out: &mut [AssignedSyllable]) {
+    let mut head = 0;
+    while head < out.len() {
+        if out[head].is_slur {
+            head += 1;
+            continue;
+        }
+        let index = out[head].syllable_index;
+        let mut last = head;
+        while out
+            .get(last + 1)
+            .is_some_and(|n| n.is_slur && n.syllable_index == index)
+        {
+            last += 1;
+        }
+        if last > head {
+            if let Some(v) = out[head].phonemes.iter().rposition(|p| !is_consonant(p)) {
+                let coda = out[head].phonemes.split_off(v + 1);
+                out[last].phonemes.extend(coda);
+            }
+            out[last].is_word_end = std::mem::take(&mut out[head].is_word_end);
+        }
+        head = last + 1;
+    }
 }

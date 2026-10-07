@@ -541,6 +541,27 @@ pub enum VocalParamsError {
 }
 
 impl VocalParams {
+    /// Longest lyric theme, in characters. The lane inspector truncates
+    /// to it; the control API refuses longer text.
+    pub const THEME_MAX_CHARS: usize = 240;
+
+    /// Switch to `voicebank`, resetting the speaker to the new bank's
+    /// default when the bank actually changes (TIGER: the voice type's
+    /// historic singer; Meiji: `Standard`; Lilia has a single voice).
+    /// Re-selecting the current bank changes nothing. The one rule every
+    /// bank switch outside the GUI picker goes through (`vocal.set_params`,
+    /// `vocal.render {voicebank}`).
+    pub fn switch_voicebank(&mut self, voicebank: VocalVoicebank) {
+        if voicebank != self.voicebank {
+            match voicebank {
+                VocalVoicebank::Tiger => self.singer = self.voice.default_singer(),
+                VocalVoicebank::Meiji => self.singer_meiji = VocalSingerMeiji::Standard,
+                VocalVoicebank::Lilia => {}
+            }
+        }
+        self.voicebank = voicebank;
+    }
+
     /// Bounds-check the implicit invariants on each field. Run at the
     /// app boundary before handing params to the engine so a malformed
     /// project file or a UI state-machine bug surfaces as a clean

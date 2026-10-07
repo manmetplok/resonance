@@ -31,6 +31,7 @@ pub use syllabify::{
 
 // ── lyric_parse ───────────────────────────────────────────────────────────────
 pub use lyric_parse::{is_breath_token, is_slur_lyric, is_slur_token, SLUR_MARKER};
+pub(crate) use lyric_parse::note_units;
 
 // ── note_assign ───────────────────────────────────────────────────────────────
 pub use note_assign::{

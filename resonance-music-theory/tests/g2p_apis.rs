@@ -286,7 +286,10 @@ fn slur_note_inherits_overridden_vowel_and_provenance() {
     let assigned = assign_syllables_to_notes_with(&syllables, &ann, 2, &overrides);
     assert_eq!(assigned.len(), 2);
     assert!(assigned[1].is_slur);
-    assert_eq!(assigned[1].phonemes, vec!["ao"], "slur should hold edited vowel");
+    // The hold sings the edited vowel and, as the hold's last note, the
+    // syllable's final consonant.
+    assert_eq!(assigned[0].phonemes, vec!["s", "ao"]);
+    assert_eq!(assigned[1].phonemes, vec!["ao", "n"], "slur should hold edited vowel");
     assert_eq!(assigned[1].provenance, PhonemeProvenance::Edited);
 }
 

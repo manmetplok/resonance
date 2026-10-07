@@ -5,7 +5,7 @@
 //! spans, all of which need to line notes up with syllables.
 
 use crate::derive::LyricLine;
-use crate::g2p::{is_breath_token, is_slur_token, resolve_draft, SyllableStress};
+use crate::g2p::{note_units, resolve_draft, SyllableStress};
 
 /// Lexical stress for each note one lyric line fills, padded with
 /// unstressed (or truncated) to `count` notes so indices line up with
@@ -26,37 +26,23 @@ pub(in crate::derive::vocal) fn line_note_stresses(
     stresses
 }
 
-/// Strip the syllable separator and count the notes a lyric line fills.
-/// A fallback for cases where `LyricLine::syllables` is 0.
+/// The number of notes a lyric text fills, counted by the G2P resolver's
+/// own tokenizer so the count and the resolved draft
+/// ([`note_unit_count`](crate::g2p::note_unit_count)) always agree:
 ///
-/// Every whitespace-separated token counts one, plus one per `·` break,
-/// with the two draft markers handled the way the G2P resolver handles
-/// them, so the count and the resolved draft agree:
+/// * a word fills one note per `·` piece; a between-letter `-` is the
+///   same break (`re-so-lu-tion` is four);
+/// * an inline `[..]` phoneme block fills one note per `·` group
+///   (`[l ih · l iy]` is two), however many phonemes it holds;
+/// * a standalone `_` (or `+`) is a melisma hold and fills one note,
+///   except before the line's first sung token, where there is nothing
+///   to hold and the resolver drops it;
+/// * a standalone uppercase `AP` is a breath and fills none, and so does
+///   a punctuation-only token (`&`, a standalone `-`).
 ///
-/// * a standalone `_` (or `+` / `-`) is a melisma hold and counts one
-///   note, except before the line's first sung token, where there is
-///   nothing to hold and the resolver drops it;
-/// * a standalone uppercase `AP` is a breath and counts nothing.
+/// No dictionary lookup is involved: unbroken words count as one note
+/// whatever CMU says (ingest points auto-syllabify them first). Returns
+/// at least 1, so an empty or punctuation-only line still gets a note.
 pub fn count_syllables(text: &str) -> u32 {
-    let dot_count = text.matches('\u{00B7}').count() as u32;
-    // `n syllables = dot_count + word_count` is a reasonable approximation
-    // for already-broken text; we add the dots to the word count.
-    let mut word_count = 0u32;
-    for line in text.split('\n') {
-        let mut sung_seen = false;
-        for token in line.split_whitespace() {
-            if is_breath_token(token) {
-                continue;
-            }
-            if is_slur_token(token) {
-                if sung_seen {
-                    word_count += 1;
-                }
-                continue;
-            }
-            sung_seen = true;
-            word_count += 1;
-        }
-    }
-    (dot_count + word_count).max(1)
+    (note_units(text).min(u32::MAX as usize) as u32).max(1)
 }

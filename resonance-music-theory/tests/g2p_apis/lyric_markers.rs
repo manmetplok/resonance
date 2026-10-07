@@ -1,14 +1,14 @@
 //! Lyric-draft markers and syllable sources (spec
 //! `vocal-mcp-control-and-quality.md` §6 and §8): the `_` melisma token
-//! and its `+` / `-` aliases, the `AP` breath token, exact user `·`
+//! and its `+` alias, the `AP` breath token, exact user `·`
 //! breaks with their mismatch warning, the per-syllable `G2pSource`, and
 //! the corpus-wide CMU guarantee.
 
 use std::collections::HashMap;
 
 use resonance_music_theory::g2p::{
-    assign_syllables_to_notes, assign_syllables_to_notes_with, canonical_phoneme,
-    note_unit_count, resolve_draft, resolve_draft_with_dict, word_g2p_source, G2pSource,
+    assign_syllables_to_notes, assign_syllables_to_notes_with, canonical_phoneme, is_slur_lyric,
+    is_slur_token, note_unit_count, resolve_draft, resolve_draft_with_dict, word_g2p_source, G2pSource,
     PhonemeDictionary, PhonemeProvenance, SyllableOverrides,
 };
 use resonance_music_theory::{count_syllables, lyric_corpus_lines, LyricLine};
@@ -43,13 +43,41 @@ fn underscore_holds_the_previous_syllable_and_counts_agree() {
 
     let notes = assign_syllables_to_notes(&syllables, &no_annotations(3), 3);
     assert!(!notes[0].is_slur);
-    assert_eq!(notes[0].phonemes, vec!["l", "ah", "v"]);
+    // The final consonant is sung at the END of the hold, not on the
+    // first note: `l ah` · `ah` · `ah v`.
+    assert_eq!(notes[0].phonemes, vec!["l", "ah"]);
+    assert_eq!(notes[1].phonemes, vec!["ah"], "a hold sings the held vowel");
+    assert_eq!(notes[2].phonemes, vec!["ah", "v"], "the coda closes the hold");
+    assert!(!notes[0].is_word_end && !notes[1].is_word_end);
+    assert!(notes[2].is_word_end, "the word ends where its coda is sung");
     for n in &notes[1..] {
         assert!(n.is_slur);
-        assert_eq!(n.phonemes, vec!["ah"], "a hold sings the held vowel");
         assert_eq!(n.syllable_index, 0);
         assert_eq!(n.source, G2pSource::Cmu, "a hold inherits the held source");
     }
+}
+
+#[test]
+fn the_coda_of_an_overridden_held_syllable_moves_too() {
+    let syllables = resolve_draft(&[line("love _ me")]);
+    let mut overrides: SyllableOverrides = HashMap::new();
+    overrides.insert(
+        0,
+        ["l", "ow", "v", "z"].map(|p| canonical_phoneme(p).unwrap()).to_vec(),
+    );
+    let notes = assign_syllables_to_notes_with(&syllables, &no_annotations(3), 3, &overrides);
+    assert_eq!(notes[0].phonemes, vec!["l", "ow"]);
+    assert_eq!(notes[1].phonemes, vec!["ow", "v", "z"]);
+    assert_eq!(notes[2].phonemes, vec!["m", "iy"], "the next syllable is untouched");
+    assert!(notes[1].is_word_end && notes[2].is_word_end);
+}
+
+#[test]
+fn an_unheld_syllable_keeps_its_coda() {
+    let syllables = resolve_draft(&[line("love me")]);
+    let notes = assign_syllables_to_notes(&syllables, &no_annotations(2), 2);
+    assert_eq!(notes[0].phonemes, vec!["l", "ah", "v"]);
+    assert!(notes[0].is_word_end);
 }
 
 #[test]
@@ -62,14 +90,38 @@ fn underscore_does_not_shift_later_syllable_indices() {
     assert_eq!(count_syllables("love _ me"), 3);
 }
 
+/// Auto-syllabify copies letterless tokens through untouched. It used to
+/// count a one-character token's punctuation as both lead and trail —
+/// a subtraction overflow in debug, and `_` doubled to `__` in release.
 #[test]
-fn plus_and_dash_are_slur_aliases() {
-    for text in ["love + +", "love - -"] {
-        let syllables = resolve_draft(&[line(text)]);
-        assert_eq!(syllables.len(), 1, "{text}");
-        assert_eq!(syllables[0].slurs_after, 2, "{text}");
-        assert_eq!(count_syllables(text), 3, "{text}");
-    }
+fn auto_syllabify_keeps_markers_and_punctuation_tokens() {
+    use resonance_music_theory::g2p::auto_syllabify_text;
+    assert_eq!(auto_syllabify_text("love _ _"), "love _ _");
+    assert_eq!(auto_syllabify_text("hold + AP on & - so"), "hold + AP on & - so");
+    assert_eq!(auto_syllabify_text("re·mem·ber _"), "re·mem·ber _");
+}
+
+#[test]
+fn plus_is_a_slur_alias() {
+    let syllables = resolve_draft(&[line("love + +")]);
+    assert_eq!(syllables.len(), 1);
+    assert_eq!(syllables[0].slurs_after, 2);
+    assert_eq!(count_syllables("love + +"), 3);
+}
+
+/// A spaced `-` in the draft is a dash in prose, not a hold: reading it
+/// as a melisma silently added a note.
+#[test]
+fn a_spaced_dash_is_punctuation_not_a_hold() {
+    let syllables = resolve_draft(&[line("wait - no")]);
+    let labels: Vec<&str> = syllables.iter().map(|s| s.label.as_str()).collect();
+    assert_eq!(labels, vec!["wait", "no"]);
+    assert!(syllables.iter().all(|s| s.slurs_after == 0), "no hold");
+    assert_eq!(note_unit_count(&syllables), 2);
+    assert_eq!(count_syllables("wait - no"), 2);
+    // The per-note side table still reads a lone `-` as a slur.
+    assert!(is_slur_lyric("-") && is_slur_lyric(" + ") && is_slur_lyric("_"));
+    assert!(!is_slur_token("-"));
 }
 
 #[test]
@@ -91,6 +143,23 @@ fn per_note_slur_on_a_draft_hold_is_the_same_hold() {
     assert_eq!(notes[2].label, "me", "the annotation must not add a second hold");
 }
 
+/// A per-note label on a note the draft would hold names the syllable
+/// that note starts: it ends the pending holds and takes the next
+/// syllable rather than being swallowed as a hold.
+#[test]
+fn a_label_annotation_ends_pending_draft_holds() {
+    let syllables = resolve_draft(&[line("love _ _ me")]);
+    let mut annotations = no_annotations(3);
+    annotations[1] = "ME!".into();
+    let notes = assign_syllables_to_notes(&syllables, &annotations, 3);
+    assert!(!notes[1].is_slur, "the label ends the hold");
+    assert_eq!(notes[1].label, "ME!");
+    assert_eq!(notes[1].syllable_index, 1);
+    assert_eq!(notes[1].phonemes, vec!["m", "iy"]);
+    assert_eq!(notes[0].phonemes, vec!["l", "ah", "v"], "no hold left to carry the coda");
+    assert!(notes[2].label.is_empty(), "the draft is exhausted");
+}
+
 #[test]
 fn hold_after_a_multi_syllable_word_holds_its_last_syllable() {
     let syllables = resolve_draft(&[line("for·get _")]);
@@ -98,7 +167,8 @@ fn hold_after_a_multi_syllable_word_holds_its_last_syllable() {
     assert_eq!(syllables[1].slurs_after, 1);
     let notes = assign_syllables_to_notes(&syllables, &no_annotations(3), 3);
     assert!(notes[2].is_slur);
-    assert_eq!(notes[2].phonemes, vec!["eh"]);
+    assert_eq!(notes[1].phonemes, vec!["g", "eh"]);
+    assert_eq!(notes[2].phonemes, vec!["eh", "t"]);
     assert_eq!(count_syllables("for·get _"), 3);
 }
 
@@ -193,6 +263,43 @@ fn user_break_onset_follows_the_written_consonant_letters() {
     assert_eq!(s[1].phonemes[0], "k");
 }
 
+fn split(text: &str) -> Vec<Vec<&'static str>> {
+    let s = resolve_draft(&[line(text)]);
+    assert!(s.iter().all(|x| !x.syllable_warning), "{text} warned: {s:?}");
+    s.into_iter().map(|x| x.phonemes).collect()
+}
+
+/// The onset rule weighs both sides of the break:
+/// `max(leading(next), cluster - trailing(prev))`, clamped to the cluster.
+#[test]
+fn user_break_onset_counts_the_previous_piece_coda_too() {
+    // `ery` starts with a vowel, but `ev` ends in one consonant, so the
+    // `r` goes with the next piece.
+    assert_eq!(
+        split("ev·ery·thing"),
+        vec![vec!["eh", "v"], vec!["r", "iy"], vec!["th", "ih", "ng"]]
+    );
+    assert_eq!(split("for·get(2)"), vec![vec!["f", "ao", "r"], vec!["g", "eh", "t"]]);
+    assert_eq!(split("for·get"), vec![vec!["f", "er"], vec!["g", "eh", "t"]]);
+    let remember = split("re·mem·ber");
+    assert_eq!(remember[1].last(), Some(&"m"));
+    assert_eq!(remember[2], vec!["b", "er"]);
+    assert_eq!(split("an·y"), vec![vec!["eh", "n"], vec!["iy"]]);
+    assert_eq!(split("e·ver"), vec![vec!["eh"], vec!["v", "er"]]);
+    // A silent final `e` does not hide the coda.
+    assert_eq!(split("love·ly"), vec![vec!["l", "ah", "v"], vec!["l", "iy"]]);
+}
+
+/// Without a `(N)` hint, the piece count picks among CMU's variants.
+#[test]
+fn piece_count_selects_the_matching_cmu_variant() {
+    assert_eq!(split("ev·ery"), vec![vec!["eh", "v"], vec!["r", "iy"]]);
+    assert_eq!(split("ev·er·y"), vec![vec!["eh", "v"], vec!["er"], vec!["iy"]]);
+    // An explicit hint is never second-guessed: variant 1 has three vowels.
+    let s = resolve_draft(&[line("ev·ery(1)")]);
+    assert!(s.iter().all(|x| x.syllable_warning));
+}
+
 #[test]
 fn piece_count_mismatch_falls_back_and_warns() {
     // `words` has one vowel nucleus but is written as two pieces.
@@ -204,6 +311,24 @@ fn piece_count_mismatch_falls_back_and_warns() {
     assert_eq!(s[2].label, "s");
     let notes = assign_syllables_to_notes(&s, &no_annotations(3), 3);
     assert!(notes[1].syllable_warning);
+}
+
+#[test]
+fn count_syllables_agrees_with_the_resolver() {
+    for (text, expected) in [
+        ("re-so-lu-tion", 4),
+        ("[l ih · l iy]", 2),
+        ("you & me", 2),
+        ("&", 1),
+        ("love _ _", 3),
+        ("hold AP on", 2),
+        ("wait - no", 2),
+        ("the long, the qui·et, the un·done", 8),
+    ] {
+        assert_eq!(count_syllables(text), expected, "{text}");
+        let resolved = note_unit_count(&resolve_draft(&[line(text)]));
+        assert_eq!(resolved.max(1), expected as usize, "resolver on {text}");
+    }
 }
 
 #[test]
@@ -275,14 +400,19 @@ fn g2p_source_serialises_snake_case() {
 #[test]
 fn every_corpus_word_resolves_through_cmu() {
     let mut misses = Vec::new();
+    let mut warnings = Vec::new();
     for text in lyric_corpus_lines() {
         for s in resolve_draft(&[line(text)]) {
             if s.source != G2pSource::Cmu {
                 misses.push(format!("{:?} in {text:?}", s.label));
             }
+            if s.syllable_warning {
+                warnings.push(format!("{:?} in {text:?}", s.label));
+            }
         }
     }
     assert!(misses.is_empty(), "corpus syllables off CMU: {misses:#?}");
+    assert!(warnings.is_empty(), "corpus breaks off CMU's vowels: {warnings:#?}");
 }
 
 #[test]

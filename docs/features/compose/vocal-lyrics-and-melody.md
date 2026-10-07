@@ -1,6 +1,6 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
+> Verified against master @ `86e5c2af` + vocal-params work + vocal-phase1 fixes (`d1b5c284`) on 2026-10-07.
 > Spec history: `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -25,18 +25,24 @@ line, re-rolled from a small template corpus, or set by an agent.
   breaks so each syllable gets its own note.
 - **Draft markers** (resolved in `resonance-music-theory`; the app does not
   render them yet beyond what is noted):
-  - **Melisma `_`** (aliases `+`, standalone `-`): holds the previous
-    syllable onto one more note — `love _ _` is one syllable over three
-    notes. It is not a syllable: `ResolvedSyllable::slurs_after` counts the
+  - **Melisma `_`** (alias `+`): holds the previous syllable onto one
+    more note — `love _ _` is one syllable over three notes. A standalone
+    `-` is **not** a hold in the draft (prose writes it as a dash:
+    `wait - no` is two syllables); it is punctuation and dropped. Only the
+    per-note side table (`is_slur_lyric`) still reads `-` as a slur. A
+    hold is not a syllable: `ResolvedSyllable::slurs_after` counts the
     holds after a syllable, `g2p::note_unit_count` gives syllables + holds,
     and `assign_syllables_to_notes_with` turns each hold into a slur note
     (`is_slur`, label `+`, the held vowel, the held syllable's
     `syllable_index`, stress, provenance and source). Holds therefore never
     shift later syllables' indices. A `_` before a line's first sung token
     has nothing to hold and is dropped. A per-note slur annotation on a note
-    the draft already holds is the same hold, not an extra one. The final
-    consonant is still sung on the first note (the spec's "consonant at the
-    end of the last note" is not built).
+    the draft already holds is the same hold, not an extra one; a per-note
+    *label* annotation on such a note ends the remaining holds and takes
+    the next syllable. The held syllable's final consonants are sung at the
+    end of the hold: they move from the first note to the last slur note,
+    and `is_word_end` moves with them (`love _ _` → `l ah` · `ah` ·
+    `ah v`; `carry_coda_to_last_hold`).
   - **Breath `AP`** (standalone, uppercase): takes no note and sets
     `breath_before` on the next sung syllable / its note (also across a
     line break; a trailing `AP` at the end of the draft is dropped). The
@@ -44,18 +50,32 @@ line, re-rolled from a small template corpus, or set by an agent.
     Lowercase `ap` is a word; `[AP]` is still an inline phoneme block that
     occupies its own note.
   - `count_syllables` (and so the melody generator's per-line note count)
-    agrees: a hold counts one note, a leading hold and an `AP` count none.
-    The generator's per-note stress table gives holds no stress.
+    agrees: it sums `lyric_parse::note_units`, which walks the resolver's
+    own tokenizer without dictionary lookups — a word counts its `·` / `-`
+    pieces (`re-so-lu-tion` is 4), a `[..]` block its `·` groups
+    (`[l ih · l iy]` is 2), a hold one, and a leading hold, an `AP` or a
+    punctuation-only token (`&`) none; at least 1 per line. The
+    generator's per-note stress table gives holds no stress. `song.vocal`'s
+    `syllable_count` is the same note-unit count (`note_unit_count`), so
+    `love _ _` on three notes is not a mismatch.
 - **Exact user breaks.** A word's `·` pieces are its note labels verbatim,
   and its phonemes split at the matching consonant: each piece gets one
-  vowel nucleus, and the next piece's onset takes one consonant phoneme per
-  leading consonant letter (`th sh ch ng ph wh ck` count as one, `qu` as
-  two, `y` is a consonant only piece-initially before a vowel), clamped to
-  the cluster — `func·tion` → `f ah ng k | sh ax n`, `fun·ction` →
-  `f ah ng | k sh ax n`. When the piece count differs from the vowel count
-  the phonemes fall back to the automatic onset-maximising split (labels
-  stay the user's pieces, note count unchanged) and those syllables carry
-  `syllable_warning`.
+  vowel nucleus, and the cluster between two nuclei is cut so the next
+  piece's onset is `max(leading(next), cluster − trailing(prev))`, clamped
+  to the cluster. `leading` counts the consonant sounds a piece starts with
+  (`th sh ch ng ph wh ck` count as one, `qu` as two, `y` is a consonant
+  only piece-initially before a vowel); `trailing` counts the ones it ends
+  with by the same digraph rules (plus `gh`, doubled letters as one, `x`
+  as two, a final `y` as a vowel, a silent final `e` skipped) —
+  `func·tion` → `f ah ng k | sh ax n`, `fun·ction` → `f ah ng | k sh ax n`,
+  `ev·ery·thing` → `eh v | r iy | th ih ng`,
+  `re·mem·ber` → `… m | b er`, `an·y` → `eh n | iy`, `e·ver` → `eh | v er`.
+  Without a `(N)` hint, a word whose pieces do not match the default CMU
+  variant's vowel count takes the first variant that does (`ev·ery` →
+  `EH V R IY`, `ev·er·y` → `EH V ER IY`). When no variant fits, the
+  phonemes fall back to the automatic onset-maximising split (labels stay
+  the user's pieces, note count unchanged) and those syllables carry
+  `syllable_warning`; no corpus syllable carries one (guarded by a test).
 - **Editing.** Bulk text editor for the whole lane (`vocal_bulk_lyrics`,
   synced both ways with the draft), per-line text, lock per line,
   "re-roll unlocked", auto-syllabify. Editing lyrics does not change the
@@ -165,14 +185,15 @@ Not covered: theme/POV/clichés (they have no effect).
   then; audio is re-rendered on demand.
 
 - Corpus fixes: `fore·get` → `for·get`; `ev·ry` (not a CMU word) →
-  `an·y` and `ev·ery·thing`. Two corpus words still flag
-  `syllable_warning` because their pieces do not match CMU's vowel count:
-  `ev·ery` (CMU variant 1 has three vowels) and `word·s`; fixing them
-  would change line note counts, so they were left.
+  `an·y` and `ev·ery·thing`; `word·s` → `words` and `ev·ery` →
+  `ev·er·y` (the Reflective line became `and ev·er·y still·ness makes it
+  clear` to keep its declared 9). Each changed line's note count now
+  equals its declared `syllables`, and no corpus syllable carries
+  `syllable_warning`.
 
 ## Known gaps
 
-- `song.vocal`, the GUI and the counts check do not yet show `_` holds,
+- `song.vocal` and the GUI do not yet show `_` holds,
   breaths, `syllable_warning` or the `g2p` source, and breaths are not
   rendered — [vocal-mcp-control-and-quality](../../intents/compose/vocal-mcp-control-and-quality.md)
   slices 8, 10 and 12.

@@ -74,7 +74,7 @@ const CORPUS: &[CorpusLine] = &[
     CorpusLine { mood: VocalMood::Defiant, rhyme: 3, syllables: 8, text: "noth·ing breaks me, noth·ing cracks" },
 
     // ---- Hopeful (1: -ight, 2: -orn/-orning, 3: -ound) ----
-    CorpusLine { mood: VocalMood::Hopeful, rhyme: 1, syllables: 9, text: "and ev·ery cor·ner finds the light" },
+    CorpusLine { mood: VocalMood::Hopeful, rhyme: 1, syllables: 9, text: "and ev·er·y cor·ner finds the light" },
     CorpusLine { mood: VocalMood::Hopeful, rhyme: 1, syllables: 8, text: "a thou·sand suns be·hind the night" },
     CorpusLine { mood: VocalMood::Hopeful, rhyme: 1, syllables: 9, text: "I learn to read the dark·er signs" },
     CorpusLine { mood: VocalMood::Hopeful, rhyme: 2, syllables: 9, text: "I'll meet you in the qui·et morn·ing" },
@@ -93,7 +93,7 @@ const CORPUS: &[CorpusLine] = &[
     CorpusLine { mood: VocalMood::Reflective, rhyme: 2, syllables: 8, text: "the streets that ran on for a mile" },
     CorpusLine { mood: VocalMood::Reflective, rhyme: 3, syllables: 9, text: "I think of you and feel quite near" },
     CorpusLine { mood: VocalMood::Reflective, rhyme: 3, syllables: 8, text: "I bend my head and hear, and hear" },
-    CorpusLine { mood: VocalMood::Reflective, rhyme: 3, syllables: 9, text: "ev·ery still·ness makes it clear" },
+    CorpusLine { mood: VocalMood::Reflective, rhyme: 3, syllables: 9, text: "and ev·er·y still·ness makes it clear" },
 
     // ---- Joyful (1: -ee, 2: -ay, 3: -ound) ----
     CorpusLine { mood: VocalMood::Joyful, rhyme: 1, syllables: 8, text: "you laugh, the whole room laughs with me" },
@@ -101,7 +101,7 @@ const CORPUS: &[CorpusLine] = &[
     CorpusLine { mood: VocalMood::Joyful, rhyme: 1, syllables: 9, text: "I read the sky like po·et·ry" },
     CorpusLine { mood: VocalMood::Joyful, rhyme: 2, syllables: 8, text: "we won't be quiet, won't go a·way" },
     CorpusLine { mood: VocalMood::Joyful, rhyme: 2, syllables: 9, text: "the kind of morn·ing made for play" },
-    CorpusLine { mood: VocalMood::Joyful, rhyme: 2, syllables: 8, text: "the kind of word·s I want to say" },
+    CorpusLine { mood: VocalMood::Joyful, rhyme: 2, syllables: 8, text: "the kind of words I want to say" },
     CorpusLine { mood: VocalMood::Joyful, rhyme: 3, syllables: 8, text: "your laugh·ter spins us all around" },
     CorpusLine { mood: VocalMood::Joyful, rhyme: 3, syllables: 9, text: "we shake the win·dows with the sound" },
     CorpusLine { mood: VocalMood::Joyful, rhyme: 3, syllables: 9, text: "the kind of joy that won't stay bound" },

@@ -174,8 +174,11 @@ pub fn word_g2p_source(word: &str) -> G2pSource {
 pub enum G2pSource {
     /// A per-syllable override or an inline `[..]` phoneme block.
     Edited,
-    /// The project's pronunciation dictionary (the caller-supplied
-    /// [`PhonemeDictionary`](super::PhonemeDictionary)).
+    /// A user pronunciation dictionary — the project's *or* the global
+    /// one. Both arrive merged in the caller-supplied
+    /// [`PhonemeDictionary`](super::PhonemeDictionary) (project entries
+    /// win), so the resolver cannot tell them apart; the wire name stays
+    /// `project_dict`.
     ProjectDict,
     /// The voicebank's own dictionary. Not produced yet — bank
     /// dictionaries arrive with any-bank phonemisation (spec §4.4).
