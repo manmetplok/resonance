@@ -18,6 +18,7 @@ mod plugin_state;
 mod removals;
 mod restored;
 mod routing;
+mod stage;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -26,6 +27,7 @@ use std::sync::Arc;
 use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId};
 
 pub use entities::{migrate_auto_name, sort_plugins_by_saved_order};
+pub use stage::Stage;
 
 use crate::project::ProjectFile;
 use crate::Resonance;
@@ -70,52 +72,6 @@ pub(crate) trait Reconcile {
     );
 }
 
-/// Groups of [`DOMAINS`], declared in the order they run. They used to
-/// mark the points in each restore path's inline code where a group was
-/// valid; since A-13f nothing runs between two stages, so they only group
-/// the table and document why it is in the order it is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Stage {
-    /// Transport / master scalars, the transient UI a full replay resets,
-    /// compose sections and the drum-pattern bank. The first thing both
-    /// paths restore (the full path after `SetProjectDir`).
-    Globals,
-    /// Tempo events, chord track, markers, and the section chord trim
-    /// (reads the meter). Right after `Globals` on both paths, before any
-    /// track or clip is restored.
-    Timeline,
-    /// What a diff restore removes: the routing edges `new` lacks, the
-    /// clips it does not keep (A-13i), then the plugin instances, tracks
-    /// and busses (A-13h, A-13i). Before `Entities`, so an edge or a clip
-    /// is gone before its endpoint and an entity before a re-add under its
-    /// id. Nothing after a `ClearAll`.
-    Removals,
-    /// The entities: tracks, busses, the master chain, the track outputs,
-    /// then each plugin's state (blob, bypass, params), then the registry
-    /// and chain order. Right after `Removals` on both paths. After a
-    /// `ClearAll` every entity is added; on the diff path only changed
-    /// scalars are sent, and the busses and plugin instances `old` lacks
-    /// are added (A-13h).
-    Entities,
-    /// The routing edges between entities: aux sends, then sidechain key
-    /// routes. Right after `Entities` (the engine rejects a send naming an
-    /// unregistered endpoint; a key route names a plugin instance id).
-    Routing,
-    /// The audio and MIDI clips, then state derived from them: the lyric
-    /// side-table, the derived-clip map and the vocal audio-clip map.
-    /// Right after `Routing`, on every track the clips sit on.
-    Clips,
-    /// App-side content restored whole, and the references. After `Clips`
-    /// (the pool counts the clips' asset refs).
-    Content,
-    /// Domains that must see everything else restored: external
-    /// instruments, then the automation lanes (a `DeviceParam` lane needs
-    /// the engine's device bindings), the missing-plugin warning, and
-    /// freeze last (a disk load's baseline fingerprints the replayed
-    /// content, lanes included). The end of both paths' restore.
-    Tail,
-}
-
 type ReconcileFn =
     for<'a, 'b, 'c, 'd> fn(&'a mut Resonance, Option<&'b ProjectFile>, &'c ProjectFile, &'d ReconcileCtx<'_>);
 
@@ -141,9 +97,11 @@ pub(crate) const DOMAINS: &[Domain] = &[
     // scalars, and `SetBpm` must precede `SetTempoEvents`.
     domain::<globals::Transport>(Stage::Globals),
     domain::<globals::TransientUi>(Stage::Globals),
-    // Before `Clips`: the load resets the derived map `DerivedClips` restores.
-    // Pronunciation is app-side; the drum bank's promotion edits the sections.
+    // Before `Clips`: the load resets the derived map `DerivedClips`
+    // restores. The drum bank's legacy promotion edits the definitions.
     domain::<globals::ComposeSections>(Stage::Globals),
+    // App-side only; after the sections, whose definitions a disk load
+    // checks the overrides' lanes against.
     domain::<globals::Pronunciation>(Stage::Globals),
     domain::<globals::DrumPatterns>(Stage::Globals),
     // Before the chord trim and every clip (derived-clip bar recovery
@@ -204,7 +162,8 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<restored::MissingPlugins>(Stage::Tail),
     // Last: a disk load's baseline fingerprints everything above.
     domain::<restored::Freeze>(Stage::Tail),
-    // The replay's closing command (ARCH-04 D-7d): the fresh clip-id grant.
+    // The replay's closing command (ARCH-04 D-7d): the engine's fresh
+    // clip-id grant, from a counter every domain above has seeded.
     domain::<restored::ClipIdGrant>(Stage::Tail),
 ];
 
