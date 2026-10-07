@@ -1,6 +1,6 @@
 # Lyric pronunciation (G2P and dictionary)
 
-> Verified against master @ `cb3b1d6a` + voicebank registry (slices 4–5) + pronunciation persistence (slice 11) on 2026-10-07.
+> Verified against master @ `cb3b1d6a` + vocal phase 2 on 2026-10-07.
 > Spec history: prototype `docs/intents/prototypes/svs-pronunciation-control/index.html` (design #173, notes #174).
 
 Every sung syllable becomes a list of ARPAbet phonemes before it reaches
@@ -32,8 +32,16 @@ and a global user dictionary, but nothing sets those yet.
   for a spelling wins. Lilia's multi-language extras (`dx`, `L`, `d0`)
   therefore fall through to CMU. The entry is also skipped for a word with
   a `(N)` CMU-variant hint, or whose `·` pieces do not match its vowel
-  count (CMU's variants may fit the breaks). The vocal roll's phoneme
-  strip and `song.vocal` resolve through the same layer.
+  count (CMU's variants may fit the breaks). A `dsdict` reading carries no
+  stress, so a hit copies the per-vowel lexical stress of the first CMU
+  variant with the same vowel count, else stresses its first vowel
+  (`with_lexical_stress`) — a bank hit never sings flatter than the CMU
+  reading it replaces. The vocal roll's phoneme strip and `song.vocal`
+  resolve through the same layer: `song.vocal` builds one
+  `DictionaryLayers` per lane (project + the lane's bank) for
+  `syllable_count`, `lines[].syllables[].phonemes` and, through
+  `PronunciationState::resolve_lane`, `notes[].phonemes`, so the three
+  agree with each other and with the render.
 - **Pronunciation source.** Alongside `PhonemeProvenance`, every
   `ResolvedSyllable` and `AssignedSyllable` carries a finer
   `source: g2p::G2pSource` — `Edited` (override or `[..]` block),
@@ -81,7 +89,10 @@ and a global user dictionary, but nothing sets those yet.
   (and a dictionary entry left with none). `vocal.set_pronunciation` and
   `vocal.clear_pronunciation` are one undo entry each. Overrides are
   written verbatim, including those of a deleted lane, so undoing the
-  delete brings them back.
+  delete brings them back; a **disk load** then drops the overrides whose
+  section definition or track the file no longer holds, so they cannot
+  wake up on a lane that reuses the freed id (a new vocal track takes the
+  highest id back). Undo/redo keeps them.
 - **Per-syllable overrides.** Keyed by vocal lane `(definition_id,
   track_id)` and the syllable's index in the lane's resolved draft (`_`
   holds take a note but no syllable index), not by clip and note, so a
@@ -99,14 +110,14 @@ and a global user dictionary, but nothing sets those yet.
 
 | Concern | Location | Key items |
 |---|---|---|
-| G2P | `resonance-music-theory/src/g2p/{phonemes,syllabify,lyric_parse,note_assign}.rs` | `canonical_phoneme`, `cmu_variants`, `auto_syllabify_text`, `resolve_draft_with_dict`, `resolve_draft_with_layers`, `DictionaryLayers`, `assign_syllables_to_notes_with`, `PhonemeProvenance`, `G2pSource`, `word_g2p_source` |
-| App model + resolver | `resonance-app/src/compose/vocal_svs/pronunciation.rs` | `PronunciationState` (`lane_overrides`, `resolve_lane`, `to_project`, `restore_from_project`), `DictionaryEntry`, `DictionaryScope`, `SyllableOverride`, `resolve_clip`, `resolve_clip_with_bank`, `clean_word`, `canonicalize_phonemes` |
+| G2P | `resonance-music-theory/src/g2p/{phonemes,syllabify,lyric_parse,note_assign}.rs` | `canonical_phoneme`, `cmu_variants`, `auto_syllabify_text`, `resolve_draft_with_dict`, `resolve_draft_with_layers`, `DictionaryLayers`, `with_lexical_stress`, `assign_syllables_to_notes_with`, `PhonemeProvenance`, `G2pSource`, `word_g2p_source` |
+| App model + resolver | `resonance-app/src/compose/vocal_svs/pronunciation.rs` | `PronunciationState` (`lane_overrides`, `resolve_lane` — with the bank dictionary, what `song.vocal`'s notes resolve through — `to_project`, `restore_from_project`), `DictionaryEntry`, `DictionaryScope`, `SyllableOverride`, `resolve_clip`, `resolve_clip_with_bank`, `clean_word`, `canonicalize_phonemes` |
 | Bank dictionary + inventory mapping | `compose/vocal_svs/registry/dict.rs`, `phonemes.rs`, `validate.rs`; `resonance-svs/src/voicebank/dsdict.rs` | `load_english_dictionary`, `VoicebankPhonemes`, `nearest_by_class`, `validate_for_voicebank`, `load_dsdict` |
 | Persisted shape | `resonance-app/src/project/pronunciation.rs` | `ProjectPronunciation`, `ProjectPronunciationEntry`, `ProjectSyllableOverride` |
-| Save / restore | `update/project_io/serialize.rs` (`build_project_file`), `update/project_io/reconcile/globals.rs` | `Pronunciation` reconcile domain |
-| Control mutation | `resonance-app/src/update/compose/mod.rs` | `control_set_pronunciation`, `control_clear_pronunciation` |
+| Save / restore | `update/project_io/serialize.rs` (`build_project_file`), `update/project_io/reconcile/globals.rs` | `Pronunciation` reconcile domain (drops orphan overrides on a disk load) |
+| Control mutation | `resonance-app/src/update/compose/vocal_control.rs` | `control_set_pronunciation`, `control_clear_pronunciation` |
 | Control validation | `resonance-app/src/update/control/vocal.rs` | `set_pronunciation` param checks |
-| Read view | `resonance-app/src/update/control/song.rs` | `VocalView::pronunciation_overrides` |
+| Read view | `resonance-app/src/update/control/song.rs`, `update/control/view_model/lane.rs` | `VocalView::pronunciation_overrides`; per-lane layers for counts and lines; `lane_articulation` for notes |
 | Strip display | `resonance-app/src/view/compose/vocal_roll/` | read-only phoneme strip under the chord strip |
 
 ## Surfaces
@@ -125,10 +136,11 @@ and a global user dictionary, but nothing sets those yet.
 | Resolver precedence | `resonance-app/tests/vocal/pronunciation_resolution.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Resolved phonemes in the segment | `tests/vocal/vocal_segment_pronunciation.rs` | same |
 | Control set/clear | `tests/control/control_vocal.rs` | same |
-| Save → reopen, undo/redo, override text check, legacy file | `tests/control/control_vocal_pronunciation_persistence.rs` | same |
+| Save → reopen, undo/redo, override text check, legacy file, orphan overrides dropped on load (read back through `song.vocal`'s notes) | `tests/control/control_vocal_pronunciation_persistence.rs` | same |
+| `song.vocal` lines, counts and notes agree on a bank-dictionary word | `tests/control/control_voicebanks.rs` | same |
 | G2P | `resonance-music-theory/tests/g2p.rs`, `g2p_apis.rs` | `./scripts/run-tests.py -p resonance-music-theory` |
 | `G2pSource`, exact breaks, corpus all-CMU | `resonance-music-theory/tests/g2p_apis/lyric_markers.rs` | same |
-| Bank-dictionary layer precedence | `resonance-music-theory/tests/g2p_apis/bank_dictionary.rs` | same |
+| Bank-dictionary layer precedence and lexical stress | `resonance-music-theory/tests/g2p_apis/bank_dictionary.rs` | same |
 | Bank dictionary from a fixture bank, prefix stripping, inventory mapping, unmappable word | `resonance-app/tests/vocal/bank_phonemisation.rs` | `./scripts/run-tests.py -p resonance-app` |
 
 Not covered: per-syllable overrides through a real surface (none exists).

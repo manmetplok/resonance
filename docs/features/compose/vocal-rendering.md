@@ -1,6 +1,6 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `cb3b1d6a` + voicebank registry (vocal slices 4–5) on 2026-10-07.
+> Verified against master @ `cb3b1d6a` + vocal phase 2 on 2026-10-07.
 > Spec history: crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -22,20 +22,36 @@ not installed keeps playing its MIDI, and the render fails naming the bank
     (`$RESONANCE_VOICEBANK_DIR`) holding an acoustic `dsconfig.yaml` (the
     one with an `acoustic:` key) at most two levels down, which covers
     OpenUtau layout and Meiji's `configs/configs/`; the id is the folder
-    name as a slug;
+    name as a slug, or — for a folder whose name slugs to nothing — the
+    character file's name as one (a warning names it; with neither the
+    folder is skipped with a warning);
   - **development banks**: the three shipped layouts under
     `$RESONANCE_SVS_MODELS_DIR` and `resonance-svs/models/` (resolved from
     the app crate's compile-time `CARGO_MANIFEST_DIR`) with fixed ids —
     `singer/extracted` = `tiger`, `voicebanks/lilia` = `lilia`,
-    `voicebanks/meiji` = `meiji`. A user bank with the same id wins.
+    `voicebanks/meiji` = `meiji`.
+  - **precedence for one id**: the user folder beats every development
+    root; within the user folder the first folder in sorted order wins
+    and the others are skipped with a warning naming both;
+    `$RESONANCE_SVS_MODELS_DIR` beats the source tree.
   - **vocoders**: the folder the acoustic config's `vocoder:` names next
     to it (TIGER's and Meiji's `dsvocoder`), else a bundled
     `dsvocoder/` (Lilia), else a shared vocoder by id in
-    `…/resonance/vocoders/<id>/` (`$RESONANCE_VOCODER_DIR`) or a dev root's
-    `vocoder/`, matched by folder or by the config's `name`. A vocoder
-    counts as installed when its model file exists.
-  A hermetic test app scans a private folder under its hermetic root plus
-  `$RESONANCE_SVS_MODELS_DIR` only when set, never the source tree.
+    `…/resonance/vocoders/<id>/` (`$RESONANCE_VOCODER_DIR`; with only
+    `$RESONANCE_VOICEBANK_DIR` set, the `vocoders/` folder beside it) or a
+    dev root's `vocoder/`, matched by folder or by the config's `name`. A
+    vocoder counts as installed when its model file exists.
+  - **rescan reuse**: a bank found in the same folder as last time keeps
+    its `Arc<InstalledBank>` (parsed configs, inventory, the lazily-read
+    dictionary) while a `BankStamp` of what the scan read — times and
+    lengths of the acoustic config, phoneme list, character file,
+    `languages.json`, dictionary and vocoder config, and the bank folder's
+    subfolders — still matches; a bank whose vocoder was missing is always
+    re-read.
+  A hermetic test app scans only a private folder under its hermetic
+  root — never the source tree and never `$RESONANCE_SVS_MODELS_DIR`, so
+  the variable cannot change a test's result. A test that wants the real
+  banks opts in with `Resonance::test_install_dev_voicebanks_from_env`.
   `resonance-svs/scripts/download_models.sh` fetches the three shipped
   banks. Models are git-ignored.
 - **Facts per bank** (`BankProfile`): derived from the files when the
@@ -70,10 +86,18 @@ not installed keeps playing its MIDI, and the render fails naming the bank
 - **Missing bank.** `vocal.render` checks every lane it covers before
   anything starts and fails with `voicebank_missing`, naming the bank (or
   the bank's missing vocoder), where a user bank goes, and
-  `vocal_voicebanks`. `vocal.generate` still writes the melody but
-  reports `render_error {kind: voicebank_missing}`. A GUI render, or a
-  bank deleted mid-render, fails asynchronously (`VocalAudioFailed` with
-  kind `VoicebankMissing`, banner + job `error.kind`). A render whose
+  `vocal_voicebanks`. Every render path checks the bank right after
+  planning and **before** tearing down the lane's audio
+  (`enqueue_vocal_render` → `render_target_or_missing`): a GUI render
+  keeps the old audio, raises the banner and fails any job waiting on the
+  lane with `voicebank_missing`; `vocal.generate` writes the melody,
+  skips its auto-render and reports `render_error {kind:
+  voicebank_missing}`; a chord or length edit that regenerates the lane
+  as a side effect keeps the audio and puts the banner back
+  (`regenerate_lane_as_side_effect`). A bank deleted mid-render fails
+  asynchronously (`VocalAudioFailed` with kind `VoicebankMissing`, banner
+  + job `error.kind`), naming the user voicebank folder like the
+  up-front check. A render whose
   units all resolve to no phonemes is its own error ("no phonemes to
   sing"); a clip with no notes resolves the job as "no notes to sing".
 - **What gets sung.** For each note, the lane's lyric syllable (per-note
@@ -113,7 +137,11 @@ not installed keeps playing its MIDI, and the render fails naming the bank
   `svs_backend` once a render has created a session.
 - **Cache.** `SvsRenderCache` keys units by content, per `(section,
   track)`, so an edit re-renders only the units it touched; the plan
-  reports "N of M segments changed".
+  reports "N of M segments changed". The key covers what renders the
+  unit, not the lane's params: the acoustic and vocoder config paths, the
+  speaker key the lane's speaker resolves to, and the bank version — a
+  rescan that resolves the same params to another speaker or release
+  re-renders.
 - **Install.** The WAV (`vocal_*.wav`) goes to the project's `audio/`
   folder, or `$TMP/resonance_vocal` for an unsaved project. One audio clip
   per placement starts at the section start plus the lane's first-note
@@ -143,19 +171,20 @@ not installed keeps playing its MIDI, and the render fails naming the bank
 
 | Concern | Location | Key items |
 |---|---|---|
-| Render entry | `resonance-app/src/compose/vocal_svs/mod.rs`, `error.rs` | `render_vocal_clip`, `VocalRenderError`, `vocal_audio_start`, `RenderedVocal`, `SEGMENT_PAD_SEC`, `SILENCE_GAP_SEC` |
-| Voicebank registry | `compose/vocal_svs/registry/{mod,roots,installed,profile,builtin,dict}.rs` | `VoicebankRegistry` (`scan`, `rescan`, `profile`, `get`, `is_known`, `user_bank_dir`), `VoicebankRoots`, `InstalledBank`, `BankProfile` (`render_target`, `phoneme_name`, `language_id`, `curve_supported`, `speakers`, `default_speaker`, `comfortable_range`, `missing_phonemes`, `english`, `dictionary`), `VoicebankMissing`, `BUILTIN_BANKS` |
+| Render entry | `resonance-app/src/compose/vocal_svs/{mod,render,error}.rs` | `render_vocal_clip`, `RenderedVocal`, `VocalRenderError`, `vocal_audio_start`, `SEGMENT_PAD_SEC`, `SILENCE_GAP_SEC` |
+| Voicebank registry | `compose/vocal_svs/registry/{mod,roots,scan,stamp,installed,profile,builtin,dict}.rs` | `VoicebankRegistry` (`scan`, `rescan`, `profile`, `get`, `is_known`, `user_bank_dir`), `VoicebankRoots` (`for_machine`, `from_dirs`, `hermetic`, `dev_models_from_env`), `BankStamp`, `InstalledBank`, `BankProfile` (`render_target`, `phoneme_name`, `language_id`, `curve_supported`, `speakers`, `default_speaker`, `comfortable_range`, `missing_phonemes`, `english`, `dictionary`), `VoicebankMissing`, `BUILTIN_BANKS` |
 | App state | `resonance-app/src/lib.rs`, `update/compose/vocal_control.rs` | `Resonance::voicebanks`, `Resonance::rescan_voicebanks` |
 | Curve kinds, backend | `compose/vocal_svs/paths.rs` | `CurveKind`, `svs_backend` |
 | Phoneme inventory + timing | `compose/vocal_svs/phonemes.rs`, `validate.rs` | `VoicebankPhonemes`, `nearest_substitutes`, `nearest_by_class`, `validate_for_voicebank`, `articulation_report` |
 | Segment build | `compose/vocal_svs/segment/{duration,f0,tension,overlay}.rs` | `build_segment` |
-| Cache | `compose/vocal_svs/render_cache.rs` | `SvsRenderCache`, `split_render_units`, `render_units_cached`, `RenderPlan` |
+| Cache | `compose/vocal_svs/render_cache.rs` | `SvsRenderCache`, `split_render_units`, `render_units_cached`, `RenderPlan`, `model_identity` |
 | Post-processing | `compose/vocal_svs/post.rs` | `apply_ap_gate`, `safety_gain_factor`, `resample_to`, `write_stereo_wav` |
-| Orchestration | `resonance-app/src/update/compose/vocal_render.rs`, `vocal_render_plan.rs`, `vocal_audio_io.rs`, `vocal_audio_install.rs`, `vocal_midi_install.rs` | `enqueue_vocal_render`, `spawn_render`, `rerender_vocal_audio`, `plan_vocal_render`, `handle_vocal_audio_ready`, `reap_orphaned_takes` |
+| Orchestration | `resonance-app/src/update/compose/vocal_render.rs`, `vocal_render_plan.rs`, `vocal_audio_io.rs`, `vocal_audio_install.rs`, `vocal_midi_install.rs`, `vocal_control.rs`, `regenerate.rs` | `enqueue_vocal_render`, `render_target_or_missing`, `spawn_render`, `rerender_vocal_audio`, `plan_vocal_render`, `handle_vocal_audio_ready`, `reap_orphaned_takes`, `control_generate_vocal`, `regenerate_lane_as_side_effect` |
 | Registry | `resonance-app/src/compose/state.rs` | `VocalAudioRegistry` (`clips`, `render_epoch`, `in_flight_render`, `clip_lyrics`, `render_cache`) |
 | Control | `resonance-app/src/update/control/vocal.rs`, `view_model/voicebanks.rs`, `gate.rs` | `render`, `voicebanks`, `checked_voicebank`, `bank_missing`, `lane_voice`, `voicebank_list` |
-| GUI pickers | `view/compose/lane_inspector/vocal/voice_group.rs`, `state/picks.rs`, `state/ui_caches.rs`, `update/compose/lane_inspector/vocal_params.rs` | `voicebank_pickers`, `VoicebankChoice`, `SpeakerChoice`, `UiViewCaches::voicebank_choices`, `VocalRailContext`, `set_voicebank` |
-| SVS crate | `resonance-svs/src/{pipeline,ds,config,audio}.rs`, `stages/{acoustic,vocoder,common}.rs`, `voicebank/{mod,layout,dsdict,phonetics}.rs` | `render_segments`, `PipelineArgs`, `DsSegment`, `active_backend`, `voicebank::scan`, `BankDetails`, `looks_like_bank`, `find_dsdict`, `find_library_vocoder`, `installed_vocoder_name`, `load_dsdict`, `PhonemeInventory` |
+| GUI pickers | `view/compose/lane_inspector/vocal/voice_group.rs`, `state/picks.rs`, `state/ui_caches.rs`, `update/compose/lane_inspector/vocal_params.rs` | `voicebank_pickers`, `VoicebankChoice`, `SpeakerChoice`, `UiViewCaches::{voicebank_choices, missing_voicebank_choices}`, `VocalRailContext`, `set_voicebank` |
+| Vocal roll | `view/compose/vocal_roll/{build,draw}.rs` | `build_canvas`, `VocalRollCanvas::fingerprint` (hashes the bank's identity and stamp, so a rescan that changes the bank repaints the phoneme strip) |
+| SVS crate | `resonance-svs/src/{pipeline,ds,config,audio}.rs`, `stages/{acoustic,vocoder,common}.rs`, `voicebank/{mod,quirks,layout,dsdict,phonetics}.rs` | `render_segments`, `PipelineArgs`, `DsSegment`, `active_backend`, `voicebank::scan`, `BankDetails`, `looks_like_bank`, `find_dsdict`, `find_library_vocoder`, `installed_vocoder_name`, `load_dsdict`, `PhonemeInventory` |
 
 The crate also has split-pipeline stage scaffolds (`stages/{linguistic,
 duration,pitch,variance}.rs`) and a CLI (`--features cli`), which the app
@@ -168,10 +197,12 @@ It depends only on `resonance-music-theory`.
 - **GUI:** vocal lane right rail → Generate (renders after generating) and
   Re-render; Voice & delivery has a **Voicebank** pick list (the installed
   English banks, options cached in `UiViewCaches::voicebank_choices` and
-  rebuilt on every rescan; a lane on a bank that is not installed shows
-  `<id> (not installed)`) and a **Speaker** pick list (that bank's
-  speakers, hidden for a bank with at most one); tempo mismatch warning
-  in the inspector. A missing bank surfaces as the render-failure banner.
+  rebuilt on every rescan; a lane on a built-in bank that is not installed
+  shows `<id> (not installed)`, from `missing_voicebank_choices` built
+  alongside, so the picker allocates nothing per frame) and a **Speaker**
+  pick list (that bank's speakers, hidden for a bank with at most one);
+  tempo mismatch warning in the inspector. A missing bank surfaces as the
+  render-failure banner, and the lane keeps its audio.
 - **Control API / MCP:** `vocal.render` → `mcp__resonance__vocal_render`,
   a job (`job_status` / `job_wait`). `section_id` renders one lane;
   `track_id` alone renders **all** that track's lanes; neither renders
@@ -200,8 +231,9 @@ It depends only on `resonance-music-theory`.
 |---|---|---|
 | Plan, cache, IO, placement, timing, articulation | `resonance-app/tests/vocal/{vocal_render_plan,vocal_render_cache,vocal_audio_io,vocal_audio_placement,vocal_segment_timing,vocal_articulation,vocal_phoneme_accessor,vocal_expression_segment,voicebank_curve_support}.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Registry scans (temp-dir fixture banks: slugs, two-level layout, languages, shared vocoder, user-over-dev, rescan, built-in fallbacks) | `tests/vocal/voicebank_registry.rs`; fixtures from `resonance_app::{write_voicebank_fixture, VoicebankFixture}` | same |
-| Real banks register with the right ids, speakers, curve flags | `tests/vocal/voicebank_curve_support.rs` (`real_banks_register_…`, `installed_flags_match_…`; no-ops unless set) | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
-| `vocal.voicebanks`, `voicebank_missing`, set_params bank checks | `tests/control/control_voicebanks.rs`, `control_jobs.rs` | same |
+| Real banks register with the right ids, speakers, curve flags | `tests/vocal/voicebank_curve_support.rs` (`real_banks_register_…`, `installed_flags_match_…`; no-ops unless set). Nothing else reads the variable: the suite gives the same results with it set | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
+| `vocal.voicebanks`, `voicebank_missing`, set_params bank checks; hermetic roots and the explicit dev-bank opt-in; vocoders beside `$RESONANCE_VOICEBANK_DIR`; id fallback and duplicate precedence; rescan reuse; a missing bank keeps the old audio (GUI re-render and `vocal.generate`); `song.vocal` lines and notes agree on a bank-dictionary word | `tests/control/control_voicebanks.rs`, `control_jobs.rs` | same |
+| Cache key follows the resolved speaker; vocal-roll fingerprint follows a rescan | `tests/vocal/vocal_render_cache.rs` (`the_key_follows_the_resolved_speaker_not_the_params`), `tests/compose/vocal_roll_fingerprint.rs` (`a_rescan_that_changes_the_bank_invalidates`) | same |
 | Inspector pickers (installed bank + speaker; `lilia (not installed)`) | `tests/compose/compose_rail_collapse.rs` → `compose_vocal_rail_installed_bank-wgpu.png`, `compose_vocal_rail_lyrics_draft_folded-wgpu.png` | `RESONANCE_BLESS=1` |
 | In-flight / re-render safety | `tests/compose/vocal_render_inflight_placement.rs`, `vocal_rerender_keeps_saved_audio.rs`, `vocal_tempo_mismatch_warning.rs` | same |
 | Control render, `svs_backend` in hello | `tests/control/control_endpoint.rs`, `control_vocal.rs`, `control_vocal_render_all_lanes.rs`, `control_jobs.rs`, `tests/e2e_compose_via_control.rs` | same |
@@ -221,10 +253,8 @@ results.
   and a tempo change inside a placement cannot be fixed by any
   constant-tempo render.
 - A missing bank **is** an error now (spec D12): it fails the render
-  naming the bank. The GUI path still tears the lane's old audio down
-  before the render discovers the bank is missing (the check runs in the
-  render job), so the lane falls back to MIDI rather than keeping stale
-  audio; the control path checks up front and leaves everything alone.
+  naming the bank, and every path checks before the tear-down, so the
+  lane keeps whatever audio it had.
 - TIGER is scanned through its OpenUtau root config
   (`singer/extracted/dsconfig.yaml`, speakers `dsacoustic/tiger_*`,
   `vocoder: dsvocoder`) rather than the `dsacoustic/dsconfig.yaml` the

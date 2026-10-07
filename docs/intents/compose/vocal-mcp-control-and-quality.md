@@ -453,8 +453,7 @@ handler, MCP tool, GUI, tests, and the feature doc with its
    `vocal.set_params` accepts installed banks plus the three built-in ids
    until the index exists; `vocal.generate` reports the missing bank as a
    `render_error` field of its result rather than failing (the melody is
-   written either way); a GUI render still tears the old audio down before
-   the render job finds the bank missing.
+   written either way).
    - The string id and `speaker`, with old-project mapping.
    - `VoicebankRegistry` with derived facts and the built-in table, and the
      user voicebank and vocoder directories.
