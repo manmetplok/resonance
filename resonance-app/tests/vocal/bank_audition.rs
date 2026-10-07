@@ -30,7 +30,6 @@
 
 use std::path::PathBuf;
 
-use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
     render_vocal_clip, resolve_clip, validate_for_voicebank, write_stereo_wav, SvsRenderCache,
     VoicebankRegistry, VoicebankRoots,
@@ -163,7 +162,6 @@ fn audition() {
                 &notes,
                 &params,
                 &assigned,
-                &ExpressionCurves::default(),
                 TICKS_PER_QUARTER_NOTE as u32,
                 song.bpm,
                 SR,
