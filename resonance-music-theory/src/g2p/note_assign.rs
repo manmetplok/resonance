@@ -21,7 +21,8 @@ use std::collections::HashMap;
 
 use super::lyric_parse::{is_slur_lyric, tokenize_line, LyricToken, SLUR_MARKER};
 use super::phonemes::{
-    cmu_variant_count, is_consonant, word_to_phonemes_sourced, G2pSource, SyllableStress,
+    cmu_variant_count, cmu_variants, is_consonant, word_g2p_source, word_to_phonemes_sourced,
+    G2pSource, SyllableStress,
 };
 use super::syllabify::{split_at_user_breaks, split_into_syllables};
 
@@ -281,10 +282,7 @@ pub fn resolve_draft_with_layers(
                     ),
                     None => match bank_entry(layers.bank, &cleaned, &pieces, variant_idx) {
                         Some(bank_phonemes) => (
-                            bank_phonemes
-                                .iter()
-                                .map(|p| (*p, SyllableStress::None))
-                                .collect::<Vec<_>>(),
+                            with_lexical_stress(&cleaned, bank_phonemes),
                             PhonemeProvenance::Auto,
                             G2pSource::BankDict,
                         ),
@@ -350,6 +348,48 @@ fn bank_entry<'d>(
     let entry = bank?.get(cleaned)?;
     let vowels = entry.iter().filter(|p| !is_consonant(p)).count();
     (pieces.len() <= 1 || vowels == pieces.len()).then_some(entry)
+}
+
+/// Lexical stress for a bank-dictionary reading, which carries none of
+/// its own (`dsdict` phonemes have no stress digits). When CMU knows the
+/// word and has a variant with the same vowel count, its per-vowel
+/// stresses are copied in order; otherwise the first vowel is marked
+/// [`SyllableStress::Primary`], so a bank hit never sings flatter (lower
+/// velocity) than the CMU reading it replaces.
+fn with_lexical_stress(
+    cleaned: &str,
+    phonemes: &[&'static str],
+) -> Vec<(&'static str, SyllableStress)> {
+    let vowel_count = phonemes.iter().filter(|p| !is_consonant(p)).count();
+    let from_cmu: Option<Vec<SyllableStress>> = (word_g2p_source(cleaned) == G2pSource::Cmu)
+        .then(|| {
+            cmu_variants(cleaned).into_iter().find_map(|v| {
+                let stresses: Vec<SyllableStress> = v
+                    .phonemes
+                    .iter()
+                    .filter(|(p, _)| !is_consonant(p))
+                    .map(|(_, s)| *s)
+                    .collect();
+                (stresses.len() == vowel_count).then_some(stresses)
+            })
+        })
+        .flatten();
+    let mut vowel_idx = 0;
+    phonemes
+        .iter()
+        .map(|p| {
+            if is_consonant(p) {
+                return (*p, SyllableStress::None);
+            }
+            let stress = match &from_cmu {
+                Some(stresses) => stresses[vowel_idx],
+                None if vowel_idx == 0 => SyllableStress::Primary,
+                None => SyllableStress::None,
+            };
+            vowel_idx += 1;
+            (*p, stress)
+        })
+        .collect()
 }
 
 /// The CMU / rules transcription of a word for the resolver.

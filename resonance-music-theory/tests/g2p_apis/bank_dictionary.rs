@@ -4,7 +4,8 @@
 
 use resonance_music_theory::derive::LyricLine;
 use resonance_music_theory::g2p::{
-    resolve_draft_with_layers, DictionaryLayers, G2pSource, PhonemeDictionary, PhonemeProvenance,
+    resolve_draft, resolve_draft_with_layers, DictionaryLayers, G2pSource, PhonemeDictionary,
+    PhonemeProvenance, ResolvedSyllable, SyllableStress,
 };
 
 fn draft(text: &str) -> Vec<LyricLine> {
@@ -82,4 +83,45 @@ fn a_variant_hint_or_mismatched_breaks_skip_the_bank_entry() {
         got.iter().all(|s| s.source == G2pSource::BankDict),
         "{got:?}"
     );
+}
+
+fn stresses(syllables: &[ResolvedSyllable]) -> Vec<SyllableStress> {
+    syllables.iter().map(|s| s.stress).collect()
+}
+
+#[test]
+fn a_bank_entry_keeps_cmu_stress_when_the_vowel_counts_match() {
+    // CMU: M AO1 R N IH0 NG. The bank's reading swaps a vowel but keeps
+    // two of them, so CMU's per-vowel stresses carry over.
+    let bank = dict(&[("morning", &["m", "ao", "r", "n", "iy", "ng"])]);
+    let layers = DictionaryLayers {
+        project: &PhonemeDictionary::new(),
+        bank: Some(&bank),
+    };
+    let got = resolve_draft_with_layers(&draft("mor·ning"), layers);
+    assert_eq!(got[0].source, G2pSource::BankDict);
+    let cmu = resolve_draft(&draft("mor·ning"));
+    assert_eq!(stresses(&got), stresses(&cmu));
+    assert_eq!(
+        stresses(&got),
+        [SyllableStress::Primary, SyllableStress::None]
+    );
+}
+
+#[test]
+fn a_bank_entry_without_a_matching_cmu_variant_stresses_its_first_vowel() {
+    // Three vowels where CMU's `morning` has two; and a word CMU lacks.
+    let bank = dict(&[
+        ("morning", &["m", "ao", "r", "ax", "n", "iy", "ng"]),
+        ("zorglblat", &["z", "ao", "r", "g", "ax", "l"]),
+    ]);
+    let layers = DictionaryLayers {
+        project: &PhonemeDictionary::new(),
+        bank: Some(&bank),
+    };
+    for word in ["morning", "zorglblat"] {
+        let got = resolve_draft_with_layers(&draft(word), layers);
+        assert_eq!(got[0].source, G2pSource::BankDict, "{word}");
+        assert_eq!(got[0].stress, SyllableStress::Primary, "{word}: {got:?}");
+    }
 }
