@@ -51,11 +51,37 @@ fn hello_roundtrips_and_reports_capabilities() {
             .into_iter()
             .map(str::to_owned)
             .collect(),
+        svs_backend: None,
     };
     let wire = serde_json::to_value(&result).unwrap();
     assert_eq!(wire["protocol_version"], json!(2));
     let back: control::HelloResult = serde_json::from_value(wire).unwrap();
     assert_eq!(back, result);
+}
+
+#[test]
+fn hello_svs_backend_is_optional_on_the_wire() {
+    // Absent until a vocal render created a session: not serialized, and a
+    // result without it (an older app) still parses.
+    let result = control::HelloResult {
+        app_version: "0.1.0".to_owned(),
+        protocol_version: PROTOCOL_VERSION,
+        capabilities: Vec::new(),
+        svs_backend: None,
+    };
+    let wire = serde_json::to_value(&result).unwrap();
+    assert!(wire.get("svs_backend").is_none(), "{wire}");
+    let back: control::HelloResult = serde_json::from_value(wire).unwrap();
+    assert_eq!(back.svs_backend, None);
+
+    let with = control::HelloResult {
+        svs_backend: Some("cpu".to_owned()),
+        ..result
+    };
+    let wire = serde_json::to_value(&with).unwrap();
+    assert_eq!(wire["svs_backend"], json!("cpu"));
+    let back: control::HelloResult = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, with);
 }
 
 #[test]

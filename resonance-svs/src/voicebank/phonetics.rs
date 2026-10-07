@@ -60,9 +60,10 @@ impl CurveSupport {
     /// Whether the given expression curve is usable on this bank.
     ///
     /// Pitch bend is a pre-synthesis f0 edit, so it is always available;
-    /// the other three each require their matching acoustic embed. TIGER's
-    /// model exposes no tension or breathiness input, so those report
-    /// `false` there while Lilia and Meiji accept all three.
+    /// the other three each require their matching acoustic embed. Of the
+    /// shipped banks none takes energy or breathiness (every acoustic
+    /// `dsconfig.yaml` sets both embeds `false`); Lilia and Meiji take
+    /// tension, TIGER does not.
     pub fn supports(&self, curve: ExpressionCurve) -> bool {
         match curve {
             ExpressionCurve::PitchBend => true,

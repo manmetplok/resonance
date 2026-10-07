@@ -28,7 +28,7 @@ use resonance_svs::stages::common::ExecutionProvider;
 
 use crate::compose::expression::ExpressionCurves;
 
-mod paths;
+pub mod paths;
 mod phonemes;
 mod post;
 mod pronunciation;
@@ -36,7 +36,7 @@ mod render_cache;
 mod segment;
 mod validate;
 
-pub use paths::{curve_supported, CurveKind};
+pub use paths::{curve_supported, svs_backend, CurveKind};
 pub use phonemes::{
     articulation_class, floor_duration_sec, min_articulation_sec, target_duration_sec,
     ArticulationClass, PhonemeFate, VoicebankPhonemes,

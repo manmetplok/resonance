@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::SingerInfo;
+use super::{CurveSupport, SingerInfo};
 use crate::config::{self, AcousticConfig};
 
 /// Conventional acoustic-config filenames, in priority order.
@@ -132,6 +132,22 @@ pub fn probe(dir: &Path) -> Result<BankLayout> {
         accepts_breathiness: acoustic.use_breathiness_embed,
         accepts_tension: acoustic.use_tension_embed,
         accepts_voicing: acoustic.use_voicing_embed,
+    })
+}
+
+/// Read only the expression-curve capability flags
+/// (`use_{energy,breathiness,tension}_embed`) from one acoustic
+/// `dsconfig.yaml`, without probing the rest of the bank. For callers
+/// that already know where the acoustic config sits (the app's fixed
+/// per-bank paths) and only need the curve answer; [`probe`] reads the
+/// same flags into a full manifest.
+pub fn read_curve_support(acoustic_config: &Path) -> Result<CurveSupport> {
+    let acoustic = config::load_acoustic(acoustic_config)
+        .with_context(|| format!("loading acoustic config {}", acoustic_config.display()))?;
+    Ok(CurveSupport {
+        energy: acoustic.use_energy_embed,
+        tension: acoustic.use_tension_embed,
+        breathiness: acoustic.use_breathiness_embed,
     })
 }
 

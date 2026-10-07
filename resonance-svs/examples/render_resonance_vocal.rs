@@ -49,6 +49,16 @@ struct Args {
     /// Seed.
     #[arg(long, default_value_t = 0xC0FFEE)]
     seed: u64,
+    /// ONNX Runtime execution provider for the acoustic model: cpu, cuda
+    /// or migraphx. A provider that fails to register falls back to CPU;
+    /// the backend actually used is printed with the timings.
+    #[arg(long, default_value = "cpu")]
+    execution_provider: String,
+    /// Render the segment this many times and report each run's timing
+    /// (the first run includes ONNX Runtime's one-off warm-up). The WAV is
+    /// written from the last run.
+    #[arg(long, default_value_t = 1)]
+    repeat: u32,
 }
 
 const SEGMENT_PAD_SEC: f64 = 0.3;
@@ -142,14 +152,34 @@ fn main() -> Result<()> {
         acoustic_config: args.acoustic_config,
         vocoder_config: args.vocoder_config,
         out: args.out.clone(),
-        execution_provider: ExecutionProvider::Cpu,
+        execution_provider: ExecutionProvider::parse(&args.execution_provider),
         device_index: 0,
         speaker: Some(speaker),
         speedup: args.speedup,
         depth: 1000,
     };
-    let rendered = pipeline::render_segments(std::slice::from_ref(&segment), &pipeline_args)
-        .context("running SVS pipeline")?;
+    // Timing: `wall` covers the whole call (config + ONNX session loads +
+    // inference), `infer` only the per-segment acoustic + vocoder runs.
+    // RTF = time / seconds of audio produced.
+    let mut last = None;
+    for run in 1..=args.repeat.max(1) {
+        let t0 = std::time::Instant::now();
+        let rendered = pipeline::render_segments(std::slice::from_ref(&segment), &pipeline_args)
+            .context("running SVS pipeline")?;
+        let wall = t0.elapsed().as_secs_f64();
+        let infer: f64 = rendered.per_segment_seconds.iter().map(|(_, s)| s).sum();
+        let audio_sec = rendered.samples.len() as f64 / rendered.sample_rate as f64;
+        println!(
+            "TIMING run={run} speedup={} backend={} audio={audio_sec:.2}s wall={wall:.2}s \
+             infer={infer:.2}s rtf_wall={:.3} rtf_infer={:.3}",
+            args.speedup,
+            resonance_svs::active_backend().map_or("none", |b| b.as_str()),
+            wall / audio_sec,
+            infer / audio_sec,
+        );
+        last = Some(rendered);
+    }
+    let rendered = last.expect("at least one run");
 
     let mut mono = rendered.samples;
     // Apply the same AP gating as the app integration does.

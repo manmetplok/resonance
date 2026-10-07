@@ -58,6 +58,23 @@ fn hello_reports_version_and_capabilities() {
 }
 
 #[test]
+fn hello_reports_the_active_svs_backend() {
+    // `svs_backend` mirrors the backend the last vocal render's acoustic
+    // session really ran on; absent before any render in this process
+    // (hermetic tests run no ONNX inference).
+    let mut app = app();
+    let response = roundtrip(&mut app, 1, hello_request(1, PROTOCOL_VERSION));
+    let result: HelloResult = response.result().expect("hello succeeds");
+    assert_eq!(
+        result.svs_backend.as_deref(),
+        resonance_app::compose::vocal_svs::svs_backend()
+    );
+    if let Some(backend) = result.svs_backend.as_deref() {
+        assert!(["cpu", "cuda", "migraphx"].contains(&backend), "{backend}");
+    }
+}
+
+#[test]
 fn hello_with_missing_params_is_invalid_params() {
     let mut app = app();
     let response = roundtrip(&mut app, 1, Request::without_params(1, "control.hello"));

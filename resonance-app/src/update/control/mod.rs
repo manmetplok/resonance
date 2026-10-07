@@ -406,9 +406,8 @@ fn execute_mutating(
     )
 }
 
-/// `control.hello` — version handshake. Records the declared version on
-/// the connection's session; an incompatible version marks the session
-/// so every later request is rejected.
+/// `control.hello` — version handshake. Records the declared version on the connection's
+/// session; an incompatible version marks the session so every later request is rejected.
 fn hello(app: &mut Resonance, conn: ConnId, request: &Request) -> Response {
     let params: HelloParams = match request.params() {
         Ok(params) => params,
@@ -439,6 +438,7 @@ fn hello(app: &mut Resonance, conn: ConnId, request: &Request) -> Response {
             .iter()
             .map(|m| (*m).to_owned())
             .collect(),
+        svs_backend: crate::compose::vocal_svs::svs_backend().map(str::to_owned),
     };
     success(request, &result)
 }

@@ -29,4 +29,10 @@ pub struct HelloResult {
     /// Method names this server implements (see
     /// [`crate::methods::capabilities`]).
     pub capabilities: Vec<String>,
+    /// The ONNX Runtime backend the vocal synth's acoustic model really
+    /// runs on (`cpu`, `cuda`, `migraphx`), after any fallback to CPU.
+    /// Absent until a vocal render has created a session in this app
+    /// process. Optional, so older clients ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub svs_backend: Option<String>,
 }
