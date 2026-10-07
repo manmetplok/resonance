@@ -453,3 +453,130 @@ fn get_params_on_a_track_without_a_vocal_lane_is_refused() {
     ));
     assert!(message.contains("no vocal lane"), "{message}");
 }
+
+/// `song.vocal`'s pre-flight counts notes the draft fills, not sung
+/// syllables: `love _ _` is one syllable over three notes, so a three-note
+/// lane is not a mismatch — and the `_` marks survive `vocal.generate`.
+#[test]
+fn a_held_syllable_fills_its_notes_without_a_counts_mismatch() {
+    let (mut app, def) = one_lane_app();
+    call(
+        &mut app,
+        "vocal.set_lyrics",
+        json!({ "track_id": TRACK, "section_id": def, "text": "love _ _" }),
+    )
+    .result::<Value>()
+    .expect("lyrics set");
+    call(
+        &mut app,
+        "vocal.generate",
+        json!({ "track_id": TRACK, "section_id": def, "seed": 3, "lyrics": false }),
+    )
+    .result::<proto::GenerateResult>()
+    .expect("vocal.generate succeeds");
+
+    let view = vocal_view(&mut app);
+    let lane = &view.lanes[0];
+    assert_eq!(lane.lines.len(), 1);
+    assert_eq!(lane.lines[0].text, "love _ _", "the holds survive generate");
+    assert_eq!(lane.syllable_count, 3, "one syllable plus two holds");
+    assert_eq!(lane.note_count, 3, "the melody fills one note per unit");
+    assert!(!lane.counts_mismatch, "{lane:?}");
+    // The held word closes on the hold's last note (Lilia, the default
+    // bank, has no `v` and sings it as `f`).
+    let phonemes: Vec<Vec<&str>> = lane
+        .notes
+        .iter()
+        .map(|n| n.phonemes.iter().map(String::as_str).collect())
+        .collect();
+    assert_eq!(phonemes, vec![vec!["l", "ah"], vec!["ah"], vec!["ah", "f"]]);
+}
+
+/// `vocal.get_params` only reads the open project, so like the other
+/// reads it stays answerable while a GUI drag is open; `set_params` is an
+/// edit and is refused `busy` (code review STATE2-05).
+#[test]
+fn get_params_answers_during_a_gui_drag() {
+    use resonance_app::message::{Message, TransportMessage};
+    use resonance_app::state::LoopDragTarget;
+
+    let (mut app, def) = one_lane_app();
+    let _ = app.update(Message::Transport(TransportMessage::StartLoopDrag(
+        LoopDragTarget::Out,
+    )));
+    let got = get_params(&mut app, def);
+    assert_eq!(got.params.voicebank, "lilia");
+
+    let refused = set_params(&mut app, def, json!({ "vibrato": 0.2 }));
+    let error = refused.error.expect("an edit mid-drag is refused");
+    assert_eq!(error.kind(), ErrorKind::Busy, "{}", error.message);
+    let _ = app.update(Message::Transport(TransportMessage::EndLoopDrag));
+}
+
+/// The GUI caps the theme at 240 characters; over the wire a longer one
+/// is refused, naming the field, rather than silently truncated.
+#[test]
+fn set_params_refuses_a_theme_over_the_gui_limit() {
+    let (mut app, def) = one_lane_app();
+    let reply: proto::ParamsResult = set_params(&mut app, def, json!({ "theme": "a".repeat(240) }))
+        .result()
+        .expect("240 characters is accepted");
+    assert_eq!(reply.params.theme.chars().count(), 240);
+
+    // Characters, not bytes: 240 two-byte characters still fit.
+    set_params(&mut app, def, json!({ "theme": "é".repeat(240) }))
+        .result::<proto::ParamsResult>()
+        .expect("240 two-byte characters are accepted");
+
+    let message = expect_invalid(set_params(&mut app, def, json!({ "theme": "a".repeat(241) })));
+    assert!(message.contains("theme"), "names the field: {message}");
+    assert_eq!(get_params(&mut app, def).params.theme, "é".repeat(240), "lane untouched");
+}
+
+/// `vocal.render {voicebank}` switching the bank resets the speaker the
+/// same way `vocal.set_params` does.
+#[test]
+fn a_render_that_switches_the_bank_resets_the_speaker() {
+    let (mut app, def) = one_lane_app();
+    set_params(&mut app, def, json!({ "voicebank": "meiji", "speaker": "phantom" }))
+        .result::<proto::ParamsResult>()
+        .expect("meiji phantom");
+    call(
+        &mut app,
+        "vocal.generate",
+        json!({ "track_id": TRACK, "section_id": def, "seed": 1, "lyrics": false }),
+    )
+    .result::<proto::GenerateResult>()
+    .expect("vocal.generate succeeds");
+    let render = |app: &mut Resonance, bank: &str| {
+        call(
+            app,
+            "vocal.render",
+            json!({ "track_id": TRACK, "section_id": def, "voicebank": bank }),
+        )
+        .result::<JobStarted>()
+        .expect("render returns a job");
+    };
+
+    // Re-rendering on the same bank keeps the chosen speaker.
+    render(&mut app, "meiji");
+    assert_eq!(get_params(&mut app, def).params.speaker.as_deref(), Some("phantom"));
+
+    // Switching banks resets to the new bank's default — the same value a
+    // `set_params` bank switch lands on.
+    render(&mut app, "tiger");
+    let after_render = get_params(&mut app, def).params.speaker;
+    set_params(&mut app, def, json!({ "voicebank": "meiji" }))
+        .result::<proto::ParamsResult>()
+        .expect("back to meiji");
+    let via_set_params: proto::ParamsResult = set_params(&mut app, def, json!({ "voicebank": "tiger" }))
+        .result()
+        .expect("back to tiger");
+    assert_eq!(after_render, via_set_params.params.speaker);
+
+    set_params(&mut app, def, json!({ "speaker": "royal" }))
+        .result::<proto::ParamsResult>()
+        .expect("royal");
+    render(&mut app, "meiji");
+    assert_eq!(get_params(&mut app, def).params.speaker.as_deref(), Some("standard"));
+}

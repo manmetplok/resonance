@@ -28,7 +28,7 @@ use resonance_svs::stages::common::ExecutionProvider;
 
 use crate::compose::expression::ExpressionCurves;
 
-pub mod paths;
+mod paths;
 mod phonemes;
 mod post;
 mod pronunciation;
@@ -36,7 +36,8 @@ mod render_cache;
 mod segment;
 mod validate;
 
-pub use paths::{curve_supported, svs_backend, CurveKind};
+pub use paths::{bank_curve_support, curve_supported, shipped_curve_support, svs_backend};
+pub use paths::{CurveKind, CurveSupport};
 pub use phonemes::{
     articulation_class, floor_duration_sec, min_articulation_sec, target_duration_sec,
     ArticulationClass, PhonemeFate, VoicebankPhonemes,
@@ -75,9 +76,7 @@ pub struct RenderedVocal {
 /// Leading + trailing silence pad inserted into every rendered
 /// segment, in seconds. Matches the reference `.ds` fixtures'
 /// convention; the engine clip trims past it so timeline alignment
-/// stays correct. Visible to descendant modules (`segment`) without
-/// a `pub` modifier — Rust grants child modules access to a parent's
-/// private items.
+/// stays correct.
 const SEGMENT_PAD_SEC: f64 = 0.3;
 
 /// A gap to the next note longer than its sing duration by more than this
@@ -87,23 +86,6 @@ const SEGMENT_PAD_SEC: f64 = 0.3;
 /// same point. Shared so the two never disagree about where silences are.
 pub(crate) const SILENCE_GAP_SEC: f64 = 0.4;
 
-/// Render a vocal MIDI clip + lyric draft to a singing waveform. Returns
-/// `None` when the SVS model files aren't installed (the PoC's download
-/// script hasn't been run, env var unset, etc.) so the caller can fall
-/// back to its existing MIDI-only behaviour silently.
-///
-/// `assigned` is the per-note resolved + voicebank-validated syllable
-/// stream (one entry per note), produced on the main thread by
-/// [`resolve_clip_pronunciation`] + [`validate_for_voicebank`] so
-/// per-syllable overrides, dictionary entries and the voicebank's
-/// substitutions are already folded into the phonemes the model sings.
-/// Slur notes carry the held vowel from the previous syllable; an empty
-/// `assigned` slice renders nothing.
-/// `cache` carries per-unit rendered audio across renders of the same
-/// clip so an edit only re-renders the segments it touched (see
-/// [`render_cache`]); pass a fresh [`SvsRenderCache`] for a clip that has
-/// never been rendered. After the call its [`SvsRenderCache::last_plan`]
-/// holds the "N of M segments changed" tally for the UI overlay.
 /// Where a lane's rendered audio belongs on the timeline: the section's
 /// start, advanced by the lane's first note.
 ///
@@ -131,6 +113,23 @@ pub fn vocal_audio_start(
     tempo_map.tick_to_abs_sample(section_start_sample, lead_ticks, sample_rate)
 }
 
+/// Render a vocal MIDI clip + lyric draft to a singing waveform. Returns
+/// `None` when the SVS model files aren't installed (the PoC's download
+/// script hasn't been run, env var unset, etc.) so the caller can fall
+/// back to its existing MIDI-only behaviour silently.
+///
+/// `assigned` is the per-note resolved + voicebank-validated syllable
+/// stream (one entry per note), produced on the main thread by
+/// [`resolve_clip_pronunciation`] + [`validate_for_voicebank`] so
+/// per-syllable overrides, dictionary entries and the voicebank's
+/// substitutions are already folded into the phonemes the model sings.
+/// Slur notes hold the previous vowel (the last one also its coda); an empty
+/// `assigned` slice renders nothing.
+/// `cache` carries per-unit rendered audio across renders of the same
+/// clip so an edit only re-renders the segments it touched (see
+/// [`render_cache`]); pass a fresh [`SvsRenderCache`] for a clip that has
+/// never been rendered. After the call its [`SvsRenderCache::last_plan`]
+/// holds the "N of M segments changed" tally for the UI overlay.
 #[allow(clippy::too_many_arguments)]
 pub fn render_vocal_clip(
     notes: &[MidiNote],

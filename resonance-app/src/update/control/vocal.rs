@@ -409,6 +409,15 @@ pub(super) fn apply_params_patch(
 
     // Lyric generator.
     if let Some(theme) = &patch.theme {
+        // The GUI truncates at this limit; over the wire a silent cut
+        // would store something the caller never wrote, so refuse.
+        let len = theme.chars().count();
+        if len > VocalParams::THEME_MAX_CHARS {
+            return Err(RpcError::invalid_params(format!(
+                "theme: {len} characters is over the {}-character limit",
+                VocalParams::THEME_MAX_CHARS
+            )));
+        }
         p.theme = theme.clone();
     }
     if let Some(v) = patch.mood {
@@ -430,14 +439,8 @@ pub(super) fn apply_params_patch(
     // speaker sees the patched voice type.
     if let Some(id) = &patch.voicebank {
         let vb = vm::parse_voicebank_id(id).ok_or_else(|| unknown_voicebank(id))?;
-        if vb != p.voicebank && patch.speaker.is_none() {
-            match vb {
-                VocalVoicebank::Tiger => p.singer = p.voice.default_singer(),
-                VocalVoicebank::Meiji => p.singer_meiji = VocalSingerMeiji::Standard,
-                VocalVoicebank::Lilia => {}
-            }
-        }
-        p.voicebank = vb;
+        // A `speaker` in the same patch overwrites the reset just below.
+        p.switch_voicebank(vb);
     }
     if let Some(name) = &patch.speaker {
         let wanted = name.trim().to_ascii_lowercase();
@@ -643,10 +646,8 @@ fn render(
         // overrode a lane that had explicitly chosen that default
         // (BUG-52); Lilia is now the code default itself, so the lane's
         // value is always the answer.
-        let voicebank = requested.or_else(|| lane_voicebank(app, definition_id, track_id));
-        let Some(voicebank) = voicebank else {
-            continue;
-        };
+        let voicebank =
+            requested.unwrap_or_else(|| lane_voicebank(app, definition_id, track_id));
 
         let task = super::run_via_update(
             app,
@@ -829,11 +830,11 @@ fn describe_batch(lanes: &[(u64, u64)]) -> String {
 // ---------------------------------------------------------------------------
 
 /// The voicebank currently stored on a vocal lane.
-fn lane_voicebank(
-    app: &Resonance,
-    definition_id: u64,
-    track_id: u64,
-) -> Option<VocalVoicebank> {
+///
+/// Only called for lanes [`resolve_render_lanes`] produced, which are
+/// vocal lanes by construction, and nothing between that lookup and this
+/// one edits the project — so a miss is a bug, not a request error.
+fn lane_voicebank(app: &Resonance, definition_id: u64, track_id: u64) -> VocalVoicebank {
     app.compose
         .find_definition(definition_id)
         .and_then(|d| d.lane_generators.get(&track_id))
@@ -841,6 +842,7 @@ fn lane_voicebank(
             crate::compose::LaneGeneratorKind::Vocal(p) => Some(p.voicebank),
             _ => None,
         })
+        .expect("vocal.render: resolve_render_lanes yields vocal lanes only")
 }
 
 /// Does the lane have a MIDI clip holding at least one note?

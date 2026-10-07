@@ -92,14 +92,24 @@ impl ResonanceMcp {
     #[tool(
         description = "Replace a vocal track's full lyric text, one line per \\n-separated line. \
                        \
-                       SVS sings ONE SYLLABLE PER NOTE, so the syllable count — not the word \
-                       count — is what has to match the lane's notes. You may write breaks \
-                       yourself with - or · (\"re-so-lu-tion\"); by default (syllabify: true) \
-                       words you did not break are split for you, and your own breaks and [..] \
-                       phoneme blocks are left alone. Pass syllabify: false only when you want \
-                       the text stored exactly as typed, and then expect to place every break \
-                       yourself — an unbroken multi-syllable word crams all its phonemes onto \
-                       one note and is heard as a smear, not as the word. \
+                       Each syllable STARTS ITS OWN NOTE, so the note count the text fills — \
+                       not the word count — is what has to match the lane's notes. You may \
+                       write breaks yourself with - or · inside a word (\"re-so-lu-tion\", \
+                       \"ev·er·y\"): your breaks are exact, each piece is one note, and the \
+                       piece count also picks which dictionary pronunciation is sung. By \
+                       default (syllabify: true) words you did not break are split for you, \
+                       and your own breaks and [..] phoneme blocks are left alone. Pass \
+                       syllabify: false only when you want the text stored exactly as typed, \
+                       and then expect to place every break yourself — an unbroken \
+                       multi-syllable word crams all its phonemes onto one note and is heard \
+                       as a smear, not as the word. \
+                       \
+                       Two standalone markers (separated by spaces): _ holds the previous \
+                       syllable onto the next note — a melisma, \"love _ _\" is one syllable \
+                       over three notes, its final consonant sung at the end of the hold (+ \
+                       is an alias; a spaced - is just a dash and is ignored). AP (uppercase) \
+                       marks a breath before the next word and takes no note; it is not yet \
+                       rendered as a breath sound. \
                        \
                        ALWAYS re-read song_vocal after writing. It is the cheapest verification \
                        available: syllable_count vs note_count with counts_mismatch, plus the \
@@ -125,9 +135,12 @@ impl ResonanceMcp {
         description = "Replace ONE lyric line, addressed by its 0-based line_index from \
                        that lane's lines in song_vocal — the surgical alternative to rewriting \
                        the whole lane with \
-                       vocal_set_lyrics. Same syllable rules: one syllable sings on one note, \
-                       breaks may be written as - or ·, and syllabify (default true) splits the \
-                       words you did not break. Like vocal_set_lyrics, section_id picks which \
+                       vocal_set_lyrics. Same syllable rules: each syllable starts its own \
+                       note, breaks inside a word may be written as - or · and are exact, a \
+                       standalone _ (or +) holds the previous syllable onto one more note, a \
+                       standalone AP marks a breath and takes no note (not yet rendered as a \
+                       breath sound), and syllabify (default true) splits the words you did \
+                       not break. Like vocal_set_lyrics, section_id picks which \
                        vocal lane (lyrics live per (section, track) lane); omitted it writes the \
                        track's FIRST lane. Re-read song_vocal afterwards to confirm the lane's \
                        counts still line up.",

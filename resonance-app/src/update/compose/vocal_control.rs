@@ -177,7 +177,9 @@ pub(crate) fn control_render(
     voicebank: resonance_music_theory::VocalVoicebank,
 ) -> Task<Message> {
     super::lane_inspector::update_vocal(r, definition_id, track_id, |p| {
-        p.voicebank = voicebank;
+        // Same rule as `vocal.set_params`: a bank switch resets the
+        // speaker to the new bank's default.
+        p.switch_voicebank(voicebank);
     });
     super::vocal_render::rerender_vocal_audio(r, definition_id, track_id)
 }

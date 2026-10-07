@@ -127,9 +127,10 @@ impl ResonanceMcp {
                        definition_id and name, its start_bar, its full params (the \
                        vocal_get_params shape), its lyric lines with per-syllable phonemes \
                        (line index is 0-based WITHIN the lane, as vocal_set_line takes it), and \
-                       the render pre-flight. SVS sings ONE SYLLABLE PER NOTE, \
-                       and syllable_count is the app's own count of the syllables it will \
-                       consume — trust it over counting words or syllables in the text yourself. \
+                       the render pre-flight. Each syllable starts its own note and each _ \
+                       melisma hold takes one more (AP breaths take none); syllable_count is \
+                       the app's own count of the notes the lyrics will consume — trust it \
+                       over counting words or syllables in the text yourself. \
                        counts_mismatch (syllable_count > 0 and != note_count) is the first check \
                        before vocal_render; note_count == 0 means the lane has no notes yet (run \
                        vocal_generate). \

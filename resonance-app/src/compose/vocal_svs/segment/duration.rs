@@ -155,10 +155,10 @@ pub(super) fn build_phoneme_track(
             (slot_sec, 0.0)
         };
 
-        // Slur notes sing only the previous syllable's vowel for the
-        // whole slot — no consonants, no new attack. `AssignedSyllable`
-        // already encodes this (slur entries carry a single-vowel
-        // phoneme list); fall back to `"ah"` when the resolver couldn't
+        // Slur notes sing the previous syllable's vowel — no onset, no
+        // new attack; the last note of a hold also closes the syllable
+        // with its final consonants. `AssignedSyllable` already encodes
+        // this; fall back to `"ah"` when the resolver couldn't
         // even produce a vowel (e.g. draft is empty).
         let assignment = &assigned[i];
         let phonemes: &[&'static str] = if assignment.phonemes.is_empty() {
@@ -180,8 +180,9 @@ pub(super) fn build_phoneme_track(
         // word, reserve a small silence at the end of the singing
         // slot. The reference DiffSinger fixtures don't insert SP
         // between words, so this is opt-in — env-var-gated for A/B
-        // testing. `AssignedSyllable::is_word_end` is already `false`
-        // for slur notes, so no extra check needed here.
+        // testing. On a held word `AssignedSyllable::is_word_end` sits on
+        // the hold's last slur note — where the word's final consonants
+        // are sung — so the SP lands after the coda, not mid-hold.
         let inject_sp = word_boundary_sp_sec > 0.0
             && assignment.is_word_end
             && assignment.syllable_index + 1 < syllable_count;

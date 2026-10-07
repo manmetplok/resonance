@@ -25,8 +25,12 @@ pub(super) fn set_theme(
     text: String,
 ) {
     update_vocal(r, definition_id, track_id, |p| {
-        // Mirror the prototype's 240-char cap.
-        p.theme = text.chars().take(240).collect();
+        // Mirror the prototype's 240-char cap (the control API refuses
+        // longer text rather than truncating it).
+        p.theme = text
+            .chars()
+            .take(resonance_music_theory::VocalParams::THEME_MAX_CHARS)
+            .collect();
     });
 }
 

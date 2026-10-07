@@ -65,12 +65,16 @@ pub struct SetLyricsParams {
     ///
     /// Syllable breaks may be written explicitly as `-` or `·`
     /// (`re-so-lu-tion`); anything without a break is split for you (see
-    /// [`Self::syllabify`]). One **syllable** sings on one note, so the
-    /// break count is what decides how many notes a word needs.
+    /// [`Self::syllabify`]). Each **syllable** starts its own note, so the
+    /// break count is what decides how many notes a word needs. Two
+    /// standalone markers change that: `_` (alias `+`) holds the previous
+    /// syllable onto one more note (a melisma — `love _ _` is one syllable
+    /// over three notes), and an uppercase `AP` marks a breath before the
+    /// next word and takes no note (not yet rendered as a breath sound).
     pub text: String,
     /// Split multi-syllable words across notes (default `true`).
     ///
-    /// SVS sings one syllable per note. Stored verbatim, `"resolution"`
+    /// A syllable starts one note. Stored verbatim, `"resolution"`
     /// is one syllable, so all nine of its phonemes are crammed onto a
     /// single note and the word is unintelligible. With this on, the
     /// engine's G2P inserts the missing `·` breaks (`re·so·lu·tion`) so

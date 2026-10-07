@@ -14,7 +14,7 @@
 //!   shipped acoustic model has those inputs.
 //! - **Tension** is accepted by Lilia and Meiji, not by TIGER.
 
-use resonance_app::compose::vocal_svs::paths::{
+use resonance_app::compose::vocal_svs::{
     bank_curve_support, curve_supported, shipped_curve_support, CurveKind,
 };
 use resonance_music_theory::VocalVoicebank;

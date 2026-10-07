@@ -251,11 +251,13 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
         // FR-3/FR-7). Without these a client cannot tell which lane a
         // write landed on, and a notes/syllables mismatch only surfaces
         // as a render-time failure.
-        let syllable_count = resonance_music_theory::g2p::resolve_draft_with_dict(
-            &vocal_params.draft,
-            &dictionary,
-        )
-        .len();
+        // Notes the draft fills, not sung syllables: a `_` hold takes a
+        // note without being a syllable, so `love _ _` on three notes is
+        // not a mismatch.
+        let syllable_count = {
+            use resonance_music_theory::g2p;
+            g2p::note_unit_count(&g2p::resolve_draft_with_dict(&vocal_params.draft, &dictionary))
+        };
         let note_count = view_model::lane_note_count(app, definition.id, track.id);
         // Intelligibility pre-flight: per note, can the phonemes assigned
         // to it actually be articulated in the time it has, and is it
