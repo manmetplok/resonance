@@ -189,6 +189,12 @@ pub struct Resonance {
     /// stays a top-level field rather than joining `state::UiTransientState`
     /// (A-12e survey).
     pub(crate) update_depth: u32,
+    /// Whether the last `Message::Tick` drained an engine event that can
+    /// change project state (anything but a playhead move). A tick that
+    /// did not cannot have touched a vocal lane, so `update()` skips the
+    /// vocal render-state settle after it — the tick runs at frame rate
+    /// during playback, and a settle fingerprints every vocal lane.
+    pub(crate) tick_drained_state_events: bool,
     /// Settings of the MIDI editor's Quantize panel (todo #392). App-level
     /// so the chosen grid/strength/swing/mode persist across clip
     /// open/close; the Apply button reads this to build the bulk quantize.
@@ -691,6 +697,7 @@ impl Resonance {
             viewport: ArrangeViewport::default(),
             markers: state::ArrangementMarkers::default(),
             update_depth: 0,
+            tick_drained_state_events: false,
             midi_quantize: state::MidiQuantizePanelState::default(),
             io: ProjectIoState {
                 recent_projects,

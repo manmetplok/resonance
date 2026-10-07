@@ -495,7 +495,10 @@ handler, MCP tool, GUI, tests, and the feature doc with its
    stale > not_rendered > rendered`; the badge also shows `RENDERING` and
    an error card; a take saved before keys existed reads `stale`; chord
    and length edits no longer render at all (they re-derive the melody
-   and leave the lane stale), which replaces plumbing the dropped Task.
+   and leave the lane stale), which replaces plumbing the dropped Task;
+   the compared keys are unit *state* keys (cache key + first clip tick
+   + raw velocities when `velocity_dynamics` > 0), so a whole-line shift
+   or a TIGER velocity edit reads stale though no cache key moves.
    - Per-lane state from plan hashes, with keys saved with the audio.
    - The debounced GUI re-render and the stale badge.
    - The chord-edit Task fix.
@@ -521,9 +524,7 @@ handler, MCP tool, GUI, tests, and the feature doc with its
     rests); a breath on a phrase's first note takes 0.25 s of the 0.3 s
     leading pad; a short gap lends the breath its whole length and the
     rest comes from the previous note's tail; a rest ending in a breath
-    no longer splits render units; `song.vocal`'s articulation report
-    still uses the default threshold until `view_model/lane.rs` calls
-    `articulation_report_for`.
+    no longer splits render units.
 13. **Velocity dynamics.** ✅ built (phase 3). `velocity_dynamics`, the
     bank curve, and the post-render gain. Deviations: on a bank without
     energy, tension keeps its own `tension_velocity_amount` rather than

@@ -539,12 +539,9 @@ pub(super) fn rerender_vocal_audio(
         .filter(|p| p.definition_id == definition_id)
         .map(|p| (p.id, p.start_bar))
         .collect();
-    if placements.is_empty() {
-        r.compose.last_error =
-            Some("Place this section before re-rendering vocals.".to_string());
-        return Task::none();
-    }
-
+    // Every refusal below is also the lane's render error, so the badge
+    // and `song.vocal` say why nothing rendered. An unplaced section has
+    // no clip to render (the render state finds none either): `no_notes`.
     let no_notes = |r: &mut crate::Resonance, message: &str| {
         super::vocal_render_state::record_lane_error(
             r,
@@ -555,6 +552,9 @@ pub(super) fn rerender_vocal_audio(
         r.compose.last_error = Some(message.to_owned());
         Task::none()
     };
+    if placements.is_empty() {
+        return no_notes(r, "Place this section before re-rendering vocals.");
+    }
     let Some(clip_id) = lane_midi_clip(r, definition_id, track_id, &placements) else {
         return no_notes(r, "Generate a vocal first \u{2014} no MIDI clip to render.");
     };

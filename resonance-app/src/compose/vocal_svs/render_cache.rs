@@ -38,7 +38,7 @@ use super::segment::build_segment_windowed;
 
 /// One independently-renderable slice of a vocal clip: a contiguous run
 /// of notes delimited by genuine silences. Carries its own `DsSegment`
-/// (with leading/trailing `AP` pads, same as the whole-clip builder), the
+/// (with leading/trailing `SP` pads, same as the whole-clip builder), the
 /// note/syllable ranges it covers, the clip-relative start time its first
 /// phoneme should land at, and the content [`key`](RenderUnit::key) that
 /// addresses it in the cache.
@@ -58,6 +58,15 @@ pub struct RenderUnit {
     pub syllable_range: Range<usize>,
     /// Content hash addressing this unit's rendered audio in the cache.
     pub key: u64,
+    /// What the lane's render state records for this unit: [`key`] plus
+    /// what the take depends on that the cache key leaves out — where the
+    /// unit sits (its first note's clip tick, so moving the whole line
+    /// moves the installed audio out of place) and, when
+    /// `velocity_dynamics` is on, its notes' raw velocities (the post gain
+    /// reads them after the cache).
+    ///
+    /// [`key`]: RenderUnit::key
+    pub state_key: u64,
 }
 
 /// Seconds-per-tick at the given tempo. Mirrors the duration builder so
@@ -155,12 +164,14 @@ pub fn split_render_units(
         let start_sec = (notes[lo].start_tick.saturating_sub(base_tick)) as f64 * spt;
         let syllable_range = assigned[lo].syllable_index..assigned[hi - 1].syllable_index + 1;
         let key = content_key(&segment, &model, &lane);
+        let state_key = state_key(key, &notes[lo..hi], params.velocity_dynamics);
         units.push(RenderUnit {
             segment,
             start_sec,
             note_range: lo..hi,
             syllable_range,
             key,
+            state_key,
         });
     }
     units
@@ -230,6 +241,28 @@ fn content_key(seg: &DsSegment, model: &str, lane: &str) -> u64 {
     h.finish()
 }
 
+/// The render-state key of a unit whose cache key is `key` and whose
+/// notes are `notes`: the cache key is position-free (a unit moved in time
+/// reuses its audio), but the installed take is not — its units are
+/// stitched at their offsets and the take is placed by the lane's first
+/// note — so the state key also hashes the unit's first clip tick, which
+/// carries both the unit's offset from the first note and the lead-in.
+/// With `velocity_dynamics` above 0 it hashes the notes' velocities too:
+/// the post-vocoder gain reads them after the cache, so on a bank whose
+/// segment ignores velocity a velocity edit changes no cache key.
+fn state_key(key: u64, notes: &[MidiNote], velocity_dynamics: f32) -> u64 {
+    let mut h = Fnv::new();
+    h.bytes(&key.to_le_bytes());
+    let first_tick = notes.first().map_or(0, |n| n.start_tick);
+    h.bytes(&first_tick.to_le_bytes());
+    if velocity_dynamics > 0.0 {
+        for n in notes {
+            h.bytes(&n.velocity.to_bits().to_le_bytes());
+        }
+    }
+    h.finish()
+}
+
 /// Tally of what one render pass did: how many of the clip's `total`
 /// units changed (re-rendered) versus were reused from cache. This is the
 /// "N of M segments changed" figure design #173 state 5 surfaces.
@@ -264,9 +297,10 @@ pub struct SvsRenderCache {
     /// Tally from the most recent [`render_units_cached`] pass, for the
     /// UI overlay to read. `None` until the clip has been rendered once.
     last_plan: Option<RenderPlan>,
-    /// The unit keys of the most recent pass, in unit order: the take it
-    /// stitched, by content. Recorded with the installed audio so the
-    /// lane's render state can tell whether that take is still current.
+    /// The unit state keys ([`RenderUnit::state_key`]) of the most recent
+    /// pass, in unit order: the take it stitched, by content and
+    /// position. Recorded with the installed audio so the lane's render
+    /// state can tell whether that take is still current.
     last_keys: Vec<u64>,
 }
 
@@ -281,7 +315,8 @@ impl SvsRenderCache {
         self.last_plan
     }
 
-    /// The unit keys of the take the last pass stitched, in unit order.
+    /// The unit state keys of the take the last pass stitched, in unit
+    /// order.
     pub fn last_keys(&self) -> &[u64] {
         &self.last_keys
     }
@@ -351,7 +386,7 @@ pub fn render_units_cached(
     cache.entries.retain(|k, _| live.contains(k));
     cache.model_sr = Some(sr);
     cache.last_plan = Some(plan);
-    cache.last_keys = units.iter().map(|u| u.key).collect();
+    cache.last_keys = units.iter().map(|u| u.state_key).collect();
 
     Ok(StitchedRender {
         mono,
@@ -360,10 +395,10 @@ pub fn render_units_cached(
     })
 }
 
-/// The unit keys a render of this clip would stitch, in unit order —
-/// [`split_render_units`]'s keys without keeping the segments. What the
-/// lane's render state compares with the installed take's
-/// [`SvsRenderCache::last_keys`].
+/// The unit state keys a render of this clip would record, in unit order
+/// — [`split_render_units`]'s [`RenderUnit::state_key`]s without keeping
+/// the segments. What the lane's render state compares with the installed
+/// take's [`SvsRenderCache::last_keys`].
 #[allow(clippy::too_many_arguments)]
 pub fn plan_unit_keys(
     notes: &[MidiNote],
@@ -376,7 +411,7 @@ pub fn plan_unit_keys(
 ) -> Vec<u64> {
     split_render_units(notes, params, assigned, curves, ticks_per_quarter, bpm, bank)
         .into_iter()
-        .map(|u| u.key)
+        .map(|u| u.state_key)
         .collect()
 }
 

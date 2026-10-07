@@ -248,8 +248,9 @@ pub(super) fn handle_confirm_edit(r: &mut crate::Resonance) -> Task<Message> {
             name,
         },
     );
-    // Resizing re-derives the section's lanes; a vocal lane's re-render
-    // comes back as a task.
+    // Resizing re-derives the section's lanes. A vocal lane re-derives its
+    // melody without rendering (it goes `stale`; the GUI debounce in
+    // `vocal_render_state::settle` brings its audio up to date).
     let task = dispatch(
         r,
         ComposeMessage::ResizeSection {
@@ -489,7 +490,9 @@ pub(crate) fn trim_chords_to_sections(r: &mut crate::Resonance) -> Vec<u64> {
 /// so without this a shrink left full-length clips overlapping the next
 /// section and a grow left the added bars silent. Only lanes that already
 /// have clips are rebuilt — a resize never generates a lane the user did
-/// not ask for. Returns the vocal lanes' re-render tasks.
+/// not ask for. A vocal lane re-derives its melody without rendering and
+/// is left `stale` (see `regenerate_lane_as_side_effect`); the returned
+/// task carries whatever the other lanes' regeneration produces.
 fn rederive_section_clips(r: &mut crate::Resonance, definition_id: u64) -> Task<Message> {
     let mut tracks: Vec<resonance_audio::types::TrackId> = r
         .compose
@@ -618,6 +621,7 @@ pub(crate) fn purge_placement_outputs(r: &mut crate::Resonance, placement_id: u6
     for clip_id in audio {
         crate::engine_events::clips::send_mirrored_delete(r, clip_id);
         r.clips.retain(|c| c.id != clip_id);
+        r.compose.vocal_audio.status.clip_unit_keys.remove(&clip_id);
     }
     if removed_audio {
         r.recompute_pool_usage(); // FU-V3c, as VIEW-30 did for other deletes

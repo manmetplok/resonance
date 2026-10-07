@@ -215,7 +215,9 @@ line, re-rolled from a small template corpus, or set by an agent.
 - **GUI:** Compose tab → vocal lane → right rail groups Lyrics, Lyric
   draft, Melody, Voice & delivery, Generate (all / lyrics only / melody
   only, re-render). Double-click opens the vocal roll: notes with their
-  syllable, read-only chord strip and phoneme strip, slur arcs, f0 preview;
+  syllable, read-only chord strip and phoneme strip (each label is cut
+  with `…` to its pill and the next note's start, and left out when not
+  even two characters fit), slur arcs, f0 preview;
   edits go through the shared MIDI editor messages. A user hold paints as
   before with a `_` label; a generator hold paints fainter (lower body
   alpha, `WARM_LINE` outline and dashes) with a warm `+`; a note whose
@@ -282,8 +284,9 @@ Not covered: theme/POV/clichés (they have no effect).
   re-rolls repeat lines quickly.
 - `lane_generator.rs` still says vocal generation is "stubbed in
   `derive_vocal`"; it is not — that comment is stale.
-- Vocal lanes regenerate MIDI on chord edits but do not re-render audio
-  then; audio is re-rendered on demand.
+- Vocal lanes regenerate MIDI on chord edits without rendering: a GUI
+  chord edit leaves the lane `stale` and arms the debounced re-render; a
+  control edit waits for `vocal.render`.
 - Generator holds live in the existing per-note side table as `"+"` —
   no new marker. A `"+"` left by the old per-note `s` toggle in an older
   project therefore reads as a generator hold (no external users).
@@ -307,7 +310,9 @@ Not covered: theme/POV/clichés (they have no effect).
 ## Known gaps
 
 - Breaths are rendered (slice 12) but not drawn in the vocal roll.
-- An `s` edit does not re-render; the debounced GUI re-render is slice 9.
+- An `s` edit is a lyric edit: the lane goes `stale` and, if it already
+  has audio, the debounced GUI re-render brings it up to date 750 ms
+  later (see [vocal rendering § render state](vocal-rendering.md#render-state)).
 - The bulk lyric editor still drops ordinary `·` breaks when it writes
   text back (only the ones next to an in-word hold survive).
 

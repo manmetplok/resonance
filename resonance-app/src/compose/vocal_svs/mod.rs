@@ -39,7 +39,8 @@ mod validate;
 
 pub use dynamics::{
     apply_dynamics_gain, dynamics_gain_envelope, velocity_gain_db, velocity_gain_spans,
-    velocity_modulation, GainSpan, DYNAMICS_SMOOTH_SEC, NEUTRAL_VELOCITY, VELOCITY_GAIN_MAX_DB,
+    velocity_gain_spans_with_breaths, velocity_modulation, GainSpan, DYNAMICS_SMOOTH_SEC,
+    NEUTRAL_VELOCITY, VELOCITY_GAIN_MAX_DB,
 };
 pub use error::{VocalRenderError, VocalRenderErrorKind};
 pub use paths::{svs_backend, CurveKind, CurveSupport};
@@ -52,6 +53,7 @@ pub use phonemes::{
 };
 pub use post::write_stereo_wav;
 pub use render::{render_vocal_clip, RenderedVocal};
+pub use rests::breath_lead_secs;
 pub use pronunciation::{
     canonicalize_phonemes, clean_word, resolve_clip, resolve_clip_with_bank, DictionaryEntry,
     DictionaryScope, PhonemeProvenance, PronunciationState, SyllableOverride,
@@ -63,7 +65,7 @@ pub use render_cache::{
 pub(crate) use render_cache::model_identity;
 pub use segment::build_segment;
 pub use validate::{
-    articulation_report, articulation_report_for, validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable,
+    articulation_report_for, validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable,
     NoteArticulation,
 };
 

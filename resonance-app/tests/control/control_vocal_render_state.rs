@@ -28,9 +28,9 @@ use serde_json::json;
 
 use crate::common::roundtrip;
 
-const TRACK: u64 = 70;
+pub(crate) const TRACK: u64 = 70;
 
-fn app_with_project() -> Resonance {
+pub(crate) fn app_with_project() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Compose);
     app.test_install_shipped_voicebanks();
     app.test_set_active_project(true);
@@ -41,7 +41,11 @@ fn app_with_project() -> Resonance {
     app
 }
 
-fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {
+pub(crate) fn call<T: serde::Serialize>(
+    app: &mut Resonance,
+    method: &str,
+    params: &T,
+) -> Response {
     roundtrip(app, Request::new(1, method, params).expect("params serialize"))
 }
 
@@ -62,7 +66,7 @@ fn apply_progression(app: &mut Resonance, def: u64, numerals: [&str; 4]) {
 /// A section placed at `start_bar` with a vocal lane on `TRACK`, chords,
 /// a generated melody + lyrics, and that render landed: a `rendered`
 /// lane.
-fn rendered_lane(app: &mut Resonance, name: &str, start_bar: u32) -> u64 {
+pub(crate) fn rendered_lane(app: &mut Resonance, name: &str, start_bar: u32) -> u64 {
     let section_id = call(
         app,
         "section.create",
@@ -103,13 +107,13 @@ fn rendered_lane(app: &mut Resonance, name: &str, start_bar: u32) -> u64 {
     def
 }
 
-fn vocal_view(app: &mut Resonance) -> VocalView {
+pub(crate) fn vocal_view(app: &mut Resonance) -> VocalView {
     call(app, "song.vocal", &json!({ "track_id": TRACK }))
         .result()
         .expect("song.vocal succeeds")
 }
 
-fn lane_state(view: &VocalView, def: u64) -> VocalRenderState {
+pub(crate) fn lane_state(view: &VocalView, def: u64) -> VocalRenderState {
     view.lanes
         .iter()
         .find(|l| u64::from(l.definition_id) == def)
@@ -117,7 +121,7 @@ fn lane_state(view: &VocalView, def: u64) -> VocalRenderState {
         .render_state
 }
 
-fn gui(app: &mut Resonance, def: u64, msg: LaneInspectorMsg) {
+pub(crate) fn gui(app: &mut Resonance, def: u64, msg: LaneInspectorMsg) {
     let _ = app.update(Message::Compose(ComposeMessage::LaneInspector {
         definition_id: def,
         track_id: TRACK,
@@ -127,7 +131,7 @@ fn gui(app: &mut Resonance, def: u64, msg: LaneInspectorMsg) {
 
 /// The number (`LyricLine::n`) of the lane's first lyric line — what the
 /// inspector's line fields address.
-fn first_line_number(app: &Resonance, def: u64) -> u8 {
+pub(crate) fn first_line_number(app: &Resonance, def: u64) -> u8 {
     let cfg = &app.compose_state().find_definition(def).unwrap().lane_generators[&TRACK];
     match &cfg.kind {
         resonance_app::compose::LaneGeneratorKind::Vocal(p) => p.draft[0].n,

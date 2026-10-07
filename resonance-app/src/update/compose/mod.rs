@@ -272,7 +272,6 @@ pub(crate) fn forget_track(r: &mut crate::Resonance, track_id: resonance_audio::
         .filter(|((_, _, t), _)| *t == track_id)
         .map(|(_, (id, _))| *id)
         .collect();
-    audio.clips.retain(|(_, _, t), _| *t != track_id);
     for ((_, t), epoch) in audio.render_epoch.iter_mut() {
         if *t == track_id {
             *epoch += 1;
@@ -282,6 +281,7 @@ pub(crate) fn forget_track(r: &mut crate::Resonance, track_id: resonance_audio::
     for clip_id in audio_ids {
         crate::engine_events::clips::send_mirrored_delete(r, clip_id);
         r.clips.retain(|c| c.id != clip_id);
+        r.compose.vocal_audio.forget_deleted_clip(clip_id);
     }
     r.compose.vocal_bulk_lyrics.retain(|(_, t), _| *t != track_id);
     r.compose.expression_curves.retain(|(_, t), _| *t != track_id);

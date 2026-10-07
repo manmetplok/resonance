@@ -96,7 +96,7 @@ pub(in crate::update::control) fn lane_articulation(
     );
     let assigned = crate::compose::vocal_svs::validate_for_voicebank(&resolved, &bank)
         .unwrap_or(resolved);
-    crate::compose::vocal_svs::articulation_report(
+    crate::compose::vocal_svs::articulation_report_for(
         &clip.notes,
         &assigned,
         resonance_audio::types::TICKS_PER_QUARTER_NOTE as u32,
@@ -105,6 +105,7 @@ pub(in crate::update::control) fn lane_articulation(
         // reported here are the ones the segment builder will divide up.
         crate::update::compose::section_meter(app, definition_id).bpm,
         &bank,
+        params.rest_threshold_beats,
     )
 }
 

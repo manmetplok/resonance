@@ -127,8 +127,8 @@ only marks the lane stale.
   written length and the gap is an `SP`. A shorter gap is sung legato
   (the note holds to the next onset). One `RestRule` answers this for the
   duration builder, the render-unit splitter and the articulation report
-  (`articulation_report_for` takes the lane's threshold;
-  `articulation_report` uses the default). A standalone `AP` in the
+  (`articulation_report_for` takes the lane's threshold; `song.vocal`
+  passes it). A standalone `AP` in the
   lyrics (`AssignedSyllable::breath_before`) is an `AP` **breath** in
   front of its note: it takes the end of the gap, up to 0.35 s; when the
   gap is shorter (or the join legato) it also takes up to 30 % of the
@@ -149,7 +149,10 @@ only marks the lane stale.
   (`tension_velocity_amount`, unchanged). On **every** bank a per-note
   gain is applied to the stitched take after the vocoder and before the
   safety gain: `amount · 6 dB · (vel − 0.78)/0.22` (raw note velocity,
-  clamped to ±6 dB), each note from its onset to the next, steps smoothed
+  clamped to ±6 dB), each note from its onset to the next (a written
+  breath belongs to the note it leads into: that note's span starts at
+  the breath, `breath_lead_secs` → `velocity_gain_spans_with_breaths`),
+  steps smoothed
   by a centred 30 ms moving average in dB. Amount 0 leaves the take
   bit-identical. The gain is a reusable **dynamics gain envelope**:
   `GainSpan {start_sec, end_sec, gain_db}`, `dynamics_gain_envelope(spans,
@@ -203,8 +206,15 @@ only marks the lane stale.
 - <a id="render-state"></a>**Render state** (spec §7, D19–D22;
   `update/compose/vocal_render_state.rs`, types in
   `compose/vocal_render_status.rs`).
-  - *Staleness by content.* Every take records the unit content keys it
-    stitched (`SvsRenderCache::last_keys`, carried in
+  - *Staleness by content and position.* Every take records the unit
+    **state keys** it stitched (`RenderUnit::state_key`:
+    the unit's cache key hashed with its first note's clip tick and,
+    when `velocity_dynamics` > 0, its notes' raw velocities —
+    what the take depends on that the position-free cache key leaves
+    out: moving the whole line moves the installed audio out of place,
+    and the post gain reads velocity after the cache, so on TIGER a
+    velocity edit changes no cache key) (`SvsRenderCache::last_keys`,
+    carried in
     `VocalAudioReadyData::unit_keys`) per installed audio clip
     (`VocalRenderStatus::clip_unit_keys`). The lane's current plan is
     hashed the same way (`expected_unit_keys` → `plan_unit_keys`, through
@@ -230,7 +240,10 @@ only marks the lane stale.
     and on undo/redo, so a reopened project reads `rendered`.
   - *Origin and the debounced re-render.* `Resonance::update` runs
     `vocal_render_state::settle` after every outermost update, passing
-    whether it was a GUI message or a control request
+    whether it was a GUI message or a control request (a `Tick` that
+    drained no engine event but playhead moves skips it — the tick runs
+    at frame rate during playback, and settling fingerprints every
+    lane)
     (`Message::Control`, which wraps every MCP edit, nested
     `run_via_update` dispatches included). Settle refreshes the memo and
     the per-lane status the views read (`VocalRenderStatus::lanes`). For
@@ -251,8 +264,9 @@ only marks the lane stale.
     longer render on every breakpoint move either: the debounce covers
     them.
   - *Disk load* resets the status (`VocalRenderStatus::reset`), so opening
-    a project arms nothing; an undo keeps the memo, so a GUI undo counts
-    as an edit.
+    a project arms nothing; the debounce generation keeps counting, so a
+    timer armed before the load can never fire as one armed after it;
+    an undo keeps the memo, so a GUI undo counts as an edit.
 - **Tempo.** A lane renders once, at the tempo of the section's first
   placement. If the tempo changes while a render runs, it is re-queued at
   the new tempo. If placements sit at different tempos, the inspector warns
@@ -276,13 +290,13 @@ only marks the lane stale.
 |---|---|---|
 | Render entry | `resonance-app/src/compose/vocal_svs/{mod,render,error}.rs` | `render_vocal_clip`, `RenderedVocal`, `VocalRenderError`, `vocal_audio_start`, `SEGMENT_PAD_SEC` |
 | Rests and breaths | `compose/vocal_svs/rests.rs`, `segment/duration.rs` | `RestRule`, `REST_PHONEME` (`SP`), `BREATH_PHONEME` (`AP`), `BREATH_*`, `place_breaths` |
-| Velocity dynamics | `compose/vocal_svs/dynamics.rs`, `segment/{energy,tension}.rs` | `GainSpan`, `dynamics_gain_envelope`, `apply_dynamics_gain`, `velocity_gain_spans`, `velocity_gain_db`, `velocity_modulation`, `build_energy_curve` |
+| Velocity dynamics | `compose/vocal_svs/dynamics.rs`, `segment/{energy,tension}.rs` | `GainSpan`, `dynamics_gain_envelope`, `apply_dynamics_gain`, `velocity_gain_spans`, `velocity_gain_spans_with_breaths`, `breath_lead_secs`, `velocity_gain_db`, `velocity_modulation`, `build_energy_curve` |
 | Voicebank registry | `compose/vocal_svs/registry/{mod,roots,scan,stamp,installed,profile,builtin,dict}.rs` | `VoicebankRegistry` (`scan`, `rescan`, `profile`, `get`, `is_known`, `user_bank_dir`), `VoicebankRoots` (`for_machine`, `from_dirs`, `hermetic`, `dev_models_from_env`), `BankStamp`, `InstalledBank`, `BankProfile` (`render_target`, `phoneme_name`, `language_id`, `curve_supported`, `speakers`, `default_speaker`, `comfortable_range`, `missing_phonemes`, `english`, `dictionary`), `VoicebankMissing`, `BUILTIN_BANKS` |
 | App state | `resonance-app/src/lib.rs`, `update/compose/vocal_control.rs` | `Resonance::voicebanks`, `Resonance::rescan_voicebanks` |
 | Curve kinds, backend | `compose/vocal_svs/paths.rs` | `CurveKind`, `svs_backend` |
-| Phoneme inventory + timing | `compose/vocal_svs/phonemes.rs`, `validate.rs` | `VoicebankPhonemes`, `nearest_substitutes`, `nearest_by_class`, `validate_for_voicebank`, `articulation_report` |
+| Phoneme inventory + timing | `compose/vocal_svs/phonemes.rs`, `validate.rs` | `VoicebankPhonemes`, `nearest_substitutes`, `nearest_by_class`, `validate_for_voicebank`, `articulation_report_for` |
 | Segment build | `compose/vocal_svs/segment/{duration,f0,tension,energy,overlay}.rs` | `build_segment` |
-| Cache | `compose/vocal_svs/render_cache.rs` | `SvsRenderCache`, `split_render_units`, `render_units_cached`, `RenderPlan`, `model_identity` |
+| Cache | `compose/vocal_svs/render_cache.rs` | `SvsRenderCache`, `split_render_units`, `render_units_cached`, `RenderPlan`, `RenderUnit::state_key`, `plan_unit_keys`, `model_identity` |
 | Post-processing | `compose/vocal_svs/post.rs` | `collect_rest_intervals`, `apply_ap_gate`, `safety_gain_factor`, `resample_to`, `write_stereo_wav` |
 | Orchestration | `resonance-app/src/update/compose/vocal_render.rs`, `vocal_render_plan.rs`, `vocal_audio_io.rs`, `vocal_audio_install.rs`, `vocal_midi_install.rs`, `vocal_control.rs`, `regenerate.rs` | `enqueue_vocal_render`, `render_target_or_missing`, `spawn_render`, `rerender_vocal_audio`, `plan_vocal_render`, `handle_vocal_audio_ready`, `reap_orphaned_takes`, `control_generate_vocal`, `regenerate_lane_as_side_effect` |
 | Registry | `resonance-app/src/compose/state.rs` | `VocalAudioRegistry` (`clips`, `render_epoch`, `in_flight_render`, `clip_lyrics`, `render_cache`, `status`) |
@@ -358,12 +372,12 @@ It depends only on `resonance-music-theory`.
 | Real banks register with the right ids, speakers, curve flags | `tests/vocal/voicebank_curve_support.rs` (`real_banks_register_…`, `installed_flags_match_…`; no-ops unless set). Nothing else reads the variable: the suite gives the same results with it set | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
 | `vocal.voicebanks`, `voicebank_missing`, set_params bank checks; hermetic roots and the explicit dev-bank opt-in; vocoders beside `$RESONANCE_VOICEBANK_DIR`; id fallback and duplicate precedence; rescan reuse; a missing bank keeps the old audio (GUI re-render and `vocal.generate`); `song.vocal` lines and notes agree on a bank-dictionary word | `tests/control/control_voicebanks.rs`, `control_jobs.rs` | same |
 | Rests (eighth rest at the default threshold, threshold flips legato/rest, articulation report follows it), breaths (gap, short gap, no gap, first note, render units keep rest + breath together) | `tests/vocal/vocal_rests_breaths.rs` | `./scripts/run-tests.py -p resonance-app` |
-| Velocity gain shape and 30 ms ramp, TIGER per-note RMS via the post gain, tension on Lilia, energy on a fixture bank with `use_energy_embed`, content key follows both params | `tests/vocal/vocal_velocity_dynamics.rs` | same |
+| Velocity gain shape and 30 ms ramp, a breath takes its note's gain, TIGER per-note RMS via the post gain, tension on Lilia, energy on a fixture bank with `use_energy_embed`, content key follows both params | `tests/vocal/vocal_velocity_dynamics.rs` | same |
 | Real models: AP vs SP rest level before the gate, rest gated silent and breath heard (Lilia), TIGER velocity sweep ±6 dB | `tests/vocal/vocal_dynamics_render.rs` (no-ops unless set) | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
 | Param ranges, serde defaults; wire round-trip and range errors | `resonance-music-theory/tests/vocal_params_validate.rs`, `tests/control/control_vocal_params.rs` | same |
 | Cache key follows the resolved speaker; vocal-roll fingerprint follows a rescan | `tests/vocal/vocal_render_cache.rs` (`the_key_follows_the_resolved_speaker_not_the_params`), `tests/compose/vocal_roll_fingerprint.rs` (`a_rescan_that_changes_the_bank_invalidates`) | same |
 | Inspector pickers (installed bank + speaker; `lilia (not installed)`) | `tests/compose/compose_rail_collapse.rs` → `compose_vocal_rail_installed_bank-wgpu.png`, `compose_vocal_rail_lyrics_draft_folded-wgpu.png` | `RESONANCE_BLESS=1` |
-| Render state: per-lane stale / error / rendered, control edits don't render, GUI debounce (timer generations), chord edits stale not stuck, reopen reads `rendered`, keyless take reads `stale`, worst-lane summary | `tests/control/control_vocal_render_state.rs` (`test_finish_vocal_render` / `test_fail_vocal_render` land or fail a render through the real messages) | same |
+| Render state: per-lane stale / error / rendered, control edits don't render, GUI debounce (timer generations), chord edits stale not stuck, reopen reads `rendered`, keyless take reads `stale`, worst-lane summary; a whole-line shift (control: stale, GUI: armed), a TIGER velocity edit stale only with `velocity_dynamics`, `song.vocal` articulation follows the lane's rest threshold, the debounce generation survives a load, a playhead-only tick skips the settle | `tests/control/control_vocal_render_state.rs`, `control_vocal_render_state_edits.rs` (`test_finish_vocal_render` / `test_fail_vocal_render` land or fail a render through the real messages) | same |
 | Badge goldens | `tests/compose/compose_vocal_render_badge.rs` → `compose_vocal_rail_stale_badge-wgpu.png`, `compose_vocal_rail_error_badge-wgpu.png`, `compose_vocal_roll_stale_badge-wgpu.png` | `RESONANCE_BLESS=1` |
 | In-flight / re-render safety | `tests/compose/vocal_render_inflight_placement.rs`, `vocal_rerender_keeps_saved_audio.rs`, `vocal_tempo_mismatch_warning.rs` | same |
 | Control render, `svs_backend` in hello | `tests/control/control_endpoint.rs`, `control_vocal.rs`, `control_vocal_render_all_lanes.rs`, `control_jobs.rs`, `tests/e2e_compose_via_control.rs` | same |
@@ -389,8 +403,11 @@ results.
   also shows `RENDERING` and an error card, not only `STALE`. A take saved
   before keys existed reads `stale`.
 - A missing bank **is** an error now (spec D12): it fails the render
-  naming the bank, and every path checks before the tear-down, so the
-  lane keeps whatever audio it had.
+  naming the bank, and every path checks before queueing the render, so
+  the lane keeps whatever audio it had.
+- Every refusal of a GUI re-render (`rerender_vocal_audio`) is also the
+  lane's render error, including an unplaced section (`no_notes`: the
+  lane has no clip to render).
 - TIGER is scanned through its OpenUtau root config
   (`singer/extracted/dsconfig.yaml`, speakers `dsacoustic/tiger_*`,
   `vocoder: dsvocoder`) rather than the `dsacoustic/dsconfig.yaml` the
@@ -412,10 +429,6 @@ results.
 
 ## Known gaps
 
-- The `song.vocal` articulation report (`view_model/lane.rs`) still calls
-  `articulation_report` with the default rest threshold; switching it to
-  `articulation_report_for(…, params.rest_threshold_beats)` is a one-line
-  follow-up in a file owned by another phase-3 slice.
 - The energy path (velocity → energy) runs on no shipped bank and has not
   been heard; it uses the overlay's signed ±1 convention, not dB.
 - Expression curves have no editor, no persistence and no control method —

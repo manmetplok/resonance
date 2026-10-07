@@ -70,3 +70,46 @@ impl RestRule {
         slot_sec - sing_sec >= self.threshold_sec - EPS_SEC
     }
 }
+
+/// How far before each note's onset its written breath starts, in
+/// seconds (0 for a note without one, and for the first note, whose
+/// breath sits in the leading pad). Mirrors the duration builder's
+/// `place_breaths` on the notes alone: the breath takes the end of a rest
+/// before the note (up to [`BREATH_MAX_SEC`]), then up to
+/// [`BREATH_TAIL_FRACTION`] of the previous note (at most
+/// [`BREATH_TAIL_MAX_SEC`]). Ignores the minimum-slot floors, so it can
+/// overstate a breath on a very short previous note — the post gain only
+/// uses it to hand the breath to the note it leads into.
+pub fn breath_lead_secs(
+    notes: &[resonance_audio::types::MidiNote],
+    assigned: &[resonance_music_theory::g2p::AssignedSyllable],
+    ticks_per_quarter: u32,
+    bpm: f32,
+    params: &VocalParams,
+) -> Vec<f64> {
+    let rule = RestRule::new(params, bpm);
+    let spt = 60.0 / (bpm.max(1.0) as f64 * ticks_per_quarter.max(1) as f64);
+    (0..notes.len())
+        .map(|i| {
+            let breathes = assigned
+                .get(i)
+                .is_some_and(|a| a.breath_before && !a.is_slur);
+            if i == 0 || !breathes {
+                return 0.0;
+            }
+            let prev = &notes[i - 1];
+            let slot = notes[i].start_tick.saturating_sub(prev.start_tick) as f64 * spt;
+            let cap = (prev.duration_ticks as f64 * spt).max(0.05);
+            let (sing, gap) = if rule.is_rest(slot, cap) {
+                (cap, slot - cap)
+            } else {
+                (slot, 0.0)
+            };
+            let from_gap = gap.min(BREATH_MAX_SEC);
+            let from_tail = (BREATH_MAX_SEC - from_gap)
+                .min(sing * BREATH_TAIL_FRACTION)
+                .clamp(0.0, BREATH_TAIL_MAX_SEC);
+            from_gap + from_tail
+        })
+        .collect()
+}

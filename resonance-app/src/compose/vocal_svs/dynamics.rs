@@ -60,18 +60,43 @@ pub fn velocity_gain_spans(
     amount: f32,
     lead_sec: f64,
 ) -> Vec<GainSpan> {
+    velocity_gain_spans_with_breaths(notes, &[], ticks_per_quarter, bpm, amount, lead_sec)
+}
+
+/// [`velocity_gain_spans`] where note `i`'s span starts
+/// `breath_lead_sec[i]` before its onset: a written breath in front of a
+/// note is sung at the end of the previous note's slot, and takes the
+/// gain of the note it leads into, not the one it follows. A missing or
+/// zero entry is no breath; a lead never reaches back past the previous
+/// note's onset.
+pub fn velocity_gain_spans_with_breaths(
+    notes: &[MidiNote],
+    breath_lead_sec: &[f64],
+    ticks_per_quarter: u32,
+    bpm: f32,
+    amount: f32,
+    lead_sec: f64,
+) -> Vec<GainSpan> {
     let Some(first) = notes.first() else {
         return Vec::new();
     };
     let spt = 60.0 / (bpm.max(1.0) as f64 * ticks_per_quarter.max(1) as f64);
     let onset = |n: &MidiNote| lead_sec + n.start_tick.saturating_sub(first.start_tick) as f64 * spt;
-    notes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| GainSpan {
-            start_sec: if i == 0 { 0.0 } else { onset(n) },
-            end_sec: notes.get(i + 1).map_or(f64::INFINITY, onset),
-            gain_db: velocity_gain_db(n.velocity, amount),
+    // Where note `i`'s span starts: its onset, pulled back over its breath.
+    let start = |i: usize| -> f64 {
+        let at = onset(&notes[i]);
+        let breath = breath_lead_sec.get(i).copied().unwrap_or(0.0).max(0.0);
+        (at - breath).max(onset(&notes[i - 1]))
+    };
+    (0..notes.len())
+        .map(|i| GainSpan {
+            start_sec: if i == 0 { 0.0 } else { start(i) },
+            end_sec: if i + 1 < notes.len() {
+                start(i + 1)
+            } else {
+                f64::INFINITY
+            },
+            gain_db: velocity_gain_db(notes[i].velocity, amount),
         })
         .collect()
 }

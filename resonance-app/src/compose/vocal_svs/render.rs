@@ -12,7 +12,8 @@ use resonance_svs::stages::common::ExecutionProvider;
 
 use crate::compose::expression::ExpressionCurves;
 
-use super::dynamics::{apply_dynamics_gain, velocity_gain_spans};
+use super::dynamics::{apply_dynamics_gain, velocity_gain_spans_with_breaths};
+use super::rests::breath_lead_secs;
 use super::post::{
     apply_ap_gate, collect_rest_intervals, mono_to_stereo_with_gain, resample_to,
     safety_gain_factor,
@@ -119,9 +120,12 @@ pub fn render_vocal_clip(
 
     // Velocity → loudness on every bank (§9): one gain per note, on the
     // stitched take (the first note sits `SEGMENT_PAD_SEC` in), before the
-    // safety gain so a +6 dB note cannot clip.
-    let spans = velocity_gain_spans(
+    // safety gain so a +6 dB note cannot clip. A written breath takes
+    // the gain of the note it leads into.
+    let breaths = breath_lead_secs(notes, assigned, ticks_per_quarter, bpm, params);
+    let spans = velocity_gain_spans_with_breaths(
         notes,
+        &breaths,
         ticks_per_quarter,
         bpm,
         params.velocity_dynamics,

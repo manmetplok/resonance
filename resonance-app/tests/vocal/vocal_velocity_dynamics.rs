@@ -9,9 +9,10 @@
 
 use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
-    apply_dynamics_gain, build_segment, dynamics_gain_envelope, resolve_clip,
+    apply_dynamics_gain, breath_lead_secs, build_segment, dynamics_gain_envelope, resolve_clip,
     split_render_units, validate_for_voicebank, velocity_gain_db, velocity_gain_spans,
-    BankProfile, GainSpan, VoicebankRegistry, VoicebankRoots, DYNAMICS_SMOOTH_SEC,
+    velocity_gain_spans_with_breaths, BankProfile, GainSpan, VoicebankRegistry, VoicebankRoots,
+    DYNAMICS_SMOOTH_SEC,
 };
 use resonance_app::{write_voicebank_fixture, VoicebankFixture};
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
@@ -215,4 +216,43 @@ fn the_content_key_changes_with_rest_threshold_and_velocity_dynamics() {
     // ...but both move the key.
     assert_ne!(k0, keys(&vel));
     assert_ne!(k0, keys(&rest));
+}
+
+/// A written breath is sung at the end of the previous note's slot, but
+/// it belongs to the note it leads into: its stretch of the take takes
+/// that note's gain, not the previous one's.
+#[test]
+fn a_breath_takes_the_gain_of_the_note_it_leads_into() {
+    let bank = BankProfile::not_installed("tiger");
+    let p = params("tiger", 1.0);
+    // A one-beat note, a one-beat rest (0.5 s at 120 bpm), then a loud
+    // note with a breath: the breath fills the last 0.35 s of the rest.
+    let rested = vec![
+        MidiNote { note: 64, velocity: 0.56, start_tick: 0, duration_ticks: Q },
+        MidiNote { note: 64, velocity: 1.0, start_tick: 2 * Q, duration_ticks: Q },
+    ];
+    let mut syllables = assign(2, &bank);
+    syllables[1].breath_before = true;
+    let leads = breath_lead_secs(&rested, &syllables, TPQ, BPM, &p);
+    assert_eq!(leads[0], 0.0);
+    assert!((leads[1] - 0.35).abs() < 1e-9, "{leads:?}");
+
+    let lead = 0.3;
+    let spans = velocity_gain_spans_with_breaths(&rested, &leads, TPQ, BPM, 1.0, lead);
+    let onset = lead + 1.0;
+    assert!((spans[0].end_sec - (onset - 0.35)).abs() < 1e-9, "{spans:?}");
+    assert_eq!(spans[1].start_sec, spans[0].end_sec);
+    assert!((spans[1].gain_db - 6.0).abs() < 1e-5, "the breath is loud, like its note");
+    // Without the breath the boundary is the onset, as before.
+    let plain = velocity_gain_spans(&rested, TPQ, BPM, 1.0, lead);
+    assert!((plain[0].end_sec - onset).abs() < 1e-9);
+
+    // Legato: the breath can only take the previous note's tail —
+    // 30 % of a 0.5 s quarter.
+    let legato = notes([0.56, 1.0, 0.78]);
+    let mut syllables = assign(3, &bank);
+    syllables[1].breath_before = true;
+    let leads = breath_lead_secs(&legato, &syllables, TPQ, BPM, &p);
+    assert!((leads[1] - 0.15).abs() < 1e-9, "{leads:?}");
+    assert_eq!(leads[2], 0.0);
 }

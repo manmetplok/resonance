@@ -75,7 +75,8 @@ pub enum VocalLaneErrorKind {
     VoicebankMissing,
     /// Every unit resolved to no phonemes.
     NothingToSing,
-    /// The lane has no clip, or its clip has no notes.
+    /// The lane has no clip (its section may not be placed), or its clip
+    /// has no notes.
     NoNotes,
     /// A syllable has a phoneme the bank cannot sing.
     UnsupportedPhonemes,
@@ -160,6 +161,9 @@ pub struct VocalRenderStatus {
     /// the pending `VocalAutoRender` message carries; a newer edit bumps
     /// it, so only the last edit's timer renders.
     pub auto_render: HashMap<VocalLaneKey, u64>,
+    /// The last generation handed out. Never reset (not even by a load):
+    /// a timer armed before a load still delivers its generation
+    /// afterwards, and must not match a timer armed after it.
     pub next_generation: u64,
     /// Every vocal lane's status as of the end of the last update, for
     /// the views (read per frame, never computed there).
@@ -179,9 +183,14 @@ impl VocalRenderStatus {
     }
 
     /// A disk load: nothing of the previous project applies, so the first
-    /// settle after it sees no edits.
+    /// settle after it sees no edits. Keeps [`Self::next_generation`], so
+    /// a debounce timer armed before the load can never fire as one armed
+    /// after it.
     pub fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            next_generation: self.next_generation,
+            ..Self::default()
+        };
     }
 
     /// The unit keys of the take the lane plays, from any of its installed

@@ -26,7 +26,6 @@
 
 use resonance_audio::types::MidiNote;
 use resonance_music_theory::g2p::{self, AssignedSyllable};
-use resonance_music_theory::VocalParams;
 
 use super::phonemes::{min_articulation_sec, PhonemeFate, VoicebankPhonemes};
 use super::rests::RestRule;
@@ -212,27 +211,8 @@ pub struct NoteArticulation {
 /// without changing either note's phoneme budget materially, so it is not
 /// modelled here.)
 ///
-/// Uses the default rest threshold; [`articulation_report_for`] takes the
-/// lane's.
-pub fn articulation_report(
-    notes: &[MidiNote],
-    assigned: &[AssignedSyllable],
-    ticks_per_quarter: u32,
-    bpm: f32,
-    bank: &BankProfile,
-) -> Vec<NoteArticulation> {
-    articulation_report_for(
-        notes,
-        assigned,
-        ticks_per_quarter,
-        bpm,
-        bank,
-        VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
-    )
-}
-
-/// [`articulation_report`] with the lane's `rest_threshold_beats`, so the
-/// report bridges exactly the gaps the segment builder sings legato.
+/// `rest_threshold_beats` is the lane's, so the report bridges exactly
+/// the gaps the segment builder sings legato.
 pub fn articulation_report_for(
     notes: &[MidiNote],
     assigned: &[AssignedSyllable],

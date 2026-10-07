@@ -132,7 +132,7 @@ impl<'a> VoicebankPhonemes<'a> {
 // How long each phone needs to be *heard* as itself. Two consumers share
 // this table and must not disagree: the segment builder
 // (`segment::duration`) hands out the real `ph_dur` slices, and the
-// intelligibility report (`validate::articulation_report`) tells a client
+// intelligibility report (`validate::articulation_report_for`) tells a client
 // over the wire whether a note is long enough before they bounce audio.
 //
 // A uniform per-consonant duration is the wrong model. A `t` burst is

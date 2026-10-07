@@ -72,6 +72,7 @@ impl crate::Resonance {
         // remote client must not aim the user's next Backspace.
         let outermost = self.update_depth == 0;
         let grants = outermost && !matches!(message, Message::Control(_));
+        let is_tick = matches!(message, Message::Tick);
         let before = grants.then(|| self.timeline_delete_targets());
         self.update_depth += 1;
         let task = self.update_inner(message);
@@ -98,8 +99,15 @@ impl crate::Resonance {
             let settled = crate::update::inline_rename::settle(self);
             // Vocal render state follows every edit, whichever path made
             // it; only a GUI edit arms the debounced re-render (spec §7,
-            // D20 — `grants` is exactly "not a control request").
-            let vocal = crate::update::compose::vocal_render_state::settle(self, grants);
+            // D20 — `grants` is exactly "not a control request"). A tick
+            // that only moved the playhead edited nothing, and skipping
+            // it keeps the settle off the frame-rate playback path.
+            let quiet_tick = is_tick && !self.tick_drained_state_events;
+            let vocal = if quiet_tick {
+                Task::none()
+            } else {
+                crate::update::compose::vocal_render_state::settle(self, grants)
+            };
             Task::batch([task, settled, vocal])
         } else {
             task
