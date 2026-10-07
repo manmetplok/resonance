@@ -226,7 +226,8 @@ pub mod test_support {
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{
-        encode_control_change, encode_nrpn, parse_control_event_for_test,
+        encode_control_change, encode_nrpn, enumerate_midi_inputs, enumerate_midi_outputs,
+        parse_control_event_for_test,
         parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
     };
     pub use crate::mixer::render::slots::PassStats;

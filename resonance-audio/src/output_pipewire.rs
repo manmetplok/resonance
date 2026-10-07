@@ -409,6 +409,30 @@ fn on_state_changed(
 /// it, and publish the written chunk. No intermediate ring — this is
 /// where the ALSA-shim periods used to live.
 fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
+    let entry = monotonic_ns();
+    on_process_timed(stream, user_data, entry);
+    let took = monotonic_ns().saturating_sub(entry);
+    user_data
+        .shared
+        .output_callback_max_ns
+        .fetch_max(took, Ordering::Relaxed);
+}
+
+/// `CLOCK_MONOTONIC` in ns — the clock `pw_time.now` is on. A vDSO call;
+/// RT-safe.
+fn monotonic_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: plain out-parameter.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
+/// [`on_process`]'s body; `entry` is when the callback started, for the
+/// wakeup delay against the cycle start the graph reports.
+fn on_process_timed(stream: &pw::stream::Stream, user_data: &mut UserData, entry: u64) {
     // Publish the playback-side latency (stream -> device, as reported
     // by the graph: includes downstream filters, device buffering and
     // configured offsets) for the engine's round-trip queries
@@ -449,6 +473,16 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
                     .fetch_add(missed, Ordering::Relaxed);
             }
             user_data.last_ticks = time.ticks;
+            // How long after the graph cycle began this callback ran: a
+            // stutter whose mix was fast but started too late.
+            if time.now > 0 {
+                let wake = entry.saturating_sub(time.now as u64);
+                let shared = &user_data.shared;
+                shared.output_wake_max_ns.fetch_max(wake, Ordering::Relaxed);
+                if wake > crate::cycle_load::LATE_WAKE_NS {
+                    shared.output_late_wakes.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
     }
     // Every early return below leaves the graph playing silence for the

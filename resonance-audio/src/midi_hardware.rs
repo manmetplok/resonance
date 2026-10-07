@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::Sender;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
@@ -155,11 +155,25 @@ pub enum LiveControlEvent {
     },
 }
 
+/// The sequencer clients port enumeration lists through, kept for the life
+/// of the process. Listing ports is a live query, so a long-lived client
+/// still sees a controller plugged in later; creating and dropping one per
+/// call — every two seconds, for each direction, from the GUI's hotplug
+/// poll — made every MIDI bridge on the system (PipeWire's included)
+/// handle a client appearing and leaving twice a second. `None` until the
+/// first enumeration, and again after a failed create, so the next call
+/// retries.
+static ENUMERATE_IN: Mutex<Option<MidiInput>> = Mutex::new(None);
+static ENUMERATE_OUT: Mutex<Option<MidiOutput>> = Mutex::new(None);
+
 /// Enumerate currently-available MIDI input devices.
 pub fn enumerate_midi_inputs() -> Vec<MidiDeviceInfo> {
-    let input = match MidiInput::new("resonance-enumerate-in") {
-        Ok(i) => i,
-        Err(_) => return Vec::new(),
+    let mut slot = ENUMERATE_IN.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.is_none() {
+        *slot = MidiInput::new("resonance-enumerate-in").ok();
+    }
+    let Some(input) = slot.as_ref() else {
+        return Vec::new();
     };
     input
         .ports()
@@ -171,9 +185,12 @@ pub fn enumerate_midi_inputs() -> Vec<MidiDeviceInfo> {
 
 /// Enumerate currently-available MIDI output devices.
 pub fn enumerate_midi_outputs() -> Vec<MidiDeviceInfo> {
-    let output = match MidiOutput::new("resonance-enumerate-out") {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
+    let mut slot = ENUMERATE_OUT.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.is_none() {
+        *slot = MidiOutput::new("resonance-enumerate-out").ok();
+    }
+    let Some(output) = slot.as_ref() else {
+        return Vec::new();
     };
     output
         .ports()
