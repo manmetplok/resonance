@@ -52,6 +52,7 @@ use crate::limits::{MAX_MIDI_EVENTS_PER_BUFFER, MAX_PLUGIN_OUTPUT_PORTS};
 use crate::types::PendingNoteEvent;
 
 use sched::Sched;
+pub use sched::{DEFAULT_SPIN_US, LIVE_SPIN_US};
 
 /// What a worker owns for the jobs it runs: the per-worker half of the
 /// render scratch (realtime-multithreading.md §4.2).
@@ -132,7 +133,7 @@ impl PoolConfig {
         let spin_us = std::env::var("RESONANCE_RENDER_SPIN_US")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
-            .unwrap_or(DEFAULT_SPIN_US);
+            .unwrap_or(LIVE_SPIN_US);
         Self {
             workers: threads.max(1) - 1,
             max_frames,
@@ -202,11 +203,6 @@ fn env_threads() -> Option<usize> {
         .and_then(|v| v.trim().parse::<usize>().ok())
         .map(|n| n.max(1))
 }
-
-/// Default idle spin before a worker parks: long enough to cover the
-/// scheduling jitter between back-to-back small-quantum blocks' job
-/// batches, short enough that an idle engine does not burn cores.
-pub const DEFAULT_SPIN_US: u64 = 50;
 
 /// Why a pool renders with fewer threads than it was built with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

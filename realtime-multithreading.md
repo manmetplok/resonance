@@ -375,6 +375,15 @@ parallel: `RESONANCE_RENDER_THREADS=4` and `=8`, all goldens unchanged.
   is never preempted by a same-priority thread queued on its CPU, so a
   caller spinning at the join could starve the worker it waits for.
   Every 64th spin iteration is a `sched_yield`.
+- **Live workers do not idle-spin** (`LIVE_SPIN_US = 0`, field report
+  2026-10-07). A `SCHED_FIFO` thread spinning on a core starves the kernel
+  work queued there at normal priority — on a USB interface the softirq
+  that completes the audio transfers. With the planned 50 µs window a
+  Scarlett 18i20 driver xrun'd every few seconds at under 10% DSP load,
+  taking every node of the graph with it; parking at once stopped it, as
+  did keeping the app off the core taking the xHCI interrupts. A parked
+  worker costs one futex wake per block. Offline pools, at normal
+  priority, keep the 50 µs window.
 - **Thread count**: `RESONANCE_RENDER_THREADS`, else the app setting
   `audio.render_threads` (`EngineOptions::render_threads`), else physical
   cores (sysfs topology) − 1 workers plus the audio thread. The engine

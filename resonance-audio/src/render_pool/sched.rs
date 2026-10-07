@@ -12,6 +12,24 @@
 //! RTKit path is not reachable through the `pipewire` crate, and RTKit
 //! over D-Bus is not implemented (realtime-multithreading.md §9).
 
+/// Default idle spin before a worker parks: long enough to cover the
+/// scheduling jitter between back-to-back small-quantum blocks' job
+/// batches, short enough that an idle engine does not burn cores. For the
+/// offline pools, whose workers run at normal priority.
+pub const DEFAULT_SPIN_US: u64 = 50;
+
+/// The live pool's idle spin: none beyond the few dozen `spin_loop`s the
+/// wait loop does before its first park check. Its workers run
+/// `SCHED_FIFO`, and a realtime thread spinning on a core starves the
+/// kernel work queued there at normal priority — on a USB interface, the
+/// softirq that completes the audio transfers. Measured on a Scarlett
+/// 18i20 (field report 2026-10-07): 50 µs of spin per block made the ALSA
+/// driver xrun every few seconds (and every node of the graph with it)
+/// at under 10% DSP load; parking at once, or keeping the app off the
+/// core taking the xHCI interrupts, stopped it. The cost is one futex wake
+/// per worker per block. `RESONANCE_RENDER_SPIN_US` still overrides it.
+pub const LIVE_SPIN_US: u64 = 0;
+
 /// A thread's scheduling class, as far as the pool cares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sched {
