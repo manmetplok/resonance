@@ -1,6 +1,6 @@
 # Vocals: MCP control, voicebank library, correctness and expression
 
-> Status: **partly built** (slices 1–5 built; progress per slice in §12)
+> Status: **partly built** (slices 1–5, 8, 10 and 11 built; progress per slice in §12)
 > Area: compose (vocals) + control-api + plugins-instruments (library)
 > Source: MCP field report 2026-10-07; design Q&A with Jorrit 2026-10-07
 > (every decision below was put to him as a multiple-choice question; §11
@@ -475,14 +475,26 @@ handler, MCP tool, GUI, tests, and the feature doc with its
 7. **plok.org install.** Index entries, shared `plok_download`, the library
    overlay, `vocal.voicebank_install`, and the available list in
    `vocal.voicebanks`.
-8. **Melisma.** Library side (`_`/`+` holds, coda on the last hold, counts) built in phase 1; The `_` token, counts, the `s` key editing the draft,
-   `SyllableMode`, and `slur: user | auto`.
+8. **Melisma.** ✅ built (phase 1 library, phase 3 app; see
+   [lyrics and melody](../../features/compose/vocal-lyrics-and-melody.md)).
+   The `_` token, counts, the `s` key editing the draft, `SyllableMode`,
+   and `slur: user | auto`. Deviations: generator holds are the existing
+   per-note `"+"` side-table entries (a legacy `"+"` reads as `auto`);
+   holds inside a word are written `a·_·ma·zing` (added so `s` can hold a
+   word's first syllable); a run reads user holds first, so `s` on a
+   generator hold converts the generator holds before it too;
+   `SyllableMode` is a post-pass splitting the finished syllabic notes
+   (Syllabic unchanged), called through `derive_vocal_with_holds`.
 9. **Render state.**
    - Per-lane state from plan hashes, with keys saved with the audio.
    - The debounced GUI re-render and the stale badge.
    - The chord-edit Task fix.
-10. **Syllables and pronunciation source.** Library side built in phase 1 (exact breaks, `G2pSource`, corpus); Exact user breaks, `g2p` per
-    note, and the corpus fix and test.
+10. **Syllables and pronunciation source.** ✅ built (phase 1 library,
+    phase 3 readout; see [pronunciation](../../features/compose/pronunciation.md)).
+    Exact user breaks, `g2p` per note, and the corpus fix and test.
+    `song.vocal` notes carry `g2p` and `syllable_warning` (omitted when
+    false); the vocal roll marks a warned syllable. Deviation: a note past
+    the end of the lyrics reports no `g2p`.
 11. **Pronunciation persistence.** ✅ built. The project dictionary and
     overrides in `ProjectFile::pronunciation`; the `pronunciation`
     reconcile domain restores them instead of clearing them. Overrides are

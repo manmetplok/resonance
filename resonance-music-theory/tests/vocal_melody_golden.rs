@@ -15,6 +15,9 @@
 
 #![allow(clippy::field_reassign_with_default)]
 
+#[path = "vocal_melody_golden/melisma.rs"]
+mod melisma;
+
 use resonance_music_theory::{
     derive_vocal_with_motif, generate_lyrics, vocal_phrase_spans, Chord, ChordQuality, PitchClass,
     TimedChord, VocalContour, VocalParams, VocalStyle, VoiceType,

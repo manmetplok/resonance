@@ -22,6 +22,7 @@ impl VocalRollCanvas<'_> {
         grid_top: f32,
         grid_h: f32,
         assigned: &[g2p::AssignedSyllable],
+        origins: &[Option<g2p::HoldOrigin>],
     ) {
         for (i, n) in self.clip.notes.iter().enumerate() {
             let Some(y_local) = self.note_to_y(n.note, grid_h) else {
@@ -36,11 +37,21 @@ impl VocalRollCanvas<'_> {
             }
             let v = n.velocity.clamp(0.0, 1.0);
             let is_slur = assigned.get(i).map(|a| a.is_slur).unwrap_or(false);
+            // A generator-made melisma hold (not in the lyrics; the next
+            // regenerate replaces it) paints fainter than a `_` hold the
+            // user wrote, and carries `+` where a user hold carries `_`.
+            let auto_hold = is_slur
+                && origins.get(i).copied().flatten() == Some(g2p::HoldOrigin::Annotation);
             // Slur notes paint thinner and more transparent — visually
             // says "this isn't a new attack, just a pitch change inside
             // the previous syllable". Matches the engraving convention
             // where slurred notes share a beam / common phrase.
-            let body_color = if is_slur {
+            let body_color = if auto_hold {
+                Color {
+                    a: 0.16 + 0.16 * v,
+                    ..theme::WARM
+                }
+            } else if is_slur {
                 Color {
                     a: 0.30 + 0.25 * v,
                     ..theme::WARM
@@ -60,6 +71,8 @@ impl VocalRollCanvas<'_> {
             let selected = self.selected_note == Some(i);
             let stroke_color = if selected {
                 theme::WARM
+            } else if auto_hold {
+                theme::WARM_LINE
             } else if is_slur {
                 Color { a: 0.60, ..theme::WARM }
             } else {
@@ -97,18 +110,43 @@ impl VocalRollCanvas<'_> {
                     frame.fill_rectangle(
                         Point::new(dx, dash_y),
                         Size::new(dw, 1.0),
-                        theme::WARM,
+                        if auto_hold { theme::WARM_LINE } else { theme::WARM },
                     );
                 }
+            }
+
+            // A syllable whose written `·` pieces did not match its
+            // vowels (so the phoneme split is automatic): a BAD underline
+            // plus a corner tick — shape and colour, never colour alone.
+            let warned = assigned.get(i).is_some_and(|a| a.syllable_warning);
+            if warned && w >= 4.0 && h >= 4.0 {
+                frame.fill_rectangle(
+                    Point::new(x + 1.0, y + h - 2.5),
+                    Size::new((w - 2.0).max(1.0), 2.0),
+                    theme::BAD,
+                );
+                let tick = Path::new(|p| {
+                    p.move_to(Point::new(x + w - 6.0, y));
+                    p.line_to(Point::new(x + w, y));
+                    p.line_to(Point::new(x + w, y + 6.0));
+                    p.close();
+                });
+                frame.fill(&tick, theme::BAD);
             }
 
             // Syllable / slur marker on the note body — only when the
             // note is wide enough for the text to fit. Italic serif
             // matches the rest of the vocal UI; ink colour is dark
             // against the warm body for legibility. Slur notes show
-            // the `+` marker centred (smaller) so the visual reads as
-            // a continuation rather than a syllable.
-            let label = assigned.get(i).map(|a| a.label.clone()).unwrap_or_default();
+            // a hold marker centred (smaller) so the visual reads as a
+            // continuation rather than a syllable: `_` for a hold the
+            // lyrics write, `+` (warm ink on the faint body) for one the
+            // generator made.
+            let label = match (is_slur, auto_hold) {
+                (true, true) => g2p::SLUR_MARKER.to_owned(),
+                (true, false) => "_".to_owned(),
+                _ => assigned.get(i).map(|a| a.label.clone()).unwrap_or_default(),
+            };
             if !label.is_empty() && w >= 12.0 && h >= 10.0 {
                 let (size, dx) = if is_slur {
                     ((h * 0.7).min(11.0), w * 0.5 - 3.0)
@@ -118,7 +156,9 @@ impl VocalRollCanvas<'_> {
                 frame.fill_text(canvas::Text {
                     content: label,
                     position: Point::new(x + dx, y - 1.0),
-                    color: if is_slur {
+                    color: if auto_hold {
+                        Color { a: 0.85, ..theme::WARM }
+                    } else if is_slur {
                         Color::from_rgba(0.08, 0.06, 0.04, 0.7)
                     } else {
                         Color::from_rgba(0.08, 0.06, 0.04, 0.92)

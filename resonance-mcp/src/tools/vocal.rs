@@ -28,7 +28,12 @@ impl ResonanceMcp {
                        has chords. section_id picks the lane; seed makes the result \
                        reproducible. Pass lyrics: false to keep lyrics you wrote with \
                        vocal_set_lyrics — the default regenerates them. Returns the clip_id to \
-                       inspect with song_notes and edit with notes_*, then vocal_render. When \
+                       inspect with song_notes and edit with notes_*, then vocal_render. The \
+                       lane's syllable_mode shapes the melody: syllabic sings one note per \
+                       lyric unit; mixed gives some line-final and long stressed syllables 2-3 \
+                       notes; melismatic does so more often. Those generator holds read \
+                       slur: \"auto\" in song_vocal and are regenerated each time; holds you \
+                       want to keep belong in the lyrics as _. When \
                        the lane's voicebank is not installed the melody is still generated \
                        and render_error {kind: voicebank_missing, message} says so; pick an \
                        installed bank (vocal_voicebanks) with vocal_set_params, then \
@@ -114,7 +119,8 @@ impl ResonanceMcp {
                        Two standalone markers (separated by spaces): _ holds the previous \
                        syllable onto the next note — a melisma, \"love _ _\" is one syllable \
                        over three notes, its final consonant sung at the end of the hold (+ \
-                       is an alias; a spaced - is just a dash and is ignored). AP (uppercase) \
+                       is an alias; a spaced - is just a dash and is ignored). Inside a broken \
+                       word a _ piece holds the piece before it: \"a·_·ma·zing\". AP (uppercase) \
                        marks a breath before the next word and takes no note; it is not yet \
                        rendered as a breath sound. \
                        \

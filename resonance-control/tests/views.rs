@@ -14,6 +14,7 @@ use resonance_control::methods::song::{
     SectionPlacementView, SectionsView, SendView, SongSummary, SyllableView, TrackDetail,
     TrackSummary,
     PitchRangeView, TracksView, VocalLaneView, VocalNoteView, VocalRenderState, VocalView,
+    VocalG2pSource, VocalSlurKind,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -359,6 +360,9 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
                 min_duration_ms: 115.0,
                 too_short: false,
                 out_of_range: false,
+                slur: None,
+                g2p: Some(VocalG2pSource::Cmu),
+                syllable_warning: false,
             }],
             short_note_count: 0,
             out_of_range_note_count: 0,
@@ -448,4 +452,46 @@ fn track_colors_parse_and_format_as_hex() {
     assert_eq!(format_hex_color([0, 10, 255]), "#000aff");
     let c = [0x12, 0xab, 0xef];
     assert_eq!(parse_hex_color(&format_hex_color(c)), Some(c));
+}
+
+/// `song.vocal` per-note hold / pronunciation readout (vocal spec §6,
+/// §8): `slur` is always present (`null` on a sung note), `g2p` is
+/// snake_case, and `syllable_warning` is omitted when false.
+#[test]
+fn vocal_note_slur_g2p_and_warning_wire_shape() {
+    let note = |slur, g2p, syllable_warning| VocalNoteView {
+        index: 1,
+        syllable: "+".to_owned(),
+        phonemes: vec!["ah".to_owned()],
+        phoneme_count: 1,
+        pitch: 62,
+        pitch_name: "D4".to_owned(),
+        duration_ms: 250.0,
+        min_duration_ms: 60.0,
+        too_short: false,
+        out_of_range: false,
+        slur,
+        g2p,
+        syllable_warning,
+    };
+    let sung = serde_json::to_value(note(None, Some(VocalG2pSource::ProjectDict), false)).unwrap();
+    assert_eq!(sung["slur"], json!(null));
+    assert!(sung.as_object().unwrap().contains_key("slur"), "slur is an explicit null");
+    assert_eq!(sung["g2p"], json!("project_dict"));
+    assert!(sung.get("syllable_warning").is_none(), "false is omitted");
+
+    let held = note(Some(VocalSlurKind::Auto), Some(VocalG2pSource::BankDict), true);
+    let wire = serde_json::to_value(&held).unwrap();
+    assert_eq!(wire["slur"], json!("auto"));
+    assert_eq!(wire["g2p"], json!("bank_dict"));
+    assert_eq!(wire["syllable_warning"], json!(true));
+    assert_eq!(serde_json::from_value::<VocalNoteView>(wire).unwrap(), held);
+    assert_eq!(serde_json::to_value(VocalSlurKind::User).unwrap(), json!("user"));
+
+    // A reply from before these fields still deserializes.
+    let mut old = sung.as_object().unwrap().clone();
+    old.remove("slur");
+    old.remove("g2p");
+    let back: VocalNoteView = serde_json::from_value(json!(old)).unwrap();
+    assert_eq!((back.slur, back.g2p, back.syllable_warning), (None, None, false));
 }

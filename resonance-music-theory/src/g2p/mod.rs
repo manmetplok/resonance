@@ -1,16 +1,18 @@
 //! Grapheme-to-phoneme module for English lyrics.
 //!
-//! Organised into four focused sub-modules, each with a single reason
+//! Organised into five focused sub-modules, each with a single reason
 //! to change:
 //!
 //! * [`phonemes`]    — CMU dict loading, ARPAbet inventory, `SyllableStress`
 //! * [`syllabify`]   — syllable counting, `·`-marker insertion, phoneme splitting
 //! * [`lyric_parse`] — lyric tokenising, `[..]` block parsing, slur detection
 //! * [`note_assign`] — draft resolution and per-note syllable assignment
+//! * [`holds`]       — melisma hold origins and `_` draft edits
 //!
 //! All public items are re-exported here so call sites using
 //! `resonance_music_theory::g2p::*` are unaffected.
 
+mod holds;
 mod lyric_parse;
 mod note_assign;
 mod phonemes;
@@ -40,4 +42,9 @@ pub use note_assign::{
 };
 pub use note_assign::{
     AssignedSyllable, PhonemeProvenance, PhonemeDictionary, ResolvedSyllable, SyllableOverrides,
+};
+
+// ── holds ─────────────────────────────────────────────────────────────────────
+pub use holds::{
+    hold_origins, line_first_syllables, set_holds_after, strip_syllable_marks, HoldOrigin,
 };

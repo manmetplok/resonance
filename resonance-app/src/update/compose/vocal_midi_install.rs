@@ -72,3 +72,22 @@ impl VocalMidiInstall<'_> {
         }
     }
 }
+
+/// The clip's per-note slur side table for a freshly derived vocal
+/// melody: `"+"` on the generator's own melisma holds
+/// ([`resonance_music_theory::VocalDerivation::auto_holds`]), `""`
+/// elsewhere. The draft's `_` holds are not marked — the lyrics carry
+/// them — so a generator hold is exactly a marker the draft does not
+/// explain (`g2p::hold_origins`), and the next regenerate replaces it.
+pub(super) fn auto_hold_annotations(auto_holds: &[bool]) -> Vec<String> {
+    auto_holds
+        .iter()
+        .map(|&hold| {
+            if hold {
+                resonance_music_theory::g2p::SLUR_MARKER.to_string()
+            } else {
+                String::new()
+            }
+        })
+        .collect()
+}

@@ -14,7 +14,8 @@ pub use chord::{parse_chord, Chord, ChordParseError, ChordQuality};
 pub use derive::{
     count_syllables, derive_bass, derive_bass_motif, derive_melody,
     derive_motif_melody_with_section, derive_motif_rhythm, derive_pad, derive_vocal,
-    derive_melody_fill_vocal, derive_vocal_with_meter, derive_vocal_with_motif,
+    derive_melody_fill_vocal, derive_vocal_with_holds, derive_vocal_with_meter,
+    derive_vocal_with_motif, VocalDerivation,
     generate_lyrics, lyric_corpus_lines, motif_intervals, phrase_grammar_roles,
     plan_motif_transforms,
     section_climax_phrase, toggle_manual_motif_cell,

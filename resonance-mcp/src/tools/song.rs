@@ -131,9 +131,22 @@ impl ResonanceMcp {
                        melisma hold takes one more (AP breaths take none); syllable_count is \
                        the app's own count of the notes the lyrics will consume — trust it \
                        over counting words or syllables in the text yourself. \
-                       counts_mismatch (syllable_count > 0 and != note_count) is the first check \
-                       before vocal_render; note_count == 0 means the lane has no notes yet (run \
-                       vocal_generate). \
+                       counts_mismatch (syllable_count > 0 and != note_count minus the auto \
+                       holds) is the first check before vocal_render; note_count == 0 means the \
+                       lane has no notes yet (run vocal_generate). \
+                       \
+                       Per note, slur says why a note holds the previous syllable instead of \
+                       singing its own: \"user\" is a _ in the lyrics (yours, or the vocal \
+                       roll's s key), \"auto\" a melisma the melody generator made for \
+                       syllable_mode mixed/melismatic — not in the lyrics, not a lyric unit, \
+                       replaced by the next vocal_generate; null on a sung note. g2p says where \
+                       the note's phonemes came from: edited (a pronunciation edit or [..] \
+                       block), project_dict (vocal_set_pronunciation), bank_dict (the \
+                       voicebank's dictionary), cmu, or rules — a spelling-rule guess for a word \
+                       in no dictionary, worth checking or fixing with vocal_set_pronunciation; \
+                       hold notes report the held syllable's. syllable_warning: true means the \
+                       · pieces you wrote for that word do not match its vowel count, so its \
+                       phonemes were split automatically — re-break the word. \
                        \
                        This is the closest thing to HEARING the vocal without rendering it: the \
                        lane also reports its voicebank and comfortable_range, and per note the \
