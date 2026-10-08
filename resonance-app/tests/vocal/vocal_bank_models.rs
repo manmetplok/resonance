@@ -69,12 +69,13 @@ fn ph(list: &[(&str, usize)]) -> Vec<(String, usize)> {
 }
 
 /// A syllable's onset consonants belong to the group before its vowel
-/// (sung before the beat); its vowel starts a group on the beat. In a
-/// consonant–glide–vowel onset (`b r ay`) the glide starts the note, as in
-/// OpenUtau. The score's phonemes are the rule track's, its rule durations
-/// add up to the unit.
+/// (sung before the beat); its vowel starts a group on the beat. A
+/// consonant–glide–vowel onset (`b r ay`) is no exception: the glide is
+/// sung before the beat with the consonant, and the group and the pitch
+/// model's note start on the vowel. The score's phonemes are the rule
+/// track's, its rule durations add up to the unit.
 #[test]
-fn onsets_sit_before_the_beat_and_a_glide_after_a_consonant_starts_the_note() {
+fn onsets_sit_before_the_beat_and_a_glide_onset_too() {
     let bank = BankProfile::not_installed("tiger");
     let notes = [note(62, 0.0, 1.0), note(64, 1.0, 1.0)];
     let u = unit(&notes, "bright stars", &bank);
@@ -83,7 +84,7 @@ fn onsets_sit_before_the_beat_and_a_glide_after_a_consonant_starts_the_note() {
         ph(&[
             ("SP", 0),
             ("b", 0),
-            ("r", 1),
+            ("r", 0),
             ("ay", 1),
             ("t", 1),
             ("s", 1),
@@ -97,6 +98,12 @@ fn onsets_sit_before_the_beat_and_a_glide_after_a_consonant_starts_the_note() {
     assert_eq!(u.score.phones.iter().map(|p| &p.symbol).collect::<Vec<_>>(), u.segment.ph_seq.iter().collect::<Vec<_>>());
     let starts: Vec<f64> = u.score.groups.iter().map(|g| g.start_sec).collect();
     assert_eq!(starts[0], 0.0);
+    // "bright" lands its vowel on beat 1, PAD into the unit: its group
+    // starts there, the glide `r` sung before it.
+    let rule_start = |k: usize| u.segment.ph_dur[..k].iter().sum::<f64>();
+    assert!((rule_start(3) - PAD).abs() < 1e-6, "the rules put ay on the beat");
+    assert!(rule_start(2) < PAD - 0.01, "and r before it");
+    assert!((starts[1] - PAD).abs() < 1e-6, "{starts:?}");
     // "stars" lands its vowel on beat 2, the trailing pad starts at the
     // last note's end.
     assert!((starts[2] - (PAD + 0.5)).abs() < 1e-6, "{starts:?}");
@@ -110,6 +117,7 @@ fn onsets_sit_before_the_beat_and_a_glide_after_a_consonant_starts_the_note() {
     let n = &u.score.notes;
     assert_eq!(n.len(), 2);
     assert!(n.iter().all(|n| n.voiced && !n.slur));
+    assert!((n[0].start_sec - PAD).abs() < 1e-6, "the note starts on the beat");
     assert!((n[0].end_sec - n[1].start_sec).abs() < EPS);
     assert!((n[1].start_sec - (PAD + 0.5)).abs() < 1e-6);
 }
@@ -300,6 +308,114 @@ fn with_bank_pitch_vibrato_moves_no_key_but_pitch_bend_does() {
     );
 }
 
+/// A unit singing a phoneme the bank's pitch model does not know (TIGER's
+/// lacks `io`, `iz`, `rs`) is planned without it: it sings the
+/// synthesized line, so its key hashes that line (vibrato moves it); the
+/// duration model, which knows the phoneme, still times it. A unit
+/// without the phoneme keeps the bank's pitch.
+#[test]
+fn a_unit_with_a_phoneme_the_pitch_model_lacks_sings_the_rules_pitch_and_its_key_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = fixture_registry(
+        dir.path(),
+        &[(
+            "models",
+            VoicebankFixture {
+                bank_models: true,
+                use_tension_embed: true,
+                pitch_model_lacks: vec!["ng".into()],
+                ..Default::default()
+            },
+        )],
+    );
+    let bank = registry.profile(&VoicebankId::new("models"));
+    // Two phrases a rest apart: "sing" (with ng) and "oh".
+    let notes = [note(60, 0.0, 1.0), note(62, 4.0, 1.0)];
+    let text = "sing oh";
+    let base = params("models");
+    let units = split_render_units(&notes, &base, &assign(text, 2, &bank), TPQ, BPM, &bank);
+    assert_eq!(units.len(), 2);
+    let m = &units[0].bank_models;
+    assert!(m.duration.is_some(), "the duration model knows ng");
+    assert!(m.pitch.is_none() && m.variance.is_none(), "the pitch model does not");
+    let m = &units[1].bank_models;
+    assert!(m.duration.is_some() && m.pitch.is_some() && m.variance.is_some());
+
+    let vibrato = VocalParams { vibrato: 0.9, portamento_ms: 120.0, ..base.clone() };
+    let (a, b) = (keys(&notes, text, &base, &bank), keys(&notes, text, &vibrato, &bank));
+    assert_ne!(a[0], b[0], "the rule-pitched unit hears its vibrato");
+    assert_eq!(a[1], b[1], "the bank-pitched unit does not");
+}
+
+/// Under the bank's pitch the tension contour reads the written pitch, so
+/// vibrato and portamento (which are not heard) move no key on a bank
+/// whose acoustic model takes tension either; on the rule path they do.
+#[test]
+fn under_bank_pitch_vibrato_moves_no_key_on_a_bank_with_tension() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = fixture_registry(
+        dir.path(),
+        &[(
+            "tense",
+            VoicebankFixture {
+                bank_models: true,
+                use_tension_embed: true,
+                ..Default::default()
+            },
+        )],
+    );
+    let bank = registry.profile(&VoicebankId::new("tense"));
+    assert!(bank.active_bank_models(true, true).variance.is_some());
+    let notes = [note(60, 0.0, 2.0), note(67, 2.0, 2.0)];
+    let text = "oh no";
+    let base = VocalParams {
+        tension_contour_amount: 1.0,
+        tension_velocity_amount: 1.0,
+        ..params("tense")
+    };
+    let vibrato = VocalParams { vibrato: 0.9, portamento_ms: 150.0, ..base.clone() };
+    assert_eq!(keys(&notes, text, &base, &bank), keys(&notes, text, &vibrato, &bank));
+    // The contour still leans the tension: a higher note moves the key.
+    let higher = [note(60, 0.0, 2.0), note(69, 2.0, 2.0)];
+    assert_ne!(keys(&notes, text, &base, &bank), keys(&higher, text, &base, &bank));
+
+    let rules = |p: &VocalParams| VocalParams { bank_pitch: false, ..p.clone() };
+    assert_ne!(
+        keys(&notes, text, &rules(&base), &bank),
+        keys(&notes, text, &rules(&vibrato), &bank)
+    );
+}
+
+/// Replacing a model file (same path, other contents) moves every unit
+/// key once the registry rescans: the acoustic model, the vocoder or one
+/// of the bank's own models.
+#[test]
+fn a_replaced_model_file_moves_the_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = VoicebankFixture { bank_models: true, ..Default::default() };
+    let notes = [note(60, 0.0, 1.0), note(62, 1.0, 1.0)];
+    let text = "walk on";
+    let keys_now = || {
+        let registry = VoicebankRegistry::scan(VoicebankRoots {
+            banks: Some(dir.path().to_path_buf()),
+            vocoders: None,
+            dev_models: Vec::new(),
+        });
+        let bank = registry.profile(&VoicebankId::new("models"));
+        keys(&notes, text, &params("models"), &bank)
+    };
+    write_voicebank_fixture(&dir.path().join("models"), &spec);
+    let before = keys_now();
+    assert_eq!(before, keys_now(), "nothing changed, nothing moves");
+    let mut seen = vec![before];
+    for file in ["acoustic.onnx", "dsvocoder/vocoder.onnx", "dspitch/pitch.onnx"] {
+        std::fs::write(dir.path().join("models").join(file), format!("new {file}")).unwrap();
+        let after = keys_now();
+        assert!(!seen.contains(&after), "replacing {file} moves the keys");
+        seen.push(after);
+    }
+}
+
 // ---- Real models (no-ops unless RESONANCE_SVS_MODELS_DIR is set) ----
 
 mod real {
@@ -450,5 +566,74 @@ mod real {
         let rest = rms(&frames(1.2, 1.8));
         assert!(sung > 0.01, "the first phrase is sung: rms {sung}");
         assert!(rest < sung / 30.0, "the rest is silent: {rest} vs {sung}");
+    }
+
+    /// Peak resident memory since the last [`reset_peak_rss`], in MiB
+    /// (`VmHWM`), and the current one (`VmRSS`).
+    fn rss_mib() -> (f64, f64) {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        let field = |name: &str| {
+            status
+                .lines()
+                .find(|l| l.starts_with(name))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse::<f64>().ok())
+                .map_or(0.0, |kb| kb / 1024.0)
+        };
+        (field("VmHWM:"), field("VmRSS:"))
+    }
+
+    fn reset_peak_rss() {
+        let _ = std::fs::write("/proc/self/clear_refs", "5");
+    }
+
+    /// Measurement, by hand (`--ignored --nocapture`, release build): the
+    /// wall time and peak RSS of a take's first render and of re-rendering
+    /// it after an edit that changes one of its two units, per shipped bank.
+    #[test]
+    #[ignore]
+    fn measure_one_unit_rerender() {
+        let Some(registry) = registry() else {
+            return;
+        };
+        let text = "sing on and on";
+        for id in ["tiger", "lilia", "meiji"] {
+            let bank = registry.profile(&VoicebankId::new(id));
+            if !bank.is_installed() {
+                continue;
+            }
+            let p = params(id);
+            let assigned = assign(text, 4, &bank);
+            // Two phrases a rest apart; an edit moves the last note.
+            let take = |last: u8| {
+                [note(60, 0.0, 1.0), note(62, 1.0, 1.0), note(60, 4.0, 1.0), note(last, 5.0, 1.0)]
+            };
+            let mut cache = SvsRenderCache::new();
+            let mut render = |notes: &[MidiNote]| {
+                reset_peak_rss();
+                let t0 = std::time::Instant::now();
+                render_vocal_clip(notes, &p, &assigned, TPQ, BPM, 44_100, &mut cache, &bank, None)
+                    .unwrap()
+                    .unwrap();
+                let (peak, now) = rss_mib();
+                (t0.elapsed().as_secs_f64(), peak, now)
+            };
+            let first = render(&take(57));
+            let mut edits = Vec::new();
+            for last in [59, 57, 59, 57] {
+                edits.push(render(&take(last)));
+            }
+            let n = edits.len() as f64;
+            let mean = |f: fn(&(f64, f64, f64)) -> f64| edits.iter().map(f).sum::<f64>() / n;
+            eprintln!(
+                "MEASURE {id}: first {:.3}s peak {:.0} MiB | \
+                 one-unit re-render {:.3}s peak {:.0} MiB rss {:.0} MiB",
+                first.0,
+                first.1,
+                mean(|e| e.0),
+                mean(|e| e.1),
+                mean(|e| e.2),
+            );
+        }
     }
 }

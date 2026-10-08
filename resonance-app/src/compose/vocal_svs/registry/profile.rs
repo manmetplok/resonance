@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use resonance_music_theory::g2p::{self, PhonemeDictionary};
 use resonance_music_theory::{VoiceType, VoicebankId};
-use resonance_svs::predict::BankModelPaths;
+use resonance_svs::predict::{BankModelPaths, ModelKind};
 use resonance_svs::voicebank::{CurveSupport, SingerInfo};
 
 use super::builtin::{self, BuiltinBank, ShippedSpelling, DEFAULT_RANGE};
@@ -384,13 +384,22 @@ impl BankProfile {
         let all = self.bank_models();
         let support = self.curve_support();
         let accepts_variance = support.tension || support.energy || support.breathiness;
-        BankModelPaths {
+        let mut active = BankModelPaths {
             duration: all.duration.filter(|_| bank_timing),
             pitch: all.pitch.clone().filter(|_| bank_pitch),
             variance: all
                 .variance
                 .filter(|_| bank_pitch && all.pitch.is_some() && accepts_variance),
-        }
+            facts: all.facts,
+        };
+        let used: Vec<ModelKind> = active
+            .facts
+            .keys()
+            .copied()
+            .filter(|k| active.get(*k).is_some())
+            .collect();
+        active.facts.retain(|k, _| used.contains(k));
+        active
     }
 
     /// The bank's English dictionary, when it is installed and ships one.

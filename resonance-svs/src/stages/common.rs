@@ -5,7 +5,7 @@ use ort::execution_providers::{
 };
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// ONNX Runtime execution provider an SVS session runs on.
@@ -59,8 +59,9 @@ pub fn active_backend() -> Option<ExecutionProvider> {
 }
 
 /// Record `backend` as the one in use, logging it at info level the first
-/// time and whenever it changes. Sessions are rebuilt per render, so this
-/// keeps the log to one line per change rather than one per render.
+/// time and whenever it changes. Sessions are built again whenever the
+/// session cache drops them, so this keeps the log to one line per change
+/// rather than one per load.
 pub(crate) fn record_active_backend(backend: ExecutionProvider) {
     let mut slot = ACTIVE_BACKEND.lock().unwrap_or_else(|e| e.into_inner());
     if *slot != Some(backend) {
@@ -136,9 +137,9 @@ pub fn build_session_from(
     };
 
     // A provider that already failed in this process is not retried:
-    // sessions are rebuilt for every render, and re-probing a missing GPU
-    // stack each time cost a failed provider registration (and a warning)
-    // per render for nothing.
+    // sessions are built again whenever the cache drops them, and
+    // re-probing a missing GPU stack each time cost a failed provider
+    // registration (and a warning) per load for nothing.
     let gpu = gpu.filter(|_| !provider_failed(ep, device_index));
     let mut gpu_failed = false;
     if let Some(gpu) = gpu {
@@ -169,7 +170,7 @@ pub fn build_session_from(
 
 /// GPU providers (with their device index) whose session creation failed
 /// in this process. [`build_session_reporting`] goes straight to CPU for
-/// them, so the fallback warning is logged once, not once per render.
+/// them, so the fallback warning is logged once, not once per load.
 static FAILED_PROVIDERS: Mutex<Vec<(ExecutionProvider, i32)>> = Mutex::new(Vec::new());
 
 /// Has `ep` on `device_index` already failed in this process?
@@ -197,58 +198,48 @@ fn commit_session(
     .map_err(|e| anyhow::anyhow!("loading ONNX model at {}: {e}", source.path().display()))
 }
 
-/// A session whose in-graph random ops were replaced by fed noise
-/// ([`super::noise::seed_random_ops`]), so a run is a pure function of
-/// its inputs and the seed.
-pub struct SeededSession {
-    pub session: Session,
-    pub noise: Vec<super::noise::NoiseSpec>,
-    /// The backend it runs on.
-    pub backend: ExecutionProvider,
+pub use super::seeded::SeededSession;
+
+/// A digest of `files`' lengths and modification times (FNV-1a, so the
+/// same files give the same digest in every process): what a render key
+/// hashes so that replacing a model file re-renders, without reading it.
+/// A missing file counts as length 0, time 0.
+pub fn files_digest(files: &[PathBuf]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    for f in files {
+        let meta = std::fs::metadata(f).ok();
+        let len = meta.as_ref().map_or(0, |m| m.len());
+        let nanos = meta
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos() as u64);
+        eat(&len.to_le_bytes());
+        eat(&nanos.to_le_bytes());
+    }
+    h
 }
 
-impl SeededSession {
-    /// Read `model_path`, seed its random ops and build the session.
-    pub fn load(model_path: &Path, ep: ExecutionProvider, device_index: i32) -> Result<Self> {
-        let bytes = std::fs::read(model_path)
-            .map_err(|e| anyhow::anyhow!("reading ONNX model at {}: {e}", model_path.display()))?;
-        let (bytes, noise) = super::noise::seed_random_ops(&bytes)?;
-        let (session, backend) = build_session_from(
-            ModelSource::Bytes {
-                path: model_path,
-                bytes: &bytes,
-            },
-            ep,
-            device_index,
-        )?;
-        Ok(Self {
-            session,
-            noise,
-            backend,
-        })
-    }
+/// Warnings already logged in this process, by what they are about and
+/// what they say.
+static WARNED: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
 
-    /// The noise inputs for one run under `seed`: each at least
-    /// `per_frame × n_frames` long (+1024). The stream is prefix-stable,
-    /// so the over-allocation does not change the values; a model that
-    /// draws more than that fails its `Reshape` loudly.
-    pub fn noise_values(
-        specs: &[super::noise::NoiseSpec],
-        seed: u64,
-        n_frames: usize,
-        per_frame: usize,
-    ) -> Result<Vec<(String, ort::value::Value)>> {
-        specs
-            .iter()
-            .enumerate()
-            .map(|(k, spec)| {
-                let len = n_frames * per_frame + 1024;
-                let data = super::noise::noise(seed, k as u64, len, spec.dist);
-                let arr = ndarray::Array1::<f32>::from_vec(data);
-                Ok((spec.input.clone(), ort::value::Value::from_array(arr)?.into()))
-            })
-            .collect()
+/// Log `message` about `about` (a model or config file) as a warning once
+/// per process: sessions and bank models load on every render, and a
+/// model that cannot be used says so on each, which buried everything
+/// else in the log.
+pub fn warn_once(about: &Path, message: String) {
+    let mut warned = WARNED.lock().unwrap_or_else(|e| e.into_inner());
+    if warned.iter().any(|(p, m)| p == about && *m == message) {
+        return;
     }
+    tracing::warn!("{}: {message}", about.display());
+    warned.push((about.to_path_buf(), message));
 }
 
 /// Names of the inputs declared by an ONNX model.

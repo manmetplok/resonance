@@ -1059,6 +1059,29 @@ pub fn fader_style(tinted: bool) -> impl Fn(&Theme, slider::Status) -> slider::S
     }
 }
 
+/// A horizontal slider whose value is not heard right now (a vocal lane's
+/// vibrato while the voicebank's pitch model sings): rail and handle in
+/// `TEXT_4`, so it reads as set aside while staying adjustable.
+pub fn muted_slider_style(_theme: &Theme, _status: slider::Status) -> slider::Style {
+    slider::Style {
+        rail: slider::Rail {
+            backgrounds: (TEXT_4.into(), BG_1.into()),
+            width: 2.0,
+            border: iced::Border {
+                radius: 1.0.into(),
+                width: 0.0,
+                color: Color::TRANSPARENT,
+            },
+        },
+        handle: slider::Handle {
+            shape: slider::HandleShape::Circle { radius: 5.0 },
+            background: TEXT_4.into(),
+            border_color: Color::TRANSPARENT,
+            border_width: 0.0,
+        },
+    }
+}
+
 // ---- Container style helpers ------------------------------------------------
 // These wrap the most common backdrop+border pairings used throughout the
 // view layer.

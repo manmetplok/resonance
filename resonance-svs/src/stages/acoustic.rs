@@ -5,7 +5,6 @@
 
 use anyhow::{anyhow, Context, Result};
 use ndarray::{Array0, Array2, Array3};
-use ort::session::Session;
 use ort::value::Value;
 use std::path::Path;
 
@@ -34,10 +33,9 @@ pub struct AcousticFlags {
 }
 
 pub struct AcousticStage {
-    pub session: Session,
-    /// The noise inputs standing in for the model's random ops (see
-    /// [`super::noise`]): fed from the `seed` each [`Self::infer`] takes.
-    pub noise: Vec<super::noise::NoiseSpec>,
+    /// The model, its random ops reading noise fed from the `seed` each
+    /// [`Self::infer`] takes (see [`super::noise`]).
+    pub model: SeededSession,
     pub flags: AcousticFlags,
     /// The execution provider the session really runs on — the requested
     /// one, or `Cpu` after a fallback.
@@ -50,14 +48,11 @@ impl AcousticStage {
     /// seeded ([`SeededSession`]), and record the backend in use as the
     /// process-wide [`super::common::active_backend`].
     pub fn load(model_path: &Path, ep: ExecutionProvider, device_index: i32) -> Result<Self> {
-        let SeededSession {
-            session,
-            noise,
-            backend,
-        } = SeededSession::load(model_path, ep, device_index)?;
+        let model = SeededSession::load(model_path, ep, device_index)?;
+        let backend = model.backend;
         record_active_backend(backend);
-        let ins = input_names(&session);
-        let outs = output_names(&session);
+        let ins = input_names(&model.session);
+        let outs = output_names(&model.session);
 
         for required in &["tokens", "durations", "f0"] {
             if !ins.contains(*required) {
@@ -90,8 +85,7 @@ impl AcousticStage {
             languages: ins.contains("languages"),
         };
         Ok(Self {
-            session,
-            noise,
+            model,
             flags,
             backend,
         })
@@ -231,6 +225,7 @@ impl AcousticStage {
             // Inspect the model's actual dtype for `depth`. Newer "variable-depth" exports use
             // float32; older exports use int64 step counts.
             let depth_is_float = self
+                .model
                 .session
                 .inputs()
                 .iter()
@@ -249,23 +244,20 @@ impl AcousticStage {
             }
         }
 
-        let seeded = SeededSession::noise_values(&self.noise, seed, n_frames, NOISE_PER_FRAME)?;
-        inputs.extend(seeded);
-        let outputs = self
-            .session
-            .run(inputs)
-            .context("running acoustic ONNX session")?;
-        let mel_value = outputs
-            .get("mel")
-            .ok_or_else(|| anyhow!("acoustic output `mel` not present"))?;
-        let (shape, data) = mel_value
-            .try_extract_tensor::<f32>()
-            .context("extracting mel tensor")?;
-
-        Ok(MelOutput {
-            shape: shape.iter().copied().collect(),
-            data: data.to_vec(),
-        })
+        self.model
+            .run(&inputs, seed, n_frames, NOISE_PER_FRAME, |outputs| {
+                let mel_value = outputs
+                    .get("mel")
+                    .ok_or_else(|| anyhow!("acoustic output `mel` not present"))?;
+                let (shape, data) = mel_value
+                    .try_extract_tensor::<f32>()
+                    .context("extracting mel tensor")?;
+                Ok(MelOutput {
+                    shape: shape.iter().copied().collect(),
+                    data: data.to_vec(),
+                })
+            })
+            .context("running acoustic ONNX session")
     }
 
     pub fn supported_features(&self) -> &AcousticFlags {
@@ -275,8 +267,10 @@ impl AcousticStage {
 
 pub const SPK_EMBED_SIZE: usize = 256;
 
-/// Noise values per frame the acoustic models draw: `num_mel_bins` (128)
-/// times up to two feature channels.
+/// At most how many noise values per frame the acoustic models draw:
+/// `num_mel_bins` (128) times up to two feature channels. Only the first
+/// run of a session is fed this many; it then feeds what the model draws
+/// ([`super::seeded`]).
 const NOISE_PER_FRAME: usize = 256;
 
 #[derive(Debug, Clone, Default)]

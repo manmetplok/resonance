@@ -23,6 +23,13 @@ use super::{
     UnitAudio, VocalRenderError, SEGMENT_PAD_SEC,
 };
 
+/// Sampling steps of the acoustic model (passed as `speedup`; every
+/// shipped acoustic model takes `steps`). TIGER's working CLI command used
+/// 20; 50 measured no better at 1.7× the time (feature doc § Decisions).
+pub(super) const ACOUSTIC_STEPS: i32 = 20;
+/// Shallow-diffusion depth asked for; clamped to the bank's `max_depth`.
+pub(super) const ACOUSTIC_DEPTH: i32 = 1000;
+
 /// Output of `render_vocal_clip` — stereo-interleaved f32 samples ready
 /// for `transcode_to_wav` / `write_stereo_f32_wav`, plus their rate
 /// and the number of leading/trailing frames that are silence pads
@@ -96,12 +103,8 @@ pub fn render_vocal_clip(
         execution_provider: ExecutionProvider::Cpu,
         device_index: 0,
         speaker: target.speaker,
-        // The TIGER voicebank's working CLI command uses speedup=20.
-        // (We previously thought 20 produced diffusion artifacts, but
-        // those artifacts were actually from feeding the mel into the
-        // wrong vocoder.)
-        speedup: 20,
-        depth: 1000,
+        speedup: ACOUSTIC_STEPS,
+        depth: ACOUSTIC_DEPTH,
         // Each unit is rendered with its content key as the seed (below).
         seed: 0,
     };
@@ -117,11 +120,11 @@ pub fn render_vocal_clip(
     let mut renderer: Option<Renderer> = None;
     let mut models: Option<BankModels> = None;
     let render_fn = |unit: &RenderUnit| -> Result<UnitAudio, String> {
-        let segment = if bank_render::uses_bank_models(unit) {
+        let (segment, fallback) = if bank_render::uses_bank_models(unit) {
             let models = models.get_or_insert_with(|| bank_render::load_models(unit));
             bank_render::refine_segment(unit, models, speaker.as_deref(), bank)
         } else {
-            unit.segment.clone()
+            (unit.segment.clone(), false)
         };
         if renderer.is_none() {
             renderer = Some(Renderer::load(&args).map_err(|e| format!("svs render: {e:#}"))?);
@@ -137,6 +140,7 @@ pub fn render_vocal_clip(
             mono,
             sample_rate,
             lead_sec: segment.ph_dur.first().copied().unwrap_or(SEGMENT_PAD_SEC),
+            fallback,
         })
     };
 

@@ -62,7 +62,7 @@ pub use pronunciation::{
 };
 pub use render_cache::{
     plan_unit_keys, render_units_cached, render_units_cached_with, split_render_units,
-    RenderPlan, RenderUnit, SvsRenderCache, UnitAudio,
+    RenderPlan, RenderUnit, SvsRenderCache, UnitAudio, FALLBACK_KEY_MARK,
 };
 pub(crate) use render_cache::model_identity;
 pub use segment::{build_segment, build_unit_segment, UnitSegment};

@@ -154,8 +154,14 @@ pub fn to_frame(sec: f64, frame_sec: f64) -> i64 {
 /// Shortest a phoneme may come out of the alignment.
 const MIN_PHONE_SEC: f64 = 0.01;
 
-/// Least silence the leading pad keeps before the first onset.
+/// Least silence the leading pad keeps before the first onset (when it is
+/// that long at all).
 const LEAD_SILENCE_MIN_SEC: f64 = 0.05;
+
+/// The shortest a phoneme comes out of [`align_durations`], in frames: a
+/// hair over one, so the pipeline's cumulative rounding gives it a whole
+/// frame wherever it falls.
+const MIN_PHONE_FRAMES: f64 = 1.001;
 
 /// Lay the duration model's prediction (`predicted`, frames per phoneme)
 /// onto the score's anchors; seconds per phoneme, adding up to
@@ -166,6 +172,12 @@ const LEAD_SILENCE_MIN_SEC: f64 = 0.05;
 /// together if they would take more than [`BankScore::lead_max_sec`],
 /// and end on the first anchor; the silence takes the rest. Every later
 /// group is stretched (or squeezed) proportionally to fill its span.
+///
+/// No phoneme comes out shorter than one frame: one squeezed below that
+/// (a group whose span is shorter than its phonemes, a leading pad under
+/// 50 ms) is lengthened to a frame, taken from its group's longest
+/// phoneme, and — when the group has nothing left to give — from the
+/// unit's longest, so the total stays [`BankScore::total_sec`].
 pub fn align_durations(score: &BankScore, predicted: &[f32], frame_sec: f64) -> Vec<f64> {
     let n = score.phones.len();
     let mut out = vec![0.0; n];
@@ -206,7 +218,53 @@ pub fn align_durations(score: &BankScore, predicted: &[f32], frame_sec: f64) -> 
             out[i] = if total > 0.0 { span * pred[k] / total } else { span / len as f64 };
         }
     }
+    floor_to_a_frame(score, &mut out, frame_sec * MIN_PHONE_FRAMES);
     out
+}
+
+/// Lengthen every phoneme of `out` shorter than `min` to `min`, taking the
+/// time from its group's longest phonemes, then from the unit's.
+fn floor_to_a_frame(score: &BankScore, out: &mut [f64], min: f64) {
+    let mut carry = 0.0;
+    let mut start = 0;
+    for g in 0..score.groups.len() {
+        let len = score.phones[start..].iter().take_while(|p| p.group == g).count();
+        let idx = start..start + len;
+        start += len;
+        let mut deficit = 0.0;
+        for i in idx.clone() {
+            if out[i] < min {
+                deficit += min - out[i];
+                out[i] = min;
+            }
+        }
+        carry += take_from_longest(out, idx, deficit, min);
+    }
+    let n = out.len();
+    take_from_longest(out, 0..n, carry, min);
+}
+
+/// Shorten the longest phonemes of `out[idx]` (never below `min`) by
+/// `deficit` in all; what they could not give.
+fn take_from_longest(
+    out: &mut [f64],
+    idx: std::ops::Range<usize>,
+    mut deficit: f64,
+    min: f64,
+) -> f64 {
+    while deficit > 1e-12 {
+        let longest = idx
+            .clone()
+            .filter(|&i| out[i] > min + 1e-12)
+            .max_by(|a, b| out[*a].total_cmp(&out[*b]));
+        let Some(k) = longest else {
+            break;
+        };
+        let give = (out[k] - min).min(deficit);
+        out[k] -= give;
+        deficit -= give;
+    }
+    deficit
 }
 
 /// The pitch model's note layout: `(midi, rest, frames)` per note, the
@@ -214,8 +272,10 @@ pub fn align_durations(score: &BankScore, predicted: &[f32], frame_sec: f64) -> 
 /// and the trailing pad, the frames adding up to `total_frames`.
 ///
 /// Rest notes take the pitch of their nearest sung neighbour, split at the
-/// middle of a run of rests (OpenUtau's rule); a held note is voiced when
-/// the note it holds is.
+/// middle of a run of rests (OpenUtau's rule). A note is a rest exactly
+/// when it is not voiced ([`ScoreNote::voiced`]; the score marks a held
+/// note voiced when the note it holds is) — a hold after a rest or breath
+/// is not a rest because the gap before it is.
 pub fn pitch_notes(score: &BankScore, frame_sec: f64, total_frames: i64) -> Vec<(f32, bool, i64)> {
     // (start, end, midi, rest)
     let mut notes: Vec<(f64, f64, f32, bool)> = Vec::new();
@@ -224,11 +284,7 @@ pub fn pitch_notes(score: &BankScore, frame_sec: f64, total_frames: i64) -> Vec<
         if n.start_sec > cursor {
             notes.push((cursor, n.start_sec, n.midi, true));
         }
-        let rest = if n.slur {
-            notes.last().map_or(!n.voiced, |prev| prev.3)
-        } else {
-            !n.voiced
-        };
+        let rest = !n.voiced;
         let end = n.end_sec.max(n.start_sec);
         notes.push((n.start_sec, end, n.midi, rest));
         cursor = end;

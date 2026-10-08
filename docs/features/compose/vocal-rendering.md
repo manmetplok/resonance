@@ -1,6 +1,6 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `e3d187e9` + bank models on 2026-10-08.
+> Verified against master @ `e3d187e9` + bank models + their review fixes on 2026-10-08.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -82,20 +82,35 @@ only marks the lane stale.
   does, just before the acoustic model runs:
   - *Score.* Beside every rule segment the planner builds a `BankScore`
     from the same phoneme track: **groups** start at anchors — a note's
-    first vowel (in a consonant–glide–vowel onset like `b r ay`, the
-    glide), every rest and written breath, the trailing pad — at the time
-    the rule layout starts that phoneme; a syllable's onset consonants sit
-    in the group before (sung before the beat), group 0 is the leading pad
-    plus the first onset. A held note (`_`) folds its repeated vowel into
-    the vowel before and its coda closes the group, but stays a note of
-    its own for the pitch model.
+    first vowel, every rest and written breath, the trailing pad — at the
+    time the rule layout starts that phoneme (the vowel's start is the
+    beat); a syllable's onset consonants sit in the group before (sung
+    before the beat), group 0 is the leading pad plus the first onset. A
+    consonant–glide–vowel onset (`b r ay`) is no exception: the glide is
+    sung before the beat with the consonant, and the group and the pitch
+    model's note start on the vowel (see Decisions). A held note (`_`)
+    folds its repeated vowel into the vowel before and its coda closes the
+    group, but stays a note of its own for the pitch model (a rest exactly
+    when it sings no vowel — a hold after a rest or breath is sung).
+  - *Which models a unit uses* is decided at planning, per render unit
+    (`build_unit_segment` → `BankModelPaths::covering`): the models the
+    lane's flags ask for, less any whose phoneme list lacks one of the
+    unit's phonemes (TIGER's pitch model lacks `io`, `iz`, `rs`, which its
+    duration model has); the variance model goes with the pitch model.
+    Such a unit sings the rules' part — synthesized f0 with vibrato — and
+    its key says so (`RenderUnit::bank_models`).
   - *Duration* (`bank_timing`): the linguistic encoder in word mode
     (`tokens`, `languages` where the model takes them, `word_div`,
     `word_dur`) and the duration model (`ph_midi`, the speaker's
     embedding where it takes one; a duration model with one speaker
     serves every mode) predict frames per phoneme; each group is stretched
     to fill its anchor-to-anchor span, so every vowel still lands on its
-    beat and the unit keeps its length. Group 0's onset keeps its
+    beat and the unit keeps its length. No phoneme comes out under one
+    frame: one squeezed below (a group shorter than its phonemes) takes
+    the time from its group's longest phoneme, else the unit's. Language
+    ids go to each model through the language names (its own
+    `languages.json` against the acoustic model's; `ModelFacts::language`).
+    Group 0's onset keeps its
     predicted length up to 0.25 s (`MODEL_LEAD_MAX_SEC`, 50 ms of the pad
     stays silent; the rules cap it at 0.2 s) and becomes the take's
     pre-roll.
@@ -110,13 +125,20 @@ only marks the lane stale.
     curve it predicts — tension on Lilia and Meiji): its predicted
     tension (20 steps, on the final pitch) with the lane's own tension
     curve (slider, velocity / contour modulation, Tension curve) added on
-    top. Energy / breathiness / voicing predictions are not used (no
-    shipped acoustic model takes them).
-  - *Fallback.* A bank without a model, a flag off, or a model that fails
-    to load or run (a warning says which; e.g. TIGER's pitch model lacks
-    `io`, `iz`, `rs`) leaves that part to the rules: rule timing,
-    synthesized f0. With neither model run the unit is the rule segment
-    exactly.
+    top. Under the bank's pitch the contour modulation reads the written
+    pitch (`build_step_curve`), not the synthesized line, so vibrato and
+    portamento reach neither the take nor the key. Energy / breathiness /
+    voicing predictions are not used (no shipped acoustic model takes
+    them).
+  - *Fallback.* A bank without a model, a flag off, or a unit whose
+    phonemes a model lacks (above) leaves that part to the rules: rule
+    timing, synthesized f0; with neither model run the unit is the rule
+    segment exactly. A model that fails to **load or run** at render time
+    falls back the same way (a warning says which, once per process), but
+    the unit then does not sound like its key says: it is stitched into
+    the take and **not cached**, and the take records it under a key no
+    plan has (`UnitAudio::fallback`, `FALLBACK_KEY_MARK`), so the lane
+    reads `stale` and the next render tries it again.
   - *Steps.* Pitch 10, variance 20 (OpenUtau's defaults; Meiji's notes ask
     10 for pitch), acoustic 20 as before.
 - **Rests and breaths** (`compose/vocal_svs/rests.rs`, spec §8). A gap
@@ -165,9 +187,19 @@ only marks the lane stale.
   in dB (the gains multiply) before the one smoothing pass.
 - **Inference.** Each missing unit goes through
   `resonance_svs::pipeline::Renderer` — combined acoustic ONNX (mel)
-  then vocoder ONNX — on CPU, `speedup` 20, `depth` 1000. The acoustic
-  and vocoder sessions (and the bank models) load once per render, on the
-  first unit that misses the cache, not once per unit. All three shipped
+  then vocoder ONNX — on CPU, `speedup` 20, `depth` 1000
+  (`ACOUSTIC_STEPS`, `ACOUSTIC_DEPTH`). Sessions come from a process-wide
+  **session cache** (`resonance_svs::stages::session_cache`): keyed by the
+  model file's path, length and modification time, the provider and the
+  stage type, grouped by bank, the two most recently used banks kept, all
+  dropped when a voicebank rescan finds a bank added, removed or changed.
+  So a re-render of one edited unit loads nothing (§ Measurements); a
+  first render loads on the first unit that misses the cache. A cached
+  session is shared as `Arc<Mutex<…>>`: two lanes rendering with the same
+  bank at once take turns per model run. Loading reads the model, rewrites
+  it and drops the original before building the session (a model with
+  nothing to rewrite is built from its file), so our side never holds
+  more than two copies. All three shipped
   acoustic models are continuous-acceleration exports that take a `steps`
   input rather than `speedup`, and the pipeline passes the `speedup` value
   as the step count: the app renders with **20 sampling steps**. TIGER and
@@ -188,9 +220,27 @@ only marks the lane stale.
   new float input, fed from a SplitMix64 / Box–Muller stream keyed by a
   seed. The seed is `RenderUnit::seed`: the unit's content key without the
   lane params that only act after the models (`velocity_dynamics` on a
-  bank without energy), so the same model input gives the same samples in
-  any process, in any order. Checked: two renders of the audition on all
-  12 bank × speaker voices in separate processes are byte-identical.
+  bank without energy) and without the key-only versioning (render
+  revision, file digests, step counts, measurement knobs: `seed_identity`
+  keeps the identity seeding started with), so the same model input gives
+  the same samples in any process, in any order. Each noise input is fed
+  exactly what its op draws: a fixed-shape op (the vocoders'
+  `RandomUniform([1, harmonics])`) its size, a `*Like` op the count the
+  graph reports (an extra output), learned per session from the first
+  runs (`SeededSession`, `stages/seeded.rs`); the stream is prefix-stable,
+  so the length never changes the values. Checked: two renders of the
+  audition on all 12 bank × speaker voices in separate processes are
+  byte-identical, and the TIGER audition renders byte-identically before
+  and after the exact sizing and the session cache.
+  **Caveats.** Only a model's top-level random ops are rewritten. One in a
+  `Loop` / `If` / `Scan` body or a model-local function (it would need
+  other noise per iteration), one drawing a non-float type, a model
+  older than opset 12 or with external weight files is loaded as it is
+  and renders **not repeatably**; so is a model whose rewrite fails to
+  parse or build (it is loaded from its file, unseeded). Each says so in
+  a warning once per process (`SeededSession::repeatable`,
+  `Renderer::repeatable`). None of the shipped banks has any of these. A
+  unit whose bank model fell back at render time is never cached (above).
 - **Backend.** The app requests CPU. The crate can request `cuda` or
   `migraphx` (cargo features of the same name; the old `rocm` feature is
   gone because ONNX Runtime 1.23 removed that provider). A GPU provider is
@@ -202,10 +252,19 @@ only marks the lane stale.
 - **Cache.** `SvsRenderCache` keys units by content, per `(section,
   track)`, so an edit re-renders only the units it touched; the plan
   reports "N of M segments changed". Keys never need a model run: when a
-  bank model is in use the key hashes the `BankScore` it is fed and the
-  bank models' config paths (`model_identity`), and with the bank's pitch
-  it hashes the pitch bend instead of the synthesized f0 (so vibrato and
-  portamento, which are not heard, move no key). Each cached unit keeps
+  bank model is in use the key hashes the `BankScore` it is fed, which of
+  the lane's models the unit uses and the bank models' config paths and
+  file digests (`model_identity`), and with the bank's pitch it hashes the
+  pitch bend instead of the synthesized f0 (so vibrato and portamento,
+  which are not heard, move no key — the tension contour reads the
+  written pitch then). `model_identity` also carries the render revision
+  (`resonance_svs::pipeline::SVS_RENDER_REV`, bumped when the same input
+  would render differently), a digest of the acoustic and vocoder model
+  files' lengths and times (`InstalledBank::render_digest`, read at scan;
+  the bank's stamp covers the model files, so a replaced model is
+  re-read), the step counts and the measurement knobs
+  (`RESONANCE_BANK_EXPR`, `RESONANCE_BANK_VARIANCE`,
+  `RESONANCE_SVS_SEED_SALT`). Each cached unit keeps
   the silence its leading pad kept (`UnitAudio::lead_sec`), so the
   pre-roll follows the duration model's onset on a cache hit too. The key covers what renders the
   unit plus two lane params: the acoustic and vocoder config paths, the
@@ -376,9 +435,9 @@ only marks the lane stale.
 | Phoneme inventory + timing | `compose/vocal_svs/phonemes.rs`, `validate.rs` | `VoicebankPhonemes`, `nearest_substitutes`, `nearest_by_class`, `validate_for_voicebank`, `articulation_report_for` |
 | Segment build | `compose/vocal_svs/segment/{duration,f0,tension,energy,overlay,gender}.rs` | `build_segment`, `build_unit_segment`, `UnitSegment` |
 | Bank models (app) | `compose/vocal_svs/segment/score.rs`, `compose/vocal_svs/bank_render.rs`, `registry/profile.rs` | `build_bank_score`, `EntryRole`, `MODEL_LEAD_MAX_SEC`, `refine_segment`, `apply_prediction`, `unit_seed`, `BankProfile::{bank_models, active_bank_models}` |
-| Bank models (crate) | `resonance-svs/src/predict/{mod,config,score,run}.rs` | `BankModels` (`load`, `predict`), `PredictOptions`, `Prediction`, `BankScore`, `align_durations`, `pitch_notes`, `fit_frames`, `discover`, `DurationModel`, `PitchModel`, `VarianceModel` |
-| Seeded noise | `resonance-svs/src/stages/{noise,common}.rs` | `seed_random_ops`, `noise`, `NoiseSpec`, `SeededSession`, `ModelSource`, `build_session_from` |
-| Cache | `compose/vocal_svs/render_cache.rs` | `SvsRenderCache`, `split_render_units`, `render_units_cached`, `render_units_cached_with`, `UnitAudio`, `RenderPlan`, `RenderUnit::{state_key, seed, score}`, `plan_unit_keys`, `model_identity` |
+| Bank models (crate) | `resonance-svs/src/predict/{mod,config,score,run}.rs` | `BankModels` (`load`, `predict`), `PredictOptions`, `Prediction` (`fallback`), `BankScore`, `align_durations`, `pitch_notes`, `fit_frames`, `discover`, `BankModelPaths::{covers, covering, facts}`, `ModelFacts`, `language_map`, `DurationModel`, `PitchModel`, `VarianceModel` |
+| Seeded noise, sessions | `resonance-svs/src/stages/{noise,seeded,session_cache,common}.rs`, `pipeline.rs` | `seed_random_ops`, `SeededModel`, `noise`, `NoiseSpec`, `NoiseSize`, `SeededSession` (`load`, `run`, `noise_lengths`, `repeatable`), `session_cache::{get_or_load, invalidate}`, `ModelSource`, `build_session_from`, `warn_once`, `files_digest`, `render_files`, `SVS_RENDER_REV` |
+| Cache | `compose/vocal_svs/render_cache.rs` | `SvsRenderCache`, `split_render_units`, `render_units_cached`, `render_units_cached_with`, `UnitAudio` (`fallback`), `FALLBACK_KEY_MARK`, `RenderPlan`, `RenderUnit::{state_key, seed, score, bank_models}`, `plan_unit_keys`, `model_identity`, `seed_identity` |
 | Post-processing | `compose/vocal_svs/post.rs` | `collect_rest_intervals`, `apply_ap_gate`, `safety_gain_factor`, `resample_to`, `write_stereo_wav` |
 | Orchestration | `resonance-app/src/update/compose/vocal_render.rs`, `vocal_render_plan.rs`, `vocal_audio_io.rs`, `vocal_audio_install.rs`, `vocal_midi_install.rs`, `vocal_control.rs`, `regenerate.rs` | `enqueue_vocal_render`, `render_target_or_missing`, `spawn_render`, `rerender_vocal_audio`, `plan_vocal_render`, `handle_vocal_audio_ready`, `reap_orphaned_takes`, `control_generate_vocal`, `regenerate_lane_as_side_effect` |
 | Registry | `resonance-app/src/compose/state.rs` | `VocalAudioRegistry` (`clips`, `render_epoch`, `in_flight_render`, `clip_lyrics`, `render_cache`, `status`) |
@@ -403,8 +462,13 @@ It depends only on `resonance-music-theory`.
   loudness** (0–1) sliders (`SetVocalRestThresholdBeats`,
   `SetVocalVelocityDynamics`, coalesced undo) and the **Timing from the
   voicebank** / **Pitch from the voicebank** toggles under the Speaker
-  picker (`ToggleVocalBankTiming` / `ToggleVocalBankPitch`, shown on every
-  bank); tempo mismatch warning in
+  picker (`ToggleVocalBankTiming` / `ToggleVocalBankPitch`), each shown
+  only when the lane's bank ships that model
+  (`VoicebankChoice::{has_timing_model, has_pitch_model}`). While the
+  bank's pitch model sings, the Vibrato, Vibrato rate and Portamento
+  sliders are muted (`theme::muted_slider_style`, still adjustable)
+  under the hint "Vibrato and portamento: the voicebank sings its own";
+  tempo mismatch warning in
   the inspector. A missing bank surfaces as the render-failure banner, and
   the lane keeps its audio. A lane whose audio is not current shows a
   **badge** at the top of its inspector body and in the vocal-roll
@@ -537,9 +601,12 @@ LUNAI English singers, Meiji v170) join the index is Jorrit's call — see
 | Control render, `svs_backend` in hello | `tests/control/control_endpoint.rs`, `control_vocal.rs`, `control_vocal_render_all_lanes.rs`, `control_jobs.rs`, `tests/e2e_compose_via_control.rs` | same |
 | SVS crate | `resonance-svs/tests/{ds_validation,mix_timeline,voicebank_manifest,voicebank_phonetics,smoke}.rs` (`read_curve_support`, two-level layout, library vocoders, `dsdict` parsing, execution-provider names); `smoke.rs::end_to_end_render` is `#[ignore]` and also checks `active_backend()` | `./scripts/run-tests.py -p resonance-svs`; by hand: `SVS_POC_VOICEBANK_DIR=… SVS_POC_DS_FILE=… cargo test -p resonance-svs --test smoke -- --ignored` |
 | Bank audition: the phrase fills its notes and fits every built-in voice once transposed (hermetic); every installed bank × speaker renders it non-silently | `tests/vocal/bank_audition.rs` (`audition` is `#[ignore]`, no-ops with no `$RESONANCE_AUDITION_OUT`) | `scripts/vocal-audition.py`, `scripts/vocal-intelligibility.py` (see [Bank audition](#bank-audition)) |
-| Bank models, model-free: the score's groups (onsets before the beat, a glide after a consonant starting the note, a hold folded into its vowel but kept as a note, breath and rest groups), the flags picking models, keys following the flags only where the bank has the models, vibrato moving no key under the bank's pitch while pitch bend does | `tests/vocal/vocal_bank_models.rs` | `./scripts/run-tests.py -p resonance-app` |
-| Bank model inputs and alignment (word_div / word_dur / ph_midi, onset kept and capped, groups filled, pitch notes with rest fill, frame fitting, the rule fallback with no model) | `resonance-svs/tests/ds_validation.rs` (`bank_score`) | `./scripts/run-tests.py -p resonance-svs` |
-| Seeded noise: a hand-written ONNX model's `RandomNormalLike` / `RandomUniform` rewritten to fed noise, same seed same output across sessions, another seed other output, prefix-stable stream, a model without random ops untouched | `resonance-svs/tests/smoke.rs` | same |
+| Bank models, model-free: the score's groups (onsets before the beat, a glide onset too, the note and its group on the vowel, a hold folded into its vowel but kept as a note, breath and rest groups), the flags picking models, keys following the flags only where the bank has the models, vibrato moving no key under the bank's pitch while pitch bend does — also on a bank with tension; a unit whose phonemes the pitch model lacks planned without it (its key hearing vibrato), a replaced acoustic / vocoder / pitch model file moving the keys | `tests/vocal/vocal_bank_models.rs` | `./scripts/run-tests.py -p resonance-app` |
+| A unit rendered with a fallback is stitched but not cached and recorded under a marked key; the next render retries it | `tests/vocal/vocal_render_cache.rs` (`a_unit_rendered_with_a_fallback_…`) | same |
+| Voice card: both model toggles and the muted vibrato / portamento sliders with their hint on a bank with models (golden), neither toggle nor hint on a bank without | `tests/compose/compose_rail_collapse.rs` (`vocal_rail_installed_bank_with_speakers` → `compose_vocal_rail_installed_bank-wgpu.png`, `vocal_rail_bank_without_models_hides_the_model_toggles`) | `RESONANCE_BLESS=1` |
+| Bank model inputs and alignment (word_div / word_dur / ph_midi, onset kept and capped, groups filled, every phoneme at least a frame — squeezed groups and a leading pad under 50 ms — pitch notes with rest fill, a hold after a rest sung, frame fitting, the rule fallback with no model) | `resonance-svs/tests/ds_validation.rs` (`bank_score`) | `./scripts/run-tests.py -p resonance-svs` |
+| Discovery: per-model phonemes, language ids mapped by name, file digests; a unit's models narrowed to those that know its phonemes | `resonance-svs/tests/voicebank_manifest.rs` (`the_banks_own_models_are_found_…`, `a_unit_uses_only_the_bank_models_…`) | same |
+| Seeded noise: a hand-written ONNX model's `RandomNormalLike` / `RandomUniform` rewritten to fed noise, same seed same output across sessions, another seed other output, prefix-stable stream, a model without random ops not copied; a session feeding a fixed op its size and learning a `*Like` op's count; a `Loop` body's random op counted and the model loaded unseeded; a `*Like` without `dtype` seeded over floats and falling back to the file over a double; opset 11, external data and a double `dtype` left unseeded; a truncated model an error, not a panic | `resonance-svs/tests/smoke.rs` | same |
 | Real models: each shipped bank's duration model fills every group (vowels on their anchors, length kept) and differs from the rules, its pitch model sings each long note within 50 cents with no octave jump, both repeatable; a Lilia take renders bit-identically twice, is audible and keeps its rest silent | `tests/vocal/vocal_bank_models.rs` (`real::*`, no-ops unless set) | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
 | Dictionary replacements: parsing the section alone, the scan spelling phones through them, read-back to ARPAbet; Lilia spelt `L`/`t0`/…, installed and not; her dictionary entries read back | `resonance-svs/tests/{voicebank_manifest,voicebank_phonetics}.rs`, `tests/vocal/{bank_phonemisation,vocal_phoneme_accessor,vocal_segment_pronunciation}.rs` | `./scripts/run-tests.py` |
 | Timbre → gender: Warm neutral on every bank, TIGER a quarter of the swing | `tests/vocal/vocal_expression_segment.rs` | same |
@@ -615,7 +682,33 @@ results.
   estimate is a fair guide; the model's actual timing is not reported.
 - Seeding mixes nothing lane-specific in: two lanes singing the same
   notes with the same bank, speaker and params render identical audio (a
-  future doubling feature has to salt the seed).
+  future doubling feature has to salt the seed). Kept deliberately: the
+  seed is a function of what the models are fed, which is what makes a
+  take reproducible.
+- Which bank models a unit uses is decided at planning from the models'
+  phoneme lists, not discovered when a model rejects a phoneme at render
+  time: the key then always says what the unit sings. A model that fails
+  at render time anyway makes its unit uncacheable rather than caching
+  audio under a key that promises the model's output.
+- The seed keeps the identity it had when seeding was introduced
+  (`seed_identity`), while the key also hashes the render revision, the
+  model file digests and the knobs: re-keying a unit (a new revision, a
+  re-stamped model) re-renders it but with the same noise, so a fix that
+  does not touch the model input leaves takes bit-identical.
+- Bank model language ids are mapped through the language names of each
+  model's `languages.json` rather than assumed equal to the acoustic
+  model's (they are on the shipped banks); an id a model does not list
+  goes through unchanged.
+- A consonant–glide–vowel onset's glide is sung before the beat like any
+  onset consonant; the note's group and the pitch model's note start on
+  the vowel. Against OpenUtau, which opens the note's group with the
+  glide: built that way (the group on the beat, the glide sung from it)
+  the held-out phrase measured TIGER 92 % against 96 % (§ Measurements).
+  The branch before the review started the group at the glide's rule
+  start, a little before the beat, so its note began early.
+- Model warnings (a model not used, a failed prediction, unseeded random
+  ops, a voicebank folder skipped) are logged once per process per file
+  and message (`warn_once`): rescans and renders repeat them otherwise.
 - `RESONANCE_SVS_SEED_SALT=<n>` (measurement only) mixes `n` into every
   seed, to measure the spread across noise draws.
 - Sampling steps stay 20 (`speedup`): 50 measured no better (TIGER 85 /
@@ -702,11 +795,17 @@ results.
 - The phrase-initial onset lead is capped at 0.2 s on the rule path
   (`PAD_ONSET_MAX_SEC`) and 0.25 s under the duration model: a longer
   cluster (`str`, ~0.28 s) is shortened to fit.
-- The bank models' sessions load per render (≈ 0.3–0.7 s per render on
-  this machine); a process-wide session cache would make an interactive
-  re-render of one changed unit cheaper.
-- The GUI toggles show on every bank; on a bank without the model they do
-  nothing (the voice card does not say so; `vocal.voicebanks` does).
+- `song.vocal` reports the **rule** timing: its per-note `duration_ms` /
+  `too_short` and the articulation report are the rule layout's
+  estimates, not what the bank's duration model sings (that needs a model
+  run, which planning never does).
+- A random op inside a model's control-flow body or function is not
+  seeded: such a model renders, but not repeatably (a warning says so).
+  None of the shipped banks has one.
+- The session cache holds the two most recently used banks' sessions
+  (~0.5–0.7 GB resident per bank on the shipped ones); there is no
+  setting for it, and two lanes rendering with one bank at once take
+  turns per model run.
 - On the held-out phrase the remaining errors are mostly "street" heard
   "streets" before the breath (TIGER) and the first word on some seeds.
 - Short passing notes (≈ 0.27 s) often sit 50–190 cents off their
@@ -720,6 +819,51 @@ results.
   the knob is not exposed to the user.
 
 ## Measurements
+
+**Review fixes** (session cache, exact noise sizing, per-unit model
+coverage, glide anchors, tension from the written pitch), 2026-10-08,
+release build, one process per bank (a models root holding only that
+bank), mean of 2 runs. "First" is a fresh process's first render of a
+two-phrase take (two units); "re-render" is the same take after an edit
+that changes one of its units (mean of 4 edits), i.e. an interactive
+re-render: `vocal_bank_models::real::measure_one_unit_rerender`
+(`#[ignore]`d; peak RSS is `VmHWM` reset before each render).
+
+| Bank | First render (before → after) | Peak RSS, first | One-unit re-render | Peak RSS, re-render | Resident after |
+|---|---|---|---|---|---|
+| TIGER | 1.23 → 1.22 s | 1272 → 1240 MiB | 0.78 → 0.39 s | 1618 → 768 MiB | 683 → 719 MiB |
+| Lilia | 1.33 → 1.31 s | 1127 → 1083 MiB | 0.84 → 0.45 s | 1372 → 732 MiB | 672 → 694 MiB |
+| Meiji | 0.93 → 0.91 s | 798 → 778 MiB | 0.61 → 0.28 s | 999 → 577 MiB | 499 → 539 MiB |
+
+A re-render loads nothing now (the sessions are cached), which halves it
+and halves its peak; the bank's sessions stay resident (+20–50 MiB over a
+process that dropped them and kept the allocator's pages). A first render
+still peaks at the model loads, ONNX Runtime's own copies included; our
+side holds at most the read model and its rewrite at once.
+
+Renders are bit-identical across processes after the fixes too (the
+audition on all 12 voices, rendered twice), and the TIGER audition —
+whose phrase has no consonant–glide–vowel onset and whose bank takes no
+tension — renders byte-for-byte what the branch did before the fixes:
+the exact noise sizing, the session cache and the new keys leave the
+audio alone.
+
+Whisper `small.en`, the same seeds before and after (salts 0–7; the
+audition phrase on salts 0–2):
+
+| Bank | Audition, branch → fixes | Held-out, branch | Held-out, glide opening the note's group (OpenUtau) | Held-out, fixes (glide before the beat) |
+|---|---|---|---|---|
+| TIGER (7 modes, 56 takes) | 100 → 100 % | 95.3 % | 92.2 % | 96.2 % |
+| Meiji (4 modes, 32 takes) | 100 → 100 % | 96.4 % | 95.3 % | 96.9 % |
+| Lilia (8 takes) | 100 → 100 % | 96.4 % | 97.3 % | 97.3 % |
+
+The middle column is the reading of OpenUtau's layout first built for
+the review (the glide opens the note's group on the beat): the held-out
+phrase's first word, "bright", came out as "red" / "bread" / "Brett" on
+more TIGER takes, so the glide is sung before the beat like any onset
+consonant (§ Decisions). With it the fixes measure at or above the
+branch on every bank (differences of a point are one word in a take or
+two).
 
 **Bank models**, 2026-10-08: Whisper `small.en` word accuracy, mean over
 3 seeds × every speaker (TIGER 7, Meiji 4; Lilia 11 seeds), the audition

@@ -6,13 +6,15 @@
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::fs;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::audio::{mix_into_timeline, write_mono_f32_wav};
 use crate::config::{load_acoustic, load_phoneme_dict, load_vocoder, AcousticConfig};
 use crate::ds::{load_ds_file, DsSegment};
-use crate::stages::acoustic::{AcousticStage, PreprocessedAcoustic, SPK_EMBED_SIZE};
+use crate::stages::acoustic::{AcousticFlags, AcousticStage, PreprocessedAcoustic, SPK_EMBED_SIZE};
 use crate::stages::common::ExecutionProvider;
+use crate::stages::session_cache;
 use crate::stages::vocoder::VocoderStage;
 
 #[derive(Debug, Clone)]
@@ -104,7 +106,9 @@ pub fn render_segments(segments: &[DsSegment], args: &PipelineArgs) -> Result<Re
 }
 
 /// The acoustic + vocoder models of one bank, loaded once and reused for
-/// any number of segments (a render of several units loads them once).
+/// any number of segments. The sessions come from the process-wide
+/// [`session_cache`], so a later render of the same bank (a re-render of
+/// one edited unit) does not load them again.
 pub struct Renderer {
     acoustic_cfg: AcousticConfig,
     phoneme_map: HashMap<String, i64>,
@@ -113,8 +117,9 @@ pub struct Renderer {
     sample_rate: u32,
     speedup: i32,
     depth: f32,
-    acoustic: AcousticStage,
-    vocoder: VocoderStage,
+    acoustic: Arc<Mutex<AcousticStage>>,
+    acoustic_flags: AcousticFlags,
+    vocoder: Arc<Mutex<VocoderStage>>,
     speaker_embeddings: SpeakerEmbeddings,
     selected_speaker: Option<String>,
 }
@@ -163,22 +168,43 @@ impl Renderer {
             }
         }
 
-        let acoustic = AcousticStage::load(
+        let group = args
+            .acoustic_config
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
+        let acoustic = session_cache::get_or_load(
+            &group,
             &acoustic_cfg.acoustic_model,
             args.execution_provider,
-            args.device_index,
+            || {
+                let stage = AcousticStage::load(
+                    &acoustic_cfg.acoustic_model,
+                    args.execution_provider,
+                    args.device_index,
+                )?;
+                tracing::info!("acoustic features: {:?}", stage.supported_features());
+                Ok(stage)
+            },
         )?;
-        tracing::info!("acoustic features: {:?}", acoustic.supported_features());
+        let acoustic_flags = *lock(&acoustic).supported_features();
 
         // Vocoder runs on CPU regardless of execution provider for the acoustic model. Mirrors
         // Jobsecond's choice: most vocoders are CPU-bound matmul + 1D conv, GPU dispatch overhead
         // dominates. Users can change this trivially if they want.
-        let vocoder = VocoderStage::load(
+        let vocoder = session_cache::get_or_load(
+            &group,
             &vocoder_cfg.model_path,
             ExecutionProvider::Cpu,
-            args.device_index,
-            vocoder_cfg.num_mel_bins as usize,
-            vocoder_cfg.hop_size as usize,
+            || {
+                VocoderStage::load(
+                    &vocoder_cfg.model_path,
+                    ExecutionProvider::Cpu,
+                    args.device_index,
+                    vocoder_cfg.num_mel_bins as usize,
+                    vocoder_cfg.hop_size as usize,
+                )
+            },
         )?;
 
         let speaker_embeddings = load_speaker_embeddings(&acoustic_cfg)?;
@@ -195,10 +221,17 @@ impl Renderer {
             speedup,
             depth,
             acoustic,
+            acoustic_flags,
             vocoder,
             speaker_embeddings,
             selected_speaker,
         })
+    }
+
+    /// Whether the acoustic model and the vocoder render repeatably: every
+    /// random op of both reads seeded noise (see [`crate::stages::noise`]).
+    pub fn repeatable(&self) -> bool {
+        lock(&self.acoustic).model.repeatable && lock(&self.vocoder).model.repeatable
     }
 
     /// The vocoder's output rate.
@@ -220,17 +253,14 @@ impl Renderer {
             &self.phoneme_map,
             self.frame_length,
             &self.acoustic_cfg,
-            &self.acoustic,
+            &self.acoustic_flags,
             &self.speaker_embeddings,
             self.selected_speaker.as_deref(),
         )?;
         let n_frames = pd.f0.len();
-        let mut mel = self
-            .acoustic
-            .infer(&mut pd, self.speedup as i64, self.depth, seed)?;
-        let mut waveform = self
-            .vocoder
-            .infer(&mut mel, &pd.f0, seed ^ 0x564f_434f_4445_5221)?;
+        let mut mel = lock(&self.acoustic).infer(&mut pd, self.speedup as i64, self.depth, seed)?;
+        let mut waveform =
+            lock(&self.vocoder).infer(&mut mel, &pd.f0, seed ^ 0x564f_434f_4445_5221)?;
         // Vocoder waveform length is typically n_frames * hop_size, but some vocoders return
         // shorter/longer. Trim very long results to a sensible cap.
         let expected = n_frames * self.hop_size;
@@ -239,6 +269,42 @@ impl Renderer {
         }
         Ok(waveform)
     }
+}
+
+/// The files a render of the bank whose acoustic config is
+/// `acoustic_config` (with vocoder config `vocoder_config`) reads: the
+/// configs, the phoneme dictionary and both models — what a render key
+/// digests ([`crate::stages::common::files_digest`]) so that replacing a
+/// model re-renders. A config that does not parse contributes itself only.
+pub fn render_files(
+    acoustic_config: &std::path::Path,
+    vocoder_config: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let mut files = vec![acoustic_config.to_path_buf()];
+    if let Ok(cfg) = load_acoustic(acoustic_config) {
+        files.push(cfg.phonemes_path);
+        files.push(cfg.acoustic_model);
+    }
+    if let Some(vocoder) = vocoder_config {
+        files.push(vocoder.to_path_buf());
+        if let Ok(cfg) = load_vocoder(vocoder) {
+            files.push(cfg.model_path);
+        }
+    }
+    files
+}
+
+/// Bumped whenever a change to this crate makes the same score, models and
+/// seed render different samples (the app hashes it into every render
+/// unit's key, so old takes read stale instead of being reused). 2: the
+/// bank models' per-unit coverage, the one-frame floor in the alignment
+/// and the pitch model's rest flags (2026-10-08).
+pub const SVS_RENDER_REV: u32 = 2;
+
+/// Lock a cached session, recovering it from a panicked holder (a run
+/// that panicked leaves the session as usable as before it).
+pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[derive(Debug, Clone)]
@@ -254,7 +320,7 @@ fn preprocess_acoustic(
     phoneme_map: &HashMap<String, i64>,
     frame_length: f64,
     cfg: &AcousticConfig,
-    acoustic: &AcousticStage,
+    flags: &AcousticFlags,
     speaker_embeddings: &SpeakerEmbeddings,
     selected_speaker: Option<&str>,
 ) -> Result<PreprocessedAcoustic> {
@@ -327,7 +393,7 @@ fn preprocess_acoustic(
         )
     };
 
-    let spk_embed = if acoustic.flags.multi_speakers {
+    let spk_embed = if flags.multi_speakers {
         let speaker = selected_speaker
             .ok_or_else(|| anyhow!("acoustic model is multi-speaker but no speaker selected"))?;
         let emb = speaker_embeddings
@@ -345,13 +411,13 @@ fn preprocess_acoustic(
     // Energy / breathiness are required when the acoustic model declares them but the .ds
     // doesn't supply them. In a real pipeline we'd run the variance model here; for the PoC
     // we return an error so the user knows to supply them or pick a simpler voicebank.
-    if acoustic.flags.energy && energy.is_none() {
+    if flags.energy && energy.is_none() {
         return Err(anyhow!(
             "acoustic model requires energy input but the .ds supplied none and the variance \
              predictor is not wired up in this PoC"
         ));
     }
-    if acoustic.flags.breathiness && breathiness.is_none() {
+    if flags.breathiness && breathiness.is_none() {
         return Err(anyhow!(
             "acoustic model requires breathiness input but the .ds supplied none and the \
              variance predictor is not wired up in this PoC"

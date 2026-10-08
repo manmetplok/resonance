@@ -41,9 +41,14 @@ a `.ds` segment, whose phoneme durations and `f0_seq` it reads as given.
 (`dsdur/`, `dspitch/`, `dsvariance/`, OpenUtau's layout) to produce those
 for the app (`resonance-app` `vocal_svs`, see
 `docs/features/compose/vocal-rendering.md`). Every diffusion model's and
-NSF vocoder's in-graph random ops are rewritten to read seeded noise
-(`stages/noise.rs`), so a render is a pure function of its inputs and
-seed.
+NSF vocoder's top-level in-graph random ops are rewritten to read seeded
+noise (`stages/noise.rs`, `stages/seeded.rs`), so a render is a pure
+function of its inputs and seed; a random op the rewrite cannot reach (in
+a `Loop` / `If` / `Scan` body or a function, a non-float one, an opset
+before 12, external data) leaves its model loadable but not repeatable,
+with a warning. Loaded sessions are kept in a process-wide cache
+(`stages/session_cache.rs`, the two most recently used banks), so a
+second render of a bank does not load its models again.
 
 ## Build
 
@@ -162,7 +167,9 @@ resonance-svs/
 │       ├── common.rs          # session builder, execution-provider parsing
 │       ├── acoustic.rs        # combined acoustic ONNX (Jobsecond-style)
 │       ├── vocoder.rs         # mel + f0 → waveform
-│       └── noise.rs           # seeded noise: rewrites Random* ops into fed inputs
+│       ├── noise.rs           # seeded noise: rewrites Random* ops into fed inputs
+│       ├── seeded.rs          # SeededSession: load fallback, noise sizing, runs
+│       └── session_cache.rs   # process-wide session cache (2 banks)
 │   └── predict/               # the bank's own duration / pitch / variance models
 │       ├── config.rs          # dsdur/dspitch/dsvariance discovery + configs
 │       ├── score.rs           # BankScore, inputs, anchor alignment (pure)

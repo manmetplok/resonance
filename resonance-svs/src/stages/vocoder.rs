@@ -2,21 +2,21 @@
 
 use anyhow::{anyhow, Context, Result};
 use ndarray::{Array2, Array3};
-use ort::session::Session;
 use ort::value::Value;
 use std::path::Path;
 
 use super::acoustic::MelOutput;
 use super::common::{input_names, output_names, ExecutionProvider, SeededSession};
-use super::noise::NoiseSpec;
 
 pub struct VocoderStage {
-    pub session: Session,
+    /// The model; an NSF vocoder's excitation noise and harmonic phases
+    /// are fed from the `seed` each [`Self::infer`] takes
+    /// ([`super::noise`]).
+    pub model: SeededSession,
     pub n_mel_bins: usize,
-    /// The excitation noise and harmonic phases of an NSF vocoder, fed
-    /// from the `seed` each [`Self::infer`] takes ([`super::noise`]).
-    pub noise: Vec<NoiseSpec>,
-    /// Noise values per mel frame: the hop times the source's harmonics.
+    /// At most how many noise values per mel frame it draws (the first run
+    /// of a session is fed this many, later ones what it draws): the hop
+    /// times the source's harmonics.
     noise_per_frame: usize,
 }
 
@@ -30,9 +30,9 @@ impl VocoderStage {
         n_mel_bins: usize,
         hop_size: usize,
     ) -> Result<Self> {
-        let SeededSession { session, noise, .. } = SeededSession::load(model_path, ep, device_index)?;
-        let ins = input_names(&session);
-        let outs = output_names(&session);
+        let model = SeededSession::load(model_path, ep, device_index)?;
+        let ins = input_names(&model.session);
+        let outs = output_names(&model.session);
         for required in &["mel", "f0"] {
             if !ins.contains(*required) {
                 return Err(anyhow!(
@@ -48,9 +48,8 @@ impl VocoderStage {
             ));
         }
         Ok(Self {
-            session,
+            model,
             n_mel_bins,
-            noise,
             // NSF-HiFiGAN's sine source draws noise for its harmonics (9 on
             // the shipped vocoders) at every output sample.
             noise_per_frame: hop_size * 10,
@@ -98,27 +97,20 @@ impl VocoderStage {
         let f0_arr = Array2::<f32>::from_shape_vec((1, n_frames), f0.iter().map(|x| *x as f32).collect())
             .context("packing f0 for vocoder")?;
 
-        let mut inputs: Vec<(String, Value)> = vec![
+        let inputs: Vec<(String, Value)> = vec![
             ("mel".into(), Value::from_array(mel_arr)?.into()),
             ("f0".into(), Value::from_array(f0_arr)?.into()),
         ];
-        inputs.extend(SeededSession::noise_values(
-            &self.noise,
-            seed,
-            n_frames,
-            self.noise_per_frame,
-        )?);
-
-        let outputs = self
-            .session
-            .run(inputs)
-            .context("running vocoder ONNX session")?;
-        let waveform_value = outputs
-            .get("waveform")
-            .ok_or_else(|| anyhow!("vocoder output `waveform` not present"))?;
-        let (_shape, data) = waveform_value
-            .try_extract_tensor::<f32>()
-            .context("extracting waveform tensor")?;
-        Ok(data.to_vec())
+        self.model
+            .run(&inputs, seed, n_frames, self.noise_per_frame, |outputs| {
+                let waveform_value = outputs
+                    .get("waveform")
+                    .ok_or_else(|| anyhow!("vocoder output `waveform` not present"))?;
+                let (_shape, data) = waveform_value
+                    .try_extract_tensor::<f32>()
+                    .context("extracting waveform tensor")?;
+                Ok(data.to_vec())
+            })
+            .context("running vocoder ONNX session")
     }
 }

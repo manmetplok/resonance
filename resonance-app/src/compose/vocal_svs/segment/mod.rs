@@ -7,7 +7,8 @@
 //! - [`f0`] samples the per-frame f0 curve from those arrays and
 //!   applies portamento + vibrato.
 //! - [`tension`] derives the optional per-frame tension curve from
-//!   the same f0 metadata for voicebanks that accept it.
+//!   the same f0 metadata for voicebanks that accept it (from the written
+//!   pitch alone when the bank's pitch model sings the unit).
 //! - [`energy`] derives the velocity-driven energy curve for voicebanks
 //!   that take one.
 //!
@@ -34,10 +35,10 @@ mod tension;
 
 use duration::build_phoneme_track;
 use energy::build_energy_curve;
-use f0::{build_f0_curve, F0_TIMESTEP};
+use f0::{build_f0_curve, build_step_curve, F0_TIMESTEP};
 use gender::build_gender_curve;
 use overlay::{curve_gain_db, overlay_envelope, overlay_pitch_cents, CurveClock};
-use resonance_svs::predict::BankScore;
+use resonance_svs::predict::{BankModelPaths, BankScore};
 use score::build_bank_score;
 use tension::build_tension_curve;
 
@@ -79,6 +80,11 @@ pub struct UnitSegment {
     /// segment start; empty when it has no points. Already in
     /// `segment.f0`; kept apart so it can ride on the bank's pitch.
     pub bend_cents: Vec<f64>,
+    /// The bank's own models this unit renders with: the ones the lane's
+    /// flags ask for that know every phoneme of [`Self::score`] (a model
+    /// lacking one leaves its part to the rules for this unit — decided
+    /// here, at planning, so the unit's key says which).
+    pub bank_models: BankModelPaths,
 }
 
 /// [`build_segment`], keeping the [`BankScore`] and the pitch bend the
@@ -104,13 +110,25 @@ pub fn build_unit_segment(
     // Breathiness → breathiness. Same gate: no shipped bank takes it.
     let breathiness = overlay_envelope(params, CurveKind::Breathiness, bank, n_frames, clock)
         .unwrap_or_default();
+    let score = build_bank_score(&track, notes, assigned);
+    let bank_models = bank
+        .active_bank_models(params.bank_timing, params.bank_pitch)
+        .covering(score.phones.iter().map(|p| p.symbol.as_str()));
     // Tension → tension. A shaped curve on a bank that takes tension
     // replaces the auto-derived velocity/contour tension; otherwise keep
-    // the baseline (which itself no-ops on TIGER).
+    // the baseline (which itself no-ops on TIGER). When the bank's pitch
+    // model sings the unit, the contour reads the written pitch: the
+    // synthesized line's portamento and vibrato are not heard, so they
+    // must not lean the tension (nor move the unit's key) either.
     let tension = overlay_envelope(params, CurveKind::Tension, bank, n_frames, clock)
-        .unwrap_or_else(|| build_tension_curve(&f0_curve, params, bank));
+        .unwrap_or_else(|| {
+            if bank_models.pitch.is_some() {
+                build_tension_curve(&build_step_curve(&track), params, bank)
+            } else {
+                build_tension_curve(&f0_curve, params, bank)
+            }
+        });
     let gender = build_gender_curve(params, bank, n_frames);
-    let score = build_bank_score(&track, notes, assigned);
     let bend_cents = overlay_pitch_cents(params, n_frames, clock).unwrap_or_default();
 
     let segment = DsSegment {
@@ -148,6 +166,7 @@ pub fn build_unit_segment(
         segment,
         score,
         bend_cents,
+        bank_models,
     }
 }
 

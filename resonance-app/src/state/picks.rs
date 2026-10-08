@@ -414,6 +414,12 @@ pub(crate) struct VoicebankChoice {
     pub id: std::rc::Rc<str>,
     pub label: std::rc::Rc<str>,
     pub speakers: std::rc::Rc<[SpeakerChoice]>,
+    /// Whether the bank ships its own duration model (`dsdur`): the
+    /// "Timing from the voicebank" toggle shows only then.
+    pub has_timing_model: bool,
+    /// Whether the bank ships its own pitch model (`dspitch`): the "Pitch
+    /// from the voicebank" toggle shows only then.
+    pub has_pitch_model: bool,
 }
 
 impl std::fmt::Display for VoicebankChoice {
@@ -446,10 +452,13 @@ impl VoicebankChoice {
                 label: s.name,
             })
             .collect();
+        let models = profile.bank_models();
         Self {
             id: profile.id().as_str().into(),
             label: label.into(),
             speakers: speakers.into(),
+            has_timing_model: models.duration.is_some(),
+            has_pitch_model: models.pitch.is_some(),
         }
     }
 

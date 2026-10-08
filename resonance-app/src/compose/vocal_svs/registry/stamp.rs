@@ -5,7 +5,9 @@
 //!
 //! A [`BankStamp`] is the modification time and length of every file the
 //! scan read (the acoustic config, the phoneme list, the character file,
-//! `languages.json`, the English dictionary, the vocoder config) plus the
+//! `languages.json`, the English dictionary, the vocoder config), the
+//! models a render loads (acoustic, vocoder and the bank's own, with their
+//! configs — whose digests the render keys hash), plus the
 //! bank folder and its immediate subfolders, whose times move when a file
 //! is added or removed in them — a dictionary or a vocoder dropped in
 //! later. Reading it is a few `stat` calls, against parsing YAML and JSON
@@ -36,6 +38,8 @@ pub(super) struct StampedPaths<'a> {
     pub phoneme_dict: &'a Path,
     pub english_dict: Option<&'a Path>,
     pub vocoder_config: Option<&'a Path>,
+    /// The model files (and their configs) a render loads.
+    pub model_files: &'a [PathBuf],
 }
 
 impl BankStamp {
@@ -55,6 +59,7 @@ impl BankStamp {
         files.push(paths.phoneme_dict.to_path_buf());
         files.extend(paths.english_dict.map(Path::to_path_buf));
         files.extend(paths.vocoder_config.map(Path::to_path_buf));
+        files.extend(paths.model_files.iter().cloned());
         files.sort();
         files.dedup();
         let files = files

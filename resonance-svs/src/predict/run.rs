@@ -4,18 +4,22 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use ndarray::{Array0, Array2, Array3};
 use ort::session::Session;
 use ort::value::Value;
 
-use super::config::{ModelConfig, ModelKind};
+use super::config::{ModelConfig, ModelFacts, ModelKind};
 use super::score::{pitch_notes, BankScore};
+use crate::pipeline::lock;
 use crate::stages::common::{build_session, input_names, ExecutionProvider, SeededSession};
+use crate::stages::session_cache;
 
-/// Noise values per frame the pitch / variance models draw (64 repeat
-/// bins on the pitch models; up to four variances × their bins).
+/// At most how many noise values per frame the pitch / variance models
+/// draw (64 repeat bins on the pitch models; up to four variances × their
+/// bins): what a session's first run is fed ([`crate::stages::seeded`]).
 const PITCH_NOISE_PER_FRAME: usize = 256;
 const VARIANCE_NOISE_PER_FRAME: usize = 1024;
 
@@ -23,9 +27,37 @@ const VARIANCE_NOISE_PER_FRAME: usize = 1024;
 /// ids — what all three predictors share.
 struct Encoder {
     cfg: ModelConfig,
-    linguistic: Session,
+    linguistic: Arc<Mutex<Session>>,
     linguistic_inputs: std::collections::HashSet<String>,
     embeds: HashMap<String, Vec<f32>>,
+    /// The acoustic model's language ids → this model's.
+    facts: ModelFacts,
+}
+
+/// The bank a model config belongs to, for the session cache: the folder
+/// holding the acoustic config, next to `dsdur/` and friends.
+fn bank_group(config: &Path) -> &Path {
+    config.parent().and_then(Path::parent).unwrap_or(Path::new("."))
+}
+
+/// A plain session for `path`, from the session cache.
+fn cached_session(
+    config: &Path,
+    path: &Path,
+    ep: ExecutionProvider,
+) -> Result<Arc<Mutex<Session>>> {
+    session_cache::get_or_load(bank_group(config), path, ep, || build_session(path, ep, 0))
+}
+
+/// A seeded session for `path`, from the session cache.
+fn cached_seeded(
+    config: &Path,
+    path: &Path,
+    ep: ExecutionProvider,
+) -> Result<Arc<Mutex<SeededSession>>> {
+    session_cache::get_or_load(bank_group(config), path, ep, || {
+        SeededSession::load(path, ep, 0)
+    })
 }
 
 /// What the linguistic encoder returns.
@@ -37,10 +69,15 @@ struct Encoded {
 }
 
 impl Encoder {
-    fn load(config: &Path, kind: ModelKind, ep: ExecutionProvider) -> Result<Self> {
+    fn load(
+        config: &Path,
+        kind: ModelKind,
+        ep: ExecutionProvider,
+        facts: ModelFacts,
+    ) -> Result<Self> {
         let cfg = ModelConfig::load(config, kind)?;
-        let linguistic = build_session(&cfg.linguistic, ep, 0)?;
-        let linguistic_inputs = input_names(&linguistic);
+        let linguistic = cached_session(config, &cfg.linguistic, ep)?;
+        let linguistic_inputs = input_names(&lock(&linguistic));
         let mut embeds = HashMap::new();
         for spk in &cfg.speakers {
             let path = cfg.dir.join(format!("{spk}.emb"));
@@ -65,6 +102,7 @@ impl Encoder {
             linguistic,
             linguistic_inputs,
             embeds,
+            facts,
         })
     }
 
@@ -92,7 +130,11 @@ impl Encoder {
         let n = tokens.len();
         let mut inputs: Vec<(String, Value)> = vec![("tokens".into(), row_i64(tokens)?)];
         if self.linguistic_inputs.contains("languages") {
-            let langs = score.phones.iter().map(|p| p.language).collect();
+            let langs = score
+                .phones
+                .iter()
+                .map(|p| self.facts.language(p.language))
+                .collect();
             inputs.push(("languages".into(), row_i64(langs)?));
         }
         if self.linguistic_inputs.contains("word_div") {
@@ -106,7 +148,8 @@ impl Encoder {
             let d = ph_dur.ok_or_else(|| anyhow!("phoneme-mode encoder needs durations"))?;
             inputs.push(("ph_dur".into(), row_i64(d.to_vec())?));
         }
-        let outputs = self.linguistic.run(inputs).context("linguistic encoder")?;
+        let mut linguistic = lock(&self.linguistic);
+        let outputs = linguistic.run(inputs).context("linguistic encoder")?;
         let (shape, enc) = outputs
             .get("encoder_out")
             .ok_or_else(|| anyhow!("linguistic encoder: no encoder_out"))?
@@ -162,15 +205,17 @@ fn scalar_i64(v: i64) -> Result<Value> {
 /// The bank's duration model (`dsdur`).
 pub struct DurationModel {
     enc: Encoder,
-    dur: Session,
+    dur: Arc<Mutex<Session>>,
     dur_inputs: std::collections::HashSet<String>,
 }
 
 impl DurationModel {
-    pub fn load(config: &Path, ep: ExecutionProvider) -> Result<Self> {
-        let enc = Encoder::load(config, ModelKind::Duration, ep)?;
-        let dur = build_session(&enc.cfg.model, ep, 0)?;
-        let dur_inputs = input_names(&dur);
+    /// Load the model `config` describes; `facts` maps the score's
+    /// language ids to its own ([`ModelFacts::language`]).
+    pub fn load(config: &Path, ep: ExecutionProvider, facts: ModelFacts) -> Result<Self> {
+        let enc = Encoder::load(config, ModelKind::Duration, ep, facts)?;
+        let dur = cached_session(config, &enc.cfg.model, ep)?;
+        let dur_inputs = input_names(&lock(&dur));
         Ok(Self {
             enc,
             dur,
@@ -196,7 +241,8 @@ impl DurationModel {
         if self.dur_inputs.contains("spk_embed") {
             inputs.push(("spk_embed".into(), self.enc.speaker_rows(speaker, n)?));
         }
-        let outputs = self.dur.run(inputs).context("duration model")?;
+        let mut dur = lock(&self.dur);
+        let outputs = dur.run(inputs).context("duration model")?;
         let (_, pred) = outputs
             .get("ph_dur_pred")
             .ok_or_else(|| anyhow!("duration model: no ph_dur_pred"))?
@@ -211,15 +257,16 @@ impl DurationModel {
 /// The bank's pitch model (`dspitch`).
 pub struct PitchModel {
     enc: Encoder,
-    pitch: SeededSession,
+    pitch: Arc<Mutex<SeededSession>>,
     pitch_inputs: std::collections::HashSet<String>,
 }
 
 impl PitchModel {
-    pub fn load(config: &Path, ep: ExecutionProvider) -> Result<Self> {
-        let enc = Encoder::load(config, ModelKind::Pitch, ep)?;
-        let pitch = SeededSession::load(&enc.cfg.model, ep, 0)?;
-        let pitch_inputs = input_names(&pitch.session);
+    /// Load the model `config` describes (see [`DurationModel::load`]).
+    pub fn load(config: &Path, ep: ExecutionProvider, facts: ModelFacts) -> Result<Self> {
+        let enc = Encoder::load(config, ModelKind::Pitch, ep, facts)?;
+        let pitch = cached_seeded(config, &enc.cfg.model, ep)?;
+        let pitch_inputs = input_names(&lock(&pitch).session);
         Ok(Self {
             enc,
             pitch,
@@ -266,21 +313,19 @@ impl PitchModel {
         if self.pitch_inputs.contains("spk_embed") {
             inputs.push(("spk_embed".into(), self.enc.speaker_rows(speaker, frames)?));
         }
-        inputs.extend(SeededSession::noise_values(
-            &self.pitch.noise,
-            seed,
-            frames,
-            PITCH_NOISE_PER_FRAME,
-        )?);
-        let outputs = self.pitch.session.run(inputs).context("pitch model")?;
-        let (_, pred) = outputs
-            .get("pitch_pred")
-            .ok_or_else(|| anyhow!("pitch model: no pitch_pred"))?
-            .try_extract_tensor::<f32>()?;
+        let pred = lock(&self.pitch)
+            .run(&inputs, seed, frames, PITCH_NOISE_PER_FRAME, |outputs| {
+                let (_, pred) = outputs
+                    .get("pitch_pred")
+                    .ok_or_else(|| anyhow!("pitch model: no pitch_pred"))?
+                    .try_extract_tensor::<f32>()?;
+                Ok(pred.to_vec())
+            })
+            .context("pitch model")?;
         if pred.len() != frames {
             bail!("pitch model returned {} frames for {frames}", pred.len());
         }
-        Ok(pred.to_vec())
+        Ok(pred)
     }
 }
 
@@ -297,17 +342,18 @@ pub struct VarianceCurves {
 /// The bank's variance model (`dsvariance`).
 pub struct VarianceModel {
     enc: Encoder,
-    variance: SeededSession,
+    variance: Arc<Mutex<SeededSession>>,
     variance_inputs: std::collections::HashSet<String>,
 }
 
 const VARIANCES: [&str; 4] = ["energy", "breathiness", "voicing", "tension"];
 
 impl VarianceModel {
-    pub fn load(config: &Path, ep: ExecutionProvider) -> Result<Self> {
-        let enc = Encoder::load(config, ModelKind::Variance, ep)?;
-        let variance = SeededSession::load(&enc.cfg.model, ep, 0)?;
-        let variance_inputs = input_names(&variance.session);
+    /// Load the model `config` describes (see [`DurationModel::load`]).
+    pub fn load(config: &Path, ep: ExecutionProvider, facts: ModelFacts) -> Result<Self> {
+        let enc = Encoder::load(config, ModelKind::Variance, ep, facts)?;
+        let variance = cached_seeded(config, &enc.cfg.model, ep)?;
+        let variance_inputs = input_names(&lock(&variance).session);
         Ok(Self {
             enc,
             variance,
@@ -361,27 +407,24 @@ impl VarianceModel {
         if self.variance_inputs.contains("spk_embed") {
             inputs.push(("spk_embed".into(), self.enc.speaker_rows(speaker, frames)?));
         }
-        inputs.extend(SeededSession::noise_values(
-            &self.variance.noise,
-            seed,
-            frames,
-            VARIANCE_NOISE_PER_FRAME,
-        )?);
-        let outputs = self.variance.session.run(inputs).context("variance model")?;
-        let get = |name: &str| -> Result<Option<Vec<f32>>> {
-            match outputs.get(format!("{name}_pred").as_str()) {
-                Some(v) => {
-                    let (_, data) = v.try_extract_tensor::<f32>()?;
-                    Ok(Some(data.to_vec()))
-                }
-                None => Ok(None),
-            }
-        };
-        Ok(VarianceCurves {
-            energy: get("energy")?,
-            breathiness: get("breathiness")?,
-            voicing: get("voicing")?,
-            tension: get("tension")?,
-        })
+        lock(&self.variance)
+            .run(&inputs, seed, frames, VARIANCE_NOISE_PER_FRAME, |outputs| {
+                let get = |name: &str| -> Result<Option<Vec<f32>>> {
+                    match outputs.get(format!("{name}_pred").as_str()) {
+                        Some(v) => {
+                            let (_, data) = v.try_extract_tensor::<f32>()?;
+                            Ok(Some(data.to_vec()))
+                        }
+                        None => Ok(None),
+                    }
+                };
+                Ok(VarianceCurves {
+                    energy: get("energy")?,
+                    breathiness: get("breathiness")?,
+                    voicing: get("voicing")?,
+                    tension: get("tension")?,
+                })
+            })
+            .context("variance model")
     }
 }

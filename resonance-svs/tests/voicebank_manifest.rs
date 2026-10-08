@@ -787,10 +787,21 @@ fn the_banks_own_models_are_found_next_to_the_acoustic_config() {
     write(&dir, "dsvariance/l.onnx", "");
     write(&dir, "dsvariance/v.onnx", "");
 
-    let found = discover(&dir.join("dsconfig.yaml"));
+    let acoustic_languages = [("ja".to_owned(), 1), ("en".to_owned(), 2)].into_iter().collect();
+    let found = discover(&dir.join("dsconfig.yaml"), &acoustic_languages);
     assert_eq!(found.duration, Some(dir.join("dsdur/dsconfig.yaml")));
     assert_eq!(found.pitch, None, "pitch model file missing");
     assert_eq!(found.variance, Some(dir.join("dsvariance/dsconfig.yaml")));
+    // What discovery read of each: the phonemes, the acoustic language
+    // ids mapped through their names onto the model's (`en` is 2 to the
+    // acoustic model, 3 to the duration model; `ja` it does not list).
+    let dur_facts = found.facts(ModelKind::Duration).unwrap();
+    assert!(dur_facts.phonemes.contains("en/ah") && !dur_facts.phonemes.contains("ah"));
+    assert_eq!(dur_facts.language_map, [(2, 3)].into_iter().collect());
+    assert_eq!(dur_facts.language(2), 3);
+    assert_eq!(dur_facts.language(1), 1, "an unlisted id goes through");
+    assert!(found.facts(ModelKind::Variance).unwrap().language_map.is_empty());
+    assert!(found.facts(ModelKind::Pitch).is_none());
 
     let dur = ModelConfig::load(found.duration.as_deref().unwrap(), ModelKind::Duration).unwrap();
     assert_eq!(dur.phonemes.get("en/ah"), Some(&7));
@@ -806,5 +817,48 @@ fn the_banks_own_models_are_found_next_to_the_acoustic_config() {
     // A bank without the folders has none.
     let bare = fresh_dir("bank_models_none");
     write(&bare, "dsconfig.yaml", "phonemes: p.txt\nacoustic: a.onnx\n");
-    assert_eq!(discover(&bare.join("dsconfig.yaml")), Default::default());
+    assert_eq!(discover(&bare.join("dsconfig.yaml"), &Default::default()), Default::default());
+}
+
+/// A render unit uses a model only when the model knows every phoneme it
+/// sings; the variance model goes with the pitch model. Replacing a
+/// model's file moves its digest.
+#[test]
+fn a_unit_uses_only_the_bank_models_that_know_its_phonemes() {
+    use resonance_svs::predict::{discover, ModelKind};
+    let dir = fresh_dir("bank_models_cover");
+    write(&dir, "dsconfig.yaml", "phonemes: phonemes.txt\nacoustic: acoustic.onnx\n");
+    write(&dir, "phonemes.txt", "AP\nSP\nah\nio\n");
+    for (folder, key, phonemes) in [
+        ("dsdur", "dur", "AP\nSP\nah\nio\n"),
+        ("dspitch", "pitch", "AP\nSP\nah\n"),
+        ("dsvariance", "variance", "AP\nSP\nah\nio\n"),
+    ] {
+        write(
+            &dir,
+            &format!("{folder}/dsconfig.yaml"),
+            &format!("phonemes: ph.txt\nlinguistic: l.onnx\n{key}: m.onnx\n"),
+        );
+        write(&dir, &format!("{folder}/ph.txt"), phonemes);
+        write(&dir, &format!("{folder}/l.onnx"), "");
+        write(&dir, &format!("{folder}/m.onnx"), "");
+    }
+    let all = discover(&dir.join("dsconfig.yaml"), &Default::default());
+    assert_eq!(all.covering(["SP", "ah", "SP"]), all, "every model knows these");
+    let without_pitch = all.covering(["SP", "io", "SP"]);
+    assert!(without_pitch.duration.is_some(), "the duration model knows io");
+    assert_eq!(without_pitch.pitch, None, "the pitch model does not");
+    assert_eq!(without_pitch.variance, None, "nor does the variance model run without it");
+    assert!(without_pitch.facts(ModelKind::Pitch).is_none());
+    assert!(!all.covers(ModelKind::Pitch, ["io"]));
+
+    let before = all.facts(ModelKind::Pitch).unwrap().files_digest;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write(&dir, "dspitch/m.onnx", "new weights");
+    let after = discover(&dir.join("dsconfig.yaml"), &Default::default());
+    assert_ne!(after.facts(ModelKind::Pitch).unwrap().files_digest, before);
+    assert_eq!(
+        after.facts(ModelKind::Duration).unwrap().files_digest,
+        all.facts(ModelKind::Duration).unwrap().files_digest
+    );
 }

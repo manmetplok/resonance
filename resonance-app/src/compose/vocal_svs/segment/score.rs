@@ -3,12 +3,16 @@
 //! the rule-based phoneme track so the two always describe the same
 //! phonemes and the rule durations stay the fallback.
 //!
-//! * **Groups** start at anchors: a note's first vowel — or, in a
-//!   consonant–glide–vowel onset (`b r ay`), the glide, as OpenUtau does —
-//!   and every rest and written breath. A syllable's onset consonants sit
-//!   in the group before its anchor, sung before the beat. The anchor time
-//!   is where the rule layout starts that phoneme: the beat, or a little
-//!   after when the onset could not be fully anticipated.
+//! * **Groups** start at anchors: a note's first vowel, and every rest and
+//!   written breath. A syllable's onset consonants sit in the group before
+//!   its anchor, sung before the beat. The anchor time is where the rule
+//!   layout starts the vowel: the beat, or a little after when the onset
+//!   could not be fully anticipated. A consonant–glide–vowel onset
+//!   (`b r ay`) is no exception: the glide is an onset consonant like the
+//!   others, sung before the beat, and the group and the pitch model's
+//!   note start on the vowel. (OpenUtau opens the note's group with the
+//!   glide; measured on the held-out phrase that sang "bright" as "red"
+//!   far more often — see the feature doc's Decisions.)
 //! * **Held notes** (`_`) are merged the way DiffSinger was trained on
 //!   them: the held vowel is one phoneme spanning both notes (the rule
 //!   track's repeated vowel folds into it) and the hold's coda consonants
@@ -25,12 +29,6 @@ use super::duration::{EntryRole, PhonemeTrack};
 /// bank's duration model, keeping 50 ms of silence (the rules allow 0.2 s,
 /// `PAD_ONSET_MAX_SEC`).
 pub(crate) const MODEL_LEAD_MAX_SEC: f64 = super::super::SEGMENT_PAD_SEC - 0.05;
-
-/// ARPAbet glides: a consonant–glide–vowel onset starts its note on the
-/// glide (OpenUtau's `semivowel` / `liquid` types).
-fn is_glide(ph: &str) -> bool {
-    matches!(ph, "w" | "y" | "l" | "r")
-}
 
 /// Build the bank models' score of a unit from its rule track.
 pub(super) fn build_bank_score(
@@ -50,15 +48,10 @@ pub(super) fn build_bank_score(
     let total_sec: f64 = track.ph_dur.iter().sum();
     let lang = |k: usize| track.languages.get(k).copied().unwrap_or(0);
     let midi_of = |i: usize| notes.get(i).map_or(60, |n| n.note as i64);
-    // The anchor phoneme of each note: its first vowel (or the glide
-    // before it after a consonant), else its first phoneme.
-    let anchor_index = |phones: &[&str]| -> usize {
-        match phones.iter().position(|p| !g2p::is_consonant(p)) {
-            Some(v) if v >= 2 && is_glide(phones[v - 1]) && g2p::is_consonant(phones[v - 2]) => v - 1,
-            Some(v) => v,
-            None => 0,
-        }
-    };
+    // Each note's anchor: its first vowel (whose rule start is the beat),
+    // else its first phoneme.
+    let anchor_index =
+        |phones: &[&str]| phones.iter().position(|p| !g2p::is_consonant(p)).unwrap_or(0);
 
     let mut score = BankScore {
         total_sec,

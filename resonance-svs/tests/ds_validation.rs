@@ -210,7 +210,7 @@ mod bank_score {
         s.notes = vec![
             ScoreNote { start_sec: 0.1, end_sec: 0.3, midi: 60.0, slur: false, voiced: true },
             ScoreNote { start_sec: 0.5, end_sec: 0.7, midi: 64.0, slur: false, voiced: true },
-            ScoreNote { start_sec: 0.7, end_sec: 0.75, midi: 65.0, slur: true, voiced: false },
+            ScoreNote { start_sec: 0.7, end_sec: 0.75, midi: 65.0, slur: true, voiced: true },
         ];
         let notes = pitch_notes(&s, FRAME, 80);
         let midi: Vec<f32> = notes.iter().map(|n| n.0).collect();
@@ -221,6 +221,58 @@ mod bank_score {
         assert_eq!(midi, vec![60.0, 60.0, 60.0, 64.0, 65.0, 65.0]);
         assert_eq!(frames, vec![10, 20, 20, 20, 5, 5]);
         assert_eq!(frames.iter().sum::<i64>(), 80);
+    }
+
+    /// A held note after a rest is sung (it is voiced); it used to take
+    /// the rest flag of the gap note in front of it.
+    #[test]
+    fn a_held_note_after_a_rest_is_not_a_rest() {
+        let mut s = score();
+        s.total_sec = 0.8;
+        s.notes = vec![
+            ScoreNote { start_sec: 0.1, end_sec: 0.3, midi: 60.0, slur: false, voiced: true },
+            ScoreNote { start_sec: 0.5, end_sec: 0.7, midi: 62.0, slur: true, voiced: true },
+        ];
+        let rest: Vec<bool> = pitch_notes(&s, FRAME, 80).iter().map(|n| n.1).collect();
+        // head rest, A, gap, the hold, tail rest
+        assert_eq!(rest, vec![true, false, true, false, true]);
+        // A hold of a note sung without a vowel stays a rest.
+        s.notes[1].voiced = false;
+        let rest: Vec<bool> = pitch_notes(&s, FRAME, 80).iter().map(|n| n.1).collect();
+        assert_eq!(rest, vec![true, false, true, true, true]);
+    }
+
+    /// A group whose span is shorter than its phonemes, or a leading pad
+    /// under 50 ms, still gives every phoneme at least a frame: the time
+    /// comes from the group's longest phoneme, else the unit's, and the
+    /// unit keeps its length.
+    #[test]
+    fn every_phoneme_gets_at_least_a_frame() {
+        let mut s = score();
+        // The vowel group squeezed to 5 ms (the trailing pad starts at
+        // 0.305 s, its own phonemes predicted 30 + 10 frames).
+        s.groups[2].start_sec = 0.305;
+        let out = align_durations(&s, &[50.0, 10.0, 8.0, 30.0, 10.0, 5.0], FRAME);
+        assert!(out.iter().all(|d| *d >= FRAME), "{out:?}");
+        assert!((out.iter().sum::<f64>() - s.total_sec).abs() < 1e-9, "{out:?}");
+        // The trailing pad, the unit's longest phoneme, gave the time.
+        assert!(out[5] < s.total_sec - 0.305);
+
+        // A first anchor 40 ms in: the onset takes a frame each, the pad's
+        // silence what is left.
+        let mut early = score();
+        early.groups[1].start_sec = 0.04;
+        let out = align_durations(&early, &[50.0, 10.0, 8.0, 30.0, 10.0, 5.0], FRAME);
+        assert!(out.iter().all(|d| *d >= FRAME), "{out:?}");
+        assert!((out.iter().sum::<f64>() - early.total_sec).abs() < 1e-9);
+        assert!((out[..3].iter().sum::<f64>() - 0.04).abs() < 1e-9, "group 0 fills its span: {out:?}");
+
+        // A group with no time at all.
+        let mut empty = score();
+        empty.groups[2].start_sec = 0.3;
+        let out = align_durations(&empty, &[50.0, 10.0, 8.0, 30.0, 10.0, 5.0], FRAME);
+        assert!(out.iter().all(|d| *d >= FRAME), "{out:?}");
+        assert!((out.iter().sum::<f64>() - empty.total_sec).abs() < 1e-9);
     }
 
     #[test]
@@ -242,6 +294,7 @@ mod bank_score {
         let pred = BankModels::default().predict(&s, None, 1, &PredictOptions::default(), &|_| 0.0);
         assert!(!pred.timed_by_model);
         assert!(pred.pitch.is_none());
+        assert!(!pred.fallback, "nothing was asked for, so nothing fell back");
         close(&pred.ph_dur, &s.rule_durations());
     }
 }

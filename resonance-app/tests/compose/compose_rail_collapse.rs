@@ -224,16 +224,71 @@ fn vocal_rail_lyrics_and_draft_folded() {
 }
 
 /// 4. **vocal rail, installed bank** — with a multi-speaker bank installed
-///    (a config-only TIGER stand-in) and picked, the Voice & delivery card
-///    shows the Voicebank picker on its name and a Speaker picker on the
-///    lane's default mode (Disco for an alto lane). The not-installed
-///    state is the folded-draft golden above (`lilia (not installed)`).
+///    (a config-only TIGER stand-in, shipping its own duration and pitch
+///    models as TIGER does) and picked, the Voice & delivery card shows
+///    the Voicebank picker on its name, a Speaker picker on the lane's
+///    default mode (Disco for an alto lane), both "from the voicebank"
+///    toggles, and — the bank's pitch model singing — the vibrato, rate and
+///    portamento sliders muted under a hint. The not-installed state is the
+///    folded-draft golden above (`lilia (not installed)`).
 #[test]
 fn vocal_rail_installed_bank_with_speakers() {
+    let (app, definition_id, vocal_track_id) = vocal_rail_on_installed_tiger(true);
+    let mut ui = simulator(&app, TALL_WINDOW);
+    for shown in [
+        "Timing from the voicebank",
+        "Pitch from the voicebank",
+        "Vibrato and portamento: the voicebank sings its own",
+    ] {
+        ui.find(shown).unwrap_or_else(|_| panic!("{shown:?} missing"));
+    }
+
+    // The pickers draw their selection themselves (not as a findable text
+    // widget), so the state they show is asserted on the lane.
+    assert_eq!(
+        app.test_vocal_voicebank(definition_id, vocal_track_id),
+        Some(resonance_music_theory::VoicebankId::new("tiger"))
+    );
+
+    snapshot_to_window(
+        &app,
+        "tests/snapshots/compose_vocal_rail_installed_bank.png",
+        TALL_WINDOW,
+    );
+}
+
+/// A bank that ships none of its own models shows neither toggle (they
+/// would do nothing), and the vibrato sliders are live, without the hint.
+#[test]
+fn vocal_rail_bank_without_models_hides_the_model_toggles() {
+    let (app, _, _) = vocal_rail_on_installed_tiger(false);
+    let mut ui = simulator(&app, TALL_WINDOW);
+    ui.find("Vibrato · 0.30").expect("the voice card is open");
+    for hidden in [
+        "Timing from the voicebank",
+        "Pitch from the voicebank",
+        "Vibrato and portamento: the voicebank sings its own",
+    ] {
+        assert!(ui.find(hidden).is_err(), "{hidden:?} shown on a bank without models");
+    }
+}
+
+/// A test app with a TIGER stand-in installed (with or without its own
+/// models), picked on the demo's vocal lane, the other vocal cards
+/// folded: `(app, definition_id, vocal_track_id)`.
+fn vocal_rail_on_installed_tiger(
+    bank_models: bool,
+) -> (resonance_app::Resonance, u64, resonance_audio::types::TrackId) {
     use resonance_app::compose::messages::LaneInspectorMsg;
 
     let mut app = build_app();
-    app.test_install_voicebank("tiger", &resonance_app::VoicebankFixture::shipped("tiger"));
+    app.test_install_voicebank(
+        "tiger",
+        &resonance_app::VoicebankFixture {
+            bank_models,
+            ..resonance_app::VoicebankFixture::shipped("tiger")
+        },
+    );
     let vocal_track_id = app
         .track_registry()
         .tracks
@@ -263,17 +318,5 @@ fn vocal_rail_installed_bank_with_speakers() {
     fold(&mut app, RailPanelKey::VocalLyrics(vocal_track_id));
     fold(&mut app, RailPanelKey::VocalDraft(vocal_track_id));
     fold(&mut app, RailPanelKey::VocalMelody(vocal_track_id));
-
-    // The pickers draw their selection themselves (not as a findable text
-    // widget), so the state they show is asserted on the lane.
-    assert_eq!(
-        app.test_vocal_voicebank(definition_id, vocal_track_id),
-        Some(resonance_music_theory::VoicebankId::new("tiger"))
-    );
-
-    snapshot_to_window(
-        &app,
-        "tests/snapshots/compose_vocal_rail_installed_bank.png",
-        TALL_WINDOW,
-    );
+    (app, definition_id, vocal_track_id)
 }

@@ -39,6 +39,9 @@ pub struct VoicebankFixture {
     /// files and the acoustic speakers' embeddings) — enough for the
     /// registry to find them, not to run them.
     pub bank_models: bool,
+    /// Phonemes the pitch model's (`dspitch`) list leaves out, as TIGER's
+    /// lacks `io`, `iz` and `rs`.
+    pub pitch_model_lacks: Vec<String>,
 }
 
 impl Default for VoicebankFixture {
@@ -63,6 +66,7 @@ impl Default for VoicebankFixture {
             languages: None,
             name: None,
             bank_models: false,
+            pitch_model_lacks: Vec::new(),
         }
     }
 }
@@ -221,7 +225,13 @@ pub fn write_voicebank_fixture(dir: &Path, spec: &VoicebankFixture) {
                 }
             }
             write(&format!("{folder}/dsconfig.yaml"), &cfg);
-            write(&format!("{folder}/phonemes.txt"), &spec.phonemes.join("\n"));
+            let phonemes: Vec<&str> = spec
+                .phonemes
+                .iter()
+                .map(String::as_str)
+                .filter(|p| folder != "dspitch" || !spec.pitch_model_lacks.iter().any(|l| l == p))
+                .collect();
+            write(&format!("{folder}/phonemes.txt"), &phonemes.join("\n"));
             write(&format!("{folder}/linguistic.onnx"), "");
             write(&format!("{folder}/{key}.onnx"), "");
         }

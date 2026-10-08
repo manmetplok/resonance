@@ -44,6 +44,11 @@ pub struct InstalledBank {
     /// `dspitch/`, `dsvariance/` next to the acoustic config), where it
     /// ships them.
     pub models: resonance_svs::predict::BankModelPaths,
+    /// A digest of the lengths and times of the files a render loads (the
+    /// configs, phoneme list, acoustic model and vocoder;
+    /// `resonance_svs::pipeline::render_files`), read at scan: the render
+    /// keys hash it, so a replaced model re-renders.
+    pub render_digest: u64,
     /// The bank's `dsdict-en.yaml`, if it ships one.
     pub english_dict: Option<PathBuf>,
     pub builtin: Option<&'static BuiltinBank>,

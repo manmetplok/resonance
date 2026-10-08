@@ -18,12 +18,31 @@ pub(super) fn options_for(unit: &RenderUnit) -> PredictOptions {
     PredictOptions {
         timing: unit.bank_models.duration.is_some(),
         pitch: unit.bank_models.pitch.is_some(),
-        // `RESONANCE_BANK_VARIANCE=0` skips the variance model, for an A/B.
-        variance: unit.bank_models.variance.is_some()
-            && std::env::var("RESONANCE_BANK_VARIANCE").map_or(true, |v| v != "0"),
+        variance: unit.bank_models.variance.is_some() && variance_on(),
         expr: bank_expr(),
         ..PredictOptions::default()
     }
+}
+
+/// `RESONANCE_BANK_VARIANCE=0` skips the variance model, for an A/B.
+fn variance_on() -> bool {
+    std::env::var("RESONANCE_BANK_VARIANCE").map_or(true, |v| v != "0")
+}
+
+/// `RESONANCE_SVS_SEED_SALT=<n>`, 0 when unset.
+fn seed_salt() -> u64 {
+    std::env::var("RESONANCE_SVS_SEED_SALT")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+/// The measurement knobs that change what a unit renders (the pitch
+/// model's expressiveness, the variance model on or off, the seed salt),
+/// for the units' keys (`model_identity`): a take rendered with another
+/// setting is not reused.
+pub(super) fn render_knobs() -> String {
+    format!("expr={}|var={}|salt={}", bank_expr(), variance_on(), seed_salt())
 }
 
 /// The seed of every model's noise for `unit` ([`RenderUnit::seed`]), so
@@ -31,11 +50,7 @@ pub(super) fn options_for(unit: &RenderUnit) -> PredictOptions {
 /// `RESONANCE_SVS_SEED_SALT=<n>` mixes a number in, to measure how much a
 /// take depends on its noise (the audition's spread across seeds).
 pub(super) fn unit_seed(unit: &RenderUnit) -> u64 {
-    let salt = std::env::var("RESONANCE_SVS_SEED_SALT")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(0);
-    unit.seed ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    unit.seed ^ seed_salt().wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
 /// Whether `unit` uses any of the bank's models.
@@ -59,22 +74,25 @@ pub(super) fn load_models(unit: &RenderUnit) -> BankModels {
     BankModels::load(&unit.bank_models, &options_for(unit), ExecutionProvider::Cpu)
 }
 
-/// `unit`'s segment with the bank models' timing, pitch and tension.
-/// `speaker` is the acoustic speaker key the lane sings with. Whatever a
-/// model could not provide stays as the rules built it; when neither the
-/// duration nor the pitch model ran, the rule segment comes back untouched.
+/// `unit`'s segment with the bank models' timing, pitch and tension, and
+/// whether a model it was planned with fell back to the rules (did not
+/// load or failed to run: the audio is not what the unit's key says, see
+/// [`super::UnitAudio::fallback`]). `speaker` is the acoustic speaker key
+/// the lane sings with. Whatever a model could not provide stays as the
+/// rules built it; when neither the duration nor the pitch model ran, the
+/// rule segment comes back untouched.
 pub(super) fn refine_segment(
     unit: &RenderUnit,
     models: &mut BankModels,
     speaker: Option<&str>,
     bank: &BankProfile,
-) -> DsSegment {
+) -> (DsSegment, bool) {
     let opts = options_for(unit);
     let bend = |t: f64| sample_frames(&unit.bend_cents, t / CURVE_FRAME_SEC);
     let pred = models.predict(&unit.score, speaker, unit_seed(unit), &opts, &bend);
     let seg = apply_prediction(unit, &pred, bank);
     dump(unit, &pred, &seg);
-    seg
+    (seg, pred.fallback)
 }
 
 /// With `RESONANCE_BANK_DUMP=<dir>`, write what the bank models were fed
@@ -99,6 +117,7 @@ fn dump(unit: &RenderUnit, pred: &Prediction, seg: &DsSegment) {
         })).collect::<Vec<_>>(),
         "total_sec": score.total_sec,
         "timed_by_model": pred.timed_by_model,
+        "fallback": pred.fallback,
         "ph_dur": pred.ph_dur,
         "frame_sec": pred.frame_sec,
         "pitch": pred.pitch,
