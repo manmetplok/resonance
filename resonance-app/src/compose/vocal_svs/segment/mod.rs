@@ -78,7 +78,7 @@ pub fn build_segment(
     // the baseline (which itself no-ops on TIGER).
     let tension = overlay_envelope(params, CurveKind::Tension, bank, n_frames, clock)
         .unwrap_or_else(|| build_tension_curve(&f0_curve, params, bank));
-    let gender = build_gender_curve(params, n_frames);
+    let gender = build_gender_curve(params, bank, n_frames);
 
     DsSegment {
         offset: 0.0,
@@ -115,28 +115,33 @@ pub fn build_segment(
 
 /// Gender curve maps to the acoustic model's `gender` ONNX input,
 /// which shifts formants brighter / darker (range `[-1, +1]`, 0 =
-/// neutral). The dsconfig's `use_key_shift_embed` flag is unrelated —
-/// that's about training-time pitch-shift augmentation, not a runtime
-/// input. Other per-frame curves (`energy`, `breathiness`, `voicing`,
-/// `tension`) aren't accepted by the TIGER model and are left as
-/// `SampleCurve::default()`. The `timbre` chip selects a landmark on
-/// the brightness axis; the curve is constant across the segment so
-/// the formant character stays consistent.
+/// neutral: the bank as its author voiced it). The dsconfig's
+/// `use_key_shift_embed` flag is what makes the input exist; it is a
+/// runtime input, not the training-time augmentation alone. Other
+/// per-frame curves (`energy`, `breathiness`, `voicing`, `tension`)
+/// are built elsewhere. The `timbre` chip selects a landmark on the
+/// brightness axis, scaled per bank ([`BankProfile::gender_scale`]); the
+/// curve is constant across the segment so the formant character stays
+/// consistent.
 ///
-/// Empirically-tuned band, characterised against TIGER (the tightest
-/// of the three voicebanks): the negative side has a hard ceiling
-/// around `-0.20`, and the positive side starts losing intelligibility
-/// past about `+0.35` — whisper transcribes a `+0.50` Bright TIGER as
-/// "my my my" instead of the test lyric. Lilia and Meiji are robust
-/// across the band. If you widen, do it positive-side only and re-run
-/// the sweep harness to confirm intelligibility doesn't collapse.
-fn build_gender_curve(params: &VocalParams, curve_len: usize) -> SampleCurve {
-    let gender_value = match params.timbre {
-        VocalTimbre::Warm => -0.15,
-        VocalTimbre::Edged => -0.05,
+/// The default chip, Warm, is neutral. It used to be `-0.15`, which cost
+/// TIGER its words: Whisper heard 37 % of the audition phrase across
+/// TIGER's seven modes at `-0.15` against 92 % at 0 (`vocal-rendering.md`
+/// § Measurements); Lilia and Meiji did no worse at 0. Nothing darker
+/// than neutral is offered any more, and TIGER (`gender_scale` 0.25)
+/// gets a quarter of the swing — it held 93 % at `+0.075` and fell to
+/// 71 % at `+0.15`.
+pub(super) fn timbre_gender(timbre: VocalTimbre) -> f64 {
+    match timbre {
+        VocalTimbre::Warm => 0.0,
+        VocalTimbre::Edged => 0.05,
         VocalTimbre::Airy => 0.20,
         VocalTimbre::Bright => 0.30,
-    };
+    }
+}
+
+fn build_gender_curve(params: &VocalParams, bank: &BankProfile, curve_len: usize) -> SampleCurve {
+    let gender_value = timbre_gender(params.timbre) * bank.gender_scale() as f64;
     SampleCurve {
         samples: vec![gender_value; curve_len],
         timestep: F0_TIMESTEP,

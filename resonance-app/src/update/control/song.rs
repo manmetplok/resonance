@@ -289,7 +289,8 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             view_model::lane_articulation(app, definition.id, track.id, vocal_params);
         let short_note_count = articulation.iter().filter(|n| n.too_short).count();
         let out_of_range_note_count = articulation.iter().filter(|n| n.out_of_range).count();
-        let range = profile.comfortable_range(vocal_params.speaker.as_deref());
+        let range =
+            profile.lane_comfortable_range(vocal_params.speaker.as_deref(), vocal_params.voice);
         let (range_lo, range_hi) = (range.low, range.high);
         let (render_state, stale_units, render_error) =
             view_model::lane_render_view(app, definition.id, track.id);

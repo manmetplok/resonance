@@ -51,9 +51,21 @@ pub struct BuiltinBank {
     pub speakers: &'static [BuiltinSpeaker],
     /// The speaker a lane gets when it switches to this bank.
     pub default_speaker: fn(VoiceType) -> Option<&'static str>,
-    /// Comfortable MIDI range `(low, high)`: conservative estimates, not
-    /// measured envelopes (no bank declares a range on disk).
+    /// Comfortable MIDI range `(low, high)` for a plain pop line: where
+    /// the voice sits, not its extremes (no bank declares a range on disk;
+    /// see the row comments for the sources).
     pub range: (u8, u8),
+    /// Speakers whose comfortable range differs from `range`, by id.
+    pub speaker_ranges: &'static [(&'static str, (u8, u8))],
+    /// How far the timbre chip moves this bank's `gender` (formant) input:
+    /// a factor on [`timbre_gender`](crate::compose::vocal_svs) values. TIGER
+    /// loses its words at a |gender| of 0.15 (measured), so it gets a
+    /// quarter of the swing.
+    pub gender_scale: f32,
+    /// The shipped English dictionary's `replacements:` (G2P symbol →
+    /// bank symbol), for spelling phonemes while the bank is not installed;
+    /// an installed bank reads its own.
+    pub shipped_replacements: &'static [(&'static str, &'static str)],
     /// ARPAbet phones the bank lacks, with what to sing instead, most
     /// similar first. Tried before the generic voicing and articulatory
     /// tables.
@@ -156,6 +168,17 @@ fn no_default_speaker(_: VoiceType) -> Option<&'static str> {
     None
 }
 
+/// LIEE Lilia MM 2.8's English respellings (its `dsdict-en.yaml`).
+const LILIA_REPLACEMENTS: &[(&str, &str)] = &[
+    ("t", "t0"),
+    ("d", "d0"),
+    ("r", "r0"),
+    ("l", "ll"),
+    ("v", "w"),
+    ("w", "L"),
+    ("y", "j"),
+];
+
 const TENSION_ONLY: CurveSupport = CurveSupport {
     energy: false,
     tension: true,
@@ -172,8 +195,14 @@ pub static BUILTIN_BANKS: &[BuiltinBank] = &[
         dev_dir: "singer/extracted",
         speakers: TIGER_SPEAKERS,
         default_speaker: tiger_default_speaker,
-        // English, mixed speakers, the widest of the three. C3..E5.
-        range: (48, 76),
+        // A male voice: A2..C#5 at the extremes (DiffSinger wiki, research
+        // note `diffsinger_english_ecosystem.md` §1); a pop line sits
+        // C3..A4. Every mode is the same singer. Whisper heard the audition
+        // phrase equally well (90-95 %) centred anywhere from D3 to F4.
+        range: (48, 69),
+        speaker_ranges: &[],
+        gender_scale: 0.25,
+        shipped_replacements: &[],
         substitutions: &[],
         credit: Some("TIGER by tigermeat"),
         terms_url: Some("https://github.com/spicytigermeat/tiger_diffsinger"),
@@ -192,18 +221,24 @@ pub static BUILTIN_BANKS: &[BuiltinBank] = &[
         dev_dir: "voicebanks/lilia",
         speakers: &[],
         default_speaker: no_default_speaker,
-        // A bright voice recorded high. D3..G5.
-        range: (50, 79),
-        // MM 2.8 has no voiced `v`: its voiceless partner, then the
-        // voiced stop at the same place.
-        substitutions: &[("v", &["f", "b"])],
+        // Alto, optimal C3..G5 (UTAU wiki, research note
+        // `diffsinger_english_ecosystem.md` §1). Her words blur as the
+        // line climbs: Whisper heard the audition phrase 54 / 67 / 88 / 100 %
+        // centred on A4 / E4 / B3 / F#3, so a line sits D3..A#4.
+        range: (50, 70),
+        speaker_ranges: &[],
+        gender_scale: 1.0,
+        // MM 2.8's multi-language inventory spells English with its own
+        // symbols (`dsdur/dsdict-en.yaml`); English `v` is its `w`.
+        shipped_replacements: LILIA_REPLACEMENTS,
+        substitutions: &[],
         credit: Some("LIEE"),
         terms_url: Some(
             "https://docs.google.com/document/d/1t13WKc7VA2Q3G_MppznbAwhl3vLIL2MNPyjVN3kWDDg/edit",
         ),
         commercial: Some("free_with_credit"),
         shipped_curves: TENSION_ONLY,
-        shipped_missing: &["v"],
+        shipped_missing: &[],
         shipped_spelling: ShippedSpelling::Bare,
     },
     BuiltinBank {
@@ -212,8 +247,13 @@ pub static BUILTIN_BANKS: &[BuiltinBank] = &[
         dev_dir: "voicebanks/meiji",
         speakers: MEIJI_SPEAKERS,
         default_speaker: meiji_default_speaker,
-        // Japanese-native, sits lower. A2..D5.
-        range: (45, 74),
+        // A male voice, A2..D5 at the extremes; a pop line sits B2..F#4
+        // (Whisper heard the audition phrase 88 % centred on E4 or B3, 98 %
+        // on F#3).
+        range: (47, 66),
+        speaker_ranges: &[],
+        gender_scale: 1.0,
+        shipped_replacements: &[],
         substitutions: &[],
         credit: Some("Gahata Meiji from LUNAI Project"),
         terms_url: Some("https://lunaiproject.github.io/termsofuse/"),

@@ -31,6 +31,27 @@ use crate::state::ids::CLIP_ID_BASE;
 /// a hand-placed clip that merely sits *near* a bar is never claimed.
 const DERIVED_CLIP_BAR_TOLERANCE_SAMPLES: u64 = 2;
 
+/// What [`ComposeState::rebuild_vocal_audio_clips`] reads to hand each
+/// rendered vocal take back to its lane.
+pub struct VocalTakeSources<'a> {
+    /// Every audio clip now on the timeline.
+    pub audio_clips: &'a [crate::state::ClipState],
+    /// `(clip_id, abs_path)` for every loaded audio clip, so the
+    /// tear-down path can `unlink` a superseded take later.
+    pub audio_clip_paths: &'a HashMap<resonance_audio::types::ClipId, std::path::PathBuf>,
+    /// The saved owner of each take, `clip → (definition, placement)`
+    /// (`ProjectClip::vocal_take`).
+    pub owners: &'a HashMap<resonance_audio::types::ClipId, (u64, u64)>,
+    /// The tracks with `track_type == TrackType::Vocal`.
+    pub vocal_track_ids: &'a HashSet<TrackId>,
+    pub tempo_map: &'a resonance_audio::types::TempoMap,
+    /// The engine rate the takes were rendered at.
+    pub sample_rate: u32,
+    /// Each lane's lead-in, `(definition, track) → tick of its first
+    /// note` — where an owner-less take's first note must sit.
+    pub lane_lead_ticks: &'a HashMap<(u64, TrackId), u64>,
+}
+
 /// Bundle of the three vocal-render side tables. Grouping these together
 /// keeps the audio clip install map, the per-clip lyric annotations, and
 /// the render-epoch table next to each other since they're managed as a
@@ -798,45 +819,61 @@ impl ComposeState {
 
     /// Counterpart of [`rebuild_derived_clips`] for the SVS-rendered
     /// audio clips that sit on `TrackType::Vocal` tracks. Audio clips
-    /// land in `r.clips` after project load with no marker for "this
-    /// was generated"; without rebuilding the map, the next regen
-    /// would skip its tear-down step and stack a fresh audio clip on
-    /// top of the loaded one — the user hears two voices summed
-    /// together. We claim every audio clip whose start_sample is a bar
-    /// boundary of an existing placement on a vocal-typed track.
+    /// land in `r.clips` after project load (and after every undo/redo)
+    /// with the vocal map wiped; without rebuilding it, the next render
+    /// finds no old take to replace (spec §7, D22) and stacks a fresh
+    /// clip on top of the loaded one — the user hears two voices summed
+    /// together — and the lane reads `not_rendered`.
     ///
-    /// `vocal_track_ids` is the set of tracks with `track_type ==
-    /// TrackType::Vocal`. `audio_clip_paths` is `(clip_id, abs_path)`
-    /// for every loaded audio clip (so the tear-down path can `unlink`
-    /// the on-disk WAV later).
-    pub fn rebuild_vocal_audio_clips(
-        &mut self,
-        audio_clips: &[crate::state::ClipState],
-        audio_clip_paths: &std::collections::HashMap<resonance_audio::types::ClipId, std::path::PathBuf>,
-        vocal_track_ids: &std::collections::HashSet<TrackId>,
-        tempo_map: &resonance_audio::types::TempoMap,
-    ) {
+    /// A take saved with its owner ([`ProjectVocalTake`]) goes back to
+    /// that placement's lane while the placement still exists. A take
+    /// saved without one (before owners were saved) is matched by where
+    /// its first note sits: the install starts the clip `pre_roll`
+    /// before the note and trims `pad − pre_roll` (more when the note is
+    /// too close to sample 0 to fit the pre-roll), so `start_sample +
+    /// pad − trim_start` is the note in both cases, and it must land on
+    /// a placement's [`vocal_audio_start`] for the lane's lead-in. A clip
+    /// on a vocal track that matches neither — the user's own recording —
+    /// is never claimed, so a render never deletes it.
+    ///
+    /// [`ProjectVocalTake`]: crate::project::ProjectVocalTake
+    /// [`vocal_audio_start`]: crate::compose::vocal_svs::vocal_audio_start
+    pub fn rebuild_vocal_audio_clips(&mut self, src: VocalTakeSources<'_>) {
         self.vocal_audio.clips.clear();
+        let pad = crate::compose::vocal_svs::pad_frames(src.sample_rate);
 
-        for clip in audio_clips {
-            if !vocal_track_ids.contains(&clip.track_id) {
+        for clip in src.audio_clips {
+            if !src.vocal_track_ids.contains(&clip.track_id) {
                 continue;
             }
-            // Same tempo-map-aware bar recovery as `rebuild_derived_clips`
-            // (see there): never `%` against a truncated scalar.
-            let Some(start_bar) =
-                tempo_map.bar_at_sample_exact(clip.start_sample, DERIVED_CLIP_BAR_TOLERANCE_SAMPLES)
-            else {
-                continue;
+            let owner = match src.owners.get(&clip.id) {
+                Some(&(definition_id, placement_id)) => self
+                    .placements
+                    .iter()
+                    .any(|p| p.id == placement_id && p.definition_id == definition_id)
+                    .then_some((definition_id, placement_id)),
+                None => (clip.start_sample + pad)
+                    .checked_sub(clip.trim_start_frames)
+                    .and_then(|anchor| {
+                        self.placements.iter().find_map(|p| {
+                            let lead = src
+                                .lane_lead_ticks
+                                .get(&(p.definition_id, clip.track_id))
+                                .copied()
+                                .unwrap_or(0);
+                            let note = crate::compose::vocal_svs::vocal_audio_start(
+                                src.tempo_map,
+                                src.tempo_map.bar_to_sample(p.start_bar),
+                                lead,
+                                src.sample_rate,
+                            );
+                            (note.abs_diff(anchor) <= DERIVED_CLIP_BAR_TOLERANCE_SAMPLES)
+                                .then_some((p.definition_id, p.id))
+                        })
+                    }),
             };
-            let entry = self.placements.iter().find_map(|p| {
-                if p.start_bar != start_bar {
-                    return None;
-                }
-                Some((p.definition_id, p.id))
-            });
-            if let Some((def_id, placement_id)) = entry {
-                let path = audio_clip_paths.get(&clip.id).cloned().unwrap_or_default();
+            if let Some((def_id, placement_id)) = owner {
+                let path = src.audio_clip_paths.get(&clip.id).cloned().unwrap_or_default();
                 self.vocal_audio
                     .clips
                     .insert((def_id, placement_id, clip.track_id), (clip.id, path));

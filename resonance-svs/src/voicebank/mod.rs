@@ -131,7 +131,7 @@ impl VoicebankManifest {
     /// Join a probed on-disk layout with the phonetic model its inventory
     /// implies.
     fn from_layout(layout: BankLayout) -> Self {
-        let inventory = PhonemeInventory::new(layout.phonemes.iter().cloned());
+        let inventory = PhonemeInventory::of_layout(&layout);
         let phoneme_target = inventory.target();
         let BankLayout {
             id,

@@ -2,12 +2,12 @@
 //! by the SVS segment builder and the vocal-roll phoneme strip (design
 //! #173, todo #492).
 //!
-//! These pin two things: (1) the accessor reproduces the historic
-//! per-voicebank substitution behaviour the segment builder relied on
-//! (every bank covers the full ARPAbet set except Lilia, which lacks the
-//! voiced `v` and substitutes `f`), and (2) `effective` — what the strip
-//! displays — agrees with that substitution for every phone the G2P can
-//! emit, so the strip and the render can never disagree.
+//! These pin two things: (1) every shipped bank sings every ARPAbet phone
+//! the G2P emits as itself — Lilia included, since her dictionary's
+//! replacements say how she spells English `v` (as her own `w`), where she
+//! used to substitute `f` — and (2) `effective`, what the strip displays,
+//! agrees with what the render sings for every phone, so the strip and the
+//! render can never disagree.
 
 use resonance_app::compose::vocal_svs::{BankProfile, PhonemeFate, VoicebankPhonemes};
 use resonance_music_theory::g2p::ARPABET_PHONEMES;
@@ -17,27 +17,14 @@ fn bank(id: &str) -> BankProfile {
     BankProfile::not_installed(id)
 }
 
-/// The historic hardcoded `substitute_phoneme` mapping, reproduced here
-/// so the accessor is checked against an independent statement of the
-/// old behaviour rather than its own internals.
-fn legacy_substitute<'a>(vb: &str, ph: &'a str) -> &'a str {
-    match vb {
-        "lilia" if ph == "v" => "f",
-        _ => ph,
-    }
-}
-
 #[test]
-fn effective_matches_legacy_substitution_for_every_phone() {
+fn every_shipped_bank_sings_every_phone_directly() {
     for vb in ["tiger", "lilia", "meiji"] {
         let profile = bank(vb);
         let bank = VoicebankPhonemes::new(&profile);
         for &ph in ARPABET_PHONEMES {
-            assert_eq!(
-                bank.effective(ph),
-                legacy_substitute(vb, ph),
-                "{vb:?} effective({ph}) diverged from the historic substitution"
-            );
+            assert_eq!(bank.resolve(ph), PhonemeFate::Direct, "{vb:?} altered {ph}");
+            assert_eq!(bank.effective(ph), ph, "{vb:?} effective({ph})");
         }
         // Silence/control tokens are passed through untouched on every
         // bank — the segment builder relies on this for its AP/SP pads.
@@ -48,47 +35,35 @@ fn effective_matches_legacy_substitution_for_every_phone() {
 }
 
 #[test]
-fn lilia_resolves_v_as_a_substitution_others_direct() {
-    let profile = bank("lilia");
-    let lilia = VoicebankPhonemes::new(&profile);
-    assert_eq!(lilia.resolve("v"), PhonemeFate::Substituted("f"));
-    assert_eq!(lilia.resolve("f"), PhonemeFate::Direct);
-    assert_eq!(lilia.resolve("ah"), PhonemeFate::Direct);
-    // Substituted phones still count as supported (they sing, just as a
-    // near neighbour) — the strip badges only the Unsupported case.
-    assert!(lilia.is_supported("v"));
-}
-
-#[test]
-fn full_inventory_banks_substitute_nothing() {
-    for vb in ["tiger", "meiji"] {
-        let profile = bank(vb);
-        let bank = VoicebankPhonemes::new(&profile);
-        for &ph in ARPABET_PHONEMES {
-            assert_eq!(
-                bank.resolve(ph),
-                PhonemeFate::Direct,
-                "{vb:?} unexpectedly altered {ph}"
-            );
-        }
+fn lilia_spells_english_with_her_own_symbols() {
+    // MM 2.8's `dsdict-en.yaml` replacements: what the model is fed for
+    // each English phone it does not hold under the ARPAbet name.
+    let lilia = bank("lilia");
+    for (ph, key) in [
+        ("t", "t0"),
+        ("d", "d0"),
+        ("r", "r0"),
+        ("l", "ll"),
+        ("v", "w"),
+        ("w", "L"),
+        ("y", "j"),
+        ("ah", "ah"),
+        ("s", "s"),
+    ] {
+        assert_eq!(lilia.phoneme_name(ph), key, "{ph}");
     }
+    // Spelling is not substitution: the phone is sung, as itself.
+    assert!(VoicebankPhonemes::new(&lilia).is_supported("v"));
+    assert_eq!(bank("tiger").phoneme_name("w"), "w");
+    assert_eq!(bank("meiji").phoneme_name("w"), "en/w");
 }
 
 #[test]
-fn valid_set_is_full_arpabet_except_lilias_v() {
-    let tiger_profile = bank("tiger");
-    let tiger = VoicebankPhonemes::new(&tiger_profile);
-    assert_eq!(tiger.valid_set(), ARPABET_PHONEMES);
-
-    let lilia_profile = bank("lilia");
-    let lilia = VoicebankPhonemes::new(&lilia_profile);
-    let expected: Vec<&str> = ARPABET_PHONEMES
-        .iter()
-        .copied()
-        .filter(|&ph| ph != "v")
-        .collect();
-    assert_eq!(lilia.valid_set(), expected);
-    assert!(!lilia.valid_set().contains(&"v"));
+fn valid_set_is_full_arpabet_on_every_shipped_bank() {
+    for vb in ["tiger", "lilia", "meiji"] {
+        let profile = bank(vb);
+        assert_eq!(VoicebankPhonemes::new(&profile).valid_set(), ARPABET_PHONEMES, "{vb}");
+    }
 }
 
 #[test]

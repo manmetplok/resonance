@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use resonance_app::compose::messages::VocalAudioReadyData;
 use resonance_app::compose::ComposeMessage;
 use resonance_app::message::Message;
-use resonance_app::project::{LoadedProject, ProjectClip, ProjectFile};
+use resonance_app::project::{LoadedProject, ProjectClip, ProjectFile, ProjectVocalTake};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioCommand, TrackType};
@@ -148,6 +148,10 @@ fn saved_project() -> Saved {
         gain_db: 0.0,
         warp: None,
         vocal_render_units: Vec::new(),
+        vocal_take: Some(ProjectVocalTake {
+            definition_id: definition,
+            placement_id: placement,
+        }),
     });
     let saved = Saved {
         _root: root,
@@ -239,6 +243,7 @@ fn installing_a_render_over_a_reloaded_clip_keeps_the_saved_vocal_wav() {
             clip_name: "Verse · Vocal".to_owned(),
             trim_start_frames: 0,
             trim_end_frames: 0,
+            pre_roll_frames: 0,
             lead_ticks: 0,
             render_epoch: 1,
             bpm: 120.0,
@@ -302,6 +307,7 @@ fn a_superseded_take_is_unlinked_only_once_nothing_references_it() {
             clip_name: "Verse · Vocal".to_owned(),
             trim_start_frames: 0,
             trim_end_frames: 0,
+            pre_roll_frames: 0,
             lead_ticks: 0,
             render_epoch: 1,
             bpm: 120.0,

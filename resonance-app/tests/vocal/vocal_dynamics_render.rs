@@ -166,7 +166,9 @@ fn a_rest_is_silent_and_a_written_breath_is_heard() {
     let out = render(&bank, &p, &[note(0, Q, 0.8), note(Q + Q / 2, Q, 0.8)], "la la");
     let sung = rms_db(&window(&out.samples_stereo, out.sample_rate, pad + 0.1, pad + 0.4));
     assert!(sung > -40.0, "the first note sings: {sung:.1} dBFS");
-    let rest = window(&out.samples_stereo, out.sample_rate, pad + 0.51, pad + 0.74);
+    // The second `la`'s `l` is sung before its beat (out of its unit's
+    // leading pad, ~90 ms), so the silence is the rest's first 0.12 s.
+    let rest = window(&out.samples_stereo, out.sample_rate, pad + 0.51, pad + 0.63);
     assert!(rest.iter().all(|&s| s == 0.0), "the eighth rest is silent");
 
     // A one-beat rest with a breath: 0.15 s of silence, 0.35 s of breath.

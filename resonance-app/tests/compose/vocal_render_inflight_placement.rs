@@ -63,6 +63,7 @@ fn ready(definition: u64, placement: u64, queued_start: u64) -> Message {
         clip_name: "Verse · Vocal".to_owned(),
         trim_start_frames: 0,
         trim_end_frames: 0,
+        pre_roll_frames: 0,
         lead_ticks: 0,
         render_epoch: 1,
         bpm: 120.0,
@@ -110,4 +111,58 @@ fn audio_is_not_installed_for_a_placement_deleted_while_rendering() {
     let _ = app.update(ready(definition, placement, queued_start));
     assert!(loaded_starts(&rx).is_empty(), "audio installed for a deleted placement");
     assert!(app.test_vocal_audio_clips(VOCAL).is_empty());
+}
+
+/// `(start_sample, trim_start_frames)` of every clip the capture saw load.
+fn loaded_clips(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<(u64, u64)> {
+    rx.try_iter()
+        .filter_map(|cmd| match cmd {
+            AudioCommand::LoadClipFromWav {
+                start_sample,
+                trim_start_frames,
+                ..
+            } => Some((start_sample, trim_start_frames)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_take_with_pre_roll_starts_before_the_first_note() {
+    // The first note's onset consonants are sung before its beat (the
+    // vowel lands on it): the clip starts that much early and trims that
+    // much less of the leading pad, so the vowel still sits on the note.
+    let (mut app, definition, placement, queued_start) = app_with_inflight_render();
+    let lead_ticks = resonance_audio::types::TICKS_PER_QUARTER_NOTE * 4;
+    let note_sample = resonance_app::compose::vocal_svs::vocal_audio_start(
+        app.test_tempo_map(),
+        queued_start,
+        lead_ticks,
+        app.sample_rate,
+    );
+    let with_pre_roll = |pre_roll: u64, lead_ticks: u64| {
+        Message::Compose(ComposeMessage::VocalAudioReady(Box::new(VocalAudioReadyData {
+            definition_id: definition,
+            track_id: VOCAL,
+            wav_path: std::path::PathBuf::from("/tmp/nonexistent-vocal-preroll.wav"),
+            placements: vec![(placement, queued_start)],
+            clip_name: "Verse · Vocal".to_owned(),
+            trim_start_frames: 13_230 - pre_roll,
+            trim_end_frames: 13_230,
+            pre_roll_frames: pre_roll,
+            lead_ticks,
+            render_epoch: 1,
+            bpm: 120.0,
+            unit_keys: Vec::new(),
+        })))
+    };
+    let rx = app.test_capture_engine();
+    let _ = app.update(with_pre_roll(4_000, lead_ticks));
+    assert_eq!(loaded_clips(&rx), vec![(note_sample - 4_000, 13_230 - 4_000)]);
+
+    // A first note at the very start of the timeline cannot start early:
+    // the pre-roll is trimmed instead, and the note stays on its beat.
+    assert_eq!(queued_start, 0, "precondition: the section starts the song");
+    let _ = app.update(with_pre_roll(4_000, 0));
+    assert_eq!(loaded_clips(&rx), vec![(0, 13_230)]);
 }

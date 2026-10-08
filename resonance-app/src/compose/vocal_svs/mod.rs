@@ -76,6 +76,15 @@ pub use validate::{
 /// stays correct.
 const SEGMENT_PAD_SEC: f64 = 0.3;
 
+/// [`SEGMENT_PAD_SEC`] in frames at `sample_rate`: the pad a rendered
+/// take carries before its first note's onset. A take installed with
+/// pre-roll keeps `pad − trim_start` of it, so `start_sample + pad −
+/// trim_start` is where the first note sits — how a reload recognises a
+/// take saved without its owner (`ComposeState::rebuild_vocal_audio_clips`).
+pub fn pad_frames(sample_rate: u32) -> u64 {
+    (SEGMENT_PAD_SEC * sample_rate as f64) as u64
+}
+
 /// Where a lane's rendered audio belongs on the timeline: the section's
 /// start, advanced by the lane's first note.
 ///

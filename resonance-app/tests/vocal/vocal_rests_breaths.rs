@@ -17,7 +17,7 @@ use resonance_app::compose::vocal_svs::{
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::derive::LyricLine;
 use resonance_music_theory::g2p::AssignedSyllable;
-use resonance_music_theory::{VocalParams, VoicebankId};
+use resonance_music_theory::{VocalParams, VoiceType, VoicebankId};
 use resonance_svs::ds::DsSegment;
 
 const TPQ: u32 = TICKS_PER_QUARTER_NOTE as u32;
@@ -175,7 +175,11 @@ fn lowering_the_threshold_turns_a_sixteenth_gap_into_a_rest() {
     // The articulation report follows the lane's threshold: legato, the
     // first note owns its slot; as a rest, only its written length.
     let syl = assign("la la", 2);
-    let at = |beats| articulation_report_for(&notes, &syl, TPQ, BPM, &bank(), beats)[0].duration_sec;
+    let at = |beats| {
+        let report =
+            articulation_report_for(&notes, &syl, TPQ, BPM, &bank(), None, VoiceType::Alto, beats);
+        report[0].duration_sec
+    };
     assert!((at(0.5) - 1.25 * BEAT).abs() < EPS);
     assert!((at(0.25) - BEAT).abs() < EPS);
 }

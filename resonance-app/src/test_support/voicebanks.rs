@@ -19,6 +19,8 @@ pub struct VoicebankFixture {
     pub phonemes: Vec<String>,
     /// `dsdict-en.yaml` entries as `(grapheme, phonemes)`.
     pub english_dict: Vec<(String, Vec<String>)>,
+    /// `dsdict-en.yaml` `replacements:` as `(from, to)`.
+    pub english_replacements: Vec<(String, String)>,
     /// Write a bundled `dsvocoder/` (config + empty model file)?
     pub vocoder: bool,
     /// Without a bundled vocoder: the shared vocoder the acoustic config
@@ -48,6 +50,7 @@ impl Default for VoicebankFixture {
             speakers: Vec::new(),
             phonemes,
             english_dict: Vec::new(),
+            english_replacements: Vec::new(),
             vocoder: true,
             vocoder_name: None,
             use_tension_embed: false,
@@ -67,9 +70,10 @@ impl VoicebankFixture {
 
     /// A config-only stand-in for one of the shipped banks, laid out like
     /// the real one where it matters to the registry: TIGER's seven
-    /// `dsacoustic/tiger_*` speakers among others, Lilia's missing `v`
-    /// and tension input, Meiji's `en/` namespace, language ids and four
-    /// `embeds/*` modes.
+    /// `dsacoustic/tiger_*` speakers among others, Lilia's multi-language
+    /// inventory (no `v`; English spelled `L`, `t0`, … through her
+    /// dictionary's replacements) and tension input, Meiji's `en/`
+    /// namespace, language ids and four `embeds/*` modes.
     pub fn shipped(id: &str) -> Self {
         let arpabet = resonance_music_theory::g2p::ARPABET_PHONEMES;
         match id {
@@ -86,10 +90,29 @@ impl VoicebankFixture {
                     .collect(),
                 ..Self::default()
             },
-            "lilia" => Self {
-                use_tension_embed: true,
-                ..Self::default().without(&["v"])
-            },
+            "lilia" => {
+                let respelt = [
+                    ("t", "t0"),
+                    ("d", "d0"),
+                    ("r", "r0"),
+                    ("l", "ll"),
+                    ("v", "w"),
+                    ("w", "L"),
+                    ("y", "j"),
+                ];
+                let mut lilia = Self::default().without(&["v"]);
+                lilia
+                    .phonemes
+                    .extend(["L", "t0", "d0", "r0", "ll", "j"].map(str::to_owned));
+                Self {
+                    use_tension_embed: true,
+                    english_replacements: respelt
+                        .iter()
+                        .map(|(a, b)| (a.to_string(), b.to_string()))
+                        .collect(),
+                    ..lilia
+                }
+            }
             "meiji" => {
                 let mut phonemes: Vec<String> = ["AP", "SP", "cl", "hh"]
                     .iter()
@@ -155,13 +178,19 @@ pub fn write_voicebank_fixture(dir: &Path, spec: &VoicebankFixture) {
         );
         write("dsvocoder/vocoder.onnx", "");
     }
-    if !spec.english_dict.is_empty() {
+    if !spec.english_dict.is_empty() || !spec.english_replacements.is_empty() {
         let mut yaml = String::from("symbols:\n- {symbol: aa, type: vowel}\nentries:\n");
         for (grapheme, phonemes) in &spec.english_dict {
             yaml.push_str(&format!(
                 "- {{grapheme: \"{grapheme}\", phonemes: [{}]}}\n",
                 phonemes.join(", ")
             ));
+        }
+        if !spec.english_replacements.is_empty() {
+            yaml.push_str("replacements: # the bank's own spelling\n");
+            for (from, to) in &spec.english_replacements {
+                yaml.push_str(&format!("- {{from: {from}, to: {to}}}\n"));
+            }
         }
         write("dsdur/dsdict-en.yaml", &yaml);
     }
@@ -351,5 +380,17 @@ impl Resonance {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+}
+
+impl BankProfile {
+    /// Test-only: a not-installed profile answering from `builtin` — a
+    /// fixture row of the built-in table (speakers, ranges, default
+    /// speaker) no shipped bank has.
+    #[doc(hidden)]
+    pub fn test_from_builtin(
+        builtin: &'static crate::compose::vocal_svs::registry::BuiltinBank,
+    ) -> Self {
+        Self::from_builtin(builtin)
     }
 }

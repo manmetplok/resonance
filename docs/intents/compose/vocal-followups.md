@@ -56,14 +56,30 @@ default bank's licence holds — plus a few small gaps the builders left.
      with it (`ORT_LIB_LOCATION`), and neither has run on a GPU.
    - The energy path (velocity and the Dynamics curve → energy) runs on no
      shipped bank and has not been heard.
-   - Comfortable ranges are per bank; no per-speaker ranges are known.
+   - Comfortable ranges are per bank; `speaker_ranges` can hold a
+     speaker's own, but none is known (Meiji's modes might differ).
+6. **Intelligibility, what is left** (after the 2026-10-08 fixes, see
+   [vocal rendering § Measurements](../../features/compose/vocal-rendering.md#measurements)).
+   - The 2026-10-07 audition renders predate the fixes (TIGER sang the
+     wrong words, Lilia another language's consonants) — listen to a fresh
+     `scripts/vocal-audition.py` run before judging banks.
+   - The banks' own duration models (`dsdur`) are not run; a 1.6×
+     consonant table matched them on the audition phrase. Running them
+     (off the planning thread, as a refinement inside the render) may
+     help phoneme-dense lines the table handles worst. The pitch and
+     variance models were not measured.
+   - On the held-out phrase TIGER and Meiji sit at 77–84 %: the
+     phrase-initial "Bright" (onset lead capped at 0.2 s) and "hear you".
+   - Check every candidate bank's `dsdict-en.yaml` for `replacements:` —
+     Lilia's were ignored until now, and a bank that respells English
+     sings garbage without them.
 
 ## What exists to build on
 
 - The audition: `scripts/vocal-audition.py` renders every installed bank ×
-  speaker blind and `--reveal`s the key
-  ([vocal rendering § bank audition](../../features/compose/vocal-rendering.md#bank-audition));
-  run 2026-10-07 on the current three banks (12 files).
+  speaker blind and `--reveal`s the key, each voice transposed into its
+  range; `scripts/vocal-intelligibility.py` scores a set with Whisper
+  ([vocal rendering § bank audition](../../features/compose/vocal-rendering.md#bank-audition)).
 - The proposed index entries and their research notes:
   [`plok-voicebank-index.json`](../../features/compose/plok-voicebank-index.json),
   [`singing-voicebank-options-2026`](../../history/research/singing-voicebank-options-2026.md).
@@ -91,6 +107,8 @@ default bank's licence holds — plus a few small gaps the builders left.
 3. The live MCP session, with its findings filed as bugs.
 4. The licence follow-up (mail; a decision recorded in the feature docs).
 5. The small gaps, each a vertical slice of its own.
+6. The intelligibility leftovers, measured with
+   `scripts/vocal-intelligibility.py` before and after.
 
 ## How we'd know it works
 

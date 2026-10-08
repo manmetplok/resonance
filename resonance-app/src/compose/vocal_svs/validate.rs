@@ -11,9 +11,9 @@
 //!    segment.
 //! 2. **Singable by the active voicebank** (#492): the symbol is checked
 //!    against [`VoicebankPhonemes`]. One the bank covers is kept as-is;
-//!    one it lacks but can substitute (e.g. Lilia `v` → `f`) is rewritten
-//!    to the substitute; one with no acceptable substitute blocks the
-//!    render.
+//!    one it lacks but can substitute (e.g. `v` → `f` on a bank without
+//!    `v`) is rewritten to the substitute; one with no acceptable
+//!    substitute blocks the render.
 //!
 //! On success the returned syllables carry the *effective* (substituted)
 //! phonemes — exactly what the segment builder feeds the model — with
@@ -212,18 +212,24 @@ pub struct NoteArticulation {
 /// modelled here.)
 ///
 /// `rest_threshold_beats` is the lane's, so the report bridges exactly
-/// the gaps the segment builder sings legato.
+/// the gaps the segment builder sings legato. `speaker` and `voice` are
+/// the lane's, for the comfortable range of the speaker it sings with
+/// ([`BankProfile::lane_comfortable_range`]) — the default speaker's when
+/// it never picked one.
+#[allow(clippy::too_many_arguments)]
 pub fn articulation_report_for(
     notes: &[MidiNote],
     assigned: &[AssignedSyllable],
     ticks_per_quarter: u32,
     bpm: f32,
     bank: &BankProfile,
+    speaker: Option<&str>,
+    voice: resonance_music_theory::VoiceType,
     rest_threshold_beats: f32,
 ) -> Vec<NoteArticulation> {
     let rest_rule = RestRule::from_beats(rest_threshold_beats, bpm);
     let seconds_per_tick = 60.0 / (bpm.max(1.0) as f64 * ticks_per_quarter.max(1) as f64);
-    let range = bank.comfortable_range(None);
+    let range = bank.lane_comfortable_range(speaker, voice);
     let (lo, hi) = (range.low, range.high);
     let mut out = Vec::with_capacity(notes.len().min(assigned.len()));
     for (i, n) in notes.iter().enumerate() {

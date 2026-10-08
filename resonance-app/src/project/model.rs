@@ -886,6 +886,25 @@ pub struct ProjectClip {
     /// `stale` until re-rendered).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vocal_render_units: Vec<u64>,
+    /// For a rendered vocal take: the section placement whose lane it
+    /// plays, so a reopened project (or an undo/redo) hands the clip
+    /// back to that lane and the next render replaces it rather than
+    /// summing a second take on top (spec §7, D22). `None` for every
+    /// other clip, and for takes saved before it existed — those are
+    /// matched by where their first note sits instead
+    /// (`ComposeState::rebuild_vocal_audio_clips`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocal_take: Option<ProjectVocalTake>,
+}
+
+/// Which lane placement a rendered vocal take belongs to
+/// ([`ProjectClip::vocal_take`]). The lane's track is the clip's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectVocalTake {
+    /// The section definition the lane belongs to.
+    pub definition_id: u64,
+    /// The placement of that section the take was installed on.
+    pub placement_id: u64,
 }
 
 /// One clip's persisted warp state ([`ProjectClip::warp`]). Every field

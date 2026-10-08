@@ -19,7 +19,7 @@ use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::derive::LyricLine;
 use resonance_music_theory::g2p::{self, AssignedSyllable};
 use resonance_app::compose::vocal_svs::BankProfile;
-use resonance_music_theory::{VocalParams, VoicebankId};
+use resonance_music_theory::{VocalParams, VoiceType, VoicebankId};
 
 const TPQ: u32 = TICKS_PER_QUARTER_NOTE as u32;
 /// The tempo the song under investigation was written at.
@@ -83,6 +83,8 @@ fn crammed_word_on_one_short_note_is_flagged() {
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        None,
+        VoiceType::Alto,
         VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     assert_eq!(report.len(), 1);
@@ -115,6 +117,8 @@ fn the_same_word_split_across_notes_is_not_flagged() {
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        None,
+        VoiceType::Alto,
         VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     assert_eq!(report.len(), 4);
@@ -146,11 +150,79 @@ fn out_of_range_notes_are_flagged_against_the_voicebank() {
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        None,
+        VoiceType::Alto,
         VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     assert!(!report[0].out_of_range, "mid-range note flagged");
     assert!(report[1].out_of_range, "an octave below the range");
     assert!(report[2].out_of_range, "an octave above the range");
+}
+
+/// A two-speaker bank whose speakers sit an octave apart, the high one
+/// the default for the upper voices — a fixture row: no shipped bank
+/// declares per-speaker ranges yet.
+fn two_speaker_bank() -> BankProfile {
+    use resonance_app::compose::vocal_svs::registry::{BuiltinBank, BuiltinSpeaker};
+    static SPEAKERS: &[BuiltinSpeaker] = &[
+        BuiltinSpeaker { id: "high", name: "High", model_key: "fixture_high" },
+        BuiltinSpeaker { id: "low", name: "Low", model_key: "fixture_low" },
+    ];
+    fn default_speaker(voice: VoiceType) -> Option<&'static str> {
+        match voice {
+            VoiceType::Soprano | VoiceType::MezzoSoprano | VoiceType::Alto => Some("high"),
+            _ => Some("low"),
+        }
+    }
+    let lilia = resonance_app::compose::vocal_svs::registry::BUILTIN_BANKS
+        .iter()
+        .find(|b| b.id == "lilia")
+        .expect("lilia is built in");
+    let fixture: &'static BuiltinBank = Box::leak(Box::new(BuiltinBank {
+        id: "two-speaker-fixture",
+        speakers: SPEAKERS,
+        default_speaker,
+        range: (50, 70),
+        speaker_ranges: &[("high", (62, 81)), ("low", (38, 57))],
+        ..*lilia
+    }));
+    BankProfile::test_from_builtin(fixture)
+}
+
+/// A lane that never picked a speaker sings with the bank's default for
+/// its voice, so that speaker's range is the one it is checked against —
+/// not the bank-wide range.
+#[test]
+fn a_lane_without_a_speaker_is_checked_against_its_default_speakers_range() {
+    let bank = two_speaker_bank();
+    let range = |speaker: Option<&str>, voice| {
+        let r = bank.lane_comfortable_range(speaker, voice);
+        (r.low, r.high)
+    };
+    assert_eq!(range(None, VoiceType::Soprano), (62, 81), "the default high speaker");
+    assert_eq!(range(None, VoiceType::Bass), (38, 57), "the default low speaker");
+    assert_eq!(range(Some("low"), VoiceType::Soprano), (38, 57), "the lane's own pick");
+    let bank_wide = bank.comfortable_range(None);
+    assert_eq!((bank_wide.low, bank_wide.high), (50, 70), "the bank's own range");
+
+    // E5 sits in the high speaker's range, above the bank's: a soprano
+    // lane on the default speaker sings it comfortably, a bass lane not.
+    let assigned = assign("la", 1);
+    let report = |voice| {
+        articulation_report_for(
+            &notes(1, 1.0, 76),
+            &assigned,
+            TPQ,
+            BPM,
+            &bank,
+            None,
+            voice,
+            VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
+        )[0]
+        .out_of_range
+    };
+    assert!(!report(VoiceType::Soprano), "in the default speaker's range");
+    assert!(report(VoiceType::Bass), "above the low speaker's range");
 }
 
 #[test]
@@ -165,6 +237,8 @@ fn report_durations_follow_the_note_grid() {
         TPQ,
         BPM,
         &BankProfile::not_installed("lilia"),
+        None,
+        VoiceType::Alto,
         VocalParams::DEFAULT_REST_THRESHOLD_BEATS,
     );
     let expected = 60.0 / BPM as f64 * 0.5;
@@ -201,7 +275,7 @@ fn a_roomy_note_gives_every_phoneme_its_floor() {
         &assigned,
         TPQ,
         BPM,
-        &BankProfile::not_installed("lilia"),
+        &BankProfile::not_installed("tiger"),
     );
     for (ph, d) in lexical_durations(&segment.ph_seq, &segment.ph_dur) {
         let floor = floor_duration_sec(&ph);
@@ -226,7 +300,7 @@ fn fricatives_get_more_time_than_stops() {
         &assigned,
         TPQ,
         BPM,
-        &BankProfile::not_installed("lilia"),
+        &BankProfile::not_installed("tiger"),
     );
     let lex = lexical_durations(&segment.ph_seq, &segment.ph_dur);
     let s = lex.iter().find(|(p, _)| p == "s").expect("`s` in {lex:?}").1;

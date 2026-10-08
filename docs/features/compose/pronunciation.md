@@ -1,6 +1,6 @@
 # Lyric pronunciation (G2P and dictionary)
 
-> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
+> Verified against master @ `c6cc8fd5` + vocal intelligibility on 2026-10-08.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4.4, §8 (slices 5, 10, 11); prototype `docs/intents/prototypes/svs-pronunciation-control/index.html` (design #173, notes #174).
 
 Every sung syllable becomes a list of ARPAbet phonemes before it reaches
@@ -73,13 +73,17 @@ and a global user dictionary, but nothing sets those yet.
 - **Mapping onto the bank.** After resolution, `validate_for_voicebank`
   maps every phone onto the bank's inventory (`VoicebankPhonemes`): kept
   if the bank has it bare or `en/`-prefixed; otherwise the bank's
-  substitution hint (Lilia `v` → `f`, `b`), then the voiced/voiceless
+  substitution hint (none of the shipped banks has one), then the voiced/voiceless
   partner, then the nearest phone of the same articulatory class
   (`nearest_by_class`: vowels to vowels, stops to stops, …, never across
   the vowel/consonant line). A symbol that is not ARPAbet, or that nothing
   near enough reaches, blocks the render; the error names the note, the
-  syllable, the **word** (`InvalidSyllable::word`) and the bank. The
-  language prefix is added when the segment is built
+  syllable, the **word** (`InvalidSyllable::word`) and the bank. A bank
+  that respells a phone through its dictionary's `replacements:` (Lilia's
+  English `w` is her `L`) has it, so nothing is substituted; the bank's own
+  dictionary entries, written in those spellings, are read back into
+  ARPAbet through the same table (`L aa n` → `w aa n`). The
+  respelling and the language prefix are added when the segment is built
   (`BankProfile::phoneme_name`) — see [vocal rendering](vocal-rendering.md).
 - **Persisted.** `PronunciationState` (project dictionary + per-syllable
   overrides) is written to `ProjectFile::pronunciation`

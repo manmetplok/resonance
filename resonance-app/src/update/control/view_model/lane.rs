@@ -105,6 +105,8 @@ pub(in crate::update::control) fn lane_articulation(
         // reported here are the ones the segment builder will divide up.
         crate::update::compose::section_meter(app, definition_id).bpm,
         &bank,
+        params.speaker.as_deref(),
+        params.voice,
         params.rest_threshold_beats,
     )
 }

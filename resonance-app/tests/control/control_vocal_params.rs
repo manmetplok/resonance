@@ -484,13 +484,13 @@ fn a_held_syllable_fills_its_notes_without_a_counts_mismatch() {
     assert_eq!(lane.note_count, 3, "the melody fills one note per unit");
     assert!(!lane.counts_mismatch, "{lane:?}");
     // The held word closes on the hold's last note (Lilia, the default
-    // bank, has no `v` and sings it as `f`).
+    // bank, spells `v` as her own `w`; the report shows the ARPAbet).
     let phonemes: Vec<Vec<&str>> = lane
         .notes
         .iter()
         .map(|n| n.phonemes.iter().map(String::as_str).collect())
         .collect();
-    assert_eq!(phonemes, vec![vec!["l", "ah"], vec!["ah"], vec!["ah", "f"]]);
+    assert_eq!(phonemes, vec![vec!["l", "ah"], vec!["ah"], vec!["ah", "v"]]);
 }
 
 /// `vocal.get_params` only reads the open project, so like the other

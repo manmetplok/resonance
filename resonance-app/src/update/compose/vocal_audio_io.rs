@@ -212,6 +212,7 @@ impl VocalRenderJob {
             path,
             trim_start_frames: rendered.trim_start_frames,
             trim_end_frames: rendered.trim_end_frames,
+            pre_roll_frames: rendered.pre_roll_frames,
             unit_keys: cache.last_keys().to_vec(),
         }))
     }
@@ -224,5 +225,8 @@ pub(crate) struct RenderedTake {
     pub path: PathBuf,
     pub trim_start_frames: u64,
     pub trim_end_frames: u64,
+    /// Frames before the first note the clip keeps (see
+    /// [`vocal_svs::RenderedVocal::pre_roll_frames`]).
+    pub pre_roll_frames: u64,
     pub unit_keys: Vec<u64>,
 }

@@ -685,3 +685,59 @@ fn dsdict_entries_parse_tolerantly() {
     assert_eq!(entries[2].phonemes.len(), 7);
     assert!(parse_dsdict("symbols: []\n").unwrap().is_empty());
 }
+
+#[test]
+fn dsdict_replacements_parse_from_their_own_section() {
+    use resonance_svs::voicebank::dsdict::{parse_replacements, DsDictReplacement};
+    // LIEE Lilia's shape: entries first (one malformed), then a commented
+    // `replacements:` header, then another top-level key.
+    let pairs = parse_replacements(
+        "entries:\n- {grapheme: want, phonemes: [L, aa, n]}\n- {grapheme: broken\n\
+         replacements: # crothlang moment\n- {from: t, to: t0}\n- {from: w, to: L}\n\
+         - {from: x}\nsymbols:\n- {symbol: aa, type: vowel}\n",
+    )
+    .expect("the section parses although an entry does not");
+    assert_eq!(
+        pairs,
+        [
+            DsDictReplacement {
+                from: "t".into(),
+                to: "t0".into()
+            },
+            DsDictReplacement {
+                from: "w".into(),
+                to: "L".into()
+            },
+        ]
+    );
+    assert!(parse_replacements("entries: []\n").unwrap().is_empty());
+}
+
+#[test]
+fn a_scan_spells_phonemes_the_way_the_english_dictionary_replaces_them() {
+    // Lilia's layout: dsconfig at the root, the dictionary in dsdur/, a
+    // multi-language inventory where English `w` is `L` and `v` is `w`.
+    let dir = fresh_dir("replacements");
+    write(
+        &dir,
+        "dsconfig.yaml",
+        "phonemes: phonemes.txt\nacoustic: acoustic.onnx\nvocoder: dsvocoder\n",
+    );
+    write(&dir, "phonemes.txt", "AP\nSP\nah\nt\nt0\nw\nL\n");
+    write(&dir, "dsvocoder/vocoder.yaml", "name: v\nmodel: v.onnx\n");
+    write(
+        &dir,
+        "dsdur/dsdict-en.yaml",
+        "entries: []\nreplacements:\n- {from: t, to: t0}\n- {from: v, to: w}\n\
+         - {from: w, to: L}\n- {from: y, to: missing}\n",
+    );
+    let m = scan(&dir).expect("scans");
+    assert_eq!(m.details.english_replacements.len(), 4);
+    assert_eq!(m.phoneme_name("t"), "t0");
+    assert_eq!(m.phoneme_name("w"), "L");
+    assert_eq!(m.phoneme_name("v"), "w");
+    assert_eq!(m.phoneme_name("ah"), "ah");
+    // A replacement into a symbol the inventory lacks is ignored.
+    assert_eq!(m.phoneme_name("y"), "y");
+    assert_eq!(m.inventory().dict_key_for("y"), None);
+}

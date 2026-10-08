@@ -1,19 +1,28 @@
 {
-  "description": "Committed fixture for the blind bank audition (vocal-mcp-control-and-quality.md §12 slice 6, D30). ~4 bars at 120bpm: v/th/r/l clusters ('velvet', 'thread', 'truly', 'lovers', 'throbs', 'really', 'rhythm'), a held `_` melisma on 'lovers', an `AP` breath before 'earth', a 1.5-beat rest before it, a high note ('lovers', pitch 74) and a low one ('velvet', pitch 50). `start_beat`/`duration_beat` are in quarter notes at `bpm`; the test converts them to ticks.",
+  "description": "Committed fixture for the blind bank audition (vocal-mcp-control-and-quality.md §12 slice 6, D30) and the Whisper intelligibility check (scripts/vocal-intelligibility.py). Two plain lines at 120 bpm, every multi-syllable word split with `·` so syllables == notes: 16 syllables + one `_` melisma on 'sing' = 17 notes, an `AP` breath in the half-beat rest between the lines. `pitch` is written in C (tonic C4 = 60, span C4..C5, one octave); the test transposes the whole melody per bank x speaker so its duration-weighted centre sits in the middle of that voice's comfortable range (`BankProfile::comfortable_range`). `text` is what an intelligible render should be heard as.",
   "bpm": 120.0,
-  "lyrics": "velvet thread truly lovers _ _ AP earth throbs really rhythm glow love",
+  "lines": [
+    "Walk with me a·long the riv·er",
+    "AP we will sing _ un·til the morn·ing"
+  ],
+  "text": "walk with me along the river we will sing until the morning",
   "notes": [
-    { "start_beat": 0.0, "duration_beat": 1.0, "pitch": 50, "velocity": 0.72 },
-    { "start_beat": 1.0, "duration_beat": 1.0, "pitch": 62, "velocity": 0.80 },
-    { "start_beat": 2.0, "duration_beat": 1.0, "pitch": 63, "velocity": 0.78 },
-    { "start_beat": 3.0, "duration_beat": 1.0, "pitch": 74, "velocity": 0.88 },
-    { "start_beat": 4.0, "duration_beat": 1.0, "pitch": 74, "velocity": 0.88 },
-    { "start_beat": 5.0, "duration_beat": 1.0, "pitch": 74, "velocity": 0.88 },
-    { "start_beat": 7.5, "duration_beat": 1.0, "pitch": 58, "velocity": 0.70 },
-    { "start_beat": 8.5, "duration_beat": 1.0, "pitch": 61, "velocity": 0.76 },
-    { "start_beat": 9.5, "duration_beat": 1.0, "pitch": 63, "velocity": 0.74 },
-    { "start_beat": 10.5, "duration_beat": 1.0, "pitch": 60, "velocity": 0.78 },
-    { "start_beat": 11.5, "duration_beat": 1.0, "pitch": 52, "velocity": 0.80 },
-    { "start_beat": 12.5, "duration_beat": 2.0, "pitch": 65, "velocity": 0.90 }
+    { "start_beat": 0.0, "duration_beat": 1.0, "pitch": 64, "velocity": 0.80 },
+    { "start_beat": 1.0, "duration_beat": 0.5, "pitch": 62, "velocity": 0.72 },
+    { "start_beat": 1.5, "duration_beat": 1.5, "pitch": 60, "velocity": 0.78 },
+    { "start_beat": 3.0, "duration_beat": 0.5, "pitch": 60, "velocity": 0.70 },
+    { "start_beat": 3.5, "duration_beat": 1.0, "pitch": 64, "velocity": 0.82 },
+    { "start_beat": 4.5, "duration_beat": 0.5, "pitch": 67, "velocity": 0.72 },
+    { "start_beat": 5.0, "duration_beat": 1.0, "pitch": 69, "velocity": 0.85 },
+    { "start_beat": 6.0, "duration_beat": 1.5, "pitch": 67, "velocity": 0.76 },
+    { "start_beat": 8.0, "duration_beat": 0.5, "pitch": 67, "velocity": 0.74 },
+    { "start_beat": 8.5, "duration_beat": 0.5, "pitch": 69, "velocity": 0.76 },
+    { "start_beat": 9.0, "duration_beat": 1.0, "pitch": 72, "velocity": 0.90 },
+    { "start_beat": 10.0, "duration_beat": 1.0, "pitch": 71, "velocity": 0.86 },
+    { "start_beat": 11.0, "duration_beat": 0.5, "pitch": 69, "velocity": 0.74 },
+    { "start_beat": 11.5, "duration_beat": 0.5, "pitch": 67, "velocity": 0.76 },
+    { "start_beat": 12.0, "duration_beat": 0.5, "pitch": 64, "velocity": 0.70 },
+    { "start_beat": 12.5, "duration_beat": 1.0, "pitch": 62, "velocity": 0.82 },
+    { "start_beat": 13.5, "duration_beat": 2.0, "pitch": 60, "velocity": 0.78 }
   ]
 }

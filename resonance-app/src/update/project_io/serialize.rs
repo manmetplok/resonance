@@ -9,7 +9,7 @@ use crate::project::{
     warp_algorithm_tag, ProjectBus, ProjectClip, ProjectClipWarp, ProjectWarpMarker,
     ProjectExternalInstrument, ProjectFile, ProjectMidiClip, ProjectPerformance, ProjectPlugin,
     ProjectPoolAsset, ProjectReference, ProjectReferenceMarker, ProjectReferenceSettings,
-    ProjectSend, ProjectTrack, PROJECT_FORMAT_VERSION,
+    ProjectSend, ProjectTrack, ProjectVocalTake, PROJECT_FORMAT_VERSION,
 };
 use crate::state::ClipWarpState;
 use crate::Resonance;
@@ -401,6 +401,17 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         routes
     };
 
+    // Which lane placement each rendered vocal take plays, so a reload or
+    // an undo/redo hands it back to its lane (spec §7, D22).
+    let vocal_takes: std::collections::HashMap<ClipId, ProjectVocalTake> = r
+        .compose
+        .vocal_audio
+        .clips
+        .iter()
+        .map(|(&(definition_id, placement_id, _track), &(clip_id, _))| {
+            (clip_id, ProjectVocalTake { definition_id, placement_id })
+        })
+        .collect();
     let clips = r
         .clips
         .iter()
@@ -432,6 +443,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
                 .get(&c.id)
                 .map(|keys| keys.to_vec())
                 .unwrap_or_default(),
+            vocal_take: vocal_takes.get(&c.id).copied(),
         })
         .collect();
 

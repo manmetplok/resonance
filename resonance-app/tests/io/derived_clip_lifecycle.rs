@@ -473,6 +473,7 @@ fn vocal_song_with_installed_audio()
             clip_name: "Verse · Vocal".to_owned(),
             trim_start_frames: 0,
             trim_end_frames: 0,
+            pre_roll_frames: 0,
             lead_ticks: 0,
             render_epoch: 0,
             bpm: 120.0,
@@ -574,24 +575,20 @@ fn remove_bars_drops_a_moved_vocal_audio_clips_entry() {
     let _ = definition;
 }
 
-/// Known limitation (not fixed here, and not a regression from FU-A6d):
-/// undoing a `remove_bars` that deleted a *moved* vocal audio clip brings
-/// the clip's `ClipState` back, but not its `vocal_audio.clips` entry.
+/// Undoing a `remove_bars` that deleted a *moved* vocal audio clip
+/// brings back both the clip and its lane's claim on it.
 ///
-/// Unlike `derived_clips`, which A-6 made undo restore from the snapshot's
-/// authoritative saved map, `vocal_audio.clips` is runtime-only and always
-/// rebuilt positionally from `r.clips` on every reconcile (the
-/// `VocalAudioClips` domain, `docs/history/refactor/A-6-derived-clips.md` §1: "out of
-/// scope here"). That rebuild only claims a clip sitting exactly on a
-/// placement's start bar, so a clip restored at the position the user
-/// dragged it to is not reclaimed — the same gap the design doc already
-/// calls out for a "derived clip the user moved" (§`Relation to
-/// midi_clips`), just for the audio side. A lane in this state reads as
-/// `not_rendered` until the user regenerates it; nothing crashes or
-/// resurrects stale audio.
+/// `vocal_audio.clips` is runtime-only and rebuilt from the clips on every
+/// reconcile (the `VocalAudioClips` domain). The rebuild used to be
+/// purely positional — it claimed a clip only on a placement's start bar
+/// — so a clip restored where the user had dragged it was not reclaimed
+/// and its lane read `not_rendered` (the gap
+/// `docs/history/refactor/A-6-derived-clips.md` noted). A take now carries
+/// the placement it plays (`ProjectClip::vocal_take`), so wherever it
+/// sits, it goes back to its lane, and the next render replaces it.
 #[test]
-fn undoing_the_removal_does_not_reclaim_a_moved_clips_vocal_audio_entry() {
-    let (mut app, rx, _definition, placement, clip_id, _root) = vocal_song_with_installed_audio();
+fn undoing_the_removal_reclaims_a_moved_clips_vocal_audio_entry() {
+    let (mut app, rx, definition, placement, clip_id, _root) = vocal_song_with_installed_audio();
     let start_bar = app
         .compose_state()
         .find_placement(placement)
@@ -629,9 +626,10 @@ fn undoing_the_removal_does_not_reclaim_a_moved_clips_vocal_audio_entry() {
         app.test_clips().iter().any(|c| c.id == clip_id && c.start_sample == moved_to),
         "the clip itself comes back at its moved position"
     );
-    assert!(
-        app.test_vocal_audio_clips(VOCAL_TRACK).is_empty(),
-        "documents the known gap: the positional rebuild does not reclaim a moved clip"
+    assert_eq!(
+        app.test_vocal_audio_clips(VOCAL_TRACK),
+        vec![(definition, clip_id)],
+        "the restored take is its lane's again"
     );
 }
 

@@ -403,6 +403,7 @@ fn a_render_that_finishes_after_a_tempo_change_is_re_rendered() {
             clip_name: "Verse".to_owned(),
             trim_start_frames: 0,
             trim_end_frames: 0,
+            pre_roll_frames: 0,
             lead_ticks: 0,
             render_epoch: queued,
             bpm: 120.0,

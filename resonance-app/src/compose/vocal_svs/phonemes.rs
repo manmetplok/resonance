@@ -15,10 +15,12 @@
 //! built-in record of its shipped one ([`BankProfile::has_phoneme`]). A
 //! phone the bank lacks is mapped onto what it has
 //! (vocal-mcp-control-and-quality.md §4.4): the bank's own substitution
-//! hints first (Lilia `v` → `f`, `b`), then the voiced/voiceless partner,
-//! then the nearest phone of the same articulatory class
+//! hints first, then the voiced/voiceless partner (a bank without `v`
+//! sings `f`), then the nearest phone of the same articulatory class
 //! ([`nearest_by_class`]). Only a phone none of those reach is
-//! unsupported.
+//! unsupported. No shipped bank needs a substitute today: Lilia, who once
+//! sang `v` as `f`, spells it as her own `w` through her dictionary's
+//! replacements and sings it as `v`.
 
 use resonance_music_theory::g2p;
 
@@ -31,7 +33,7 @@ pub enum PhonemeFate {
     /// The bank's dict contains this symbol; it is sung as-is.
     Direct,
     /// The bank lacks this symbol; it is sung as the nearest available
-    /// substitute instead (e.g. Lilia `v` → `f`).
+    /// substitute instead (e.g. `v` → `f` on a bank without `v`).
     Substituted(&'static str),
     /// The bank lacks this symbol and nothing it has is close enough. The
     /// pronunciation gate refuses the render, naming the word; the strip
@@ -187,18 +189,24 @@ impl ArticulationClass {
     /// target — they take the remainder of the note — so their band is
     /// only a lower bound used when a syllable is all-vowel.
     ///
-    /// The bands are centred on the old uniform 35-85 ms so the existing
-    /// characterisation of `consonant_emphasis` (garbage below ~0.15,
-    /// mis-heard endings above ~0.60) still holds; what changed is the
-    /// *distribution* across classes, not the average.
+    /// The consonant bands are 1.6x the first table's (which centred on
+    /// the old uniform 35-85 ms). That table was set by ear; measured
+    /// against the banks it was half what they were trained on: run on the
+    /// audition phrase, the banks' own duration models (`dsdur`) gave a
+    /// `k` 111 ms, an `s` 155, an `l` 125-139, an `m` 108-196 where this
+    /// table gave 48-75, and stretching our consonants 1.6x within each
+    /// syllable raised Whisper's word accuracy on every bank (TIGER 92 →
+    /// 98 %, Meiji 91 → 97 %, Lilia 67 → 90 %, `vocal-rendering.md`
+    /// § Measurements) — as much as the duration models themselves did.
+    /// The per-class distribution is unchanged.
     fn target_band(self) -> (f64, f64) {
         match self {
             ArticulationClass::Vowel => (0.090, 0.090),
-            ArticulationClass::Stop => (0.035, 0.060),
-            ArticulationClass::Affricate => (0.055, 0.090),
-            ArticulationClass::Fricative => (0.055, 0.095),
-            ArticulationClass::Nasal => (0.045, 0.075),
-            ArticulationClass::Approximant => (0.040, 0.070),
+            ArticulationClass::Stop => (0.056, 0.096),
+            ArticulationClass::Affricate => (0.088, 0.144),
+            ArticulationClass::Fricative => (0.088, 0.152),
+            ArticulationClass::Nasal => (0.072, 0.120),
+            ArticulationClass::Approximant => (0.064, 0.112),
         }
     }
 

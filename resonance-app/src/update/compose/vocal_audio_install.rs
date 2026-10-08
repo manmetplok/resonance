@@ -35,6 +35,7 @@ pub(super) fn handle_vocal_audio_ready(
         clip_name,
         trim_start_frames,
         trim_end_frames,
+        pre_roll_frames,
         lead_ticks,
         render_epoch,
         bpm: _,
@@ -60,12 +61,17 @@ pub(super) fn handle_vocal_audio_ready(
         // from where the section starts *now*, not where it started when
         // the render was queued (code review VIEW-19).
         let section_start = r.tempo_map.bar_to_sample(placement.start_bar);
-        let start_sample = crate::compose::vocal_svs::vocal_audio_start(
+        let note_sample = crate::compose::vocal_svs::vocal_audio_start(
             &r.tempo_map,
             section_start,
             lead_ticks,
             r.sample_rate,
         );
+        // The first note's onset consonants sound before its beat; a
+        // first note at sample 0 cannot start earlier, so what does not
+        // fit is trimmed instead.
+        let start_sample = note_sample.saturating_sub(pre_roll_frames);
+        let trim_start_frames = trim_start_frames + (pre_roll_frames - (note_sample - start_sample));
         if let Some((old_id, old_path)) = r
             .compose
             .vocal_audio
@@ -74,6 +80,8 @@ pub(super) fn handle_vocal_audio_ready(
         {
             let _ = r.engine
                 .send(AudioCommand::DeleteClip { clip_id: old_id });
+            // Its mirror goes with it, as the new one's arrives below.
+            r.clips.retain(|c| c.id != old_id);
             r.compose.vocal_audio.status.clip_unit_keys.remove(&old_id);
             // Never the saved project's `clip_<id>.wav`, nor a take
             // another placement still plays (FU-C1a).
@@ -90,6 +98,31 @@ pub(super) fn handle_vocal_audio_ready(
             name: clip_name.clone(),
             trim_start_frames,
             trim_end_frames,
+        });
+        // Mirror the clip now, trims and all, as the project load and a
+        // pool placement do: the engine's `ClipImported` echo carries no
+        // trims, so a mirror created from it alone would save the take
+        // untrimmed — reopened, it played its leading pad, late — and a
+        // reload could no longer find its first note. The echo fills in
+        // the length and the waveform.
+        r.clips.push(crate::state::ClipState {
+            id: audio_clip_id,
+            track_id,
+            start_sample,
+            duration_samples: 0,
+            name: clip_name.clone(),
+            total_frames: trim_start_frames + trim_end_frames,
+            trim_start_frames,
+            trim_end_frames,
+            fade_in_frames: 0,
+            fade_in_curve: Default::default(),
+            fade_out_frames: 0,
+            fade_out_curve: Default::default(),
+            gain_db: 0.0,
+            waveform_peaks: Vec::new(),
+            vocal_tuning: None,
+            asset_ref: None,
+            warp: Default::default(),
         });
         r.compose.vocal_audio.clips.insert(
             (definition_id, placement_id, track_id),

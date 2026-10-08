@@ -295,8 +295,10 @@ fn the_built_in_banks_report_their_terms_and_speakers() {
     assert!(lilia.speakers.is_empty());
     assert_eq!(lilia.credit.as_deref(), Some("LIEE"));
     assert_eq!(lilia.commercial.as_deref(), Some("free_with_credit"));
-    assert_eq!(lilia.missing_phonemes, ["v"]);
-    assert_eq!(lilia.substitutions[0].sung_as, "f", "Lilia's own hint");
+    // Her dictionary's replacements spell every English phone (`v` as her
+    // own `w`), so nothing is missing and nothing is substituted.
+    assert!(lilia.missing_phonemes.is_empty(), "{:?}", lilia.missing_phonemes);
+    assert!(lilia.substitutions.is_empty(), "{:?}", lilia.substitutions);
     assert!(lilia.curves.tension && !tiger.curves.tension);
 
     let meiji = bank("meiji");

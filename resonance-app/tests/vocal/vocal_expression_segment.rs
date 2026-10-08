@@ -275,3 +275,43 @@ fn gain_layers_add_in_db() {
     let want = 10f32.powf(3.0 / 20.0);
     assert!(env.iter().all(|g| (g - want).abs() < 1e-5));
 }
+
+// ---------------------------------------------------------------------------
+// Timbre → gender (formants)
+// ---------------------------------------------------------------------------
+
+/// The constant `gender` input a segment on `vb` with `timbre` carries.
+fn gender(vb: &str, timbre: resonance_music_theory::VocalTimbre) -> f64 {
+    let p = VocalParams {
+        timbre,
+        ..params(vb)
+    };
+    let seg = build(&p);
+    let first = seg.gender.samples[0];
+    assert!(seg.gender.samples.iter().all(|g| *g == first), "constant");
+    first
+}
+
+#[test]
+fn the_default_timbre_leaves_every_banks_formants_alone() {
+    // Warm used to be -0.15, which cost TIGER its words (Whisper: 37 % of
+    // the audition phrase against 92 % at 0). The default is neutral.
+    use resonance_music_theory::VocalTimbre;
+    assert_eq!(VocalParams::default().timbre, VocalTimbre::Warm);
+    for vb in ["tiger", "lilia", "meiji", "someone"] {
+        assert_eq!(gender(vb, VocalTimbre::Warm), 0.0, "{vb}");
+    }
+}
+
+#[test]
+fn tiger_gets_a_quarter_of_the_timbre_swing() {
+    // TIGER held its words at +0.075 and lost them at +0.15; Lilia and
+    // Meiji take the full swing.
+    use resonance_music_theory::VocalTimbre;
+    let bright_tiger = gender("tiger", VocalTimbre::Bright);
+    let bright_lilia = gender("lilia", VocalTimbre::Bright);
+    assert!((bright_lilia - 0.30).abs() < 1e-9, "{bright_lilia}");
+    assert!((bright_tiger - 0.075).abs() < 1e-6, "{bright_tiger}");
+    assert!(gender("tiger", VocalTimbre::Edged) > 0.0);
+    assert!(gender("meiji", VocalTimbre::Airy) > gender("meiji", VocalTimbre::Edged));
+}
