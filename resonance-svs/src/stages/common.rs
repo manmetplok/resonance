@@ -92,6 +92,33 @@ pub fn build_session_reporting(
     ep: ExecutionProvider,
     device_index: i32,
 ) -> Result<(Session, ExecutionProvider)> {
+    build_session_from(ModelSource::File(model_path), ep, device_index)
+}
+
+/// Where a session's model comes from: a file, or bytes already read
+/// (and possibly rewritten, see [`super::noise::seed_random_ops`]) from
+/// one — `path` then only names it in messages.
+#[derive(Clone, Copy)]
+pub enum ModelSource<'a> {
+    File(&'a Path),
+    Bytes { path: &'a Path, bytes: &'a [u8] },
+}
+
+impl ModelSource<'_> {
+    fn path(&self) -> &Path {
+        match self {
+            ModelSource::File(path) | ModelSource::Bytes { path, .. } => path,
+        }
+    }
+}
+
+/// [`build_session_reporting`] for any [`ModelSource`].
+pub fn build_session_from(
+    source: ModelSource<'_>,
+    ep: ExecutionProvider,
+    device_index: i32,
+) -> Result<(Session, ExecutionProvider)> {
+    let model_path = source.path();
     let gpu: Option<ExecutionProviderDispatch> = match ep {
         ExecutionProvider::Cpu => None,
         ExecutionProvider::Cuda => Some(
@@ -115,7 +142,7 @@ pub fn build_session_reporting(
     let gpu = gpu.filter(|_| !provider_failed(ep, device_index));
     let mut gpu_failed = false;
     if let Some(gpu) = gpu {
-        match commit_session(model_path, vec![gpu]) {
+        match commit_session(source, vec![gpu]) {
             Ok(session) => return Ok((session, ep)),
             Err(e) => {
                 tracing::warn!(
@@ -128,7 +155,7 @@ pub fn build_session_reporting(
             }
         }
     }
-    let session = commit_session(model_path, vec![CPUExecutionProvider::default().build()])?;
+    let session = commit_session(source, vec![CPUExecutionProvider::default().build()])?;
     // Only blame the provider once the same model loads on CPU: a missing
     // or broken model file fails both, and must not turn the GPU off.
     if gpu_failed {
@@ -154,17 +181,74 @@ pub fn provider_failed(ep: ExecutionProvider, device_index: i32) -> bool {
 }
 
 fn commit_session(
-    model_path: &Path,
+    source: ModelSource<'_>,
     providers: Vec<ExecutionProviderDispatch>,
 ) -> Result<Session> {
-    Session::builder()
+    let mut builder = Session::builder()
         .map_err(|e| anyhow::anyhow!("creating ORT SessionBuilder: {e}"))?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| anyhow::anyhow!("setting graph optimization level: {e}"))?
         .with_execution_providers(providers)
-        .map_err(|e| anyhow::anyhow!("registering execution providers: {e}"))?
-        .commit_from_file(model_path)
-        .map_err(|e| anyhow::anyhow!("loading ONNX model at {}: {e}", model_path.display()))
+        .map_err(|e| anyhow::anyhow!("registering execution providers: {e}"))?;
+    match source {
+        ModelSource::File(path) => builder.commit_from_file(path),
+        ModelSource::Bytes { bytes, .. } => builder.commit_from_memory(bytes),
+    }
+    .map_err(|e| anyhow::anyhow!("loading ONNX model at {}: {e}", source.path().display()))
+}
+
+/// A session whose in-graph random ops were replaced by fed noise
+/// ([`super::noise::seed_random_ops`]), so a run is a pure function of
+/// its inputs and the seed.
+pub struct SeededSession {
+    pub session: Session,
+    pub noise: Vec<super::noise::NoiseSpec>,
+    /// The backend it runs on.
+    pub backend: ExecutionProvider,
+}
+
+impl SeededSession {
+    /// Read `model_path`, seed its random ops and build the session.
+    pub fn load(model_path: &Path, ep: ExecutionProvider, device_index: i32) -> Result<Self> {
+        let bytes = std::fs::read(model_path)
+            .map_err(|e| anyhow::anyhow!("reading ONNX model at {}: {e}", model_path.display()))?;
+        let (bytes, noise) = super::noise::seed_random_ops(&bytes)?;
+        let (session, backend) = build_session_from(
+            ModelSource::Bytes {
+                path: model_path,
+                bytes: &bytes,
+            },
+            ep,
+            device_index,
+        )?;
+        Ok(Self {
+            session,
+            noise,
+            backend,
+        })
+    }
+
+    /// The noise inputs for one run under `seed`: each at least
+    /// `per_frame × n_frames` long (+1024). The stream is prefix-stable,
+    /// so the over-allocation does not change the values; a model that
+    /// draws more than that fails its `Reshape` loudly.
+    pub fn noise_values(
+        specs: &[super::noise::NoiseSpec],
+        seed: u64,
+        n_frames: usize,
+        per_frame: usize,
+    ) -> Result<Vec<(String, ort::value::Value)>> {
+        specs
+            .iter()
+            .enumerate()
+            .map(|(k, spec)| {
+                let len = n_frames * per_frame + 1024;
+                let data = super::noise::noise(seed, k as u64, len, spec.dist);
+                let arr = ndarray::Array1::<f32>::from_vec(data);
+                Ok((spec.input.clone(), ort::value::Value::from_array(arr)?.into()))
+            })
+            .collect()
+    }
 }
 
 /// Names of the inputs declared by an ONNX model.

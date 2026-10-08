@@ -35,6 +35,25 @@ pub(super) struct PhonemeTrack {
     pub entry_note_velocity: Vec<f32>,
     pub entry_note_total_sec: Vec<f64>,
     pub entry_note_start_offset: Vec<f64>,
+    /// What each entry is, parallel to `ph_seq`: what the bank models'
+    /// score ([`super::score`]) is built from.
+    pub roles: Vec<EntryRole>,
+}
+
+/// What one phoneme entry of a [`PhonemeTrack`] is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum EntryRole {
+    /// The leading or trailing silence pad.
+    Pad,
+    /// A rest after a note (`SP`).
+    Rest,
+    /// A written breath before a note (`AP`).
+    Breath,
+    /// A phoneme of note `note`, ARPAbet `arpabet`.
+    Phone { note: usize, arpabet: &'static str },
+    /// A word-boundary `SP` or a stop closure `cl` (both opt-in by
+    /// environment variable).
+    Extra,
 }
 
 /// Build the phoneme + note duration track for one section.
@@ -117,6 +136,7 @@ pub(super) fn build_phoneme_track(
         entry_note_velocity: Vec::new(),
         entry_note_total_sec: Vec::new(),
         entry_note_start_offset: Vec::new(),
+        roles: Vec::new(),
     };
 
     let rest_rule = RestRule::new(params, bpm);
@@ -231,6 +251,7 @@ pub(super) fn build_phoneme_track(
         bank,
         REST_PHONEME,
         SEGMENT_PAD_SEC - lead_breath - lead_onset,
+        EntryRole::Pad,
     );
 
     // Pass 2: pull each syllable's onset consonants back across the
@@ -250,7 +271,7 @@ pub(super) fn build_phoneme_track(
         let phon_sing_sec = (sing_sec - sp_sec).max(0.0);
 
         if plan.breath_sec > 0.0 {
-            push_rest_entry(&mut track, bank, BREATH_PHONEME, plan.breath_sec);
+            push_rest_entry(&mut track, bank, BREATH_PHONEME, plan.breath_sec, EntryRole::Breath);
         }
 
         // Split `phon_sing_sec` across phonemes with per-class targets
@@ -281,6 +302,7 @@ pub(super) fn build_phoneme_track(
                 if let Some(id) = bank.language_id("cl") {
                     track.languages.push(id);
                 }
+                track.roles.push(EntryRole::Extra);
             }
             let mut d = own_dur;
             // Subtract the borrowed closure time so total syllable
@@ -299,6 +321,7 @@ pub(super) fn build_phoneme_track(
             track.entry_note_velocity.push(stressed_velocity);
             track.entry_note_total_sec.push(sing_sec);
             track.entry_note_start_offset.push(offset_in_note);
+            track.roles.push(EntryRole::Phone { note: i, arpabet: ph });
             offset_in_note += d;
         }
         if sp_sec > 0.0 {
@@ -315,17 +338,18 @@ pub(super) fn build_phoneme_track(
             track.entry_note_velocity.push(stressed_velocity);
             track.entry_note_total_sec.push(sing_sec);
             track.entry_note_start_offset.push(offset_in_note);
+            track.roles.push(EntryRole::Extra);
             // No further entries belong to this note after the SP, so
             // we don't carry the cumulative offset forward.
         }
 
         if ap_sec > 0.0 {
-            push_rest_entry(&mut track, bank, REST_PHONEME, ap_sec);
+            push_rest_entry(&mut track, bank, REST_PHONEME, ap_sec, EntryRole::Rest);
         }
     }
 
     // Trailing silence pad, mirroring the leading one.
-    push_rest_entry(&mut track, bank, REST_PHONEME, SEGMENT_PAD_SEC);
+    push_rest_entry(&mut track, bank, REST_PHONEME, SEGMENT_PAD_SEC, EntryRole::Pad);
 
     track
 }
@@ -626,7 +650,13 @@ fn allocate_phoneme_durations(phonemes: &[&str], slot_sec: f64, emphasis: f32) -
 
 /// Append a rest or breath entry (`SP`/`AP`) to every parallel array in
 /// `track`: the leading and trailing pads, rests and written breaths.
-fn push_rest_entry(track: &mut PhonemeTrack, bank: &BankProfile, kind: &str, dur: f64) {
+fn push_rest_entry(
+    track: &mut PhonemeTrack,
+    bank: &BankProfile,
+    kind: &str,
+    dur: f64,
+    role: EntryRole,
+) {
     track.ph_seq.push(bank.phoneme_name(kind));
     track.ph_dur.push(dur);
     track.note_seq.push("rest".to_string());
@@ -638,6 +668,7 @@ fn push_rest_entry(track: &mut PhonemeTrack, bank: &BankProfile, kind: &str, dur
     track.entry_note_velocity.push(0.0);
     track.entry_note_total_sec.push(0.0);
     track.entry_note_start_offset.push(0.0);
+    track.roles.push(role);
 }
 
 /// MIDI note → "C4" / "D#5" notation accepted by DiffSinger's

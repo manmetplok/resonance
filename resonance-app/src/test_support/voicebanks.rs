@@ -34,6 +34,11 @@ pub struct VoicebankFixture {
     pub languages: Option<String>,
     /// `character.txt` name.
     pub name: Option<String>,
+    /// Ship the bank's own duration / pitch / variance models (`dsdur/`,
+    /// `dspitch/`, `dsvariance/` configs, the phoneme list, empty model
+    /// files and the acoustic speakers' embeddings) — enough for the
+    /// registry to find them, not to run them.
+    pub bank_models: bool,
 }
 
 impl Default for VoicebankFixture {
@@ -57,6 +62,7 @@ impl Default for VoicebankFixture {
             use_energy_embed: false,
             languages: None,
             name: None,
+            bank_models: false,
         }
     }
 }
@@ -196,6 +202,29 @@ pub fn write_voicebank_fixture(dir: &Path, spec: &VoicebankFixture) {
     }
     if let Some(name) = &spec.name {
         write("character.txt", &format!("name={name}\nversion=v1\n"));
+    }
+    if spec.bank_models {
+        for (folder, key) in [("dsdur", "dur"), ("dspitch", "pitch"), ("dsvariance", "variance")] {
+            let mut cfg = format!(
+                "phonemes: phonemes.txt\nlinguistic: linguistic.onnx\n{key}: {key}.onnx\n\
+                 hop_size: 512\nsample_rate: 44100\n"
+            );
+            if !spec.speakers.is_empty() {
+                cfg.push_str("speakers:\n");
+                for s in &spec.speakers {
+                    let name = s.rsplit('/').next().unwrap_or(s);
+                    cfg.push_str(&format!("  - embeds/{name}\n"));
+                    let emb: Vec<u8> = (0..256).flat_map(|_| 0f32.to_le_bytes()).collect();
+                    let path = dir.join(folder).join(format!("embeds/{name}.emb"));
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(path, emb).unwrap();
+                }
+            }
+            write(&format!("{folder}/dsconfig.yaml"), &cfg);
+            write(&format!("{folder}/phonemes.txt"), &spec.phonemes.join("\n"));
+            write(&format!("{folder}/linguistic.onnx"), "");
+            write(&format!("{folder}/{key}.onnx"), "");
+        }
     }
 }
 

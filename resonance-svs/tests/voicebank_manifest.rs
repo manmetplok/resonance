@@ -741,3 +741,70 @@ fn a_scan_spells_phonemes_the_way_the_english_dictionary_replaces_them() {
     assert_eq!(m.phoneme_name("y"), "y");
     assert_eq!(m.inventory().dict_key_for("y"), None);
 }
+
+/// The bank's own duration / pitch / variance models sit in `dsdur/`,
+/// `dspitch/`, `dsvariance/` next to the acoustic config (OpenUtau's
+/// layout). One counts when its config names a linguistic encoder and the
+/// model and both files exist; its speakers map onto the acoustic ones by
+/// their last path segment, falling back to its first.
+#[test]
+fn the_banks_own_models_are_found_next_to_the_acoustic_config() {
+    use resonance_svs::predict::{discover, ModelConfig, ModelKind};
+    let dir = fresh_dir("bank_models");
+    write(
+        &dir,
+        "dsconfig.yaml",
+        "phonemes: phonemes.txt\nacoustic: acoustic.onnx\nvocoder: dsvocoder\n",
+    );
+    write(&dir, "phonemes.txt", "AP\nSP\nah\n");
+    // Duration: complete, one speaker for every mode.
+    write(
+        &dir,
+        "dsdur/dsconfig.yaml",
+        "phonemes: ph.json\nlanguages: lang.json\nuse_lang_id: true\nlinguistic: l.onnx\n\
+         dur: d.onnx\nspeakers:\n- embeds/standard\n",
+    );
+    write(&dir, "dsdur/ph.json", r#"{"AP": 1, "SP": 2, "en/ah": 7}"#);
+    write(&dir, "dsdur/lang.json", r#"{"en": 3}"#);
+    write(&dir, "dsdur/l.onnx", "");
+    write(&dir, "dsdur/d.onnx", "");
+    // Pitch: its model file is missing, so it does not count.
+    write(
+        &dir,
+        "dspitch/dsconfig.yaml",
+        "phonemes: ph.txt\nlinguistic: l.onnx\npitch: p.onnx\n",
+    );
+    write(&dir, "dspitch/ph.txt", "AP\nSP\n");
+    write(&dir, "dspitch/l.onnx", "");
+    // Variance: complete, two speakers.
+    write(
+        &dir,
+        "dsvariance/dsconfig.yaml",
+        "phonemes: ph.txt\nlinguistic: l.onnx\nvariance: v.onnx\nhop_size: 256\n\
+         sample_rate: 24000\nspeakers:\n- embeds/standard\n- embeds/phantom\n",
+    );
+    write(&dir, "dsvariance/ph.txt", "AP\nSP\n");
+    write(&dir, "dsvariance/l.onnx", "");
+    write(&dir, "dsvariance/v.onnx", "");
+
+    let found = discover(&dir.join("dsconfig.yaml"));
+    assert_eq!(found.duration, Some(dir.join("dsdur/dsconfig.yaml")));
+    assert_eq!(found.pitch, None, "pitch model file missing");
+    assert_eq!(found.variance, Some(dir.join("dsvariance/dsconfig.yaml")));
+
+    let dur = ModelConfig::load(found.duration.as_deref().unwrap(), ModelKind::Duration).unwrap();
+    assert_eq!(dur.phonemes.get("en/ah"), Some(&7));
+    assert_eq!(dur.languages.get("en"), Some(&3));
+    assert!(dur.use_lang_id);
+    assert_eq!(dur.speaker_for(Some("embeds/phantom")), Some("embeds/standard"));
+    let var = ModelConfig::load(found.variance.as_deref().unwrap(), ModelKind::Variance).unwrap();
+    assert_eq!(var.speaker_for(Some("embeds/phantom")), Some("embeds/phantom"));
+    assert_eq!(var.speaker_for(Some("dsacoustic/phantom")), Some("embeds/phantom"));
+    assert_eq!(var.speaker_for(None), Some("embeds/standard"));
+    assert!((var.frame_sec() - 256.0 / 24000.0).abs() < 1e-12);
+
+    // A bank without the folders has none.
+    let bare = fresh_dir("bank_models_none");
+    write(&bare, "dsconfig.yaml", "phonemes: p.txt\nacoustic: a.onnx\n");
+    assert_eq!(discover(&bare.join("dsconfig.yaml")), Default::default());
+}

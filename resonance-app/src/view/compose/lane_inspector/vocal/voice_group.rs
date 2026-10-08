@@ -1,6 +1,6 @@
-//! Voice & delivery group — timbre / voicebank / speaker / vibrato /
-//! tension / portamento / articulation / consonant emphasis / rest
-//! threshold / velocity dynamics.
+//! Voice & delivery group — timbre / voicebank / speaker / the bank's own
+//! timing and pitch models / vibrato / tension / portamento / articulation
+//! / consonant emphasis / rest threshold / velocity dynamics.
 //!
 //! The Voicebank and Speaker pickers are driven by the voicebank registry
 //! (vocal-mcp-control-and-quality.md §4): the options are the installed
@@ -21,6 +21,7 @@ use crate::message::*;
 use crate::theme;
 
 use super::common::{chip, dim_label, group_card, group_title};
+use super::toggle_row;
 use crate::state::picks::{SpeakerChoice, VoicebankChoice};
 use crate::state::ui_caches::{ChoiceList, VocalRailContext};
 
@@ -244,7 +245,26 @@ pub(super) fn voice_group<'a>(
     if let Some(speaker) = speaker_block {
         body = body.push(Space::new().height(8)).push(speaker);
     }
+    // The bank's own duration / pitch models (where it ships them; a
+    // bank without one sings with the rules either way).
+    let bank_timing = toggle_row(
+        "Timing from the voicebank",
+        params.bank_timing,
+        LaneInspectorMsg::ToggleVocalBankTiming,
+        definition_id,
+        track_id,
+    );
+    let bank_pitch = toggle_row(
+        "Pitch from the voicebank",
+        params.bank_pitch,
+        LaneInspectorMsg::ToggleVocalBankPitch,
+        definition_id,
+        track_id,
+    );
     let body = body
+        .push(Space::new().height(6))
+        .push(bank_timing)
+        .push(bank_pitch)
         .push(Space::new().height(8))
         .push(vibrato_label)
         .push(Space::new().height(2))

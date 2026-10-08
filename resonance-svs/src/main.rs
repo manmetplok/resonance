@@ -74,6 +74,7 @@ fn main() -> Result<()> {
         speaker: cli.speaker,
         speedup: cli.speedup,
         depth: cli.depth,
+        seed: 0,
     };
 
     let summary = pipeline::run(&args).context("running resonance-svs pipeline")?;

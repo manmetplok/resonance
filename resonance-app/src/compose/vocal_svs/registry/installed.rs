@@ -40,6 +40,10 @@ pub struct InstalledBank {
     pub accepts_language_id: bool,
     pub languages: BTreeMap<String, i64>,
     pub inventory: PhonemeInventory,
+    /// The bank's own duration / pitch / variance models (`dsdur/`,
+    /// `dspitch/`, `dsvariance/` next to the acoustic config), where it
+    /// ships them.
+    pub models: resonance_svs::predict::BankModelPaths,
     /// The bank's `dsdict-en.yaml`, if it ships one.
     pub english_dict: Option<PathBuf>,
     pub builtin: Option<&'static BuiltinBank>,

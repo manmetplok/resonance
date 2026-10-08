@@ -26,6 +26,9 @@ pub struct PipelineArgs {
     pub speaker: Option<String>,
     pub speedup: i32,
     pub depth: i32,
+    /// Seed of the acoustic model's noise (segment `i` of a
+    /// [`render_segments`] call uses `seed + i`).
+    pub seed: u64,
 }
 
 pub fn run(args: &PipelineArgs) -> Result<RunSummary> {
@@ -63,98 +66,19 @@ pub struct RenderedAudio {
 /// Run the acoustic + vocoder pipeline on a programmatically-built list
 /// of [`DsSegment`]s. Mirrors [`run`] but skips both ends of the
 /// filesystem dance: callers supply the score directly and receive the
-/// mixed mono waveform in memory.
+/// mixed mono waveform in memory. Segment `i` is rendered with seed
+/// `args.seed + i` (see [`Renderer::render`]).
 pub fn render_segments(segments: &[DsSegment], args: &PipelineArgs) -> Result<RenderedAudio> {
-    let acoustic_cfg = load_acoustic(&args.acoustic_config)?;
-    let vocoder_cfg = load_vocoder(&args.vocoder_config)?;
-    let phoneme_map = load_phoneme_dict(&acoustic_cfg.phonemes_path)?;
-
-    // Frame interval the acoustic / vocoder stages expect.
-    let frame_length = vocoder_cfg.hop_size as f64 / vocoder_cfg.sample_rate as f64;
-
-    let mut speedup = args.speedup;
-    if !(1..=1000).contains(&speedup) {
-        tracing::warn!("speedup {} out of [1,1000]; clamping to 10", speedup);
-        speedup = 10;
-    }
-    // Shallow-diffusion depth handling. Two formats exist:
-    //   - Old: integer step count (max_depth like 1000), CLI --depth is integer steps,
-    //     constraint: depth ≤ max_depth and depth % speedup == 0
-    //   - New (variable depth): fractional 0–1 (max_depth like 0.6). Depth is passed to
-    //     the model as a float; speedup/step constraints don't apply.
-    // We pick the format heuristically: if max_depth < 5 we treat it as fractional.
-    let mut depth = args.depth as f32;
-    if acoustic_cfg.use_shallow_diffusion && acoustic_cfg.max_depth >= 0.0 {
-        let is_fractional = acoustic_cfg.max_depth > 0.0 && acoustic_cfg.max_depth < 5.0;
-        if is_fractional {
-            // CLI --depth defaults to 1000 which is meaningless here; cap at max_depth.
-            depth = depth.min(acoustic_cfg.max_depth).max(0.0);
-            if depth >= 1.0 {
-                depth = acoustic_cfg.max_depth;
-            }
-        } else {
-            // Cap at max_depth, then quantise to a multiple of `speedup`
-            // so the PNDM step count comes out as an integer. The
-            // quantisation MUST run regardless of whether `depth >
-            // max_depth` — otherwise a request like `--depth 350
-            // --speedup 100` with `max_depth = 1000` leaves depth at
-            // 350, violating the documented `depth % speedup == 0`
-            // invariant and producing the wrong PNDM step count for
-            // older voicebanks.
-            depth = depth.min(acoustic_cfg.max_depth);
-            depth = (depth / speedup as f32).floor() * speedup as f32;
-        }
-    }
-
-    let mut acoustic = AcousticStage::load(
-        &acoustic_cfg.acoustic_model,
-        args.execution_provider,
-        args.device_index,
-    )?;
-    tracing::info!("acoustic features: {:?}", acoustic.supported_features());
-
-    // Vocoder runs on CPU regardless of execution provider for the acoustic model. Mirrors
-    // Jobsecond's choice: most vocoders are CPU-bound matmul + 1D conv, GPU dispatch overhead
-    // dominates. Users can change this trivially if they want.
-    let mut vocoder = VocoderStage::load(
-        &vocoder_cfg.model_path,
-        ExecutionProvider::Cpu,
-        args.device_index,
-        vocoder_cfg.num_mel_bins as usize,
-    )?;
-
-    let speaker_embeddings = load_speaker_embeddings(&acoustic_cfg)?;
-    let selected_speaker = args
-        .speaker
-        .clone()
-        .or_else(|| acoustic_cfg.speakers.first().cloned());
-
+    let mut renderer = Renderer::load(args)?;
+    let sample_rate = renderer.sample_rate();
     let mut rendered: Vec<(i64, Vec<f32>)> = Vec::with_capacity(segments.len());
     let mut perf = Vec::with_capacity(segments.len());
 
     for (i, seg) in segments.iter().enumerate() {
         tracing::info!("segment {}/{}", i + 1, segments.len());
         let t0 = Instant::now();
-        let offset_samples = (seg.offset * vocoder_cfg.sample_rate as f64).ceil() as i64;
-
-        let mut pd = preprocess_acoustic(
-            seg,
-            &phoneme_map,
-            frame_length,
-            &acoustic_cfg,
-            &acoustic,
-            &speaker_embeddings,
-            selected_speaker.as_deref(),
-        )?;
-        let n_frames = pd.f0.len();
-        let mut mel = acoustic.infer(&mut pd, speedup as i64, depth)?;
-        let mut waveform = vocoder.infer(&mut mel, &pd.f0)?;
-        // Vocoder waveform length is typically n_frames * hop_size, but some vocoders return
-        // shorter/longer. Trim very long results to a sensible cap.
-        let expected = n_frames * vocoder_cfg.hop_size as usize;
-        if waveform.len() > expected + vocoder_cfg.hop_size as usize {
-            waveform.truncate(expected);
-        }
+        let offset_samples = (seg.offset * sample_rate as f64).ceil() as i64;
+        let waveform = renderer.render(seg, args.seed.wrapping_add(i as u64))?;
         let elapsed = t0.elapsed();
         perf.push((i, elapsed));
         tracing::info!(
@@ -171,12 +95,150 @@ pub fn render_segments(segments: &[DsSegment], args: &PipelineArgs) -> Result<Re
     Ok(RenderedAudio {
         segments_rendered: segments.len(),
         samples: timeline,
-        sample_rate: vocoder_cfg.sample_rate as u32,
+        sample_rate,
         per_segment_seconds: perf
             .into_iter()
             .map(|(i, d)| (i, d.as_secs_f64()))
             .collect(),
     })
+}
+
+/// The acoustic + vocoder models of one bank, loaded once and reused for
+/// any number of segments (a render of several units loads them once).
+pub struct Renderer {
+    acoustic_cfg: AcousticConfig,
+    phoneme_map: HashMap<String, i64>,
+    frame_length: f64,
+    hop_size: usize,
+    sample_rate: u32,
+    speedup: i32,
+    depth: f32,
+    acoustic: AcousticStage,
+    vocoder: VocoderStage,
+    speaker_embeddings: SpeakerEmbeddings,
+    selected_speaker: Option<String>,
+}
+
+impl Renderer {
+    /// Load the acoustic and vocoder sessions `args` names.
+    pub fn load(args: &PipelineArgs) -> Result<Self> {
+        let acoustic_cfg = load_acoustic(&args.acoustic_config)?;
+        let vocoder_cfg = load_vocoder(&args.vocoder_config)?;
+        let phoneme_map = load_phoneme_dict(&acoustic_cfg.phonemes_path)?;
+
+        // Frame interval the acoustic / vocoder stages expect.
+        let frame_length = vocoder_cfg.hop_size as f64 / vocoder_cfg.sample_rate as f64;
+
+        let mut speedup = args.speedup;
+        if !(1..=1000).contains(&speedup) {
+            tracing::warn!("speedup {} out of [1,1000]; clamping to 10", speedup);
+            speedup = 10;
+        }
+        // Shallow-diffusion depth handling. Two formats exist:
+        //   - Old: integer step count (max_depth like 1000), CLI --depth is integer steps,
+        //     constraint: depth ≤ max_depth and depth % speedup == 0
+        //   - New (variable depth): fractional 0–1 (max_depth like 0.6). Depth is passed to
+        //     the model as a float; speedup/step constraints don't apply.
+        // We pick the format heuristically: if max_depth < 5 we treat it as fractional.
+        let mut depth = args.depth as f32;
+        if acoustic_cfg.use_shallow_diffusion && acoustic_cfg.max_depth >= 0.0 {
+            let is_fractional = acoustic_cfg.max_depth > 0.0 && acoustic_cfg.max_depth < 5.0;
+            if is_fractional {
+                // CLI --depth defaults to 1000 which is meaningless here; cap at max_depth.
+                depth = depth.min(acoustic_cfg.max_depth).max(0.0);
+                if depth >= 1.0 {
+                    depth = acoustic_cfg.max_depth;
+                }
+            } else {
+                // Cap at max_depth, then quantise to a multiple of `speedup`
+                // so the PNDM step count comes out as an integer. The
+                // quantisation MUST run regardless of whether `depth >
+                // max_depth` — otherwise a request like `--depth 350
+                // --speedup 100` with `max_depth = 1000` leaves depth at
+                // 350, violating the documented `depth % speedup == 0`
+                // invariant and producing the wrong PNDM step count for
+                // older voicebanks.
+                depth = depth.min(acoustic_cfg.max_depth);
+                depth = (depth / speedup as f32).floor() * speedup as f32;
+            }
+        }
+
+        let acoustic = AcousticStage::load(
+            &acoustic_cfg.acoustic_model,
+            args.execution_provider,
+            args.device_index,
+        )?;
+        tracing::info!("acoustic features: {:?}", acoustic.supported_features());
+
+        // Vocoder runs on CPU regardless of execution provider for the acoustic model. Mirrors
+        // Jobsecond's choice: most vocoders are CPU-bound matmul + 1D conv, GPU dispatch overhead
+        // dominates. Users can change this trivially if they want.
+        let vocoder = VocoderStage::load(
+            &vocoder_cfg.model_path,
+            ExecutionProvider::Cpu,
+            args.device_index,
+            vocoder_cfg.num_mel_bins as usize,
+            vocoder_cfg.hop_size as usize,
+        )?;
+
+        let speaker_embeddings = load_speaker_embeddings(&acoustic_cfg)?;
+        let selected_speaker = args
+            .speaker
+            .clone()
+            .or_else(|| acoustic_cfg.speakers.first().cloned());
+        Ok(Self {
+            acoustic_cfg,
+            phoneme_map,
+            frame_length,
+            hop_size: vocoder_cfg.hop_size as usize,
+            sample_rate: vocoder_cfg.sample_rate as u32,
+            speedup,
+            depth,
+            acoustic,
+            vocoder,
+            speaker_embeddings,
+            selected_speaker,
+        })
+    }
+
+    /// The vocoder's output rate.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Seconds per acoustic frame (`hop_size / sample_rate`).
+    pub fn frame_sec(&self) -> f64 {
+        self.frame_length
+    }
+
+    /// Render one segment to mono audio. `seed` fills the acoustic
+    /// model's and the vocoder's noise ([`crate::stages::noise`]): the
+    /// same segment and seed render the same samples.
+    pub fn render(&mut self, seg: &DsSegment, seed: u64) -> Result<Vec<f32>> {
+        let mut pd = preprocess_acoustic(
+            seg,
+            &self.phoneme_map,
+            self.frame_length,
+            &self.acoustic_cfg,
+            &self.acoustic,
+            &self.speaker_embeddings,
+            self.selected_speaker.as_deref(),
+        )?;
+        let n_frames = pd.f0.len();
+        let mut mel = self
+            .acoustic
+            .infer(&mut pd, self.speedup as i64, self.depth, seed)?;
+        let mut waveform = self
+            .vocoder
+            .infer(&mut mel, &pd.f0, seed ^ 0x564f_434f_4445_5221)?;
+        // Vocoder waveform length is typically n_frames * hop_size, but some vocoders return
+        // shorter/longer. Trim very long results to a sensible cap.
+        let expected = n_frames * self.hop_size;
+        if waveform.len() > expected + self.hop_size {
+            waveform.truncate(expected);
+        }
+        Ok(waveform)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -370,7 +432,7 @@ pub fn phonemes_to_tokens(map: &HashMap<String, i64>, phonemes: &[String]) -> Re
 /// Convert phoneme durations (seconds) into frame counts, using the same accumulate-then-diff
 /// approach as Jobsecond's reference. This makes the cumulative position match a naive
 /// round-each-duration scheme, but distributes rounding error correctly across the sequence.
-fn phoneme_durations_to_frames(seconds: &[f64], frame_length: f64) -> Vec<i64> {
+pub fn phoneme_durations_to_frames(seconds: &[f64], frame_length: f64) -> Vec<i64> {
     let mut accum = 0.0;
     let mut prev_frames: i64 = 0;
     let mut out = Vec::with_capacity(seconds.len());

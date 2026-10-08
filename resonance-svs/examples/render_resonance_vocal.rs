@@ -157,6 +157,7 @@ fn main() -> Result<()> {
         speaker: Some(speaker),
         speedup: args.speedup,
         depth: 1000,
+        seed: 0,
     };
     // Timing: `wall` covers the whole call (config + ONNX session loads +
     // inference), `infer` only the per-segment acoustic + vocoder runs.

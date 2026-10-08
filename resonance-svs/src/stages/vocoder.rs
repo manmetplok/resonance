@@ -6,17 +6,31 @@ use ort::session::Session;
 use ort::value::Value;
 use std::path::Path;
 
-use super::common::{build_session, input_names, output_names, ExecutionProvider};
 use super::acoustic::MelOutput;
+use super::common::{input_names, output_names, ExecutionProvider, SeededSession};
+use super::noise::NoiseSpec;
 
 pub struct VocoderStage {
     pub session: Session,
     pub n_mel_bins: usize,
+    /// The excitation noise and harmonic phases of an NSF vocoder, fed
+    /// from the `seed` each [`Self::infer`] takes ([`super::noise`]).
+    pub noise: Vec<NoiseSpec>,
+    /// Noise values per mel frame: the hop times the source's harmonics.
+    noise_per_frame: usize,
 }
 
 impl VocoderStage {
-    pub fn load(model_path: &Path, ep: ExecutionProvider, device_index: i32, n_mel_bins: usize) -> Result<Self> {
-        let session = build_session(model_path, ep, device_index)?;
+    /// Load the vocoder; `hop_size` (samples per mel frame) sizes its
+    /// seeded noise.
+    pub fn load(
+        model_path: &Path,
+        ep: ExecutionProvider,
+        device_index: i32,
+        n_mel_bins: usize,
+        hop_size: usize,
+    ) -> Result<Self> {
+        let SeededSession { session, noise, .. } = SeededSession::load(model_path, ep, device_index)?;
         let ins = input_names(&session);
         let outs = output_names(&session);
         for required in &["mel", "f0"] {
@@ -33,7 +47,14 @@ impl VocoderStage {
                 model_path.display()
             ));
         }
-        Ok(Self { session, n_mel_bins })
+        Ok(Self {
+            session,
+            n_mel_bins,
+            noise,
+            // NSF-HiFiGAN's sine source draws noise for its harmonics (9 on
+            // the shipped vocoders) at every output sample.
+            noise_per_frame: hop_size * 10,
+        })
     }
 
     /// Run the vocoder, returning the rendered waveform.
@@ -45,8 +66,9 @@ impl VocoderStage {
     /// n_mel_bins floats), so the previous `&MelOutput` signature cloned megabytes
     /// per segment. `mel.shape` is left intact; `mel.data` is empty after
     /// this call. `f0` is converted f64 → f32, which allocates the small
-    /// per-frame vector regardless of ownership.
-    pub fn infer(&mut self, mel: &mut MelOutput, f0: &[f64]) -> Result<Vec<f32>> {
+    /// per-frame vector regardless of ownership. `seed` fills the
+    /// vocoder's noise: the same mel, f0 and seed give the same samples.
+    pub fn infer(&mut self, mel: &mut MelOutput, f0: &[f64], seed: u64) -> Result<Vec<f32>> {
         let n_frames = if mel.shape.len() >= 2 {
             mel.shape[mel.shape.len() - 2] as usize
         } else {
@@ -76,10 +98,16 @@ impl VocoderStage {
         let f0_arr = Array2::<f32>::from_shape_vec((1, n_frames), f0.iter().map(|x| *x as f32).collect())
             .context("packing f0 for vocoder")?;
 
-        let inputs: Vec<(String, Value)> = vec![
+        let mut inputs: Vec<(String, Value)> = vec![
             ("mel".into(), Value::from_array(mel_arr)?.into()),
             ("f0".into(), Value::from_array(f0_arr)?.into()),
         ];
+        inputs.extend(SeededSession::noise_values(
+            &self.noise,
+            seed,
+            n_frames,
+            self.noise_per_frame,
+        )?);
 
         let outputs = self
             .session

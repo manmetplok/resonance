@@ -347,6 +347,29 @@ pub(super) fn set_velocity_dynamics(
     });
 }
 
+/// Flip one of the lane's on/off settings: the melody generator's
+/// scale / clash / motif switches and the bank-model switches
+/// (`bank_timing`, `bank_pitch`).
+pub(super) fn toggle(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    msg: crate::compose::messages::LaneInspectorMsg,
+) {
+    use crate::compose::messages::LaneInspectorMsg as M;
+    update_vocal(r, definition_id, track_id, |p| {
+        let flag = match msg {
+            M::ToggleVocalStayInScale => &mut p.stay_in_scale,
+            M::ToggleVocalAvoidClashes => &mut p.avoid_clashes,
+            M::ToggleVocalUseSectionMotif => &mut p.use_section_motif,
+            M::ToggleVocalBankTiming => &mut p.bank_timing,
+            M::ToggleVocalBankPitch => &mut p.bank_pitch,
+            _ => return,
+        };
+        *flag = !*flag;
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Vocal generate actions
 // ---------------------------------------------------------------------------

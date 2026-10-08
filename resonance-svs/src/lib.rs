@@ -1,5 +1,6 @@
 pub mod ds;
 pub mod pipeline;
+pub mod predict;
 pub mod stages;
 pub mod voicebank;
 

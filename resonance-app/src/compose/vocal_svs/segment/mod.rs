@@ -21,19 +21,24 @@
 
 use resonance_audio::types::MidiNote;
 use resonance_music_theory::g2p::AssignedSyllable;
-use resonance_music_theory::{VocalParams, VocalTimbre};
+use resonance_music_theory::VocalParams;
 use resonance_svs::ds::{DsSegment, SampleCurve};
 
 mod duration;
 mod energy;
 mod f0;
+mod gender;
 mod overlay;
+mod score;
 mod tension;
 
 use duration::build_phoneme_track;
 use energy::build_energy_curve;
 use f0::{build_f0_curve, F0_TIMESTEP};
-use overlay::{curve_gain_db, overlay_envelope, CurveClock};
+use gender::build_gender_curve;
+use overlay::{curve_gain_db, overlay_envelope, overlay_pitch_cents, CurveClock};
+use resonance_svs::predict::BankScore;
+use score::build_bank_score;
 use tension::build_tension_curve;
 
 use super::paths::CurveKind;
@@ -60,6 +65,32 @@ pub fn build_segment(
     bpm: f32,
     bank: &BankProfile,
 ) -> DsSegment {
+    build_unit_segment(notes, params, assigned, ticks_per_quarter, bpm, bank).segment
+}
+
+/// A render unit's rule-based segment plus what the bank's own models
+/// need to re-time and re-pitch it (see [`build_unit_segment`]).
+#[derive(Debug, Clone)]
+pub struct UnitSegment {
+    pub segment: DsSegment,
+    /// The unit as the bank's duration / pitch / variance models see it.
+    pub score: BankScore,
+    /// The Pitch bend curve, cents per [`CURVE_FRAME_SEC`] frame from the
+    /// segment start; empty when it has no points. Already in
+    /// `segment.f0`; kept apart so it can ride on the bank's pitch.
+    pub bend_cents: Vec<f64>,
+}
+
+/// [`build_segment`], keeping the [`BankScore`] and the pitch bend the
+/// render needs when the bank's own models time and pitch the unit.
+pub fn build_unit_segment(
+    notes: &[MidiNote],
+    params: &VocalParams,
+    assigned: &[AssignedSyllable],
+    ticks_per_quarter: u32,
+    bpm: f32,
+    bank: &BankProfile,
+) -> UnitSegment {
     let clock = segment_clock(notes, ticks_per_quarter, bpm);
     let track = build_phoneme_track(notes, params, assigned, ticks_per_quarter, bpm, bank);
     let f0_curve = build_f0_curve(&track, params, clock);
@@ -79,8 +110,10 @@ pub fn build_segment(
     let tension = overlay_envelope(params, CurveKind::Tension, bank, n_frames, clock)
         .unwrap_or_else(|| build_tension_curve(&f0_curve, params, bank));
     let gender = build_gender_curve(params, bank, n_frames);
+    let score = build_bank_score(&track, notes, assigned);
+    let bend_cents = overlay_pitch_cents(params, n_frames, clock).unwrap_or_default();
 
-    DsSegment {
+    let segment = DsSegment {
         offset: 0.0,
         ph_seq: track.ph_seq,
         ph_dur: track.ph_dur,
@@ -110,41 +143,11 @@ pub fn build_segment(
         voicing: SampleCurve::default(),
         tension,
         languages: track.languages,
-    }
-}
-
-/// Gender curve maps to the acoustic model's `gender` ONNX input,
-/// which shifts formants brighter / darker (range `[-1, +1]`, 0 =
-/// neutral: the bank as its author voiced it). The dsconfig's
-/// `use_key_shift_embed` flag is what makes the input exist; it is a
-/// runtime input, not the training-time augmentation alone. Other
-/// per-frame curves (`energy`, `breathiness`, `voicing`, `tension`)
-/// are built elsewhere. The `timbre` chip selects a landmark on the
-/// brightness axis, scaled per bank ([`BankProfile::gender_scale`]); the
-/// curve is constant across the segment so the formant character stays
-/// consistent.
-///
-/// The default chip, Warm, is neutral. It used to be `-0.15`, which cost
-/// TIGER its words: Whisper heard 37 % of the audition phrase across
-/// TIGER's seven modes at `-0.15` against 92 % at 0 (`vocal-rendering.md`
-/// § Measurements); Lilia and Meiji did no worse at 0. Nothing darker
-/// than neutral is offered any more, and TIGER (`gender_scale` 0.25)
-/// gets a quarter of the swing — it held 93 % at `+0.075` and fell to
-/// 71 % at `+0.15`.
-pub(super) fn timbre_gender(timbre: VocalTimbre) -> f64 {
-    match timbre {
-        VocalTimbre::Warm => 0.0,
-        VocalTimbre::Edged => 0.05,
-        VocalTimbre::Airy => 0.20,
-        VocalTimbre::Bright => 0.30,
-    }
-}
-
-fn build_gender_curve(params: &VocalParams, bank: &BankProfile, curve_len: usize) -> SampleCurve {
-    let gender_value = timbre_gender(params.timbre) * bank.gender_scale() as f64;
-    SampleCurve {
-        samples: vec![gender_value; curve_len],
-        timestep: F0_TIMESTEP,
+    };
+    UnitSegment {
+        segment,
+        score,
+        bend_cents,
     }
 }
 

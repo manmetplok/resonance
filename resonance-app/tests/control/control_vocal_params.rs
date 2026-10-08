@@ -628,3 +628,31 @@ fn rest_threshold_and_velocity_dynamics_round_trip_and_are_range_checked() {
         assert!(message.contains(field), "{field} = {value} names the field: {message}");
     }
 }
+
+/// `bank_timing` / `bank_pitch`: on by default, set by a patch, echoed by
+/// `get_params` and `song.vocal`, nothing else moved.
+#[test]
+fn bank_timing_and_bank_pitch_round_trip() {
+    let (mut app, def) = one_lane_app();
+    let before = get_params(&mut app, def);
+    assert!(before.params.bank_timing && before.params.bank_pitch);
+
+    let reply: proto::ParamsResult = set_params(
+        &mut app,
+        def,
+        json!({ "bank_timing": false, "bank_pitch": false }),
+    )
+    .result()
+    .expect("vocal.set_params succeeds");
+    let mut expected = before.params.clone();
+    expected.bank_timing = false;
+    expected.bank_pitch = false;
+    assert_eq!(reply.params, expected, "nothing else moved");
+    assert_eq!(get_params(&mut app, def).params, expected);
+    assert_eq!(vocal_view(&mut app).lanes[0].params, expected);
+
+    let reply: proto::ParamsResult = set_params(&mut app, def, json!({ "bank_pitch": true }))
+        .result()
+        .expect("vocal.set_params succeeds");
+    assert!(!reply.params.bank_timing && reply.params.bank_pitch);
+}

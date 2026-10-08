@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use resonance_audio::types::MidiNote;
 use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::VocalParams;
-use resonance_svs::pipeline::{self, PipelineArgs};
+use resonance_svs::pipeline::{PipelineArgs, Renderer};
+use resonance_svs::predict::BankModels;
 use resonance_svs::stages::common::ExecutionProvider;
 
 use super::dynamics::{apply_dynamics_gain_layers, velocity_gain_spans_with_breaths, GainSpan};
@@ -16,9 +17,10 @@ use super::post::{
     apply_ap_gate, collect_rest_intervals, mono_to_stereo_with_gain, resample_to,
     safety_gain_factor,
 };
+use super::bank_render;
 use super::{
-    render_units_cached, split_render_units, BankProfile, SvsRenderCache, VocalRenderError,
-    SEGMENT_PAD_SEC,
+    render_units_cached_with, split_render_units, BankProfile, RenderUnit, SvsRenderCache,
+    UnitAudio, VocalRenderError, SEGMENT_PAD_SEC,
 };
 
 /// Output of `render_vocal_clip` — stereo-interleaved f32 samples ready
@@ -100,30 +102,49 @@ pub fn render_vocal_clip(
         // wrong vocoder.)
         speedup: 20,
         depth: 1000,
+        // Each unit is rendered with its content key as the seed (below).
+        seed: 0,
     };
 
     // Render each missing unit through the acoustic + vocoder pipeline,
     // gating its own rests to silence (breaths stay); cache hits skip all
-    // of this.
-    let render_fn = |segment: &resonance_svs::ds::DsSegment| -> Result<(Vec<f32>, u32), String> {
+    // of this. The sessions load once, on the first unit that misses. A
+    // unit the lane times or pitches with the bank's own models
+    // (`bank_timing` / `bank_pitch`) is re-timed and re-pitched first.
+    // Every model's noise is seeded with the unit's content key, so a
+    // unit renders the same samples every time.
+    let speaker = args.speaker.clone();
+    let mut renderer: Option<Renderer> = None;
+    let mut models: Option<BankModels> = None;
+    let render_fn = |unit: &RenderUnit| -> Result<UnitAudio, String> {
+        let segment = if bank_render::uses_bank_models(unit) {
+            let models = models.get_or_insert_with(|| bank_render::load_models(unit));
+            bank_render::refine_segment(unit, models, speaker.as_deref(), bank)
+        } else {
+            unit.segment.clone()
+        };
+        if renderer.is_none() {
+            renderer = Some(Renderer::load(&args).map_err(|e| format!("svs render: {e:#}"))?);
+        }
+        let renderer = renderer.as_mut().expect("loaded above");
         let ap_intervals = collect_rest_intervals(&segment.ph_seq, &segment.ph_dur);
-        let rendered = pipeline::render_segments(std::slice::from_ref(segment), &args)
+        let mut mono = renderer
+            .render(&segment, bank_render::unit_seed(unit))
             .map_err(|e| format!("svs render: {e:#}"))?;
-        let sr = rendered.sample_rate;
-        let mut mono = rendered.samples;
-        apply_ap_gate(&mut mono, &ap_intervals, sr);
-        Ok((mono, sr))
+        let sample_rate = renderer.sample_rate();
+        apply_ap_gate(&mut mono, &ap_intervals, sample_rate);
+        Ok(UnitAudio {
+            mono,
+            sample_rate,
+            lead_sec: segment.ph_dur.first().copied().unwrap_or(SEGMENT_PAD_SEC),
+        })
     };
 
+    let stitched = render_units_cached_with(&units, cache, render_fn)?;
     // What the first unit sings before its first note: the leading pad
-    // minus the `SP` left in front (onset consonants or a breath took the
-    // rest). The first unit starts the take, so its pad is the take's.
-    let pre_roll_sec = units
-        .first()
-        .and_then(|u| u.segment.ph_dur.first())
-        .map_or(0.0, |sp| (SEGMENT_PAD_SEC - sp).clamp(0.0, SEGMENT_PAD_SEC));
-
-    let stitched = render_units_cached(&units, cache, render_fn)?;
+    // minus the silence left in front (onset consonants or a breath took
+    // the rest). The first unit starts the take, so its pad is the take's.
+    let pre_roll_sec = (SEGMENT_PAD_SEC - stitched.first_lead_sec).clamp(0.0, SEGMENT_PAD_SEC);
     let model_sr = stitched.sample_rate;
     let mut mono = stitched.mono;
 

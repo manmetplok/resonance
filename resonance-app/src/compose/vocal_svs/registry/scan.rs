@@ -158,6 +158,7 @@ impl VoicebankRegistry {
             accepts_language_id: manifest.accepts_language_id,
             languages: manifest.languages.clone(),
             inventory: manifest.inventory().clone(),
+            models: resonance_svs::predict::discover(&manifest.acoustic_config),
             english_dict: manifest.details.english_dict.clone(),
             plok: user.then(|| install_record(dir)).flatten(),
             builtin,

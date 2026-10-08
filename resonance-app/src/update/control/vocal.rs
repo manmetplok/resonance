@@ -428,6 +428,8 @@ pub(super) fn apply_params_patch(
     set(&mut p.consonant_emphasis, patch.consonant_emphasis);
     set(&mut p.rest_threshold_beats, patch.rest_threshold_beats);
     set(&mut p.velocity_dynamics, patch.velocity_dynamics);
+    set(&mut p.bank_timing, patch.bank_timing);
+    set(&mut p.bank_pitch, patch.bank_pitch);
 
     // Melody generator.
     if let Some(v) = patch.voice {

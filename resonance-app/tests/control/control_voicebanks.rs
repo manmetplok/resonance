@@ -252,6 +252,7 @@ fn voicebanks_lists_a_dropped_in_bank_and_drops_it_when_deleted() {
     assert_eq!(bank.substitutions[0].sung_as, "sh", "the voiceless partner");
     assert!(bank.curves.tension && bank.curves.pitch_bend);
     assert!(!bank.curves.dynamics && !bank.curves.breathiness);
+    assert_eq!(bank.models, proto::VoicebankModels::default(), "ships none of its own models");
     assert_eq!(bank.vocoder.as_deref(), Some("fixture_vocoder"));
     assert!(bank.vocoder_installed);
     assert_eq!(bank.credit, None, "an unknown bank has no terms");
@@ -592,4 +593,35 @@ fn song_vocal_lines_and_notes_agree_on_a_bank_dictionary_word() {
     assert_eq!(from_lines[1], ["m", "aa"], "the bank's reading, not CMU's");
     assert_eq!(lane.syllable_count, 3);
     assert!(!lane.counts_mismatch, "{lane:?}");
+}
+
+/// `vocal.voicebanks` says which of its own models (duration, pitch,
+/// variance) a bank ships beside the acoustic one — what a lane's
+/// `bank_timing` / `bank_pitch` use.
+#[test]
+fn voicebanks_reports_the_banks_own_models() {
+    let mut app = app_with_project();
+    let dir = app.test_user_voicebank_dir("modelled");
+    resonance_app::write_voicebank_fixture(
+        &dir,
+        &VoicebankFixture {
+            bank_models: true,
+            ..VoicebankFixture::default()
+        },
+    );
+    let list = voicebanks(&mut app);
+    let bank = list.installed.iter().find(|b| b.id == "modelled").expect("listed");
+    assert_eq!(
+        bank.models,
+        proto::VoicebankModels {
+            duration: true,
+            pitch: true,
+            variance: true,
+        }
+    );
+    // Without its pitch model it reports the others.
+    std::fs::remove_file(dir.join("dspitch/pitch.onnx")).unwrap();
+    let list = voicebanks(&mut app);
+    let bank = list.installed.iter().find(|b| b.id == "modelled").expect("listed");
+    assert!(bank.models.duration && !bank.models.pitch && bank.models.variance);
 }

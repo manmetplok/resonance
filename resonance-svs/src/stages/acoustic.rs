@@ -10,7 +10,7 @@ use ort::value::Value;
 use std::path::Path;
 
 use super::common::{
-    build_session_reporting, input_names, output_names, record_active_backend, ExecutionProvider,
+    input_names, output_names, record_active_backend, ExecutionProvider, SeededSession,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -35,6 +35,9 @@ pub struct AcousticFlags {
 
 pub struct AcousticStage {
     pub session: Session,
+    /// The noise inputs standing in for the model's random ops (see
+    /// [`super::noise`]): fed from the `seed` each [`Self::infer`] takes.
+    pub noise: Vec<super::noise::NoiseSpec>,
     pub flags: AcousticFlags,
     /// The execution provider the session really runs on — the requested
     /// one, or `Cpu` after a fallback.
@@ -43,10 +46,15 @@ pub struct AcousticStage {
 
 impl AcousticStage {
     /// Load the acoustic model on `ep` (CPU fallback, see
-    /// [`build_session_reporting`]) and record the backend in use as the
+    /// [`super::common::build_session_reporting`]) with its random ops
+    /// seeded ([`SeededSession`]), and record the backend in use as the
     /// process-wide [`super::common::active_backend`].
     pub fn load(model_path: &Path, ep: ExecutionProvider, device_index: i32) -> Result<Self> {
-        let (session, backend) = build_session_reporting(model_path, ep, device_index)?;
+        let SeededSession {
+            session,
+            noise,
+            backend,
+        } = SeededSession::load(model_path, ep, device_index)?;
         record_active_backend(backend);
         let ins = input_names(&session);
         let outs = output_names(&session);
@@ -83,6 +91,7 @@ impl AcousticStage {
         };
         Ok(Self {
             session,
+            noise,
             flags,
             backend,
         })
@@ -99,7 +108,16 @@ impl AcousticStage {
     /// every input field was cloned per segment — for `spk_embed` and
     /// `breathiness` that's megabytes of avoidable copying. `pd.f0` is
     /// left intact for the vocoder to read after this call.
-    pub fn infer(&mut self, pd: &mut PreprocessedAcoustic, speedup: i64, depth: f32) -> Result<MelOutput> {
+    ///
+    /// `seed` fills the model's noise ([`super::noise`]): the same inputs
+    /// and seed give the same mel, bit for bit.
+    pub fn infer(
+        &mut self,
+        pd: &mut PreprocessedAcoustic,
+        speedup: i64,
+        depth: f32,
+        seed: u64,
+    ) -> Result<MelOutput> {
         let n_tokens = pd.tokens.len();
         if pd.durations.len() != n_tokens {
             return Err(anyhow!(
@@ -231,6 +249,8 @@ impl AcousticStage {
             }
         }
 
+        let seeded = SeededSession::noise_values(&self.noise, seed, n_frames, NOISE_PER_FRAME)?;
+        inputs.extend(seeded);
         let outputs = self
             .session
             .run(inputs)
@@ -254,6 +274,10 @@ impl AcousticStage {
 }
 
 pub const SPK_EMBED_SIZE: usize = 256;
+
+/// Noise values per frame the acoustic models draw: `num_mel_bins` (128)
+/// times up to two feature channels.
+const NOISE_PER_FRAME: usize = 256;
 
 #[derive(Debug, Clone, Default)]
 pub struct PreprocessedAcoustic {

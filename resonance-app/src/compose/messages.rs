@@ -749,6 +749,10 @@ pub enum LaneInspectorMsg {
     SetVocalRestThresholdBeats(f32),
     /// How much note velocity drives loudness, 0..1.
     SetVocalVelocityDynamics(f32),
+    /// Flip `bank_timing`: phoneme timing from the bank's duration model.
+    ToggleVocalBankTiming,
+    /// Flip `bank_pitch`: the pitch line from the bank's pitch model.
+    ToggleVocalBankPitch,
 
     // Vocal — actions
     GenerateVocalAll,
@@ -959,6 +963,8 @@ impl LaneInspectorMsg {
             | Self::ToggleVocalStayInScale
             | Self::ToggleVocalAvoidClashes
             | Self::ToggleVocalUseSectionMotif
+            | Self::ToggleVocalBankTiming
+            | Self::ToggleVocalBankPitch
             | Self::SetVocalTimbre(..)
             | Self::SetVocalVoicebank(..)
             | Self::SetVocalSpeaker(..)
