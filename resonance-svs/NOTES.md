@@ -40,11 +40,9 @@ exposes types directly used in the synthesis pipeline.
          →  timeline mix → WAV
 ```
 
-The combined-acoustic ONNX path is what's wired end-to-end. The split-pipeline
-stages (`linguistic.rs`, `duration.rs`, `pitch.rs`, `variance.rs`) are loaded
-on demand but the smoke-test path doesn't traverse them — `.ds` files from
-the openvpi sample set carry `ph_dur` and `f0_seq` directly, so the variance
-chain isn't needed for an audible result.
+The combined-acoustic ONNX path renders `.ds` input as given. The bank's
+own duration / pitch / variance models are in `predict/` (they replaced the
+old unused stage scaffolds) and are driven by the app, not by `.ds` files.
 
 ## Performance numbers
 

@@ -1,6 +1,6 @@
 # Voicebank library (registry, plok.org install, library overlay)
 
-> Verified against master @ `c6cc8fd5` + vocal intelligibility on 2026-10-08.
+> Verified against master @ `e3d187e9` + bank models on 2026-10-08.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4–§5 (slices 4 and 7); research [`singing-voicebank-options-2026`](../../history/research/singing-voicebank-options-2026.md).
 
 Voicebanks are content a user installs, not three banks fixed in the code.
@@ -56,7 +56,17 @@ in [pronunciation](pronunciation.md).
     `languages.json`, dictionary and vocoder config, and the bank folder's
     subfolders — still matches; a bank whose vocoder was missing is always
     re-read. Every rescan and index change bumps
-    `VoicebankRegistry::revision`, which the overlay's row cache keys on.
+    `VoicebankRegistry::revision`, which the overlay's row cache keys on;
+  - **the bank's own models**: `dsdur/`, `dspitch/` and `dsvariance/`
+    beside the acoustic config, each with a `dsconfig.yaml` naming a
+    `linguistic` encoder and the `dur` / `pitch` / `variance` model
+    (OpenUtau's layout), are found by `resonance_svs::predict::discover`
+    and kept as `InstalledBank::models` (`BankModelPaths`). One counts
+    when its config parses and both model files exist. All three shipped
+    banks have duration and pitch models; Lilia and Meiji also a variance
+    model (TIGER's acoustic model takes no variance curve). A lane uses
+    them through `bank_timing` / `bank_pitch` ([vocal
+    rendering](vocal-rendering.md)).
 
   A hermetic test app scans only a private folder under its hermetic root —
   never the source tree and never `$RESONANCE_SVS_MODELS_DIR`, so the
@@ -231,7 +241,7 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
 | Overlay | `state/voicebank_library.rs`, `update/voicebank_library.rs`, `view/compose/voicebank_library.rs`, `state/overlay.rs` | `VoicebankLibraryState`, `LibraryOverlay` (`built_from`, `built_progress`, `rows_generation`, `status_generation`), `VoicebankRows` (`LibraryRows`), `VoicebankLibraryMessage`, `poll`, `refresh_rows`, `patch_statuses`, `Overlay::VoicebankLibrary` |
 | GUI pickers | `view/compose/lane_inspector/vocal/voice_group.rs`, `state/picks.rs`, `state/ui_caches.rs` | `voicebank_pickers`, `VoicebankChoice`, `SpeakerChoice`, `UiViewCaches::{voicebank_choices, missing_voicebank_choices}` |
 | Control | `update/control/vocal.rs`, `view_model/voicebanks.rs`, `gate.rs`, `control_jobs.rs` | `voicebanks`, `voicebank_install`, `voicebank_install_settled`, `voicebank_list`, `JobToken::VoicebankInstall` |
-| SVS crate | `resonance-svs/src/voicebank/{mod,layout,dsdict,phonetics}.rs` | `voicebank::scan`, `looks_like_bank`, `find_library_vocoder`, `installed_vocoder_name`, `read_curve_support` |
+| SVS crate | `resonance-svs/src/voicebank/{mod,layout,dsdict,phonetics}.rs`, `predict/config.rs` | `voicebank::scan`, `looks_like_bank`, `find_library_vocoder`, `installed_vocoder_name`, `read_curve_support`, `predict::discover`, `BankModelPaths`, `ModelConfig` |
 
 ## Surfaces
 
@@ -254,7 +264,8 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
     `{installed: [{id, name, version, english, speakers [{id, name,
     comfortable_range}], default_speaker, comfortable_range {low, high,
     range_source}, missing_phonemes, substitutions [{phoneme, sung_as}],
-    curves {dynamics, tension, breathiness, pitch_bend}, credit,
+    curves {dynamics, tension, breathiness, pitch_bend}, models
+    {duration, pitch, variance}, credit,
     terms_url, commercial, vocoder, vocoder_installed}], available: [{id,
     name, version, terms_url, credit, commercial, languages, speakers,
     size, vocoder, url}], index_status: fresh | cached | fetching |
@@ -290,6 +301,7 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
 | Guards: `../x`, `/abs`, `a/b`, `.hidden`, `..` dropped from the index and refused (nothing written outside the library), Delete refuses a non-id folder; two installs needing one vocoder fetch it once; a finished install's job settles when the bank is installed again before the tick; a failed index fetch is not `not_found`; the sweep (dead / own-idle / live-other staging, deleting, a cut replace restored, a landed replace's old copy removed); install records trusted for their own folder and, on a built-in bank, only for the index's pinned file | `tests/control/control_voicebank_install_safety.rs` | same |
 | Part-file protocol and the record-less-part age rule (shared with the drums) | `plugins/resonance-drums/tests/download.rs` (`a_starting_worker_sweeps_stale_download_leftovers`, resume and lock tests) | `./scripts/run-tests.py -p resonance-drums` |
 | Overlay: Library… opens it on the lane's bank, a download waits for Accept (Decline fetches nothing), Use sets the lane, Delete asks first, Cancel; progress patches one row and typing rebuilds none; goldens of the Installed tab, plok.org tab, accept-terms, downloading and confirm-delete states | `tests/compose/compose_voicebank_library.rs` → `compose_voicebank_library_{installed,plok,accept_terms,downloading,confirm_delete}-wgpu.png` | `RESONANCE_BLESS=1` to re-bless |
+| The bank's own models found beside the acoustic config (a missing model file does not count; speakers map by last path segment, else the model's first); `vocal.voicebanks` `models`; a lane's flags pick them | `resonance-svs/tests/voicebank_manifest.rs` (`the_banks_own_models_are_found_next_to_the_acoustic_config`), `tests/control/control_voicebanks.rs` (`voicebanks_reports_the_banks_own_models`), `tests/vocal/vocal_bank_models.rs` (`a_lane_uses_the_bank_models_its_flags_ask_for`) | `./scripts/run-tests.py` |
 | Inspector pickers (installed bank + speaker; `lilia (not installed)`) | `tests/compose/compose_rail_collapse.rs` → `compose_vocal_rail_installed_bank-wgpu.png` | same |
 
 Not covered: a real install from GitHub (hundreds of MB) has not been run;
