@@ -26,8 +26,8 @@ pub(super) fn options_for(unit: &RenderUnit) -> PredictOptions {
     }
 }
 
-/// The seed of every model's noise for `unit`: its content key, so the
-/// same unit renders the same samples whenever and wherever it renders.
+/// The seed of every model's noise for `unit` ([`RenderUnit::seed`]), so
+/// the same unit renders the same samples whenever and wherever it renders.
 /// `RESONANCE_SVS_SEED_SALT=<n>` mixes a number in, to measure how much a
 /// take depends on its noise (the audition's spread across seeds).
 pub(super) fn unit_seed(unit: &RenderUnit) -> u64 {
@@ -35,7 +35,7 @@ pub(super) fn unit_seed(unit: &RenderUnit) -> u64 {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
-    unit.key ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    unit.seed ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
 /// Whether `unit` uses any of the bank's models.

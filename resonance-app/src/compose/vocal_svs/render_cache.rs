@@ -73,6 +73,10 @@ pub struct RenderUnit {
     /// [`state_key`](RenderUnit::state_key) hashes it. Empty when there is
     /// none.
     pub curve_gain: Vec<GainSpan>,
+    /// The seed of every model's noise for this unit: a hash of what the
+    /// models are fed (the key without the lane params that act after
+    /// them), so the same input renders the same samples.
+    pub seed: u64,
     /// The unit as the bank's own duration / pitch / variance models see
     /// it; what the render re-times and re-pitches the segment from when
     /// the lane uses them (`bank_timing` / `bank_pitch`).
@@ -169,6 +173,11 @@ pub fn split_render_units(
         let start_sec = (notes[lo].start_tick.saturating_sub(base_tick)) as f64 * spt;
         let syllable_range = assigned[lo].syllable_index..assigned[hi - 1].syllable_index + 1;
         let key = content_key(&segment, &model, &lane, &active, &built.score, &built.bend_cents);
+        // The models' noise is seeded from what they are fed, not from the
+        // lane params that only shape the take after them
+        // (`velocity_dynamics` on a bank without energy): changing one of
+        // those re-renders the same audio.
+        let seed = content_key(&segment, &model, "", &active, &built.score, &built.bend_cents);
         let state_key = state_key(key, &notes[lo..hi], params.velocity_dynamics, &gain_db);
         let curve_gain = gain_db
             .iter()
@@ -187,6 +196,7 @@ pub fn split_render_units(
             key,
             state_key,
             curve_gain,
+            seed,
             score: built.score,
             bend_cents: built.bend_cents,
             bank_models: active.clone(),
