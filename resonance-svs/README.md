@@ -35,11 +35,20 @@ on A4 → C5 in the `tiger_disco` voice. Other speakers shipped with TIGER:
 .ds  →  parse + preprocess  →  acoustic ONNX (mel)  →  vocoder ONNX (waveform)  →  WAV
 ```
 
-The combined-acoustic path (Jobsecond/diffsinger-onnx-infer style) is what's
-exercised end-to-end. Linguistic / duration / pitch / variance stages exist as
-module scaffolding for the split openvpi exporter format, but the smoke test
-does not drive them — phoneme durations and `f0_seq` are read directly from the
-`.ds` file.
+The combined-acoustic path (Jobsecond/diffsinger-onnx-infer style) renders
+a `.ds` segment, whose phoneme durations and `f0_seq` it reads as given.
+`predict/` runs a bank's own duration, pitch and variance models
+(`dsdur/`, `dspitch/`, `dsvariance/`, OpenUtau's layout) to produce those
+for the app (`resonance-app` `vocal_svs`, see
+`docs/features/compose/vocal-rendering.md`). Every diffusion model's and
+NSF vocoder's top-level in-graph random ops are rewritten to read seeded
+noise (`stages/noise.rs`, `stages/seeded.rs`), so a render is a pure
+function of its inputs and seed; a random op the rewrite cannot reach (in
+a `Loop` / `If` / `Scan` body or a function, a non-float one, an opset
+before 12, external data) leaves its model loadable but not repeatable,
+with a warning. Loaded sessions are kept in a process-wide cache
+(`stages/session_cache.rs`, the two most recently used banks), so a
+second render of a bank does not load its models again.
 
 ## Build
 
@@ -158,10 +167,13 @@ resonance-svs/
 │       ├── common.rs          # session builder, execution-provider parsing
 │       ├── acoustic.rs        # combined acoustic ONNX (Jobsecond-style)
 │       ├── vocoder.rs         # mel + f0 → waveform
-│       ├── linguistic.rs      # split-pipeline stage scaffold
-│       ├── duration.rs        # split-pipeline stage scaffold
-│       ├── pitch.rs           # split-pipeline stage scaffold
-│       └── variance.rs        # split-pipeline stage scaffold
+│       ├── noise.rs           # seeded noise: rewrites Random* ops into fed inputs
+│       ├── seeded.rs          # SeededSession: load fallback, noise sizing, runs
+│       └── session_cache.rs   # process-wide session cache (2 banks)
+│   └── predict/               # the bank's own duration / pitch / variance models
+│       ├── config.rs          # dsdur/dspitch/dsvariance discovery + configs
+│       ├── score.rs           # BankScore, inputs, anchor alignment (pure)
+│       └── run.rs             # the sessions
 ├── examples/
 │   ├── probe.rs               # ONNX I/O inspector
 │   └── render_resonance_vocal.rs  # CLI that mirrors the resonance-app pipeline

@@ -29,11 +29,14 @@ use resonance_audio::types::MidiNote;
 use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::VocalParams;
 use resonance_svs::ds::{DsSegment, SampleCurve};
+use resonance_svs::predict::{BankModelPaths, BankScore, ModelKind, PITCH_STEPS, VARIANCE_STEPS};
 
+use super::bank_render;
 use super::dynamics::GainSpan;
+use super::render::{ACOUSTIC_DEPTH, ACOUSTIC_STEPS};
 use super::registry::BankProfile;
 use super::rests::RestRule;
-use super::segment::{build_segment, unit_curve_gain_db, CURVE_FRAME_SEC};
+use super::segment::{build_unit_segment, unit_curve_gain_db, CURVE_FRAME_SEC};
 
 /// One independently-renderable slice of a vocal clip: a contiguous run
 /// of notes delimited by genuine silences. Carries its own `DsSegment`
@@ -72,6 +75,19 @@ pub struct RenderUnit {
     /// [`state_key`](RenderUnit::state_key) hashes it. Empty when there is
     /// none.
     pub curve_gain: Vec<GainSpan>,
+    /// The seed of every model's noise for this unit: a hash of what the
+    /// models are fed (the key without the lane params that act after
+    /// them), so the same input renders the same samples.
+    pub seed: u64,
+    /// The unit as the bank's own duration / pitch / variance models see
+    /// it; what the render re-times and re-pitches the segment from when
+    /// the lane uses them (`bank_timing` / `bank_pitch`).
+    pub score: BankScore,
+    /// The Pitch bend curve in cents per curve frame from the segment
+    /// start (empty without points), laid over the bank's pitch.
+    pub bend_cents: Vec<f64>,
+    /// The bank models this unit renders with (none on the rule path).
+    pub bank_models: BankModelPaths,
 }
 
 /// Seconds-per-tick at the given tempo. Mirrors the duration builder so
@@ -107,6 +123,7 @@ pub fn split_render_units(
     let spt = seconds_per_tick(ticks_per_quarter, bpm);
     let base_tick = notes[0].start_tick;
     let model = model_identity(params, bank);
+    let seed_model = seed_identity(params, bank);
     let lane = lane_identity(params);
     let rest_rule = RestRule::new(params, bpm);
 
@@ -138,7 +155,7 @@ pub fn split_render_units(
         // Each unit's segment samples the expression curves from its own
         // first note (section-relative ticks), so a curve point lands on
         // the same beat whichever unit sings it.
-        let segment = build_segment(
+        let built = build_unit_segment(
             &notes[lo..hi],
             params,
             &assigned[lo..hi],
@@ -146,6 +163,7 @@ pub fn split_render_units(
             bpm,
             bank,
         );
+        let segment = built.segment;
         let gain_db = unit_curve_gain_db(
             &notes[lo..hi],
             params,
@@ -156,7 +174,24 @@ pub fn split_render_units(
         );
         let start_sec = (notes[lo].start_tick.saturating_sub(base_tick)) as f64 * spt;
         let syllable_range = assigned[lo].syllable_index..assigned[hi - 1].syllable_index + 1;
-        let key = content_key(&segment, &model, &lane);
+        // The bank models this unit can use: the lane's, less any that
+        // does not know one of its phonemes (`build_unit_segment`).
+        let active = built.bank_models;
+        let unit_lane = format!(
+            "{lane}|models={}{}{}",
+            active.duration.is_some() as u8,
+            active.pitch.is_some() as u8,
+            active.variance.is_some() as u8,
+        );
+        let key =
+            content_key(&segment, &model, &unit_lane, &active, &built.score, &built.bend_cents);
+        // The models' noise is seeded from what they are fed, not from the
+        // lane params that only shape the take after them
+        // (`velocity_dynamics` on a bank without energy) nor from how the
+        // files and the render are versioned (`seed_identity`): changing
+        // one of those re-renders the same audio.
+        let seed =
+            content_key(&segment, &seed_model, "", &active, &built.score, &built.bend_cents);
         let state_key = state_key(key, &notes[lo..hi], params.velocity_dynamics, &gain_db);
         let curve_gain = gain_db
             .iter()
@@ -175,27 +210,86 @@ pub fn split_render_units(
             key,
             state_key,
             curve_gain,
+            seed,
+            score: built.score,
+            bend_cents: built.bend_cents,
+            bank_models: active,
         });
     }
     units
 }
 
 /// What renders a unit, beyond the segment itself: the files the render
-/// loads (acoustic and vocoder config), the speaker key the lane's speaker
-/// resolves to, and the bank's version — so a rescan that resolves the
-/// same params to another model, speaker or release re-renders instead of
-/// reusing audio from the old one. A bank that is not installed cannot
+/// loads (acoustic and vocoder config) and a digest of their models'
+/// lengths and times, the speaker key the lane's speaker resolves to, and
+/// the bank's version — so a rescan that resolves the same params to
+/// another model, speaker or release, or a replaced model file,
+/// re-renders instead of reusing audio from the old one — plus how the
+/// render runs: the render path's revision (`SVS_RENDER_REV`), the
+/// sampling steps, the bank models in use with their digests, the pitch
+/// model's expressiveness, whether the variance model runs and the seed
+/// salt (`RESONANCE_BANK_EXPR`, `RESONANCE_BANK_VARIANCE`,
+/// `RESONANCE_SVS_SEED_SALT`). A bank that is not installed cannot
 /// render; its id and speaker stand in (the render fails before the cache
 /// is consulted).
 pub(crate) fn model_identity(params: &VocalParams, bank: &BankProfile) -> String {
     match bank.render_target(params.speaker.as_deref(), params.voice, None) {
-        Ok(target) => format!(
-            "{}|{}|{:?}|{:?}",
-            target.acoustic_config.display(),
-            target.vocoder_config.display(),
-            target.speaker,
-            bank.installed().and_then(|b| b.version.as_deref()),
-        ),
+        Ok(target) => {
+            let active = bank.active_bank_models(params.bank_timing, params.bank_pitch);
+            let model = |kind: ModelKind| match active.get(kind) {
+                Some(p) => format!(
+                    "{}#{:016x}",
+                    p.display(),
+                    active.facts(kind).map_or(0, |f| f.files_digest)
+                ),
+                None => "-".to_owned(),
+            };
+            format!(
+                "rev={}|{}|{}|{:016x}|{:?}|{:?}|steps={}/{}/{}/{}|dur={}|pitch={}|var={}|{}",
+                resonance_svs::pipeline::SVS_RENDER_REV,
+                target.acoustic_config.display(),
+                target.vocoder_config.display(),
+                bank.installed().map_or(0, |b| b.render_digest),
+                target.speaker,
+                bank.installed().and_then(|b| b.version.as_deref()),
+                ACOUSTIC_STEPS,
+                ACOUSTIC_DEPTH,
+                PITCH_STEPS,
+                VARIANCE_STEPS,
+                model(ModelKind::Duration),
+                model(ModelKind::Pitch),
+                model(ModelKind::Variance),
+                bank_render::render_knobs(),
+            )
+        }
+        Err(_) => format!("{}|{:?}", params.voicebank, params.speaker),
+    }
+}
+
+/// What the models' noise seed hashes of the render ([`model_identity`]
+/// less the render revision, the file digests, the step counts and the
+/// measurement knobs): which acoustic, vocoder and bank models, speaker
+/// and bank version. Kept as it was when seeding was introduced, so a
+/// change that only re-keys units (a new revision, a re-stamped file)
+/// renders the same noise.
+fn seed_identity(params: &VocalParams, bank: &BankProfile) -> String {
+    match bank.render_target(params.speaker.as_deref(), params.voice, None) {
+        Ok(target) => {
+            let active = bank.active_bank_models(params.bank_timing, params.bank_pitch);
+            let path = |p: &Option<std::path::PathBuf>| {
+                p.as_ref().map_or("-".to_owned(), |p| p.display().to_string())
+            };
+            format!(
+                "{}|{}|{:?}|{:?}|dur={}|pitch={}|var={}",
+                target.acoustic_config.display(),
+                target.vocoder_config.display(),
+                target.speaker,
+                bank.installed().and_then(|b| b.version.as_deref()),
+                path(&active.duration),
+                path(&active.pitch),
+                path(&active.variance),
+            )
+        }
         Err(_) => format!("{}|{:?}", params.voicebank, params.speaker),
     }
 }
@@ -216,10 +310,25 @@ fn lane_identity(params: &VocalParams) -> String {
 /// FNV-1a hash of everything that determines a unit's rendered audio:
 /// the phoneme/note/duration arrays, every per-frame curve, and the
 /// [`model_identity`] that renders them (the acoustic/vocoder model, the
-/// speaker embedding and the bank version — not captured by the segment
-/// arrays themselves). Two units with the same key render bit-identical
-/// audio, so a cache hit is always safe to reuse.
-fn content_key(seg: &DsSegment, model: &str, lane: &str) -> u64 {
+/// speaker embedding, the bank version and the bank's own models the lane
+/// uses — not captured by the segment arrays themselves). Two units with
+/// the same key render bit-identical audio (the models' noise is seeded
+/// from the key), so a cache hit is always safe to reuse.
+///
+/// The key never needs a model run: the bank models' output is a pure
+/// function of the [`BankScore`] (hashed here whenever one of them is in
+/// use), the speaker, the models and the seed. When the bank's pitch model
+/// replaces the synthesized f0, the f0 curve (portamento, vibrato) does
+/// not reach the take, so the key hashes the pitch bend that rides on the
+/// bank's pitch instead.
+fn content_key(
+    seg: &DsSegment,
+    model: &str,
+    lane: &str,
+    active: &BankModelPaths,
+    score: &BankScore,
+    bend_cents: &[f64],
+) -> u64 {
     let mut h = Fnv::new();
     // The segment arrays already fold in the voicebank's phoneme
     // substitutions, but not which model renders them.
@@ -231,7 +340,16 @@ fn content_key(seg: &DsSegment, model: &str, lane: &str) -> u64 {
     h.f64s(&seg.ph_dur);
     h.i32s(&seg.note_seq_midi);
     h.f64s(&seg.note_dur);
-    h.curve(&seg.f0);
+    if active.pitch.is_some() {
+        h.bytes(&[0xb1]);
+        h.f64s(bend_cents);
+    } else {
+        h.curve(&seg.f0);
+    }
+    if active.duration.is_some() || active.pitch.is_some() {
+        h.bytes(&[0xb0]);
+        h.score(score);
+    }
     h.curve(&seg.gender);
     h.curve(&seg.velocity);
     h.curve(&seg.energy);
@@ -291,6 +409,9 @@ pub struct StitchedRender {
     pub mono: Vec<f32>,
     pub sample_rate: u32,
     pub plan: RenderPlan,
+    /// The first unit's [`UnitAudio::lead_sec`]: what is left of the
+    /// take's leading pad before it starts singing.
+    pub first_lead_sec: f64,
 }
 
 /// Content-addressed cache of per-unit rendered audio. Lives across
@@ -300,8 +421,9 @@ pub struct StitchedRender {
 /// cache stays bounded to the clip's current segment count.
 #[derive(Debug, Default)]
 pub struct SvsRenderCache {
-    /// Unit content key → rendered mono audio at [`model_sr`].
-    entries: HashMap<u64, Vec<f32>>,
+    /// Unit content key → rendered mono audio at [`model_sr`] and the
+    /// silence its leading pad kept before the first phoneme (seconds).
+    entries: HashMap<u64, (Vec<f32>, f64)>,
     /// Sample rate of every cached buffer. Set on first render; all units
     /// of a clip share one voicebank and therefore one rate.
     model_sr: Option<u32>,
@@ -342,6 +464,29 @@ impl SvsRenderCache {
     }
 }
 
+/// One unit's rendered audio.
+#[derive(Debug, Clone)]
+pub struct UnitAudio {
+    pub mono: Vec<f32>,
+    pub sample_rate: u32,
+    /// Seconds of silence the unit's leading pad kept before its first
+    /// phoneme — the rest of the pad is pre-roll the first unit sings
+    /// before its first note. The rule layout's leading `SP`, or what the
+    /// bank's duration model left of it.
+    pub lead_sec: f64,
+    /// A bank model the unit was planned with did not load or failed to
+    /// run, so the rules stood in for its part: the audio is not what the
+    /// unit's key says. It is stitched into the take but never cached,
+    /// and the take records the unit as not rendered
+    /// ([`FALLBACK_KEY_MARK`]), so the lane reads stale.
+    pub fallback: bool,
+}
+
+/// Mixed into the state key a take records for a unit rendered with a
+/// fallback ([`UnitAudio::fallback`]): it matches no planned key, so the
+/// unit counts as stale.
+pub const FALLBACK_KEY_MARK: u64 = 0xfa11_bac4_0000_0001;
+
 /// Render a clip's units, reusing cached audio for unchanged units and
 /// invoking `render_fn` only for the ones whose content key isn't in the
 /// cache, then stitch every unit's audio onto one mono timeline by its
@@ -351,11 +496,30 @@ impl SvsRenderCache {
 /// single unit's segment — in production it runs the acoustic + vocoder
 /// pipeline; tests pass a stub. After the pass the cache holds exactly the
 /// current units' audio (stale entries evicted) and [`SvsRenderCache::last_plan`]
-/// reflects the hit/miss tally.
+/// reflects the hit/miss tally. A unit's lead is its segment's leading
+/// `SP`; [`render_units_cached_with`] lets the renderer report its own.
 pub fn render_units_cached(
     units: &[RenderUnit],
     cache: &mut SvsRenderCache,
     mut render_fn: impl FnMut(&DsSegment) -> Result<(Vec<f32>, u32), String>,
+) -> Result<StitchedRender, String> {
+    render_units_cached_with(units, cache, |unit| {
+        let (mono, sample_rate) = render_fn(&unit.segment)?;
+        Ok(UnitAudio {
+            mono,
+            sample_rate,
+            lead_sec: unit.segment.ph_dur.first().copied().unwrap_or(0.0),
+            fallback: false,
+        })
+    })
+}
+
+/// [`render_units_cached`] with a renderer that takes the whole unit and
+/// reports where its first phoneme starts ([`UnitAudio::lead_sec`]).
+pub fn render_units_cached_with(
+    units: &[RenderUnit],
+    cache: &mut SvsRenderCache,
+    mut render_fn: impl FnMut(&RenderUnit) -> Result<UnitAudio, String>,
 ) -> Result<StitchedRender, String> {
     if units.is_empty() {
         return Err("no render units".to_string());
@@ -367,19 +531,34 @@ pub fn render_units_cached(
     };
     let mut call_sr: Option<u32> = None;
     let mut per_unit: Vec<Vec<f32>> = Vec::with_capacity(units.len());
+    let mut first_lead_sec = 0.0;
+    let mut keys = Vec::with_capacity(units.len());
 
-    for unit in units {
-        if let Some(buf) = cache.entries.get(&unit.key) {
+    for (i, unit) in units.iter().enumerate() {
+        let lead = if let Some((buf, lead)) = cache.entries.get(&unit.key) {
             plan.reused += 1;
             per_unit.push(buf.clone());
+            keys.push(unit.state_key);
+            *lead
         } else {
-            let (mono, sr) = render_fn(&unit.segment)?;
+            let audio = render_fn(unit)?;
             // Every unit of a clip shares one voicebank, hence one rate;
             // the first render this pass fixes it.
-            call_sr.get_or_insert(sr);
-            cache.entries.insert(unit.key, mono.clone());
+            call_sr.get_or_insert(audio.sample_rate);
+            if audio.fallback {
+                keys.push(unit.state_key ^ FALLBACK_KEY_MARK);
+            } else {
+                cache
+                    .entries
+                    .insert(unit.key, (audio.mono.clone(), audio.lead_sec));
+                keys.push(unit.state_key);
+            }
             plan.changed += 1;
-            per_unit.push(mono);
+            per_unit.push(audio.mono);
+            audio.lead_sec
+        };
+        if i == 0 {
+            first_lead_sec = lead;
         }
     }
 
@@ -397,12 +576,13 @@ pub fn render_units_cached(
     cache.entries.retain(|k, _| live.contains(k));
     cache.model_sr = Some(sr);
     cache.last_plan = Some(plan);
-    cache.last_keys = units.iter().map(|u| u.state_key).collect();
+    cache.last_keys = keys;
 
     Ok(StitchedRender {
         mono,
         sample_rate: sr,
         plan,
+        first_lead_sec,
     })
 }
 
@@ -477,6 +657,28 @@ impl Fnv {
             self.bytes(&x.to_le_bytes());
         }
         self.bytes(&[0xfd]);
+    }
+    fn score(&mut self, score: &BankScore) {
+        for p in &score.phones {
+            self.str(&p.symbol);
+            self.bytes(&p.language.to_le_bytes());
+            self.bytes(&(p.group as u64).to_le_bytes());
+            self.bytes(&p.rule_sec.to_bits().to_le_bytes());
+        }
+        self.bytes(&[0xfa]);
+        for g in &score.groups {
+            self.bytes(&g.start_sec.to_bits().to_le_bytes());
+            self.bytes(&g.midi.to_le_bytes());
+        }
+        self.bytes(&[0xf9]);
+        for n in &score.notes {
+            self.bytes(&n.start_sec.to_bits().to_le_bytes());
+            self.bytes(&n.end_sec.to_bits().to_le_bytes());
+            self.bytes(&n.midi.to_bits().to_le_bytes());
+            self.bytes(&[n.slur as u8, n.voiced as u8]);
+        }
+        self.bytes(&score.total_sec.to_bits().to_le_bytes());
+        self.bytes(&score.lead_max_sec.to_bits().to_le_bytes());
     }
     fn curve(&mut self, c: &SampleCurve) {
         self.f64s(&c.samples);

@@ -25,6 +25,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use resonance_svs::stages::common::warn_once;
 use resonance_svs::voicebank::{self, layout, VoicebankManifest};
 
 use super::stamp::{BankStamp, StampedPaths};
@@ -71,6 +72,15 @@ impl VoicebankRegistry {
                 }
             }
         }
+        // A bank added, dropped or re-read (its files changed) may have
+        // replaced a model the session cache holds: start it afresh.
+        let changed = old.len() != banks.len()
+            || banks
+                .iter()
+                .any(|(id, bank)| old.get(id).is_none_or(|o| !Arc::ptr_eq(o, bank)));
+        if changed {
+            resonance_svs::stages::session_cache::invalidate();
+        }
         self.banks = banks;
     }
 
@@ -94,16 +104,17 @@ impl VoicebankRegistry {
                 .map(layout::slugify)
                 .unwrap_or_default();
             if id.is_empty() {
-                tracing::warn!(
-                    "voicebank folder {} is skipped: its name gives no id and its character \
-                     file names none; rename the folder to an ASCII name",
-                    dir.display()
+                warn_once(
+                    dir,
+                    "voicebank folder is skipped: its name gives no id and its character \
+                     file names none; rename the folder to an ASCII name"
+                        .into(),
                 );
                 return None;
             }
-            tracing::warn!(
-                "voicebank folder {} gives no id; using {id:?} from its character file",
-                dir.display()
+            warn_once(
+                dir,
+                format!("voicebank folder gives no id; using {id:?} from its character file"),
             );
         }
         Some(Arc::new(self.build(manifest, id, true, dir)))
@@ -135,12 +146,24 @@ impl VoicebankRegistry {
             .map(|b| b.name.to_owned())
             .or_else(|| manifest.details.name.clone())
             .unwrap_or_else(|| manifest.display_name.clone());
+        let models =
+            resonance_svs::predict::discover(&manifest.acoustic_config, &manifest.languages);
+        let render_files = resonance_svs::pipeline::render_files(
+            &manifest.acoustic_config,
+            vocoder_config.as_deref(),
+        );
+        let render_digest = resonance_svs::stages::common::files_digest(&render_files);
+        // The model files too, so a rescan notices a replaced model (and
+        // the bank's digests, which the render keys hash, are read anew).
+        let mut model_files = render_files;
+        model_files.extend(models.facts.values().flat_map(|f| f.files.iter().cloned()));
         let stamp = BankStamp::read(&StampedPaths {
             root: &manifest.root,
             acoustic_config: &manifest.acoustic_config,
             phoneme_dict: &manifest.phoneme_dict,
             english_dict: manifest.details.english_dict.as_deref(),
             vocoder_config: vocoder_config.as_deref(),
+            model_files: &model_files,
         });
         InstalledBank {
             id,
@@ -158,6 +181,8 @@ impl VoicebankRegistry {
             accepts_language_id: manifest.accepts_language_id,
             languages: manifest.languages.clone(),
             inventory: manifest.inventory().clone(),
+            models,
+            render_digest,
             english_dict: manifest.details.english_dict.clone(),
             plok: user.then(|| install_record(dir)).flatten(),
             builtin,
@@ -185,10 +210,9 @@ fn install_record(dir: &Path) -> Option<super::PlokSidecar> {
     super::PlokSidecar::read(dir).filter(|s| {
         let ours = s.id == folder;
         if !ours {
-            tracing::warn!(
-                "voicebank folder {}: its install record names {:?}; ignored",
-                dir.display(),
-                s.id
+            warn_once(
+                dir,
+                format!("voicebank folder: its install record names {:?}; ignored", s.id),
             );
         }
         ours
@@ -198,11 +222,13 @@ fn install_record(dir: &Path) -> Option<super::PlokSidecar> {
 /// Add `bank` unless an earlier folder already holds its id.
 fn claim(banks: &mut Banks, bank: Arc<InstalledBank>) {
     if let Some(first) = banks.get(&bank.id) {
-        tracing::warn!(
-            "voicebank folders {} and {} both have the id {:?}; using the first",
-            first.scanned_dir.display(),
-            bank.scanned_dir.display(),
-            bank.id
+        warn_once(
+            &bank.scanned_dir,
+            format!(
+                "voicebank folders {} and this one both have the id {:?}; using the first",
+                first.scanned_dir.display(),
+                bank.id
+            ),
         );
         return;
     }
@@ -222,7 +248,7 @@ fn scan_manifest(dir: &Path, id: &str) -> Option<VoicebankManifest> {
     match voicebank::scan(dir) {
         Ok(m) => Some(m),
         Err(e) => {
-            tracing::warn!("voicebank {id} at {}: {e:#}", dir.display());
+            warn_once(dir, format!("voicebank {id}: {e:#}"));
             None
         }
     }

@@ -103,6 +103,10 @@ fn default_syllabify() -> bool {
     true
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Params for `vocal.set_line`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -477,6 +481,18 @@ pub struct VocalParamsPatch {
     /// +/-6 dB after the vocoder on every bank.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub velocity_dynamics: Option<f32>,
+    /// Time the phonemes with the voicebank's own duration model where it
+    /// ships one (`vocal.voicebanks` `models`), else the rule-based
+    /// consonant timing. Default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bank_timing: Option<bool>,
+    /// Take the pitch line from the voicebank's own pitch model (and its
+    /// predicted tension where the bank takes tension) where it ships one,
+    /// else the synthesized line. With it on, `vibrato`, `vibrato_rate`
+    /// and `portamento_ms` are not heard: the model sings its own. Pitch
+    /// bend applies either way. Default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bank_pitch: Option<bool>,
 
     // ---- Melody generator ----
     /// Voice type. Changing it does not move `range`; set both.
@@ -557,6 +573,12 @@ pub struct VocalParamsView {
     pub rest_threshold_beats: f32,
     /// Velocity -> loudness amount, 0..1.
     pub velocity_dynamics: f32,
+    /// Timing from the bank's own duration model (where it has one).
+    #[serde(default = "default_true")]
+    pub bank_timing: bool,
+    /// Pitch from the bank's own pitch model (where it has one).
+    #[serde(default = "default_true")]
+    pub bank_pitch: bool,
 
     // ---- Melody generator ----
     pub voice: VocalVoice,
@@ -635,6 +657,10 @@ pub struct VoicebankEntry {
     pub substitutions: Vec<PhonemeSubstitution>,
     /// Which expression curves reach the model.
     pub curves: VoicebankCurves,
+    /// Which of its own models the bank ships beside the acoustic one: a
+    /// lane's `bank_timing` / `bank_pitch` use them where present.
+    #[serde(default)]
+    pub models: VoicebankModels,
     /// The credit line the bank's terms ask for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credit: Option<String>,
@@ -649,6 +675,19 @@ pub struct VoicebankEntry {
     /// `false`: the vocoder is missing, and rendering this bank fails
     /// with `voicebank_missing`.
     pub vocoder_installed: bool,
+}
+
+/// The voicebank's own models beside the acoustic one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicebankModels {
+    /// A duration model (`dsdur`): phoneme timing for `bank_timing`.
+    pub duration: bool,
+    /// A pitch model (`dspitch`): the pitch line for `bank_pitch`.
+    pub pitch: bool,
+    /// A variance model (`dsvariance`): with `bank_pitch`, the tension
+    /// (and other curves) the acoustic model takes.
+    pub variance: bool,
 }
 
 /// One speaker of a voicebank.

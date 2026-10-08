@@ -63,13 +63,12 @@ default bank's licence holds — plus a few small gaps the builders left.
    - The 2026-10-07 audition renders predate the fixes (TIGER sang the
      wrong words, Lilia another language's consonants) — listen to a fresh
      `scripts/vocal-audition.py` run before judging banks.
-   - The banks' own duration models (`dsdur`) are not run; a 1.6×
-     consonant table matched them on the audition phrase. Running them
-     (off the planning thread, as a refinement inside the render) may
-     help phoneme-dense lines the table handles worst. The pitch and
-     variance models were not measured.
-   - On the held-out phrase TIGER and Meiji sit at 77–84 %: the
-     phrase-initial "Bright" (onset lead capped at 0.2 s) and "hear you".
+   - Left after the bank models
+     ([vocal rendering § Bank models](../../features/compose/vocal-rendering.md#bank-models)):
+     `song.vocal` reports the rule timing, not the model's; short passing
+     notes sit off pitch under the bank's pitch model (it glides through
+     them); a random op in a model's control-flow body would stay
+     unseeded (none of the shipped banks has one).
    - Check every candidate bank's `dsdict-en.yaml` for `replacements:` —
      Lilia's were ignored until now, and a bank that respells English
      sings garbage without them.

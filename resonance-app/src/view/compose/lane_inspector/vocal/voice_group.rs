@@ -1,6 +1,6 @@
-//! Voice & delivery group — timbre / voicebank / speaker / vibrato /
-//! tension / portamento / articulation / consonant emphasis / rest
-//! threshold / velocity dynamics.
+//! Voice & delivery group — timbre / voicebank / speaker / the bank's own
+//! timing and pitch models / vibrato / tension / portamento / articulation
+//! / consonant emphasis / rest threshold / velocity dynamics.
 //!
 //! The Voicebank and Speaker pickers are driven by the voicebank registry
 //! (vocal-mcp-control-and-quality.md §4): the options are the installed
@@ -21,6 +21,7 @@ use crate::message::*;
 use crate::theme;
 
 use super::common::{chip, dim_label, group_card, group_title};
+use super::toggle_row;
 use crate::state::picks::{SpeakerChoice, VoicebankChoice};
 use crate::state::ui_caches::{ChoiceList, VocalRailContext};
 
@@ -50,10 +51,28 @@ pub(super) fn voice_group<'a>(
         ));
     }
 
-    let (voicebank_picker, speaker_block) =
+    let (voicebank_picker, speaker_block, models) =
         voicebank_pickers(definition_id, track_id, params, vocal);
+    // With the bank's pitch model singing, the synthesized line's vibrato,
+    // vibrato rate and portamento are not heard: their sliders are muted
+    // and say why (they are heard again with the toggle off).
+    let bank_sings_pitch = models.pitch && params.bank_pitch;
+    let line_label = |s: String| -> Element<'a, Message> {
+        if bank_sings_pitch {
+            text(s).size(10).color(theme::TEXT_4).into()
+        } else {
+            dim_label(s)
+        }
+    };
+    let line_style = move |t: &iced::Theme, s: slider::Status| {
+        if bank_sings_pitch {
+            theme::muted_slider_style(t, s)
+        } else {
+            slider::default(t, s)
+        }
+    };
 
-    let vibrato_label = dim_label(format!("Vibrato · {:.2}", params.vibrato));
+    let vibrato_label = line_label(format!("Vibrato · {:.2}", params.vibrato));
     let vibrato_slider = slider(0.0..=1.0, params.vibrato, move |v| {
         Message::Compose(ComposeMessage::LaneInspector {
             definition_id,
@@ -62,9 +81,10 @@ pub(super) fn voice_group<'a>(
         })
     })
     .step(0.01)
+    .style(line_style)
     .width(Length::Fill);
 
-    let vibrato_rate_label = dim_label(format!("Vibrato rate · {:.1} Hz", params.vibrato_rate));
+    let vibrato_rate_label = line_label(format!("Vibrato rate · {:.1} Hz", params.vibrato_rate));
     let vibrato_rate_slider = slider(4.0..=7.0, params.vibrato_rate, move |v| {
         Message::Compose(ComposeMessage::LaneInspector {
             definition_id,
@@ -73,6 +93,7 @@ pub(super) fn voice_group<'a>(
         })
     })
     .step(0.1)
+    .style(line_style)
     .width(Length::Fill);
 
     // Tension — only meaningful for voicebanks that accept the
@@ -135,7 +156,7 @@ pub(super) fn voice_group<'a>(
 
     // Portamento — pitch glide between adjacent notes, in
     // milliseconds. 0 = hard step, 200 = strong scoop / slide.
-    let portamento_label = dim_label(format!(
+    let portamento_label = line_label(format!(
         "Portamento · {:.0} ms ({})",
         params.portamento_ms,
         if params.portamento_ms < 15.0 {
@@ -154,6 +175,7 @@ pub(super) fn voice_group<'a>(
         })
     })
     .step(5.0)
+    .style(line_style)
     .width(Length::Fill);
 
     let articulation_label = dim_label(format!("Articulation · {:.2}", params.articulation));
@@ -244,8 +266,41 @@ pub(super) fn voice_group<'a>(
     if let Some(speaker) = speaker_block {
         body = body.push(Space::new().height(8)).push(speaker);
     }
+    // The bank's own duration / pitch models: each toggle shows only when
+    // the bank ships that model (a bank without one sings with the rules
+    // either way).
+    if models.timing || models.pitch {
+        body = body.push(Space::new().height(6));
+    }
+    if models.timing {
+        body = body.push(toggle_row(
+            "Timing from the voicebank",
+            params.bank_timing,
+            LaneInspectorMsg::ToggleVocalBankTiming,
+            definition_id,
+            track_id,
+        ));
+    }
+    if models.pitch {
+        body = body.push(toggle_row(
+            "Pitch from the voicebank",
+            params.bank_pitch,
+            LaneInspectorMsg::ToggleVocalBankPitch,
+            definition_id,
+            track_id,
+        ));
+    }
+    body = body.push(Space::new().height(8));
+    if bank_sings_pitch {
+        body = body.push(
+            text("Vibrato and portamento: the voicebank sings its own")
+                .size(10)
+                .font(theme::SERIF_ITALIC_FONT)
+                .color(theme::TEXT_3),
+        );
+        body = body.push(Space::new().height(4));
+    }
     let body = body
-        .push(Space::new().height(8))
         .push(vibrato_label)
         .push(Space::new().height(2))
         .push(vibrato_slider)
@@ -301,7 +356,7 @@ fn voicebank_pickers<'a>(
     track_id: TrackId,
     params: &VocalParams,
     vocal: &VocalRailContext,
-) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
+) -> (Element<'a, Message>, Option<Element<'a, Message>>, BankModels) {
     let lane_bank = params.voicebank.as_str();
     let selected = vocal
         .voicebanks
@@ -310,6 +365,10 @@ fn voicebank_pickers<'a>(
         .find(|c| &*c.id == lane_bank)
         .cloned();
     let speakers = selected.as_ref().map(|c| c.speakers.clone());
+    let models = BankModels {
+        timing: selected.as_ref().is_some_and(|c| c.has_timing_model),
+        pitch: selected.as_ref().is_some_and(|c| c.has_pitch_model),
+    };
     let bank_picker = pick_list(
         ChoiceList::Cached(vocal.voicebanks.clone()),
         selected,
@@ -344,7 +403,7 @@ fn voicebank_pickers<'a>(
         .align_y(iced::alignment::Vertical::Center);
 
     let Some(speakers) = speakers.filter(|s| s.len() > 1) else {
-        return (bank_picker.into(), None);
+        return (bank_picker.into(), None, models);
     };
     let current = params
         .speaker
@@ -369,5 +428,12 @@ fn voicebank_pickers<'a>(
     let block = column![dim_label("Speaker"), Space::new().height(2), speaker_picker]
         .spacing(0)
         .into();
-    (bank_picker.into(), Some(block))
+    (bank_picker.into(), Some(block), models)
+}
+
+/// Which of its own models the lane's bank ships.
+#[derive(Debug, Clone, Copy)]
+struct BankModels {
+    timing: bool,
+    pitch: bool,
 }

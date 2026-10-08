@@ -377,6 +377,16 @@ pub struct VocalParams {
     /// every bank through a per-note gain of up to ±6 dB after the
     /// vocoder.
     pub velocity_dynamics: f32,
+    /// Time the phonemes with the voicebank's own duration model
+    /// (`dsdur`) when it ships one; otherwise, or when off, the rule-based
+    /// consonant timing. Default on.
+    pub bank_timing: bool,
+    /// Take the pitch line from the voicebank's own pitch model
+    /// (`dspitch`, plus its variance model's tension where the acoustic
+    /// model takes tension) when it ships one; otherwise, or when off, the
+    /// synthesized f0 (portamento, vibrato). Pitch bend rides on either.
+    /// Default on.
+    pub bank_pitch: bool,
     /// The voicebank's speaker (voice mode), as the bank's speaker id
     /// (`disco` on TIGER, `phantom` on Meiji, ...); `None` sings with the
     /// bank's default speaker, and is all a single-voice bank (Lilia)
@@ -445,6 +455,8 @@ impl Default for VocalParams {
             consonant_emphasis: 0.50,
             rest_threshold_beats: default_rest_threshold_beats(),
             velocity_dynamics: default_velocity_dynamics(),
+            bank_timing: true,
+            bank_pitch: true,
             speaker: None,
             voicebank: VoicebankId::default(),
             curves: VocalCurves::default(),
@@ -626,6 +638,10 @@ fn default_rest_threshold_beats() -> f32 {
 
 fn default_velocity_dynamics() -> f32 {
     0.5
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Seeded preview lines that mirror the prototype's draft.

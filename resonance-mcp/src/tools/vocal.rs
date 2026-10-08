@@ -56,7 +56,7 @@ impl ResonanceMcp {
         description = "Read a vocal lane's full settings: voicebank and speaker, timbre, \
                        vibrato, vibrato_rate, tension, tension_velocity_amount, \
                        tension_contour_amount, portamento_ms, articulation, consonant_emphasis, \
-                       rest_threshold_beats, velocity_dynamics; \
+                       rest_threshold_beats, velocity_dynamics, bank_timing, bank_pitch; \
                        the melody generator's voice, range {low, high}, style, contour, \
                        syllable_mode, chord_tone_anchor, leap_range, phrase_length_bars, breath, \
                        stay_in_scale, avoid_clashes, use_section_motif; and the lyric \
@@ -93,7 +93,13 @@ impl ResonanceMcp {
                        rest_threshold_beats 0.125..4 — a gap between notes of at least that \
                        many beats is sung as silence, a shorter one legato; velocity_dynamics \
                        0..1 — how much note velocity changes loudness, \
-                       syllables_min <= syllables_max, range.low < range.high). One undo step; \
+                       syllables_min <= syllables_max, range.low < range.high). bank_timing and \
+                       bank_pitch (both default true) let the voicebank's own duration and \
+                       pitch models time the phonemes and draw the pitch line where it ships \
+                       them (vocal_voicebanks models); with bank_pitch the model's own \
+                       vibrato and glides replace vibrato, vibrato_rate and portamento_ms, \
+                       pitch bend still applies; off, or on a bank without the model, the \
+                       rule-based timing / synthesized line is used. One undo step; \
                        returns the full params. Lyrics are NOT here (vocal_set_lyrics / \
                        vocal_set_line). It never renders or regenerates: call vocal_generate \
                        after changing melody/lyric generator fields, vocal_render after \
@@ -207,7 +213,9 @@ impl ResonanceMcp {
                        comfortable_range {low, high, range_source: builtin | default} per \
                        bank and per speaker, missing_phonemes and the substitutions they are \
                        sung as, curves (which of dynamics, tension, breathiness, pitch_bend \
-                       reach the model — a curve the bank lacks does nothing), credit, \
+                       reach the model — a curve the bank lacks does nothing), models \
+                       {duration, pitch, variance} (the bank's own models a lane's \
+                       bank_timing / bank_pitch use), credit, \
                        terms_url and commercial (free_with_credit | paid | permission) — tell \
                        the user the credit line when you use a bank — and vocoder with \
                        vocoder_installed. available lists the plok.org index's banks that are \

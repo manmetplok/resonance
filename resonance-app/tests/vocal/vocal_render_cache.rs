@@ -334,3 +334,46 @@ fn the_key_follows_the_resolved_speaker_not_the_params() {
     assert_ne!(key_now(), soft, "the default speaker is `power` now");
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// A unit whose bank model fell back to the rules at render time (it did
+/// not load or failed to run) is stitched into the take but not cached,
+/// and the take records it under a key no plan has, so the lane reads
+/// stale and the next render tries the unit again.
+#[test]
+fn a_unit_rendered_with_a_fallback_is_not_cached_and_reads_stale() {
+    use resonance_app::compose::vocal_svs::{
+        render_units_cached_with, RenderUnit, UnitAudio, FALLBACK_KEY_MARK,
+    };
+    let (notes, assigned) = two_units_input();
+    let units = split_render_units(&notes, &params(), &assigned, TPQ, BPM, &bank());
+    let mut cache = SvsRenderCache::new();
+    let calls = Cell::new(0);
+    let audio = |fallback: bool| UnitAudio {
+        mono: vec![0.5; 64],
+        sample_rate: 44_100,
+        lead_sec: 0.3,
+        fallback,
+    };
+    // The second unit's pitch model failed.
+    let out = render_units_cached_with(&units, &mut cache, |unit: &RenderUnit| {
+        calls.set(calls.get() + 1);
+        Ok(audio(unit.note_range.start == 1))
+    })
+    .unwrap();
+    assert_eq!(out.plan.changed, 2);
+    assert!(out.mono.iter().any(|s| *s != 0.0), "the fallback audio is in the take");
+    assert_eq!(cache.len(), 1, "only the unit that rendered as planned is cached");
+    assert_eq!(cache.last_keys()[0], units[0].state_key);
+    assert_eq!(cache.last_keys()[1], units[1].state_key ^ FALLBACK_KEY_MARK);
+    assert_ne!(cache.last_keys()[1], units[1].state_key, "the lane reads stale");
+
+    // The next render reuses the first unit and tries the second again.
+    calls.set(0);
+    let out = render_units_cached_with(&units, &mut cache, |_unit: &RenderUnit| {
+        calls.set(calls.get() + 1);
+        Ok(audio(false))
+    })
+    .unwrap();
+    assert_eq!((out.plan.reused, out.plan.changed, calls.get()), (1, 1, 1));
+    assert_eq!(cache.last_keys(), &[units[0].state_key, units[1].state_key]);
+}

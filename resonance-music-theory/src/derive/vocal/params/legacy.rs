@@ -19,7 +19,8 @@ use serde::Deserialize;
 use super::super::lyrics::LyricLine;
 use super::{
     default_portamento_ms, default_rest_threshold_beats, default_tension,
-    default_tension_contour_amount, default_tension_velocity_amount, default_velocity_dynamics,
+    default_tension_contour_amount, default_tension_velocity_amount, default_true,
+    default_velocity_dynamics,
     default_vibrato_rate, default_vocal_style, SyllableMode,
     VocalContour, VocalMood, VocalParams, VocalPov, VocalRhymeScheme, VocalStyle, VocalTimbre,
     VocalCurves, VoiceType, VoicebankId,
@@ -70,6 +71,10 @@ pub(super) struct VocalParamsRepr {
     rest_threshold_beats: f32,
     #[serde(default = "default_velocity_dynamics")]
     velocity_dynamics: f32,
+    #[serde(default = "default_true")]
+    bank_timing: bool,
+    #[serde(default = "default_true")]
+    bank_pitch: bool,
     #[serde(default)]
     speaker: Option<String>,
     #[serde(default)]
@@ -138,6 +143,8 @@ impl From<VocalParamsRepr> for VocalParams {
             consonant_emphasis: r.consonant_emphasis,
             rest_threshold_beats: r.rest_threshold_beats,
             velocity_dynamics: r.velocity_dynamics,
+            bank_timing: r.bank_timing,
+            bank_pitch: r.bank_pitch,
             speaker,
             voicebank: r.voicebank,
             curves: r.curves,

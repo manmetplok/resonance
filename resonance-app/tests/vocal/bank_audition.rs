@@ -226,6 +226,18 @@ struct Rendered {
     rms_db: f64,
     transpose: i32,
     range: (u8, u8),
+    /// Wall time of the render (session loads included).
+    render_sec: f64,
+}
+
+/// A lane flag the audition sings with: `name=0` turns it off, `name=1`
+/// on; unset keeps `default` (the lane default).
+fn env_flag(name: &str, default: bool) -> bool {
+    match std::env::var(name).ok().as_deref().map(str::trim) {
+        Some("0") | Some("false") => false,
+        Some("1") | Some("true") => true,
+        _ => default,
+    }
 }
 
 fn wanted_banks() -> Option<Vec<String>> {
@@ -348,8 +360,11 @@ fn audition() {
             let params = VocalParams {
                 voicebank: VoicebankId::new(&id),
                 speaker: speaker.clone(),
+                bank_timing: env_flag("RESONANCE_AUDITION_BANK_TIMING", true),
+                bank_pitch: env_flag("RESONANCE_AUDITION_BANK_PITCH", true),
                 ..VocalParams::default()
             };
+            let started = std::time::Instant::now();
             let rendered = render_vocal_clip(
                 &notes,
                 &params,
@@ -361,6 +376,7 @@ fn audition() {
                 &profile,
                 None,
             );
+            let render_sec = started.elapsed().as_secs_f64();
             let rendered = match rendered {
                 Ok(Some(r)) => r,
                 Ok(None) => {
@@ -395,7 +411,8 @@ fn audition() {
             let frames = rendered.samples_stereo.len() / 2;
             let duration_sec = frames as f64 / rendered.sample_rate as f64;
             eprintln!(
-                "{label}: wrote {file} ({duration_sec:.2}s, {db:.1} dBFS, transposed {transpose:+})"
+                "{label}: wrote {file} ({duration_sec:.2}s, {db:.1} dBFS, transposed \
+                 {transpose:+}, rendered in {render_sec:.2}s)"
             );
             entries.push(Rendered {
                 bank: id.clone(),
@@ -405,6 +422,7 @@ fn audition() {
                 rms_db: db,
                 transpose,
                 range: (range.low, range.high),
+                render_sec,
             });
         }
     }
@@ -419,6 +437,7 @@ fn audition() {
             "rms_db": e.rms_db,
             "transpose": e.transpose,
             "range": [e.range.0, e.range.1],
+            "render_sec": e.render_sec,
         })).collect::<Vec<_>>(),
     });
     std::fs::write(

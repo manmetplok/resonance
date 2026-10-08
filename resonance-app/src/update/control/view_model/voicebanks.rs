@@ -108,6 +108,14 @@ fn voicebank_entry(profile: &BankProfile, terms: BankTerms) -> wire::VoicebankEn
             breathiness: profile.curve_supported(CurveKind::Breathiness),
             pitch_bend: profile.curve_supported(CurveKind::PitchBend),
         },
+        models: {
+            let m = profile.bank_models();
+            wire::VoicebankModels {
+                duration: m.duration.is_some(),
+                pitch: m.pitch.is_some(),
+                variance: m.variance.is_some(),
+            }
+        },
         // What a plok.org install recorded (the terms the user accepted),
         // trusted as `VoicebankRegistry::terms` says.
         credit: terms.credit,

@@ -53,6 +53,16 @@ pub(super) fn build_f0_curve(
     curve
 }
 
+/// The written pitch alone (steps 1–2: the notes held flat, rests
+/// filled), with the same per-frame metadata — what the tension contour
+/// reads when the bank's pitch model sings the unit instead of this
+/// curve.
+pub(super) fn build_step_curve(track: &PhonemeTrack) -> F0Curve {
+    let mut curve = sample_piecewise_constant(track);
+    fill_unvoiced(&mut curve.samples);
+    curve
+}
+
 /// Step 5: fold the lane's Pitch bend curve into the f0 curve as an
 /// additive cents offset. Applied last so it rides on top of the
 /// portamento slides and vibrato wobble. Voiced frames only (the fill

@@ -741,3 +741,124 @@ fn a_scan_spells_phonemes_the_way_the_english_dictionary_replaces_them() {
     assert_eq!(m.phoneme_name("y"), "y");
     assert_eq!(m.inventory().dict_key_for("y"), None);
 }
+
+/// The bank's own duration / pitch / variance models sit in `dsdur/`,
+/// `dspitch/`, `dsvariance/` next to the acoustic config (OpenUtau's
+/// layout). One counts when its config names a linguistic encoder and the
+/// model and both files exist; its speakers map onto the acoustic ones by
+/// their last path segment, falling back to its first.
+#[test]
+fn the_banks_own_models_are_found_next_to_the_acoustic_config() {
+    use resonance_svs::predict::{discover, ModelConfig, ModelKind};
+    let dir = fresh_dir("bank_models");
+    write(
+        &dir,
+        "dsconfig.yaml",
+        "phonemes: phonemes.txt\nacoustic: acoustic.onnx\nvocoder: dsvocoder\n",
+    );
+    write(&dir, "phonemes.txt", "AP\nSP\nah\n");
+    // Duration: complete, one speaker for every mode.
+    write(
+        &dir,
+        "dsdur/dsconfig.yaml",
+        "phonemes: ph.json\nlanguages: lang.json\nuse_lang_id: true\nlinguistic: l.onnx\n\
+         dur: d.onnx\nspeakers:\n- embeds/standard\n",
+    );
+    write(&dir, "dsdur/ph.json", r#"{"AP": 1, "SP": 2, "en/ah": 7}"#);
+    write(&dir, "dsdur/lang.json", r#"{"en": 3}"#);
+    write(&dir, "dsdur/l.onnx", "");
+    write(&dir, "dsdur/d.onnx", "");
+    // Pitch: its model file is missing, so it does not count.
+    write(
+        &dir,
+        "dspitch/dsconfig.yaml",
+        "phonemes: ph.txt\nlinguistic: l.onnx\npitch: p.onnx\n",
+    );
+    write(&dir, "dspitch/ph.txt", "AP\nSP\n");
+    write(&dir, "dspitch/l.onnx", "");
+    // Variance: complete, two speakers.
+    write(
+        &dir,
+        "dsvariance/dsconfig.yaml",
+        "phonemes: ph.txt\nlinguistic: l.onnx\nvariance: v.onnx\nhop_size: 256\n\
+         sample_rate: 24000\nspeakers:\n- embeds/standard\n- embeds/phantom\n",
+    );
+    write(&dir, "dsvariance/ph.txt", "AP\nSP\n");
+    write(&dir, "dsvariance/l.onnx", "");
+    write(&dir, "dsvariance/v.onnx", "");
+
+    let acoustic_languages = [("ja".to_owned(), 1), ("en".to_owned(), 2)].into_iter().collect();
+    let found = discover(&dir.join("dsconfig.yaml"), &acoustic_languages);
+    assert_eq!(found.duration, Some(dir.join("dsdur/dsconfig.yaml")));
+    assert_eq!(found.pitch, None, "pitch model file missing");
+    assert_eq!(found.variance, Some(dir.join("dsvariance/dsconfig.yaml")));
+    // What discovery read of each: the phonemes, the acoustic language
+    // ids mapped through their names onto the model's (`en` is 2 to the
+    // acoustic model, 3 to the duration model; `ja` it does not list).
+    let dur_facts = found.facts(ModelKind::Duration).unwrap();
+    assert!(dur_facts.phonemes.contains("en/ah") && !dur_facts.phonemes.contains("ah"));
+    assert_eq!(dur_facts.language_map, [(2, 3)].into_iter().collect());
+    assert_eq!(dur_facts.language(2), 3);
+    assert_eq!(dur_facts.language(1), 1, "an unlisted id goes through");
+    assert!(found.facts(ModelKind::Variance).unwrap().language_map.is_empty());
+    assert!(found.facts(ModelKind::Pitch).is_none());
+
+    let dur = ModelConfig::load(found.duration.as_deref().unwrap(), ModelKind::Duration).unwrap();
+    assert_eq!(dur.phonemes.get("en/ah"), Some(&7));
+    assert_eq!(dur.languages.get("en"), Some(&3));
+    assert!(dur.use_lang_id);
+    assert_eq!(dur.speaker_for(Some("embeds/phantom")), Some("embeds/standard"));
+    let var = ModelConfig::load(found.variance.as_deref().unwrap(), ModelKind::Variance).unwrap();
+    assert_eq!(var.speaker_for(Some("embeds/phantom")), Some("embeds/phantom"));
+    assert_eq!(var.speaker_for(Some("dsacoustic/phantom")), Some("embeds/phantom"));
+    assert_eq!(var.speaker_for(None), Some("embeds/standard"));
+    assert!((var.frame_sec() - 256.0 / 24000.0).abs() < 1e-12);
+
+    // A bank without the folders has none.
+    let bare = fresh_dir("bank_models_none");
+    write(&bare, "dsconfig.yaml", "phonemes: p.txt\nacoustic: a.onnx\n");
+    assert_eq!(discover(&bare.join("dsconfig.yaml"), &Default::default()), Default::default());
+}
+
+/// A render unit uses a model only when the model knows every phoneme it
+/// sings; the variance model goes with the pitch model. Replacing a
+/// model's file moves its digest.
+#[test]
+fn a_unit_uses_only_the_bank_models_that_know_its_phonemes() {
+    use resonance_svs::predict::{discover, ModelKind};
+    let dir = fresh_dir("bank_models_cover");
+    write(&dir, "dsconfig.yaml", "phonemes: phonemes.txt\nacoustic: acoustic.onnx\n");
+    write(&dir, "phonemes.txt", "AP\nSP\nah\nio\n");
+    for (folder, key, phonemes) in [
+        ("dsdur", "dur", "AP\nSP\nah\nio\n"),
+        ("dspitch", "pitch", "AP\nSP\nah\n"),
+        ("dsvariance", "variance", "AP\nSP\nah\nio\n"),
+    ] {
+        write(
+            &dir,
+            &format!("{folder}/dsconfig.yaml"),
+            &format!("phonemes: ph.txt\nlinguistic: l.onnx\n{key}: m.onnx\n"),
+        );
+        write(&dir, &format!("{folder}/ph.txt"), phonemes);
+        write(&dir, &format!("{folder}/l.onnx"), "");
+        write(&dir, &format!("{folder}/m.onnx"), "");
+    }
+    let all = discover(&dir.join("dsconfig.yaml"), &Default::default());
+    assert_eq!(all.covering(["SP", "ah", "SP"]), all, "every model knows these");
+    let without_pitch = all.covering(["SP", "io", "SP"]);
+    assert!(without_pitch.duration.is_some(), "the duration model knows io");
+    assert_eq!(without_pitch.pitch, None, "the pitch model does not");
+    assert_eq!(without_pitch.variance, None, "nor does the variance model run without it");
+    assert!(without_pitch.facts(ModelKind::Pitch).is_none());
+    assert!(!all.covers(ModelKind::Pitch, ["io"]));
+
+    let before = all.facts(ModelKind::Pitch).unwrap().files_digest;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write(&dir, "dspitch/m.onnx", "new weights");
+    let after = discover(&dir.join("dsconfig.yaml"), &Default::default());
+    assert_ne!(after.facts(ModelKind::Pitch).unwrap().files_digest, before);
+    assert_eq!(
+        after.facts(ModelKind::Duration).unwrap().files_digest,
+        all.facts(ModelKind::Duration).unwrap().files_digest
+    );
+}

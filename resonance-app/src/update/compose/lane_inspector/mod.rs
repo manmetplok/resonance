@@ -187,20 +187,12 @@ pub(super) fn handle(
         LaneInspectorMsg::SetVocalBreath(v) => {
             vocal_params::set_breath(r, definition_id, track_id, v)
         }
-        LaneInspectorMsg::ToggleVocalStayInScale => {
-            update_vocal(r, definition_id, track_id, |p| {
-                p.stay_in_scale = !p.stay_in_scale;
-            })
-        }
-        LaneInspectorMsg::ToggleVocalAvoidClashes => {
-            update_vocal(r, definition_id, track_id, |p| {
-                p.avoid_clashes = !p.avoid_clashes;
-            })
-        }
-        LaneInspectorMsg::ToggleVocalUseSectionMotif => {
-            update_vocal(r, definition_id, track_id, |p| {
-                p.use_section_motif = !p.use_section_motif;
-            })
+        toggle @ (LaneInspectorMsg::ToggleVocalStayInScale
+        | LaneInspectorMsg::ToggleVocalAvoidClashes
+        | LaneInspectorMsg::ToggleVocalUseSectionMotif
+        | LaneInspectorMsg::ToggleVocalBankTiming
+        | LaneInspectorMsg::ToggleVocalBankPitch) => {
+            vocal_params::toggle(r, definition_id, track_id, toggle)
         }
 
         // Vocal voice & delivery
@@ -243,6 +235,7 @@ pub(super) fn handle(
         LaneInspectorMsg::SetVocalVelocityDynamics(v) => {
             vocal_params::set_velocity_dynamics(r, definition_id, track_id, v)
         }
+
 
         // Vocal generate actions
         LaneInspectorMsg::GenerateVocalLyricsOnly => {

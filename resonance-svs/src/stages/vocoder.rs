@@ -2,23 +2,37 @@
 
 use anyhow::{anyhow, Context, Result};
 use ndarray::{Array2, Array3};
-use ort::session::Session;
 use ort::value::Value;
 use std::path::Path;
 
-use super::common::{build_session, input_names, output_names, ExecutionProvider};
 use super::acoustic::MelOutput;
+use super::common::{input_names, output_names, ExecutionProvider, SeededSession};
 
 pub struct VocoderStage {
-    pub session: Session,
+    /// The model; an NSF vocoder's excitation noise and harmonic phases
+    /// are fed from the `seed` each [`Self::infer`] takes
+    /// ([`super::noise`]).
+    pub model: SeededSession,
     pub n_mel_bins: usize,
+    /// At most how many noise values per mel frame it draws (the first run
+    /// of a session is fed this many, later ones what it draws): the hop
+    /// times the source's harmonics.
+    noise_per_frame: usize,
 }
 
 impl VocoderStage {
-    pub fn load(model_path: &Path, ep: ExecutionProvider, device_index: i32, n_mel_bins: usize) -> Result<Self> {
-        let session = build_session(model_path, ep, device_index)?;
-        let ins = input_names(&session);
-        let outs = output_names(&session);
+    /// Load the vocoder; `hop_size` (samples per mel frame) sizes its
+    /// seeded noise.
+    pub fn load(
+        model_path: &Path,
+        ep: ExecutionProvider,
+        device_index: i32,
+        n_mel_bins: usize,
+        hop_size: usize,
+    ) -> Result<Self> {
+        let model = SeededSession::load(model_path, ep, device_index)?;
+        let ins = input_names(&model.session);
+        let outs = output_names(&model.session);
         for required in &["mel", "f0"] {
             if !ins.contains(*required) {
                 return Err(anyhow!(
@@ -33,7 +47,13 @@ impl VocoderStage {
                 model_path.display()
             ));
         }
-        Ok(Self { session, n_mel_bins })
+        Ok(Self {
+            model,
+            n_mel_bins,
+            // NSF-HiFiGAN's sine source draws noise for its harmonics (9 on
+            // the shipped vocoders) at every output sample.
+            noise_per_frame: hop_size * 10,
+        })
     }
 
     /// Run the vocoder, returning the rendered waveform.
@@ -45,8 +65,9 @@ impl VocoderStage {
     /// n_mel_bins floats), so the previous `&MelOutput` signature cloned megabytes
     /// per segment. `mel.shape` is left intact; `mel.data` is empty after
     /// this call. `f0` is converted f64 → f32, which allocates the small
-    /// per-frame vector regardless of ownership.
-    pub fn infer(&mut self, mel: &mut MelOutput, f0: &[f64]) -> Result<Vec<f32>> {
+    /// per-frame vector regardless of ownership. `seed` fills the
+    /// vocoder's noise: the same mel, f0 and seed give the same samples.
+    pub fn infer(&mut self, mel: &mut MelOutput, f0: &[f64], seed: u64) -> Result<Vec<f32>> {
         let n_frames = if mel.shape.len() >= 2 {
             mel.shape[mel.shape.len() - 2] as usize
         } else {
@@ -80,17 +101,16 @@ impl VocoderStage {
             ("mel".into(), Value::from_array(mel_arr)?.into()),
             ("f0".into(), Value::from_array(f0_arr)?.into()),
         ];
-
-        let outputs = self
-            .session
-            .run(inputs)
-            .context("running vocoder ONNX session")?;
-        let waveform_value = outputs
-            .get("waveform")
-            .ok_or_else(|| anyhow!("vocoder output `waveform` not present"))?;
-        let (_shape, data) = waveform_value
-            .try_extract_tensor::<f32>()
-            .context("extracting waveform tensor")?;
-        Ok(data.to_vec())
+        self.model
+            .run(&inputs, seed, n_frames, self.noise_per_frame, |outputs| {
+                let waveform_value = outputs
+                    .get("waveform")
+                    .ok_or_else(|| anyhow!("vocoder output `waveform` not present"))?;
+                let (_shape, data) = waveform_value
+                    .try_extract_tensor::<f32>()
+                    .context("extracting waveform tensor")?;
+                Ok(data.to_vec())
+            })
+            .context("running vocoder ONNX session")
     }
 }

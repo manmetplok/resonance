@@ -66,6 +66,8 @@ pub(in crate::update::control) fn vocal_params_view(p: &VocalParams) -> wire::Vo
         consonant_emphasis: p.consonant_emphasis,
         rest_threshold_beats: p.rest_threshold_beats,
         velocity_dynamics: p.velocity_dynamics,
+        bank_timing: p.bank_timing,
+        bank_pitch: p.bank_pitch,
         voice: voice_to_wire(p.voice),
         range: wire::VocalRange {
             low: p.range.0,

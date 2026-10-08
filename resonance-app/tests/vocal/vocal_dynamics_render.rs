@@ -130,6 +130,7 @@ fn an_ap_rest_breathes_and_an_sp_rest_does_not() {
             speaker: target.speaker,
             speedup: 20,
             depth: 1000,
+            seed: 0,
         };
         let rest_db = |kind: &str| {
             let mut s = seg.clone();

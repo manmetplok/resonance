@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use resonance_music_theory::g2p::{self, PhonemeDictionary};
 use resonance_music_theory::{VoiceType, VoicebankId};
+use resonance_svs::predict::{BankModelPaths, ModelKind};
 use resonance_svs::voicebank::{CurveSupport, SingerInfo};
 
 use super::builtin::{self, BuiltinBank, ShippedSpelling, DEFAULT_RANGE};
@@ -363,6 +364,42 @@ impl BankProfile {
             high: range.1,
             source,
         }
+    }
+
+    /// The bank's own duration / pitch / variance models it ships (none
+    /// when it is not installed).
+    pub fn bank_models(&self) -> BankModelPaths {
+        self.installed
+            .as_ref()
+            .map(|b| b.models.clone())
+            .unwrap_or_default()
+    }
+
+    /// The bank models a lane with `bank_timing` / `bank_pitch` renders
+    /// with: the duration model for timing, the pitch model for pitch, and
+    /// — with pitch — the variance model when the acoustic model takes a
+    /// curve it predicts (tension on Lilia and Meiji). Each `None` where
+    /// the flag is off or the bank does not ship the model.
+    pub fn active_bank_models(&self, bank_timing: bool, bank_pitch: bool) -> BankModelPaths {
+        let all = self.bank_models();
+        let support = self.curve_support();
+        let accepts_variance = support.tension || support.energy || support.breathiness;
+        let mut active = BankModelPaths {
+            duration: all.duration.filter(|_| bank_timing),
+            pitch: all.pitch.clone().filter(|_| bank_pitch),
+            variance: all
+                .variance
+                .filter(|_| bank_pitch && all.pitch.is_some() && accepts_variance),
+            facts: all.facts,
+        };
+        let used: Vec<ModelKind> = active
+            .facts
+            .keys()
+            .copied()
+            .filter(|k| active.get(*k).is_some())
+            .collect();
+        active.facts.retain(|k, _| used.contains(k));
+        active
     }
 
     /// The bank's English dictionary, when it is installed and ships one.

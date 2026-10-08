@@ -24,6 +24,7 @@
 //! - [`dynamics`]: the post-vocoder dynamics gain envelope (velocity).
 //! - [`post`]: rest gating, safety gain, mono→stereo, resample, WAV writer.
 
+mod bank_render;
 mod dynamics;
 mod error;
 mod paths;
@@ -60,11 +61,11 @@ pub use pronunciation::{
     DictionaryScope, PhonemeProvenance, PronunciationState, SyllableOverride,
 };
 pub use render_cache::{
-    plan_unit_keys, render_units_cached, split_render_units, RenderPlan, RenderUnit,
-    SvsRenderCache,
+    plan_unit_keys, render_units_cached, render_units_cached_with, split_render_units,
+    RenderPlan, RenderUnit, SvsRenderCache, UnitAudio, FALLBACK_KEY_MARK,
 };
 pub(crate) use render_cache::model_identity;
-pub use segment::build_segment;
+pub use segment::{build_segment, build_unit_segment, UnitSegment};
 pub use validate::{
     articulation_report_for, validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable,
     NoteArticulation,

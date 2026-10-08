@@ -307,6 +307,8 @@ fn sample_vocal_params_view() -> VocalParamsView {
         consonant_emphasis: 0.5,
         rest_threshold_beats: 0.5,
         velocity_dynamics: 0.5,
+        bank_timing: true,
+        bank_pitch: true,
         voice: vocal::VocalVoice::MezzoSoprano,
         range: vocal::VocalRange { low: 57, high: 79 },
         style: vocal::VocalStyle::PopBallad,

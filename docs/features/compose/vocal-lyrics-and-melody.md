@@ -1,6 +1,6 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
+> Verified against master @ `e3d187e9` + bank models on 2026-10-08.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §3, §6 (slices 1, 3, 8); `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -175,11 +175,13 @@ line, re-rolled from a small template corpus, or set by an agent.
   (`VocalParams::switch_voicebank` with `BankProfile::default_speaker`,
   which `vocal.render {voicebank}` and the inspector's picker use too). A `theme` over 240 characters (`THEME_MAX_CHARS`, the
   GUI's truncation limit) is refused rather than cut. `vocal.get_params`
-  stays answerable while a GUI drag is open. Two render fields live only
+  stays answerable while a GUI drag is open. Four render fields live only
   on the lane, outside the generators: `rest_threshold_beats` (0.125–4,
-  default 0.5; shortest gap sung as silence) and `velocity_dynamics`
-  (0–1, default 0.5; velocity → loudness) — see
-  [vocal rendering](vocal-rendering.md). Both read at their defaults
+  default 0.5; shortest gap sung as silence), `velocity_dynamics`
+  (0–1, default 0.5; velocity → loudness), and `bank_timing` /
+  `bank_pitch` (default true; time and pitch the line with the bank's own
+  duration and pitch models where it ships them) — see
+  [vocal rendering](vocal-rendering.md). All read at their defaults
   from projects written before they existed.
   `section.set_lane_generator` vocal `options` take the same patch and
   merge into an existing lane (lyrics and seed kept; an explicit `seed`
