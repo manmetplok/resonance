@@ -15,10 +15,12 @@
 //! built-in record of its shipped one ([`BankProfile::has_phoneme`]). A
 //! phone the bank lacks is mapped onto what it has
 //! (vocal-mcp-control-and-quality.md §4.4): the bank's own substitution
-//! hints first (Lilia `v` → `f`, `b`), then the voiced/voiceless partner,
-//! then the nearest phone of the same articulatory class
+//! hints first, then the voiced/voiceless partner (a bank without `v`
+//! sings `f`), then the nearest phone of the same articulatory class
 //! ([`nearest_by_class`]). Only a phone none of those reach is
-//! unsupported.
+//! unsupported. No shipped bank needs a substitute today: Lilia, who once
+//! sang `v` as `f`, spells it as her own `w` through her dictionary's
+//! replacements and sings it as `v`.
 
 use resonance_music_theory::g2p;
 
@@ -31,7 +33,7 @@ pub enum PhonemeFate {
     /// The bank's dict contains this symbol; it is sung as-is.
     Direct,
     /// The bank lacks this symbol; it is sung as the nearest available
-    /// substitute instead (e.g. Lilia `v` → `f`).
+    /// substitute instead (e.g. `v` → `f` on a bank without `v`).
     Substituted(&'static str),
     /// The bank lacks this symbol and nothing it has is close enough. The
     /// pronunciation gate refuses the render, naming the word; the strip

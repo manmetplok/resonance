@@ -120,6 +120,16 @@ pub struct BankProfile {
 }
 
 impl BankProfile {
+    /// A not-installed profile answering from `builtin` — a fixture
+    /// table in tests (`Resonance`-free, see `test_support`).
+    pub(crate) fn from_builtin(builtin: &'static BuiltinBank) -> Self {
+        Self {
+            id: VoicebankId::new(builtin.id),
+            installed: None,
+            builtin: Some(builtin),
+        }
+    }
+
     pub(super) fn new(id: VoicebankId, installed: Option<Arc<InstalledBank>>) -> Self {
         let builtin = builtin::builtin(id.as_str());
         Self {
@@ -311,8 +321,30 @@ impl BankProfile {
         self.speakers().iter().any(|s| s.id == speaker)
     }
 
+    /// The speaker a lane with `speaker` (its own pick, if any) and
+    /// `voice` sings with: its pick, else the bank's default for the
+    /// voice. What the render loads and the range check reads.
+    pub fn lane_speaker(&self, speaker: Option<&str>, voice: VoiceType) -> Option<String> {
+        speaker
+            .map(str::to_owned)
+            .or_else(|| self.default_speaker(voice))
+    }
+
+    /// The comfortable range of the speaker a lane sings with
+    /// ([`Self::lane_speaker`]): a lane that never picked one is checked
+    /// against the default speaker's range, the one it is rendered with.
+    pub fn lane_comfortable_range(
+        &self,
+        speaker: Option<&str>,
+        voice: VoiceType,
+    ) -> ComfortableRange {
+        self.comfortable_range(self.lane_speaker(speaker, voice).as_deref())
+    }
+
     /// The comfortable range for `speaker`: the built-in table's range for
-    /// that speaker where it knows one, else the bank's.
+    /// that speaker where it knows one, else the bank's. `None` is the
+    /// bank's own range; a lane's goes through
+    /// [`Self::lane_comfortable_range`].
     pub fn comfortable_range(&self, speaker: Option<&str>) -> ComfortableRange {
         let (range, source) = match self.builtin {
             Some(b) => {
@@ -361,9 +393,7 @@ impl BankProfile {
                     .unwrap_or_else(|| "(unnamed)".to_owned()),
             )));
         };
-        let wanted = speaker
-            .map(str::to_owned)
-            .or_else(|| self.default_speaker(voice));
+        let wanted = self.lane_speaker(speaker, voice);
         let key = wanted
             .and_then(|id| bank.speakers.iter().find(|s| s.id == id))
             .or_else(|| bank.speakers.first())

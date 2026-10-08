@@ -382,3 +382,15 @@ impl Resonance {
         }
     }
 }
+
+impl BankProfile {
+    /// Test-only: a not-installed profile answering from `builtin` — a
+    /// fixture row of the built-in table (speakers, ranges, default
+    /// speaker) no shipped bank has.
+    #[doc(hidden)]
+    pub fn test_from_builtin(
+        builtin: &'static crate::compose::vocal_svs::registry::BuiltinBank,
+    ) -> Self {
+        Self::from_builtin(builtin)
+    }
+}

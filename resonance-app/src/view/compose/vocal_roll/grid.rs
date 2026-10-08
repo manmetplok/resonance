@@ -194,8 +194,8 @@ impl VocalRollCanvas<'_> {
 
         // Route every label through the active voicebank's phoneme
         // accessor so the strip shows the symbol the model will actually
-        // sing — e.g. Lilia displays `f` where the G2P emitted the
-        // (unsupported) voiced `v`. Same source of truth `build_segment`
+        // sing — e.g. `f` where the G2P emitted `v` on a bank without
+        // it. Same source of truth `build_segment`
         // substitutes through, so the strip and the render never disagree
         // (design #173).
         let voicebank = VoicebankPhonemes::new(&self.bank);
