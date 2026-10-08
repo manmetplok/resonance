@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use resonance_app::compose::messages::VocalAudioReadyData;
 use resonance_app::compose::ComposeMessage;
 use resonance_app::message::Message;
-use resonance_app::project::{LoadedProject, ProjectClip, ProjectFile};
+use resonance_app::project::{LoadedProject, ProjectClip, ProjectFile, ProjectVocalTake};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioCommand, TrackType};
@@ -148,6 +148,10 @@ fn saved_project() -> Saved {
         gain_db: 0.0,
         warp: None,
         vocal_render_units: Vec::new(),
+        vocal_take: Some(ProjectVocalTake {
+            definition_id: definition,
+            placement_id: placement,
+        }),
     });
     let saved = Saved {
         _root: root,

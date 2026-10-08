@@ -75,11 +75,52 @@ impl Resonance {
     /// render is in flight.
     #[doc(hidden)]
     pub fn test_finish_vocal_render(&mut self, definition_id: u64, track_id: TrackId) -> bool {
+        self.finish_vocal_render(definition_id, track_id, None)
+    }
+
+    /// Test-only: [`Self::test_finish_vocal_render`], shaped like a real
+    /// take: placed at the lane's first note (its lead-in off the lane's
+    /// MIDI clip), carrying the render's silence pad at both ends with
+    /// `pre_roll_frames` of the leading one kept before the note — what
+    /// `render_vocal_clip` hands the install.
+    #[doc(hidden)]
+    pub fn test_finish_vocal_render_take(
+        &mut self,
+        definition_id: u64,
+        track_id: TrackId,
+        pre_roll_frames: u64,
+    ) -> bool {
+        self.finish_vocal_render(definition_id, track_id, Some(pre_roll_frames))
+    }
+
+    fn finish_vocal_render(
+        &mut self,
+        definition_id: u64,
+        track_id: TrackId,
+        take_pre_roll: Option<u64>,
+    ) -> bool {
         use crate::compose::messages::VocalAudioReadyData;
         use crate::compose::ComposeMessage;
         let lane = (definition_id, track_id);
         let Some(&render_epoch) = self.compose.vocal_audio.in_flight_render.get(&lane) else {
             return false;
+        };
+        let (trim_start_frames, trim_end_frames, pre_roll_frames, lead_ticks) = match take_pre_roll
+        {
+            None => (0, 0, 0, 0),
+            Some(pre_roll) => {
+                let pad = crate::compose::vocal_svs::pad_frames(self.sample_rate);
+                let lead = self
+                    .compose
+                    .derived_clips
+                    .iter()
+                    .find(|((d, _, t), _)| *d == definition_id && *t == track_id)
+                    .and_then(|(_, id)| self.midi_clips.iter().find(|c| c.id == *id))
+                    .map_or(0, |c| {
+                        crate::update::compose::vocal_render_plan::lead_ticks(&c.notes)
+                    });
+                (pad - pre_roll, pad, pre_roll, lead)
+            }
         };
         let placements = self
             .compose
@@ -100,10 +141,10 @@ impl Resonance {
             wav_path,
             placements,
             clip_name: "vocal".to_owned(),
-            trim_start_frames: 0,
-            trim_end_frames: 0,
-            pre_roll_frames: 0,
-            lead_ticks: 0,
+            trim_start_frames,
+            trim_end_frames,
+            pre_roll_frames,
+            lead_ticks,
             render_epoch,
             bpm: crate::update::compose::section_meter(self, definition_id).bpm,
             unit_keys,

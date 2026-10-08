@@ -57,7 +57,7 @@ pub use model::{
     ProjectMidiClip, ProjectMidiNote, ProjectPerformance, ProjectPlugin, ProjectPluginParam, ProjectPoolAsset,
     ProjectReference,
     ProjectReferenceMarker, ProjectReferenceSettings, ProjectSend, ProjectSidechainRoute,
-    ProjectTrack, ProjectWarpMarker, SaveCollector,
+    ProjectTrack, ProjectVocalTake, ProjectWarpMarker, SaveCollector,
     audio_format_from_tag, audio_format_tag, clip_audio_file, fade_curve_from_tag, fade_curve_tag,
     send_source_from_tag, send_source_tag, warp_algorithm_from_tag, warp_algorithm_tag,
 };

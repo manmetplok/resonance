@@ -191,6 +191,8 @@ mod control_vocal_render_state;
 mod control_vocal_curves;
 #[path = "control/control_vocal_render_state_edits.rs"]
 mod control_vocal_render_state_edits;
+#[path = "control/control_vocal_take_reload.rs"]
+mod control_vocal_take_reload;
 #[path = "control/control_voicebank_install.rs"]
 mod control_voicebank_install;
 #[path = "control/control_voicebank_install_safety.rs"]

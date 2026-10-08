@@ -326,8 +326,9 @@ fn the_full_path_sends_external_config_after_the_tracks_and_before_the_lanes() {
 /// and the registry resort; it now runs right after `DerivedClips`, as on
 /// the full path (the trace tests pin the position). Nothing in `Content`
 /// or `Tail` reads the map or the derived counter it reserves. Here: the
-/// live clip sits off the section start, so no lane claims it; the target
-/// puts it back on bar 0 and the diff undo must key it to the lane.
+/// live clip carries no owner and sits nowhere a take would, so no lane
+/// claims it; the target names its placement (`ProjectClip::vocal_take`)
+/// and moves it, and the diff undo must key it to the lane.
 #[test]
 fn a_diff_undo_rebuilds_the_vocal_audio_clip_map_from_the_target() {
     const VOCAL: u64 = 1;
@@ -376,6 +377,10 @@ fn a_diff_undo_rebuilds_the_vocal_audio_clip_map_from_the_target() {
     assert!(l.app.test_vocal_audio_clips(VOCAL).is_empty());
     let mut target = l.app.test_snapshot_for_undo();
     target.project.file.clips[0].start_sample = 0;
+    target.project.file.clips[0].vocal_take = Some(resonance_app::project::ProjectVocalTake {
+        definition_id: DEF,
+        placement_id: l.app.compose_state().placements[0].id,
+    });
     let _ = drain(&l.rx);
     l.app.test_begin_restore_from_snapshot(target);
     let cmds = drain(&l.rx);

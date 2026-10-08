@@ -1,6 +1,6 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `c6cc8fd5` + vocal intelligibility on 2026-10-08.
+> Verified against master @ `c6cc8fd5` + vocal intelligibility and its review fixes on 2026-10-08.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -153,15 +153,24 @@ only marks the lane stale.
   take's **pre-roll** (`RenderedVocal::pre_roll_frames`: what the first
   note sings before its beat, its onset consonants or a written breath),
   which the clip starts early to keep; a first note at sample 0 trims it
-  instead. Each render bumps
+  instead. **Behaviour change:** a breath written before a phrase's first
+  note used to sit in the trimmed pad and was never heard; it is pre-roll
+  now, so re-rendering an existing project makes such a breath audible
+  (and moves the take's clip start earlier by the pre-roll). The
+  install mirrors the clip app-side (`ClipState`, trims included) as it
+  sends the load — the engine's `ClipImported` echo carries no trims, so
+  a take mirrored from the echo alone was saved untrimmed and reopened
+  playing its leading pad, late. Each render bumps
   a per-lane **render epoch**; a result arriving for an old epoch, a moved
   or deleted placement is discarded or re-targeted. The previous take is
   **not** torn down when a render is queued: it plays until the new take
   replaces it, placement by placement, in `handle_vocal_audio_ready` (a
   failed or superseded render leaves it in place). A save copies live
   clips to `audio/clip_<id>.wav`, writes each take's unit keys as
-  `ProjectClip::vocal_render_units`, and reaps orphaned takes in the
-  project's own `audio/`.
+  `ProjectClip::vocal_render_units` and the placement it plays as
+  `ProjectClip::vocal_take` (`ProjectVocalTake { definition_id,
+  placement_id }`), and reaps orphaned takes in the project's own
+  `audio/`.
 - <a id="render-state"></a>**Render state** (spec §7, D19–D22;
   `update/compose/vocal_render_state.rs`, types in
   `compose/vocal_render_status.rs`).
@@ -196,7 +205,21 @@ only marks the lane stale.
     from.
   - *Persistence.* The keys travel with their clip: saved on its
     `ProjectClip`, restored by the `vocal_audio_clips` reconcile on load
-    and on undo/redo, so a reopened project reads `rendered`.
+    and on undo/redo, so a reopened project reads `rendered`. That
+    reconcile (`ComposeState::rebuild_vocal_audio_clips`) rebuilds the
+    lane → take map, which the next render's replace (D22) needs to find
+    the old take: a clip saved with its `vocal_take` goes back to that
+    placement's lane while the placement exists; one saved without it
+    (before owners were saved) is matched by its first note —
+    `start_sample + pad − trim_start` (pad = `vocal_svs::pad_frames`) must
+    land, within 2 samples, on a placement's `vocal_audio_start` for the
+    lane's lead-in (the first note's tick in its MIDI clip). That holds
+    with pre-roll and when clamped at sample 0, since trim + pre-roll =
+    pad. Any other clip on a vocal track (the user's own recording) is
+    never claimed. It used to claim only clips starting on a placement's
+    bar line, which no take with pre-roll or a lead-in does: such a lane
+    read `not_rendered` after a reload or any undo, lost its keys, and
+    its next render summed a second take with the first.
   - *Origin and the debounced re-render.* `Resonance::update` runs
     `vocal_render_state::settle` after every outermost update, passing
     whether it was a GUI message or a control request (a `Tick` that
@@ -264,8 +287,10 @@ only marks the lane stale.
     Dynamics edit on TIGER reads stale without re-running the model
     needlessly on the units it does not touch.
 - **Comfortable ranges** (warnings only, `BankProfile::comfortable_range`,
-  read for the lane's speaker by `song.vocal` and its per-note
-  `out_of_range`): per bank from the built-in table — TIGER C3–A4, Lilia
+  read for the speaker the lane sings with by `song.vocal` and its
+  per-note `out_of_range` — `lane_comfortable_range`: the lane's speaker,
+  else the bank's default for its voice, as `render_target` resolves
+  it): per bank from the built-in table — TIGER C3–A4, Lilia
   D3–A♯4, Meiji B2–F♯4 ([voicebank library](voicebank-library.md)); a
   speaker may have its own (`speaker_ranges`), none does yet.
 
@@ -427,7 +452,8 @@ LUNAI English singers, Meiji v170) join the index is Jorrit's call — see
 | Dictionary replacements: parsing the section alone, the scan spelling phones through them, read-back to ARPAbet; Lilia spelt `L`/`t0`/…, installed and not; her dictionary entries read back | `resonance-svs/tests/{voicebank_manifest,voicebank_phonetics}.rs`, `tests/vocal/{bank_phonemisation,vocal_phoneme_accessor,vocal_segment_pronunciation}.rs` | `./scripts/run-tests.py` |
 | Timbre → gender: Warm neutral on every bank, TIGER a quarter of the swing | `tests/vocal/vocal_expression_segment.rs` | same |
 | First-note onset out of the leading pad (vowel on the beat, 0.1 s of silence kept, segment length unchanged); the install starts a take with pre-roll early, or trims it at sample 0 | `tests/vocal/vocal_segment_timing.rs`, `tests/compose/vocal_render_inflight_placement.rs` | same |
-| Per-bank comfortable ranges | `tests/vocal/voicebank_registry.rs` | same |
+| Per-bank comfortable ranges; a lane without a speaker is checked against its default speaker's range (fixture bank with `speaker_ranges`) | `tests/vocal/voicebank_registry.rs`, `tests/vocal/vocal_articulation.rs` (`a_lane_without_a_speaker_is_checked_against_its_default_speakers_range`) | same |
+| A take with pre-roll and a lead-in stays its lane's after a reload (saved owner, and by first note without one, and clamped at sample 0) and after undo/redo: reads `rendered`, keeps its keys, is saved trimmed, and a re-render replaces it | `tests/control/control_vocal_take_reload.rs` | same |
 
 Not covered: no hermetic test runs ONNX inference; real audio quality is
 checked by ear only. The app tests drive the pipeline with injected

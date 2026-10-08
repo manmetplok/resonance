@@ -435,8 +435,14 @@ fn apply_midi_clip(
 /// each take's render-unit keys (`ProjectClip::vocal_render_units`) are,
 /// and come back with it here. The same body on every origin.
 ///
-/// Last in `Clips`: reads the audio clips, the section placements
-/// (`Globals`) and the tempo map (`Timeline`). The clip-id counter was
+/// Each take goes back to the placement saved with it
+/// (`ProjectClip::vocal_take`), or, saved without one, to the placement
+/// whose lane's first note it starts at (see
+/// `ComposeState::rebuild_vocal_audio_clips`).
+///
+/// Last in `Clips`: reads the audio clips, the MIDI clips and their
+/// derived map (`DerivedClips`, for each lane's lead-in), the section
+/// placements (`Globals`) and the tempo map (`Timeline`). The clip-id counter was
 /// already raised past every audio clip by `DerivedClips` (D-7b).
 /// Nothing in `Content` or `Tail` reads the map.
 pub(crate) struct VocalAudioClips;
@@ -458,12 +464,36 @@ impl Reconcile for VocalAudioClips {
             .iter()
             .map(|pc| (pc.id, dir.join(&pc.audio_file)))
             .collect();
-        r.compose.rebuild_vocal_audio_clips(
-            &r.clips,
-            &audio_clip_paths,
-            &vocal_track_ids,
-            &r.tempo_map,
-        );
+        let owners: HashMap<ClipId, (u64, u64)> = new
+            .clips
+            .iter()
+            .filter_map(|pc| pc.vocal_take.map(|t| (pc.id, (t.definition_id, t.placement_id))))
+            .collect();
+        // Each vocal lane's lead-in, off its MIDI clip (restored, and
+        // mapped by `DerivedClips`, earlier in this group): where a take
+        // saved without its owner has its first note.
+        let lane_lead_ticks: HashMap<(u64, TrackId), u64> = r
+            .compose
+            .derived_clips
+            .iter()
+            .filter(|((_, _, track), _)| vocal_track_ids.contains(track))
+            .filter_map(|(&(definition, _, track), midi_id)| {
+                let clip = r.midi_clips.iter().find(|c| c.id == *midi_id)?;
+                Some((
+                    (definition, track),
+                    crate::update::compose::vocal_render_plan::lead_ticks(&clip.notes),
+                ))
+            })
+            .collect();
+        r.compose.rebuild_vocal_audio_clips(crate::compose::VocalTakeSources {
+            audio_clips: &r.clips,
+            audio_clip_paths: &audio_clip_paths,
+            owners: &owners,
+            vocal_track_ids: &vocal_track_ids,
+            tempo_map: &r.tempo_map,
+            sample_rate: r.sample_rate,
+            lane_lead_ticks: &lane_lead_ticks,
+        });
         // Each take's unit keys travel with its clip (vocal render state,
         // spec §7): what the restored lanes play is what they compare with.
         let vocal_audio = &mut r.compose.vocal_audio;

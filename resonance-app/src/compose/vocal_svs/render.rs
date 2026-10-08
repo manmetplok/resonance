@@ -164,7 +164,7 @@ pub fn render_vocal_clip(
     // and out cleanly). Translate that pad into frame counts at the
     // *final* sample rate so the engine's clip trim skips past it on
     // playback — keeps the timeline alignment between MIDI and audio.
-    let pad_frames = (SEGMENT_PAD_SEC * out_sr as f64) as u64;
+    let pad_frames = super::pad_frames(out_sr);
     let trim_start_frames = ((SEGMENT_PAD_SEC - pre_roll_sec) * out_sr as f64) as u64;
 
     Ok(Some(RenderedVocal {

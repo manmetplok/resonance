@@ -37,10 +37,12 @@ pub(super) fn imported(
     if !known_track || !same_track {
         return;
     }
-    // Idempotent: if the clip already exists (created by project load),
-    // just update its waveform and total frames. Otherwise push new.
+    // Idempotent: if the clip already exists (mirrored by the project
+    // load, a pool placement or a vocal take's install, trims and all),
+    // just fill in what only the decoded WAV knows. Otherwise push new.
     if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
         clip.waveform_peaks = waveform_peaks;
+        clip.duration_samples = duration_samples;
         clip.total_frames = duration_samples + clip.trim_start_frames + clip.trim_end_frames;
     } else {
         r.clips.push(ClipState {
