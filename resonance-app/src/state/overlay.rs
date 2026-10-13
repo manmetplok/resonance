@@ -21,6 +21,9 @@ pub enum Overlay {
     BounceProgress,
     MixdownProgress,
     FreezeProgress,
+    /// A control client's `render.stems` job (the Export modal shows its
+    /// own stem progress in place).
+    StemsProgress,
     /// The command palette: above every other overlay but the recovery,
     /// startup and progress ones.
     Palette,
@@ -78,6 +81,7 @@ impl Overlay {
                 | Overlay::BounceProgress
                 | Overlay::MixdownProgress
                 | Overlay::FreezeProgress
+                | Overlay::StemsProgress
         )
     }
 
@@ -99,6 +103,7 @@ impl Overlay {
             | Overlay::BounceProgress
             | Overlay::MixdownProgress
             | Overlay::FreezeProgress
+            | Overlay::StemsProgress
             | Overlay::SelectionBar => return None,
             Overlay::Palette => Message::Ui(UiMessage::ClosePalette),
             Overlay::ConfirmQuit => Message::ProjectIo(ProjectIoMessage::CancelQuit),
@@ -161,6 +166,8 @@ impl Resonance {
             Overlay::MixdownProgress
         } else if self.freeze.any_in_flight() {
             Overlay::FreezeProgress
+        } else if self.control.pending_stems.is_some() {
+            Overlay::StemsProgress
         } else if self.ui.palette.is_some() {
             Overlay::Palette
         } else if self.modals.confirm_quit.is_some() {

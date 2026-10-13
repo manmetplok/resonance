@@ -28,6 +28,8 @@ mod bounce_transport_guard;
 mod delivery_normalize;
 #[path = "bounce/export_encoders.rs"]
 mod export_encoders;
+#[path = "bounce/export_range.rs"]
+mod export_range;
 #[path = "bounce/export_normalize.rs"]
 mod export_normalize;
 #[path = "bounce/export_settings.rs"]

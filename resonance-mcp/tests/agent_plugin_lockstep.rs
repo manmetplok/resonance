@@ -312,6 +312,8 @@ const WIRE_FIELDS: &[&str] = &[
     // would rewrite, and the reply's report of it.
     "vocal_lanes_affected",
     "vocal_melody",
+    // `render_stems`' filter: the tracks to export.
+    "track_ids",
 ];
 
 /// Namespace-shaped keys of the plugin's own files (`lockstep.json`).

@@ -137,3 +137,5 @@ mod vocal_roll_fingerprint;
 mod vocal_roll_holds;
 #[path = "compose/compose_rail_lazy.rs"]
 mod compose_rail_lazy;
+#[path = "compose/compose_voice_presets.rs"]
+mod compose_voice_presets;

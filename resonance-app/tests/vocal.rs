@@ -50,3 +50,5 @@ mod vocal_dynamics_render;
 mod bank_audition;
 #[path = "vocal/vocal_bank_models.rs"]
 mod vocal_bank_models;
+#[path = "vocal/voice_presets.rs"]
+mod voice_presets;

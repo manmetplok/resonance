@@ -1,6 +1,6 @@
 # Voicebank library (registry, plok.org install, library overlay)
 
-> Verified against master @ `ad042afb` + the `singing` skill on 2026-10-13.
+> Verified against master @ `ad042afb` + the `singing` skill + voice presets on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4–§5 (slices 4 and 7); research [`singing-voicebank-options-2026`](../../history/research/singing-voicebank-options-2026.md).
 
 Voicebanks are content a user installs, not three banks fixed in the code.
@@ -346,6 +346,12 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
   - `vocal.set_params` accepts any installed bank, the seven built-in ids
     and an id the index lists (English when its `languages` name `en` or
     nothing) — see [lyrics and melody](vocal-lyrics-and-melody.md).
+- **Voice presets:** a bank + speaker with a voice type, range and
+  delivery, put on a lane in one step. The built-ins are every voice the
+  41-voice blind listen scored 3 or more, their ranges taken from this
+  table's comfortable ranges; a preset on a bank that is not installed
+  still applies and points at Library… / `vocal.voicebank_install`. See
+  [voice presets](voice-presets.md).
 - **Agent skills:** the agent plugin's `singing` skill
   (`references/voicebanks.md`) chooses and installs banks and passes the
   terms and credit on; external `singer-songwriter` / `resonance-studio`

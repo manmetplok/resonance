@@ -680,6 +680,12 @@ pub enum AudioCommand {
     ExportAudio {
         path: String,
         settings: ExportSettings,
+        /// Render window in engine samples, like
+        /// [`AudioCommand::ExportStems`]'s: sample 0 of the file is
+        /// `range.0`, and the shared FX tail is rendered past `range.1`.
+        /// `None` renders the full project range (every audio + MIDI
+        /// clip), sample 0 being the earliest clip's start.
+        range: Option<(SamplePos, SamplePos)>,
     },
     /// Bounce in place — render one instrument track (and any of its
     /// sub-tracks) to a single in-RAM stereo `AudioClip` on

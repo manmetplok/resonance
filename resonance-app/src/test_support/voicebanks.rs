@@ -304,9 +304,7 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_set_voicebank_roots(&mut self, roots: VoicebankRoots) {
         self.voicebanks = crate::compose::vocal_svs::VoicebankRegistry::scan(roots);
-        self.ui
-            .view_caches
-            .rebuild_voicebank_choices(&self.voicebanks);
+        self.refresh_vocal_choices();
     }
 
     /// Test-only: the Speaker picker's cached options for bank `id` —

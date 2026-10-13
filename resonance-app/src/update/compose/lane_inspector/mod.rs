@@ -205,6 +205,9 @@ pub(super) fn handle(
         LaneInspectorMsg::SetVocalSpeaker(s) => {
             update_vocal(r, definition_id, track_id, |p| p.speaker = Some(s))
         }
+        LaneInspectorMsg::ApplyVoicePreset(settings) => {
+            update_vocal(r, definition_id, track_id, |p| settings.apply_to(p))
+        }
         LaneInspectorMsg::SetVocalVibrato(v) => {
             vocal_params::set_vibrato(r, definition_id, track_id, v)
         }

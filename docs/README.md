@@ -26,15 +26,15 @@ Templates: [feature doc](features/_template.md) · [intent](intents/_template.md
 | **Audio engine** | `resonance-audio`: command loop, render graph, render pool, PipeWire I/O, CLAP hosting, latency, offline render/export, freeze, diagnostics | [17 docs](features/audio-engine/README.md) | [9 intents](intents/audio-engine/README.md) (4 partly built) |
 | **Timeline** | Arrange view: clips, fades, warp, tempo map, markers, takes, automation lanes, MIDI editor, pool/import/relink, track groups | [17 docs](features/timeline/README.md) | [18 intents](intents/timeline/README.md) (5 partly built) |
 | **Mixer** | Mix tab: strips, inspector, busses, sends, sidechain, master, plugin chains, reference A/B, meters, `meter.*`, `master.assist` | [12 docs](features/mixer/README.md) | [6 intents](intents/mixer/README.md) (2 partly built) |
-| **Compose** | Sections, lane generators, chords, drum arrangement, vocals (lyrics, melody, DiffSinger render, voicebank library, pronunciation), music theory | [12 docs](features/compose/README.md) | [15 intents](intents/compose/README.md) (8 partly built) |
+| **Compose** | Sections, lane generators, chords, drum arrangement, vocals (lyrics, melody, DiffSinger render, voicebank library, voice presets, pronunciation), music theory | [13 docs](features/compose/README.md) | [15 intents](intents/compose/README.md) (8 partly built) |
 | **Hardware I/O** | Audio devices, input/monitoring, recording, transport, external instruments, device presets, MIDI I/O, MIDI learn, SMF import | [10 docs](features/hardware-io/README.md) | [11 intents](intents/hardware-io/README.md) (3 partly built) |
-| **Control API** | `resonance-control` protocol, the app control layer, jobs, `resonance-mcp`, the agent plugin, the full method catalogue | [6 docs](features/control-api/README.md) | [5 intents](intents/control-api/README.md) |
+| **Control API** | `resonance-control` protocol, the app control layer, jobs, `resonance-mcp`, the agent plugin, the full method catalogue | [6 docs](features/control-api/README.md) | [3 intents](intents/control-api/README.md) |
 | **UI shell** | Commands, palette, keymap, views, overlays, settings, startup/recovery, media browser, preset browser, plugin windows, performance mode, theme, UI goldens | [13 docs](features/ui-shell/README.md) | [7 intents](intents/ui-shell/README.md) (4 partly built) |
 | **Project core** | File format, save/open, autosave, clip storage, templates, undo, Reconcile, ids, app state, update loop, hermetic tests, arch invariants | [12 docs](features/project-core/README.md) | [4 intents](intents/project-core/README.md) (2 partly built) |
 | **Plugins — effects** | EQ, compressor, gate, delay, granular delay, reverb, stereo, color, IR, mastering, mastering-assist engine, de-harsh | [12 docs](features/plugins-effects/README.md) | [6 intents](intents/plugins-effects/README.md) (1 partly built) |
 | **Plugins — instruments & platform** | Wavetable, drums + kit library, amp + NAM library, preset library, plugin SDK, editor runtimes, DSP/metering crates, 3rd-party hosting, bundling | [13 docs](features/plugins-instruments/README.md) | [9 intents](intents/plugins-instruments/README.md) (6 partly built) |
 
-Totals: **124 feature docs**, **90 intents**, **43 known bugs**, 12 unbuilt prototypes.
+Totals: **125 feature docs**, **88 intents**, **43 known bugs**, 12 unbuilt prototypes.
 
 ## Guides
 
@@ -60,8 +60,8 @@ Totals: **124 feature docs**, **90 intents**, **43 known bugs**, 12 unbuilt prot
 | [CLAP plugin hosting](features/audio-engine/clap-hosting.md) | Scanning, loading, running and removing CLAP plugins; thread roles; host extensions; bypass; editors. |
 | [Plugin params, state and presets](features/audio-engine/clap-params-and-presets.md) | Param description and flush, plugin-made edits, state save/load, preset-state and preset-load, discovery. |
 | [Latency compensation](features/audio-engine/latency-compensation.md) | Two-stage PDC, live latency changes, offline trim, device I/O latency. |
-| [Offline render and export](features/audio-engine/offline-render-and-export.md) | Chunked offline render core, mixdown export (formats, normalise), bounce in place. |
-| [Stem export](features/audio-engine/stem-export.md) | Track / bus / master stems over one shared range, sequential with partial-failure reporting. |
+| [Offline render and export](features/audio-engine/offline-render-and-export.md) | Chunked offline render core, mixdown export (formats, normalise, ranged), bounce in place. |
+| [Stem export](features/audio-engine/stem-export.md) | Track / bus / master stems over one shared range, sequential with partial-failure reporting; the Export dialog and `render.stems`. |
 | [Offline measurement and chain probe](features/audio-engine/offline-measurement.md) | Render-and-measure loudness and details (incl. depth), measure files/references, probe a cloned chain. |
 | [Track freeze (engine side)](features/audio-engine/track-freeze.md) | Freeze-cache render, cache format, rate conversion and playback substitution. |
 | [Clip loading and import](features/audio-engine/clip-loading.md) | Pool import, mmapped clip loading with tickets and fences, clip WAV persistence. |
@@ -117,6 +117,7 @@ Totals: **124 feature docs**, **90 intents**, **43 known bugs**, 12 unbuilt prot
 | [Vocal lyrics and melody](features/compose/vocal-lyrics-and-melody.md) | Vocal lanes: lyric draft, template lyric generator, style-based vocal melody; `vocal.set_lyrics`, `vocal.set_line`, `vocal.generate`, `song.vocal`. |
 | [Vocal rendering](features/compose/vocal-rendering.md) | DiffSinger synthesis via `resonance-svs`, cached partial re-renders, rests and breaths, velocity dynamics, expression curves, per-lane render state; `vocal.render`. |
 | [Voicebank library](features/compose/voicebank-library.md) | Installed DiffSinger banks, the plok.org index and installs with their vocoders, the library overlay; `vocal.voicebanks`, `vocal.voicebank_install`. |
+| [Voice presets](features/compose/voice-presets.md) | A singer + delivery put on a vocal lane in one step: 31 built-ins from the blind listen (best first, scored), user presets as JSON; `vocal.voice_presets`, `vocal.apply_voice_preset`, `vocal.save_voice_preset`. |
 | [Lyric pronunciation](features/compose/pronunciation.md) | CMU G2P with a project pronunciation dictionary and voicebank phoneme substitution; `vocal.set_pronunciation`. |
 | [Music-theory library](features/compose/music-theory-library.md) | `resonance-music-theory`: pitch, scale, chord, voicing, SATB, progression generators, G2P, fretboard. |
 | [Melody and motif engine](features/compose/melody-and-motif-engine.md) | Motif-based melody with phrase forms, sequences, cadence formulas, single climax, embellishing tones and rhythm transforms. |
@@ -143,7 +144,7 @@ Totals: **124 feature docs**, **90 intents**, **43 known bugs**, 12 unbuilt prot
 |---|---|
 | [Control API architecture](features/control-api/overview.md) | Socket, threads, dispatch order, mutation gate, one-undo-per-call, revision counter, remote indicator. |
 | [Protocol and conventions](features/control-api/protocol.md) | JSON-RPC envelope, framing, error kinds, `PROTOCOL_VERSION` and capabilities, strict params, ids and positions, the vertical-slice rule. |
-| [Method catalogue](features/control-api/method-catalogue.md) | All 182 methods with their MCP tool, kind and owning area. |
+| [Method catalogue](features/control-api/method-catalogue.md) | All 187 methods with their MCP tool, kind and owning area. |
 | [Jobs](features/control-api/jobs.md) | `job.status` / `job.wait`, which calls are jobs, retention, disconnects, MCP-side waiting. |
 | [MCP server](features/control-api/mcp-server.md) | `resonance-mcp`: registration, tool naming, schema normalisation, error mapping, connection handling. |
 | [Agent plugin](features/control-api/agent-plugin.md) | The seven skills, their rules, and the lockstep test that keeps them in step with the tools. |

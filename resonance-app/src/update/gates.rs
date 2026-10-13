@@ -60,6 +60,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // its downloads), opened from a lane inspector; nothing in it
         // touches a project, so the startup modal has nothing to guard.
         Message::VoicebankLibrary(_) => false,
+        Message::VoicePreset(_) => false,
         // Tab switches / auxiliary overlays: block so they can't
         // steal focus from the startup modal.
         Message::Ui(UiMessage::SwitchView(_))
@@ -196,6 +197,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         // engine nor the project (a Use re-enters `update()` as a lane
         // edit and meets this gate on its own).
         Message::VoicebankLibrary(_) => false,
+        Message::VoicePreset(_) => false,
         // Keyboard envelopes: the message a shortcut resolves to re-enters
         // `update()` and meets this gate on its own, so ⌘S still saves
         // mid-render exactly as it did before shortcuts went through the
@@ -281,6 +283,7 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         // engine nor the project (a Use re-enters `update()` as a lane
         // edit and meets this gate on its own).
         Message::VoicebankLibrary(_) => false,
+        Message::VoicePreset(_) => false,
         // Keyboard envelopes: the message a shortcut resolves to re-enters
         // `update()` and meets this gate on its own, so ⌘S still saves
         // mid-render exactly as it did before shortcuts went through the
@@ -490,11 +493,13 @@ impl crate::Resonance {
         self.control.jobs.has_live_offline_measure()
     }
 
-    /// A stem export from the Export modal is rendering (code review
-    /// ARCH2-01). The modal can't close mid-render, so its phase is the
-    /// whole truth.
+    /// A stem export is rendering: the Export modal's (code review
+    /// ARCH2-01; the modal can't close mid-render, so its phase is the
+    /// whole truth) or a control client's `render.stems` job, held until
+    /// its terminal engine event even if the client went away.
     pub(crate) fn stem_export_in_progress(&self) -> bool {
         self.modals.export_dialog.as_ref().is_some_and(|d| d.is_rendering())
+            || self.control.pending_stems.is_some()
     }
 
     /// True while ANY offline render owns the engine's plugin instances:

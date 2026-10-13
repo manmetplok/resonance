@@ -9,7 +9,7 @@
 //! then-current status immediately, i.e. a zero-timeout wait.
 
 use crate::Resonance;
-use resonance_audio::types::ExportErrorKind;
+use resonance_audio::types::{EngineErrorKind, ExportErrorKind};
 use resonance_control::job::{self, StatusParams, WaitParams};
 use resonance_control::{ErrorKind, Request, Response, RpcError};
 
@@ -32,6 +32,22 @@ pub(crate) fn export_kind_to_rpc(kind: ExportErrorKind) -> ErrorKind {
         ExportErrorKind::EncoderUnavailable => ErrorKind::Unsupported,
         ExportErrorKind::TransportRunning => ErrorKind::Busy,
         ExportErrorKind::Io | ExportErrorKind::Cancelled | ExportErrorKind::NoAudio => {
+            ErrorKind::Internal
+        }
+    }
+}
+
+/// Map a typed engine failure's [`EngineErrorKind`] onto the control
+/// protocol's [`ErrorKind`], for jobs resolved off an `EngineError` event
+/// (`render.stems` off `StemExportError`). A hand-kept mirror for the
+/// reason [`export_kind_to_rpc`] gives; `Io` and `Plugin` have no
+/// client-actionable analog and read as `Internal`.
+pub(crate) fn engine_kind_to_rpc(kind: EngineErrorKind) -> ErrorKind {
+    match kind {
+        EngineErrorKind::NotFound => ErrorKind::NotFound,
+        EngineErrorKind::Busy => ErrorKind::Busy,
+        EngineErrorKind::Unsupported => ErrorKind::Unsupported,
+        EngineErrorKind::Io | EngineErrorKind::Plugin | EngineErrorKind::Internal => {
             ErrorKind::Internal
         }
     }

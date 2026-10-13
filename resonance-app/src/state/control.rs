@@ -126,12 +126,19 @@ pub struct ControlEndpointState {
     /// asset name their `ReferenceLoaded` echo is listed under instead of
     /// the pooled file's `asset_N` stem.
     pub reference_names: HashMap<resonance_audio::types::ReferenceId, String>,
-    /// Normalized `render.mixdown` jobs waiting on `ExportComplete`, keyed
-    /// by the output path the engine echoes (warmth-width-depth.md §7.7):
-    /// the platform and targets the result reports next to what the file
-    /// achieved.
-    pub pending_normalize:
-        HashMap<std::path::PathBuf, resonance_control::methods::render::NormalizeReport>,
+    /// `render.mixdown` jobs riding `AudioCommand::ExportAudio` (a
+    /// normalized or a ranged mixdown) waiting on `ExportComplete`, keyed
+    /// by the output path the engine echoes. The value is the
+    /// normalization the result reports next to what the file achieved
+    /// (warmth-width-depth.md §7.7), `None` for a plain ranged mixdown.
+    pub pending_exports: HashMap<
+        std::path::PathBuf,
+        Option<resonance_control::methods::render::NormalizeReport>,
+    >,
+    /// The `render.stems` job the engine is rendering, if any. One stem
+    /// export runs at a time, so the `StemExport*` events belong to it
+    /// whenever it is set (and to the Export modal otherwise).
+    pub pending_stems: Option<PendingStems>,
     /// The user's NAM model library and marks, opened once for the
     /// `amp_models.*` handlers (nam-model-library.md §9.3). Its roots are
     /// the machine's in the real app and private temp dirs in a test app.
@@ -191,6 +198,25 @@ pub struct PendingAssist {
     /// The master render still to send once the reference is in:
     /// `Some(range)` until it is sent, `None` after (or in genre mode).
     pub mix_range: Option<Option<(u64, u64)>>,
+}
+
+/// The app-side half of a `render.stems` job in flight: what the
+/// `StemExport*` events do not carry.
+#[derive(Debug, Clone)]
+pub struct PendingStems {
+    pub job_id: u64,
+    /// Targets queued, for progress after a `StemExportTargetDone`.
+    pub total: usize,
+    /// Targets finished (written or failed) so far.
+    pub done: usize,
+    /// Overall queue progress, `0.0..=1.0`, for the progress overlay.
+    pub fraction: f32,
+    /// A `CancelStemExport` was sent for this job; the overlay's Cancel
+    /// is spent until the engine answers.
+    pub cancel_requested: bool,
+    /// Per-target failures so far (`StemExportTargetError`); any one of
+    /// them fails the job once the queue finishes.
+    pub errors: Vec<String>,
 }
 
 /// The app-side half of a `meter.probe` in flight.

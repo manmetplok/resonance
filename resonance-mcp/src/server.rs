@@ -43,7 +43,7 @@ your own calls, the user edited concurrently — re-read before continuing. One 
 back one whole call. That holds on an untitled project (fresh from project_new) too: its history \
 works before the first project_save; project_open / project_new clear it.\n\
 \n\
-Long-running operations (project_*, vocal_render, render_mixdown) run as jobs: \
+Long-running operations (project_*, vocal_render, render_mixdown, render_stems) run as jobs: \
 the tool waits a bounded time and returns the final job status; if it reports still-running, \
 poll job_status or block with job_wait using the returned job_id.\n\
 \n\
@@ -51,9 +51,9 @@ You cannot hear anything, so verify every edit by reading it back — that is th
 loop available and it is cheap: song_notes for what a clip actually contains, song_sections for \
 where sections landed, song_vocal for the singing pre-flight, track_plugin_params for a sound. \
 Mutating tools that create something return its id (clip_id, track_id, section_id, chord_id), so \
-use that instead of a follow-up search. Audio is NOT a measuring instrument here: render_mixdown \
-always bounces the whole song, and offset 0 in the file is the earliest clip, not bar 1 — bounce \
-for the user to listen to, never to work out where something sits.\n\
+use that instead of a follow-up search. Audio is NOT a measuring instrument here: a \
+render_mixdown without a range starts at the earliest clip, not bar 1 (with a range, offset 0 is \
+the range start) — bounce for the user to listen to, never to work out where something sits.\n\
 \n\
 If a tool reports `unsupported`, or behaves like an older build, call control_hello: its \
 `capabilities` list is the authoritative set of control methods the RUNNING app implements, and \

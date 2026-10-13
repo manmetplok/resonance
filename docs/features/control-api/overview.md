@@ -204,8 +204,5 @@ pure `resolve_socket_path`).
 
 ## Known gaps
 
-- `render.stems` has a wire type and a handler that answers `unsupported`,
-  but is kept out of `capabilities`:
-  [render-stems-control](../../intents/control-api/render-range-and-stems.md).
 - No server push: clients poll (`song.*`, `job.status`, revision deltas).
   Nobody has asked for notifications yet, so there is no intent.

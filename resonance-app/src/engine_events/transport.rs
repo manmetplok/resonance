@@ -172,17 +172,20 @@ pub(super) fn export_complete(
     bytes: u64,
 ) {
     r.io.bouncing = false;
-    // A normalized control `render.mixdown` rides the export path
-    // (warmth-width-depth.md §7.7); resolve its job with what the file
-    // achieved. No pending entry means a GUI export: nothing to resolve.
+    // A normalized or ranged control `render.mixdown` rides the export
+    // path (warmth-width-depth.md §7.7); resolve its job, a normalized one
+    // with what the file achieved. No pending entry means a GUI export:
+    // nothing to resolve.
     let key = std::path::PathBuf::from(&path);
-    if let Some(mut report) = r.control.pending_normalize.remove(&key) {
-        report.achieved_lufs = achieved_lufs
-            .filter(|v| v.is_finite())
-            .map(|v| (f64::from(v) * 100.0).round() / 100.0);
-        report.achieved_dbtp = (f64::from(achieved_dbtp) * 100.0).round() / 100.0;
-        let result =
-            crate::update::control::mixdown_result(r, &path, r.sample_rate, Some(report));
+    if let Some(normalize) = r.control.pending_exports.remove(&key) {
+        let report = normalize.map(|mut report| {
+            report.achieved_lufs = achieved_lufs
+                .filter(|v| v.is_finite())
+                .map(|v| (f64::from(v) * 100.0).round() / 100.0);
+            report.achieved_dbtp = (f64::from(achieved_dbtp) * 100.0).round() / 100.0;
+            report
+        });
+        let result = crate::update::control::mixdown_result(r, &path, r.sample_rate, report);
         r.control
             .jobs
             .complete_token(&crate::control_jobs::JobToken::Export { path: key }, result);
@@ -196,10 +199,11 @@ pub(super) fn export_error(
     message: String,
 ) {
     r.io.bouncing = false;
-    // Only one render runs at a time, so a normalized control mixdown in
-    // flight is the one that failed (same reasoning as `bounce_error`).
-    if !r.control.pending_normalize.is_empty() {
-        r.control.pending_normalize.clear();
+    // Only one render runs at a time, so a normalized or ranged control
+    // mixdown in flight is the one that failed (same reasoning as
+    // `bounce_error`).
+    if !r.control.pending_exports.is_empty() {
+        r.control.pending_exports.clear();
         r.control.jobs.fail_export_jobs(
             message.clone(),
             Some(crate::update::control::export_kind_to_rpc(kind)),

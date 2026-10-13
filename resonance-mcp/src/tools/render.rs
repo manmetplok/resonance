@@ -24,16 +24,16 @@ impl ResonanceMcp {
                        in it; check it before calling a bounce a master. The transport must be stopped (a running or \
                        recording transport is refused as busy), and only one render at a time. \
                        \
-                       RANGE IS NOT SUPPORTED on current builds: `range` is in the schema, but \
-                       anything other than the whole song is refused as unsupported — so every \
-                       bounce costs a full-length render and there is no way to audition just 8 \
-                       bars. Omit range. \
-                       \
-                       The file spans the union of ALL clips in the project: sample 0 of the WAV \
-                       is the EARLIEST clip's start, which is not bar 1 unless something starts \
-                       there. Do not convert file offsets into bar positions — read positions \
-                       from song_tracks (clip start/length) and song_notes. See mixer_set_solo \
-                       for why a soloed bounce is an especially bad ruler. \
+                       RANGE: range {start, end} (song positions, e.g. {start: {bar: 9}, end: \
+                       {bar: 17}}) renders just that window — sample 0 of the file is the range \
+                       start — so a chorus can be auditioned without a full-length render. A \
+                       range past the song's end is clamped to it; an empty one is refused. \
+                       Without a range the file spans the union of ALL clips in the project: \
+                       sample 0 of the WAV is the EARLIEST clip's start, which is not bar 1 \
+                       unless something starts there. Either way 2 s of FX tail follow the end. \
+                       Do not convert file offsets into bar positions — read positions from \
+                       song_tracks (clip start/length) and song_notes. See mixer_set_solo for \
+                       why a soloed bounce is an especially bad ruler. \
                        \
                        DELIVERY: normalize: {target_lufs, ceiling_dbtp} writes a \
                        loudness-normalized file: the mix is measured, gained to target_lufs \
@@ -58,6 +58,32 @@ impl ResonanceMcp {
             .await
     }
 
+
+    #[tool(
+        description = "Export per-track stems: one WAV per top-level track into the directory \
+                       dir (absolute; created if missing), named NN-<track name>.wav in track-id \
+                       order exactly as the app's Export dialog names them, 48 kHz 24-bit, every \
+                       stem over the same range so they line up when re-imported. A track's stem \
+                       is that track alone after its own fader, pan and effects (its sub-tracks \
+                       included), without the master chain. track_ids: [...] exports only those \
+                       tracks — e.g. just the vocal, for a vocal-only file without soloing; an \
+                       unknown id or a sub-track is refused as invalid_params. range works as in \
+                       render_mixdown (sample 0 = the range start; omitted = every clip, sample 0 \
+                       the earliest one), plus 2 s of FX tail. A stem file already in dir under \
+                       the same name is refused as needs_confirmation until you pass overwrite: \
+                       true. Runs as a job — waits up to 5 minutes and returns the final status \
+                       whose result carries {paths, duration_s}. One render at a time; the \
+                       transport must be stopped. If any stem fails the job fails, its message \
+                       listing the errors and the files that were written.",
+        annotations(destructive_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn render_stems(
+        &self,
+        Parameters(params): Parameters<render::StemsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(render::STEMS, &params, RENDER_WAIT_MS).await
+    }
 
     #[tool(
         description = "Current state of a job (pending | running | done | error) with optional \

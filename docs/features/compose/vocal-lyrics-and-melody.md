@@ -1,6 +1,6 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `f9438e38` + the `singing` skill and the
+> Verified against master @ `f9438e38` + the `singing` skill, voice presets and the
 > chord-change melody flow (BUG-70) on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §3, §6 (slices 1, 3, 8); `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
@@ -324,6 +324,12 @@ vocal lane goes through `update/compose/vocal_melody.rs`
   - `vocal.voicebanks` → `vocal_voicebanks` and `vocal.voicebank_install`
     → `vocal_voicebank_install`: the installed and downloadable banks
     ([voicebank library](voicebank-library.md)).
+  - `vocal.voice_presets` / `vocal.apply_voice_preset` /
+    `vocal.save_voice_preset`: a singer + delivery (bank, speaker, voice,
+    range and the delivery fields — never lyrics, generator settings or
+    curves) put on a lane in one undo step, or saved from one; the
+    inspector's Voice & delivery card has the same picker
+    ([voice presets](voice-presets.md)).
   - `vocal.generate` → `vocal_generate` (`seed`, `lyrics` default true —
     pass `false` to keep lyrics you set); returns the derived `clip_id`.
     Also queues a render; when the lane's bank (or its vocoder) is not

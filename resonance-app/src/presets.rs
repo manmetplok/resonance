@@ -329,7 +329,7 @@ pub fn delete_user_preset(name: &str) -> Result<(), String> {
 /// byte. Distinct names therefore never share a file (the old sanitizer
 /// mapped "A B", "A.B" and "A_B" all to `A_B.json`), and a name of dots
 /// can neither hide the file nor step out of the directory.
-fn encode_filename(name: &str) -> String {
+pub(crate) fn encode_filename(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for c in name.chars() {
         if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {

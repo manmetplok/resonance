@@ -33,7 +33,7 @@ claude mcp add --transport stdio resonance -- /absolute/path/to/target/release/r
 
 - Tool name = method name with its **first** `.` turned into `_`:
   `transport.seek` → `transport_seek`, `midi_map.learn` →
-  `midi_map_learn`. 184 tools for 184 methods today; the full table is in
+  `midi_map_learn`. 187 tools for 187 methods today; the full table is in
   [method-catalogue.md](method-catalogue.md).
 - One module per area in `src/tools/`, not always one per namespace:
   `trackmix.rs` holds `track.*`, `mixer.*` and `plugins.*`; `arrange.rs`
@@ -121,7 +121,7 @@ name real plugin ids and real fields (checked by `doc_hygiene.rs`).
 
 ## Surfaces
 
-- **Control API / MCP:** all 184 tools; see the catalogue.
+- **Control API / MCP:** all 187 tools; see the catalogue.
 - **Agent skills:** `resonance-agent-plugin/skills/*` name these tools,
   checked by the lockstep test.
 
@@ -151,7 +151,7 @@ accuracy beyond the hygiene checks.
   clients render protocol errors opaquely and the model cannot recover.
 - One shared connection, so `job.wait` is sliced (CTL-07).
 - `resonance-mcp/README.md` is out of date: it lists `track_…plugins` (now
-  `plugins_catalog`) and `render_stems` (not published), describes only
+  `plugins_catalog`), describes only
   the Linux socket path, says `job_status` results carry a `revision`
   (they do not), and points at ba doc #267, which no longer exists. The
   tool list there covers only the first epic's namespaces.

@@ -9,7 +9,8 @@
 //! the failure mode when the app binary is older than this MCP server.
 //! It is a lower bound, not a guarantee: a declared method can still
 //! answer `unsupported` for a particular argument. A method that is
-//! never implemented (`render.stems`) is kept out of `capabilities`.
+//! never implemented is kept out of `capabilities` (`render.stems` was,
+//! until it was built).
 
 use crate::server::ResonanceMcp;
 use resonance_control::methods::control::{self, HelloParams, HelloResult};
@@ -36,10 +37,10 @@ impl ResonanceMcp {
                        rebuilt from the same checkout and the app restarted. \
                        \
                        capabilities lists what this build actually IMPLEMENTS: a name that is \
-                       always unsupported is kept out of it (render.stems is not listed, for \
-                       exactly that reason), so a missing method is proof it cannot work. A \
-                       listed method can still refuse a particular ARGUMENT — render.mixdown \
-                       takes only a whole-song range — but not the call as a whole.",
+                       always unsupported is kept out of it, so a missing method is proof it \
+                       cannot work (an older app lacks render.stems, for instance). A listed \
+                       method can still refuse a particular ARGUMENT — a range outside the \
+                       song, an unknown id — but not the call as a whole.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<HelloResult>()
     )]

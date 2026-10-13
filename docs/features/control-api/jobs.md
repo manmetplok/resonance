@@ -20,7 +20,8 @@ wait a bounded time and hand back the final status.
 | `project.save`, `project.save_as` | `ProjectIoMessage::ProjectSaved` (manual saves only; autosaves never resolve a job) | 30 s |
 | `vocal.render` | the SVS audio for **every** lane in the batch has landed (one job, N lanes) | 120 s |
 | `vocal.voicebank_install` | the install thread finished **and** the tick rescanned the registry, so the bank is listed when the job resolves; fails `not_found` for an id the index does not list, without a kind for a failed index fetch or download, with the "upstream file changed" message for a hash mismatch ([voicebank library](../compose/voicebank-library.md)) | 120 s |
-| `render.mixdown` | export completion for that output path | 300 s |
+| `render.mixdown` | export completion for that output path (`BounceComplete`, or `ExportComplete` for a ranged or normalised one) | 300 s |
+| `render.stems` | `StemExportComplete` with every target written; fails on a target error, `StemExportError` or a cancel. Progress from `StemExportProgress` / `StemExportTargetDone`. The events carry no id; one stem export runs at a time and `ControlEndpointState::pending_stems` names its job (`JobToken::StemExport`) | 300 s |
 | `pool.import`, `clip.place` | the **last** asset id of the batch has reported (`clip.place` of an already-pooled file is `done` before the reply leaves) | 120 s |
 | `clip.detect_tempo` | `AudioEvent::ClipTempoDetected` for that clip; fails if no tempo is found or the clip is deleted | 60 s |
 | `meter.measure`, `meter.stems`, `meter.snapshot`, `meter.compare` | `AudioEvent::MixMeasured` carrying the job id as its `measure_id`; fails on `MixMeasureError` | 300 s |
@@ -144,5 +145,3 @@ socket client reconnecting and resuming an orphaned job end to end
 ## Known gaps
 
 - No `job.cancel`.
-- `render.stems` would be a job but is not built:
-  [render-stems-control](../../intents/control-api/render-range-and-stems.md).

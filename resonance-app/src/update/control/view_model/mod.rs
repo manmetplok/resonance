@@ -42,6 +42,7 @@ mod section;
 mod track;
 mod vocal_notes;
 mod vocal_params;
+mod voice_presets;
 mod voicebanks;
 
 // Flat re-exports so a caller writes `view_model::song_position(..)` and
@@ -55,6 +56,7 @@ pub(in crate::update::control) use lane::{
 pub(in crate::update::control) use position::{song_end_sample, song_position, transport_state};
 pub(in crate::update::control) use vocal_notes::lane_note_lyrics;
 pub(in crate::update::control) use vocal_params::*;
+pub(in crate::update::control) use voice_presets::voice_preset_view;
 pub(in crate::update::control) use voicebanks::{voicebank_list, IndexView};
 pub(in crate::update::control) use section::{definitions_in_placement_order, placement_views};
 pub(in crate::update::control) use track::{

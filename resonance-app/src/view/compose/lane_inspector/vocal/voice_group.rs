@@ -27,6 +27,8 @@ use super::toggle_row;
 use crate::state::picks::{SpeakerChoice, VoicebankChoice};
 use crate::state::ui_caches::{ChoiceList, VocalRailContext};
 
+mod presets;
+
 pub(super) fn voice_group<'a>(
     definition_id: u64,
     track_id: TrackId,
@@ -255,6 +257,8 @@ pub(super) fn voice_group<'a>(
 
     let mut body = column![
         title,
+        Space::new().height(8),
+        presets::preset_block(definition_id, track_id, params, vocal),
         Space::new().height(8),
         dim_label("Timbre"),
         Space::new().height(2),

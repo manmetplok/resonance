@@ -108,6 +108,7 @@ fn export(gain: f32, target: f32, ceiling: f32, tag: &str) -> (f32, f32, Option<
     let events = export_for_test(
         path.to_string_lossy().into_owned(),
         &settings,
+        None,
         &AtomicBool::new(false),
         &shared,
         &tempo,

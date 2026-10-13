@@ -265,8 +265,10 @@ fn route_render(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         // modal follows the engine's multi-target queue.
         E::StemExportError(e) => export::error(r, e),
         E::StemExportProgress {
-            target_index, total, ..
-        } => export::progress(r, target_index, total),
+            target_index,
+            total,
+            fraction,
+        } => export::progress(r, target_index, total, fraction),
         E::StemExportTargetDone { index, path } => export::target_done(r, index, path),
         E::StemExportTargetError { index, message } => export::target_error(r, index, message),
         E::StemExportComplete { files } => export::complete(r, files),
