@@ -35,6 +35,8 @@ the failure is reported.
 Usage:
     scripts/vocal-audition.py              # render, shuffle, list files to listen to
     scripts/vocal-audition.py --out DIR    # use a different output dir (default target/audition)
+    scripts/vocal-audition.py --banks katyusha,liam_thorne   # only these banks
+    scripts/vocal-audition.py --fixture F  # sing another phrase of the same shape
     scripts/vocal-audition.py --reveal     # print the token -> bank/speaker key
 """
 
@@ -99,9 +101,13 @@ def reveal(out_dir: Path) -> int:
     return 0
 
 
-def run_render(out_dir: Path) -> int:
+def run_render(out_dir: Path, banks: str | None, fixture: Path | None) -> int:
     env = dict(os.environ)
     env["RESONANCE_AUDITION_OUT"] = str(out_dir)
+    if banks:
+        env["RESONANCE_AUDITION_BANKS"] = banks
+    if fixture:
+        env["RESONANCE_AUDITION_FIXTURE"] = str(fixture.resolve())
     cmd = ["cargo", "test", "-p", "resonance-app", "--test", "vocal", "--",
            "--ignored", "audition", "--nocapture"]
     print(f"running: {' '.join(cmd)}  (RESONANCE_AUDITION_OUT={out_dir})")
@@ -155,7 +161,8 @@ def shuffle_into_key(out_dir: Path) -> int:
     manifest_path.unlink()
     (out_dir / "key.json").write_text(json.dumps(key, indent=2, sort_keys=True) + "\n")
 
-    print(f"\nwrote {len(key)} files to {out_dir}, shuffled behind random tokens.")
+    banks = sorted({e["bank"] for e in key.values()})
+    print(f"\nwrote {len(key)} files ({len(banks)} banks) to {out_dir}, shuffled behind random tokens.")
     print("listen blind, then run `scripts/vocal-audition.py --reveal` to see the mapping.")
     print(f"`scripts/vocal-intelligibility.py {out_dir}` scores each file against the lyric.\n")
     print("files:")
@@ -173,6 +180,15 @@ def main() -> int:
         help="output directory (default: target/audition)",
     )
     parser.add_argument(
+        "--banks",
+        help="comma-separated bank ids to render (default: every installed bank)",
+    )
+    parser.add_argument(
+        "--fixture", type=Path,
+        help="another phrase of the fixture's shape (e.g. "
+             "resonance-app/tests/vocal/fixtures/bank_audition_heldout.json)",
+    )
+    parser.add_argument(
         "--reveal", action="store_true",
         help="print the token -> bank/speaker key for an already-rendered --out and exit",
     )
@@ -183,7 +199,7 @@ def main() -> int:
 
     if not clear_out_dir(args.out):
         return 2
-    rc = run_render(args.out)
+    rc = run_render(args.out, args.banks, args.fixture)
     # Shuffle whatever was written, even after a failure, so no file is
     # left under its bank's name; then report the failure.
     if (args.out / "manifest.json").exists():

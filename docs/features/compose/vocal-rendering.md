@@ -1,6 +1,6 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `e3d187e9` + bank models + their review fixes on 2026-10-08.
+> Verified against master @ `a0c05be8` + the LUNAI English singers (384-wide speaker embeddings, ranges, all-voice measurements) on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -537,11 +537,16 @@ fails the test), and the WAVs (`<bank>__<speaker>.wav`) go to
 and each transposition. `RESONANCE_AUDITION_BANKS=tiger,lilia` limits the
 banks, `RESONANCE_AUDITION_DUMP=1` writes each take's render units
 (`*.units.json`: phonemes, durations, notes, language ids, curves — what
-the model was fed) and `RESONANCE_AUDITION_FIXTURE=<file>` sings another
-phrase of the same shape.
+the model was fed), `RESONANCE_AUDITION_FIXTURE=<file>` sings another
+phrase of the same shape — the held-out phrase is committed as
+`tests/vocal/fixtures/bank_audition_heldout.json` — and
+`RESONANCE_AUDITION_CENTRE=<midi>` centres every voice's melody on that
+note instead of in its range (the transposition sweep that calibrates a
+range).
 
 `scripts/vocal-audition.py` is the entry point: it sets
-`$RESONANCE_AUDITION_OUT` (default `target/audition`), runs the test,
+`$RESONANCE_AUDITION_OUT` (default `target/audition`; `--banks a,b` and
+`--fixture F` set the two knobs above), runs the test,
 then shuffles `manifest.json`'s entries behind random 8-character tokens,
 renames the WAVs to `<token>.wav` and writes `key.json`
 (token → bank/speaker, transposition, text) — so a listen is blind until
@@ -577,8 +582,10 @@ neither a `key.json` nor a `manifest.json`. It shuffles whenever a
 `manifest.json` exists — also after a failed render, before reporting the
 failure — drops plainly-named WAVs a render that died before its manifest
 left, and gives every token file the same modification time, so a listing
-by time does not reveal the render order. Which candidates (Peiton, the
-LUNAI English singers, Meiji v170) join the index is Jorrit's call — see
+by time does not reveal the render order. One run renders every installed
+voice in one process (41 voices with the LUNAI singers: about 1.3 s each
+after the first of a bank). Which candidates stay in the index is
+Jorrit's call — see
 [vocal follow-ups](../../intents/compose/vocal-followups.md).
 
 ## How it's tested
@@ -723,7 +730,7 @@ results.
 - The `velocity` input all three acoustic models take is DiffSinger's
   speed embed (`use_speed_embed`), fed 1.0 (neutral); Meiji's "velocity
   curve" is the same input.
-- `set_params` accepts an installed bank, one of the three built-in ids,
+- `set_params` accepts an installed bank, one of the seven built-in ids,
   or an id the plok.org index lists; the GUI picker offers installed
   English banks only. Install deviations are in the
   [voicebank library](voicebank-library.md#decisions-and-deviations).
@@ -819,6 +826,87 @@ results.
   the knob is not exposed to the user.
 
 ## Measurements
+
+**All 41 voices**, 2026-10-13 (the LUNAI English singers installed:
+Katyusha, Keiro Revenant, Liam Thorne, Allen Crow v170): Whisper
+`small.en` word accuracy of one take per voice (default seed, both bank
+models on), each transposed into its comfortable range, on the audition
+phrase and the held-out phrase; and the share of notes of at least 0.2 s
+whose median pitch (pyin over the middle 60 % of the note) is within 50
+cents of the written note. Whisper and pitch both read the rendered WAV.
+
+| Bank | Mode | Transposed | Audition | Held-out | Pitch ≤ 50 c (aud / held) |
+|---|---|---|---|---|---|
+| tiger | disco | -7 | 100 % | 93 % | 100 / 94 % |
+| tiger | electric | -7 | 100 % | 100 % | 100 / 75 % |
+| tiger | fresh | -7 | 100 % | 93 % | 100 / 100 % |
+| tiger | glam | -7 | 100 % | 93 % | 76 / 94 % |
+| tiger | mystic | -7 | 100 % | 93 % | 94 / 94 % |
+| tiger | royal | -7 | 100 % | 100 % | 82 / 100 % |
+| tiger | vinyl | -7 | 100 % | 100 % | 94 / 100 % |
+| lilia | — | -5 | 100 % | 93 % | 94 / 69 % |
+| meiji | hunter | -9 | 100 % | 93 % | 94 / 94 % |
+| meiji | lilith | -9 | 100 % | 100 % | 88 / 100 % |
+| meiji | phantom | -9 | 100 % | 100 % | 82 / 100 % |
+| meiji | standard | -9 | 100 % | 100 % | 88 / 100 % |
+| katyusha | delicate | -1 | 100 % | 100 % | 65 / 94 % |
+| katyusha | lullaby | -1 | 100 % | 100 % | 88 / 100 % |
+| katyusha | standard | -1 | 100 % | 100 % | 71 / 94 % |
+| katyusha | strong | -1 | 100 % | 100 % | 100 / 94 % |
+| keiro_revenant | aggressive | -7 | 100 % | 100 % | 82 / 81 % |
+| keiro_revenant | cold | -7 | 100 % | 100 % | 94 / 94 % |
+| keiro_revenant | fragile | -7 | 100 % | 100 % | 88 / 88 % |
+| keiro_revenant | growl | -7 | 100 % | 100 % | 82 / 100 % |
+| keiro_revenant | mellow | -7 | 100 % | 100 % | 82 / 100 % |
+| keiro_revenant | native | -7 | 100 % | 100 % | 94 / 94 % |
+| keiro_revenant | solid | -7 | 100 % | 100 % | 88 / 94 % |
+| keiro_revenant | standard | -7 | 100 % | 93 % | 88 / 94 % |
+| keiro_revenant | vf | -7 | 100 % | 100 % | 65 / 44 % |
+| keiro_revenant | whisper | -7 | 100 % | 100 % | 0 / 0 % |
+| liam_thorne | aggressive | -10 | 100 % | 100 % | 88 / 81 % |
+| liam_thorne | crispy | -10 | 100 % | 100 % | 76 / 94 % |
+| liam_thorne | deep | -10 | 100 % | 100 % | 100 / 88 % |
+| liam_thorne | gentle | -10 | 100 % | 93 % | 82 / 100 % |
+| liam_thorne | growl | -10 | 100 % | 100 % | 88 / 94 % |
+| liam_thorne | powerful | -10 | 100 % | 100 % | 94 / 100 % |
+| liam_thorne | rock | -10 | 100 % | 100 % | 88 / 94 % |
+| liam_thorne | standard | -10 | 100 % | 100 % | 88 / 94 % |
+| liam_thorne | tired | -10 | 100 % | 100 % | 88 / 94 % |
+| liam_thorne | vf | -10 | 100 % | 100 % | 88 / 94 % |
+| allen_crow | gentle | -1 | 92 % | 100 % | 88 / 94 % |
+| allen_crow | heavy | -7 | 100 % | 100 % | 100 / 88 % |
+| allen_crow | open | -1 | 100 % | 100 % | 88 / 94 % |
+| allen_crow | standard | -7 | 100 % | 93 % | 94 / 94 % |
+| allen_crow | whisper | -7 | 92 % | 93 % | 0 / 0 % |
+
+Per bank (mean over its modes, audition / held-out): TIGER 100 / 96 %,
+Lilia 100 / 93 %, Meiji 100 / 98 %, Katyusha 100 / 100 %, Keiro Revenant
+100 / 99 %, Liam Thorne 100 / 99 %, Allen Crow 97 / 97 %. No voice falls
+under 85 % on either phrase, so nothing in the pipeline needed fixing for
+the new banks beyond what made them render at all: their 384-wide
+speaker embeddings (see [voicebank library](voicebank-library.md)). The two whisper modes (Keiro's, Allen's)
+are understood but unvoiced, so their pitch reads 0 %; vocal fry
+(Keiro's `vf`, 65 / 44 %) hits its notes loosely by design. The low
+Katyusha pitch figures on the audition phrase (delicate 65 %, standard
+71 %, against 94 % held-out) are notes she scoops into, not a wrong
+register.
+
+How the LUNAI ranges were chosen (built-in table comments carry the
+numbers per bank): every mode of Katyusha, Keiro Revenant, Liam Thorne,
+Allen Crow and Meiji sang both phrases centred on G2, A♯2, C♯3, E3, G3,
+A♯3, C♯4, E4, G4, A♯4, C♯5 and E5 (`RESONANCE_AUDITION_CENTRE`; 792
+takes). Whisper barely separates them below the top: the bank means stay
+94–100 % from G2 up to A♯4 for Keiro, Liam and Allen (to C♯5 for
+Katyusha, to G4 for Meiji) and
+fall to 77–86 % on E5. Pitch accuracy sets the low end: Katyusha's
+standard and strong modes hit 36–42 % of their notes centred on G2
+against 85–100 % from E3 up; growl modes lose their low notes (Keiro
+27 % on G2); Allen Crow's open and gentle 60–91 % below E3, which matches
+LUNAI's note that both are "intended for notes above C4". Ranges then
+follow the voice types the research notes give (Katyusha soprano/alto
+G3–D5, Keiro tenor C3–A4, Liam baritone/bass A2–F4) inside the band
+both measures hold; Allen Crow, with no published range, got C3–A4 and
+his open and gentle modes G3–D5.
 
 **Review fixes** (session cache, exact noise sizing, per-unit model
 coverage, glide anchors, tension from the written pitch), 2026-10-08,

@@ -1,0 +1,28 @@
+{
+  "description": "Held-out phrase for the intelligibility check: clusters (br, st, str, ll), not measured while tuning.",
+  "bpm": 112.0,
+  "lines": [
+    "Bright stars fall on the qui·et street",
+    "AP and I still hear you call·ing _ me"
+  ],
+  "text": "bright stars fall on the quiet street and i still hear you calling me",
+  "notes": [
+    { "start_beat": 0.0, "duration_beat": 0.5, "pitch": 62, "velocity": 0.80 },
+    { "start_beat": 0.5, "duration_beat": 1.0, "pitch": 64, "velocity": 0.82 },
+    { "start_beat": 1.5, "duration_beat": 1.0, "pitch": 67, "velocity": 0.85 },
+    { "start_beat": 2.5, "duration_beat": 0.5, "pitch": 65, "velocity": 0.72 },
+    { "start_beat": 3.0, "duration_beat": 0.5, "pitch": 64, "velocity": 0.70 },
+    { "start_beat": 3.5, "duration_beat": 0.75, "pitch": 62, "velocity": 0.78 },
+    { "start_beat": 4.25, "duration_beat": 0.25, "pitch": 60, "velocity": 0.70 },
+    { "start_beat": 4.5, "duration_beat": 2.0, "pitch": 62, "velocity": 0.80 },
+    { "start_beat": 7.0, "duration_beat": 0.5, "pitch": 60, "velocity": 0.72 },
+    { "start_beat": 7.5, "duration_beat": 0.5, "pitch": 62, "velocity": 0.74 },
+    { "start_beat": 8.0, "duration_beat": 1.0, "pitch": 67, "velocity": 0.86 },
+    { "start_beat": 9.0, "duration_beat": 1.0, "pitch": 69, "velocity": 0.88 },
+    { "start_beat": 10.0, "duration_beat": 0.5, "pitch": 67, "velocity": 0.76 },
+    { "start_beat": 10.5, "duration_beat": 1.0, "pitch": 65, "velocity": 0.82 },
+    { "start_beat": 11.5, "duration_beat": 0.5, "pitch": 64, "velocity": 0.72 },
+    { "start_beat": 12.0, "duration_beat": 1.0, "pitch": 62, "velocity": 0.74 },
+    { "start_beat": 13.0, "duration_beat": 2.0, "pitch": 60, "velocity": 0.78 }
+  ]
+}

@@ -25,7 +25,10 @@
 //! (`<bank>__<speaker>.units.json`: the phonemes, durations, notes and
 //! language ids the model was fed), for comparing against what a bank's
 //! own tools would send; `RESONANCE_AUDITION_FIXTURE=<file>` sings another
-//! phrase of the same shape.
+//! phrase of the same shape (`fixtures/bank_audition_heldout.json` is the
+//! held-out one); `RESONANCE_AUDITION_CENTRE=<midi>` centres every voice's
+//! melody on that note instead of in its comfortable range (the
+//! transposition sweep that calibrates a range).
 //!
 //! It writes plainly-named files (`<bank>__<speaker>.wav`) plus a
 //! `manifest.json` listing them with the lyric text and the transposition
@@ -44,6 +47,7 @@ use resonance_app::compose::vocal_svs::{
     render_vocal_clip, resolve_clip_with_bank, split_render_units, validate_for_voicebank,
     write_stereo_wav, BankProfile, SvsRenderCache, VoicebankRegistry, VoicebankRoots,
 };
+use resonance_app::compose::vocal_svs::registry::BUILTIN_BANKS;
 use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 use resonance_music_theory::derive::LyricLine;
 use resonance_music_theory::g2p::{self, PhonemeDictionary};
@@ -138,6 +142,27 @@ fn transpose_into(song: &Fixture, (low, high): (u8, u8)) -> i32 {
     shift
 }
 
+/// Semitones that move the melody's duration-weighted centre onto MIDI
+/// note `centre`, whatever the voice's range: the transposition sweep
+/// that calibrates a range (`RESONANCE_AUDITION_CENTRE`).
+fn transpose_to_centre(song: &Fixture, centre: f64) -> i32 {
+    let total: f64 = song.notes.iter().map(|n| n.duration_beat).sum();
+    let now: f64 =
+        song.notes.iter().map(|n| n.pitch as f64 * n.duration_beat).sum::<f64>() / total;
+    (centre - now).round() as i32
+}
+
+/// `RESONANCE_AUDITION_CENTRE=<midi>`: sing every voice centred on that
+/// note instead of in its comfortable range.
+fn sweep_centre() -> Option<f64> {
+    let v = std::env::var("RESONANCE_AUDITION_CENTRE").ok()?;
+    let v = v.trim();
+    (!v.is_empty()).then(|| {
+        v.parse()
+            .unwrap_or_else(|e| panic!("RESONANCE_AUDITION_CENTRE {v:?}: {e}"))
+    })
+}
+
 /// The fixture's syllables + holds against its notes, resolved with
 /// `bank`'s dictionary exactly as `song.vocal` counts a lane: `Err`
 /// names the mismatch.
@@ -168,6 +193,19 @@ fn rms_db(stereo: &[f32]) -> f64 {
     10.0 * ms.max(1e-24).log10()
 }
 
+/// The held-out phrase (`fixtures/bank_audition_heldout.json`, sung with
+/// `RESONANCE_AUDITION_FIXTURE` to check a change beyond the phrase it
+/// was tuned on) has the audition phrase's shape and fills its notes.
+#[test]
+fn the_held_out_phrase_fills_its_notes() {
+    let song: Fixture =
+        serde_json::from_str(include_str!("fixtures/bank_audition_heldout.json")).unwrap();
+    check_counts(&song, None).unwrap();
+    let pitches: Vec<u8> = song.notes.iter().map(|n| n.pitch).collect();
+    let span = pitches.iter().max().unwrap() - pitches.iter().min().unwrap();
+    assert!(span <= MAX_SPAN_SEMITONES, "span {span} semitones");
+}
+
 #[test]
 fn the_audition_phrase_fills_its_notes_and_fits_every_builtin_voice() {
     let song = fixture();
@@ -192,7 +230,7 @@ fn the_audition_phrase_fills_its_notes_and_fits_every_builtin_voice() {
     assert_eq!(resolved.iter().filter(|a| a.is_slur).count(), 1);
     assert_eq!(resolved.iter().filter(|a| a.breath_before).count(), 1);
     assert!(resolved.iter().all(|a| !a.phonemes.is_empty()));
-    for id in ["tiger", "lilia", "meiji"] {
+    for id in BUILTIN_BANKS.iter().map(|b| b.id) {
         let profile = registry.profile(&VoicebankId::new(id));
         let mut speakers: Vec<Option<String>> =
             profile.speakers().into_iter().map(|s| Some(s.id)).collect();
@@ -338,7 +376,10 @@ fn audition() {
                 None => id.clone(),
             };
             let range = profile.comfortable_range(speaker.as_deref());
-            let transpose = transpose_into(&song, (range.low, range.high));
+            let transpose = match sweep_centre() {
+                Some(centre) => transpose_to_centre(&song, centre),
+                None => transpose_into(&song, (range.low, range.high)),
+            };
             let notes = midi_notes(&song, transpose);
             // The same resolve + gate `plan_vocal_render` runs.
             let resolved = resolve_clip_with_bank(

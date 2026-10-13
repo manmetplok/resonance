@@ -305,6 +305,25 @@ fn the_committed_index_proposal_parses() {
         assert!(bank.url.starts_with("https://github.com/"), "{id}: {}", bank.url);
         assert!(bank.terms_url.is_some() && bank.credit.is_some() && bank.commercial.is_some());
     }
+    // The LUNAI English singers: pinned files, and the credit and terms
+    // the built-in table gives the same id once the bank is installed.
+    for id in ["katyusha", "keiro_revenant", "liam_thorne", "allen_crow"] {
+        let bank = index.voicebank(id).unwrap_or_else(|| panic!("{id} is listed"));
+        assert!(
+            bank.url.starts_with("https://github.com/lunaiproject/lunai_singers/releases/download/170/"),
+            "{id}: {}",
+            bank.url
+        );
+        assert!(bank.sha256.as_deref().is_some_and(|s| s.len() == 64), "{id} is pinned");
+        assert!(bank.languages.iter().any(|l| l == "en"), "{id} sings English");
+        let builtin = resonance_app::compose::vocal_svs::registry::BUILTIN_BANKS
+            .iter()
+            .find(|b| b.id == id)
+            .unwrap_or_else(|| panic!("{id} has a built-in row"));
+        assert_eq!(bank.credit.as_deref(), builtin.credit, "{id}");
+        assert_eq!(bank.terms_url.as_deref(), builtin.terms_url, "{id}");
+        assert_eq!(bank.commercial.as_deref(), builtin.commercial, "{id}");
+    }
     assert!(index
         .vocoder("pc_nsf_hifigan_44.1k_hop512_128bin_2025.02")
         .is_some_and(|v| v.sha256.is_some()));

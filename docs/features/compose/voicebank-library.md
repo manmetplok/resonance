@@ -1,6 +1,6 @@
 # Voicebank library (registry, plok.org install, library overlay)
 
-> Verified against master @ `e3d187e9` + bank models on 2026-10-08.
+> Verified against master @ `a0c05be8` + the LUNAI English singers on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4–§5 (slices 4 and 7); research [`singing-voicebank-options-2026`](../../history/research/singing-voicebank-options-2026.md).
 
 Voicebanks are content a user installs, not three banks fixed in the code.
@@ -27,8 +27,12 @@ in [pronunciation](pronunciation.md).
   - **user banks**: each folder of `$XDG_DATA_HOME/resonance/voicebanks/`
     (`$RESONANCE_VOICEBANK_DIR`) holding an acoustic `dsconfig.yaml` (the
     one with an `acoustic:` key) at most two levels down, which covers
-    OpenUtau layout and Meiji's `configs/configs/`. The id is the folder
-    name as a slug, or — for a folder whose name slugs to nothing — the
+    OpenUtau layout, Meiji v160's `configs/configs/` and the LUNAI v170
+    banks' `configs/`. The id is the folder name when it already is one
+    (lowercase letters, digits, `_`, `-`: `keiro_revenant`, so a plok.org
+    install of an index id comes back under that id;
+    `layout::folder_id`), else the name as a slug (`My Bank_v2` →
+    `my-bank-v2`), or — for a folder whose name slugs to nothing — the
     character file's name as one (a warning names it; with neither the
     folder is skipped with a warning). Hidden folders (an install's
     staging, a replace or delete in progress) are never scanned;
@@ -36,8 +40,10 @@ in [pronunciation](pronunciation.md).
     `$RESONANCE_SVS_MODELS_DIR` and `resonance-svs/models/` (resolved from
     the app crate's compile-time `CARGO_MANIFEST_DIR`) with fixed ids —
     `singer/extracted` = `tiger`, `voicebanks/lilia` = `lilia`,
-    `voicebanks/meiji` = `meiji`. `resonance-svs/scripts/download_models.sh`
-    fetches them; models are git-ignored;
+    `voicebanks/meiji` = `meiji` (`BuiltinBank::dev_dir`; the LUNAI
+    English singers have none — they are only ever user banks).
+    `resonance-svs/scripts/download_models.sh` fetches them; models are
+    git-ignored;
   - **precedence for one id**: the user folder beats every development
     root; within the user folder the first folder in sorted order wins and
     the others are skipped with a warning naming both;
@@ -64,7 +70,14 @@ in [pronunciation](pronunciation.md).
     and kept as `InstalledBank::models` (`BankModelPaths`). One counts
     when its config parses and both model files exist. All three shipped
     banks have duration and pitch models; Lilia and Meiji also a variance
-    model (TIGER's acoustic model takes no variance curve). A lane uses
+    model (TIGER's acoustic model takes no variance curve). The LUNAI
+    English singers ship all three (the duration model with only the
+    `standard` speaker, which every mode's timing then uses).
+  - **speaker embeddings** are `hidden_size` floats wide, read from the
+    acoustic config: 256 on TIGER, Lilia and Meiji v160, 384 on the LUNAI
+    v170 banks (Meiji v170 included). Until 2026-10-13 the width was fixed
+    at 256 and every v170 bank failed its render
+    (`resonance_svs::pipeline::speaker_embeddings`). A lane uses
     them through `bank_timing` / `bank_pitch` ([vocal
     rendering](vocal-rendering.md)).
 
@@ -78,17 +91,25 @@ in [pronunciation](pronunciation.md).
   - *Speakers*: the acoustic config's `speakers`. The table holds TIGER's
     allow-list (its acoustic model lists about 40 speakers, most from other
     creators' banks; only `glam fresh disco royal electric mystic vinyl`
-    are offered, matched to `…/tiger_*`) and Meiji's four modes (`standard
-    hunter lilith phantom` → `embeds/*`). Other banks offer every model
-    speaker, id = the slug of its last path segment. A bank switch resets
-    the speaker to the bank's default (TIGER: by voice type; Meiji:
+    are offered, matched to `…/tiger_*`), Meiji's four modes (`standard
+    hunter lilith phantom` → `embeds/*`) and the LUNAI English singers'
+    modes in their character files' order with display names (`vf` →
+    "Vocal fry"): Katyusha `standard strong delicate lullaby`, Keiro
+    Revenant `standard native cold fragile mellow aggressive solid vf
+    whisper growl`, Liam Thorne `standard gentle tired deep powerful
+    aggressive rock crispy vf growl`, Allen Crow `standard heavy open
+    gentle whisper`. Other banks offer every model speaker, id = the slug
+    of its last path segment. A bank switch resets the speaker to the
+    bank's default (TIGER: by voice type; Meiji and the LUNAI singers:
     `standard`; others: the first; none for ≤1 speaker).
   - *Phoneme inventory*: the acoustic phoneme dictionary; an ARPAbet phone
     counts as present bare or `en/`-prefixed. `missing_phonemes` is ARPAbet
     minus that. A bank missing more than 8 phones is `english: false`
     (listed, refused by `vocal.set_params`).
   - *Spelling and language ids*: a phone is sent under the key the bank
-    stores it as (`en/ah` on Meiji). The `replacements:` of the bank's
+    stores it as (`en/ah` on Meiji and the other LUNAI banks, whose
+    English `dsdict-en.yaml` replacements only add the prefix, plus `q` →
+    `en/cl`). The `replacements:` of the bank's
     `dsdict-en.yaml` come first (`dsdict::load_replacements`, read at scan
     time into `PhonemeInventory::with_replacements`): LIEE Lilia's
     multi-language inventory spells English `w` as `L`, `t` `t0`, `d` `d0`,
@@ -107,9 +128,17 @@ in [pronunciation](pronunciation.md).
     the research notes and a Whisper transposition sweep
     ([vocal rendering § Measurements](vocal-rendering.md#measurements)):
     TIGER (male, A2–C♯5 at the extremes) C3–A4; Lilia (alto, optimal
-    C3–G5, clearer low) D3–A♯4; Meiji (male, A2–D5) B2–F♯4. An unknown
-    bank gets 48–76 (`range_source: "default"`). `BuiltinBank::speaker_ranges`
-    can give a speaker its own range; none is known yet, so each speaker
+    C3–G5, clearer low) D3–A♯4; Meiji (A2–D5; the research notes say
+    male, LUNAI's site calls it a girl's voice) B2–F♯4; Katyusha (soprano
+    / alto) G3–D5; Keiro Revenant (tenor) C3–A4; Liam Thorne (baritone /
+    bass) A2–F4; Allen Crow (male, no published range) C3–A4. The LUNAI
+    ranges come from a transposition sweep with the banks' own pitch
+    models: Whisper word accuracy on both phrases and pitch accuracy
+    (pyin against the written notes), every mode, the melody centred from
+    G2 to E5. An unknown bank gets 48–76 (`range_source: "default"`).
+    `BuiltinBank::speaker_ranges` gives a speaker its own range: Allen
+    Crow's `open` and `gentle` (LUNAI: "intended for notes above C4"; they
+    lose their low notes in the sweep) sit G3–D5; every other speaker
     reports its bank's. No shipped bank needs a substitution hint any more
     (Lilia's `v` is spelt, see above).
   - *Formant swing* (`BuiltinBank::gender_scale`): how far the timbre chip
@@ -119,7 +148,11 @@ in [pronunciation](pronunciation.md).
     `paid` | `permission`): `VoicebankRegistry::terms`. The built-in table
     has TIGER "TIGER by tigermeat", `paid`; Lilia "LIEE",
     `free_with_credit`; Meiji "Gahata Meiji from LUNAI Project",
-    `permission`. An install record (below) carries the terms the user
+    `permission`; Katyusha, Keiro Revenant, Liam Thorne and Allen Crow
+    "<Name> from LUNAI Project", `permission`, all LUNAI banks with
+    `https://lunaiproject.github.io/termsofuse/` (the URL §6.1 of the
+    terms each bank bundles names as current; their bundled copies are
+    dated 2025-11-21 and 2026-01-16). An install record (below) carries the terms the user
     accepted and wins — except on a built-in id, where the built-in terms
     win unless the record's `sha256` is the one the index lists for that
     id now. An unknown bank without a record has no terms.
@@ -137,7 +170,11 @@ not cost the whole list. An entry whose `id` is not a plain folder name —
 one component of `[A-Za-z0-9._-]`, not starting with `.` (so no `../x`,
 `/abs`, `a/b`, `.hidden`; `plok_download::is_safe_id`) — is dropped when
 the index is read, with a warning. The proposed entries for TIGER, Lilia,
-Meiji v170 and the two openvpi vocoders are committed at
+Meiji v170, the LUNAI English singers (Katyusha, Keiro Revenant, Liam
+Thorne, Allen Crow v170: URL, bytes and sha256 from the GitHub releases
+API, the zip's top level — `configs/`, `files/`, `tgm_hifigan/`, no
+wrapper — read from its central directory) and the two openvpi vocoders
+are committed at
 [`plok-voicebank-index.json`](plok-voicebank-index.json) for the server to
 publish; keys starting with `_` are notes the app ignores.
 
@@ -283,7 +320,7 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
     with `not_found`); a bank already installing is `busy`; an index that
     cannot be fetched fails the job without a kind; a hash mismatch fails
     it with the "upstream file changed" message.
-  - `vocal.set_params` accepts any installed bank, the three built-in ids
+  - `vocal.set_params` accepts any installed bank, the seven built-in ids
     and an id the index lists (English when its `languages` name `en` or
     nothing) — see [lyrics and melody](vocal-lyrics-and-melody.md).
 - **Agent skills:** the `arranging` skill's generator reference names the
@@ -294,10 +331,11 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
 
 | What | Where | Run |
 |---|---|---|
-| Registry scans (temp-dir fixture banks: slugs, two-level layout, languages, shared vocoder, user-over-dev, rescan, built-in fallbacks) | `resonance-app/tests/vocal/voicebank_registry.rs`; fixtures from `resonance_app::{write_voicebank_fixture, VoicebankFixture}` | `./scripts/run-tests.py -p resonance-app` |
-| Real banks register with the right ids, speakers, curve flags | `tests/vocal/voicebank_curve_support.rs` (no-ops unless set) | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
+| Registry scans (temp-dir fixture banks: slugs, two-level layout, languages, shared vocoder, user-over-dev, rescan, built-in fallbacks); the four LUNAI v170 banks in their zip layout register under their folder ids with the table's names, mode names, ranges (Allen Crow's per-speaker ones) and terms, `en/` + language id 3, their own three models and bundled vocoder | `resonance-app/tests/vocal/voicebank_registry.rs` (`lunai_v170_banks_register_under_their_folder_ids_with_the_builtin_facts`); fixtures from `resonance_app::{write_voicebank_fixture, VoicebankFixture}` | `./scripts/run-tests.py -p resonance-app` |
+| Folder ids (`keiro_revenant` kept, `My Bank_v2` slugged); the LUNAI v170 layout scanned; 384-wide embeddings loaded, a width other than `hidden_size` refused, 256 by default | `resonance-svs/tests/voicebank_manifest.rs` (`a_folder_already_named_as_an_id_keeps_it`, `a_lunai_v170_bank_scans_and_loads_its_384_wide_embeddings`, `embeddings_default_to_256_wide`) | `./scripts/run-tests.py -p resonance-svs` |
+| Real banks register with the right ids, speakers, curve flags; the real LUNAI singers register and load their embeddings | `tests/vocal/voicebank_curve_support.rs` (no-ops unless set; `real_lunai_banks_register` reads `$RESONANCE_VOICEBANK_DIR`) | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models RESONANCE_VOICEBANK_DIR=~/.local/share/resonance/voicebanks cargo test -p resonance-app --test vocal` |
 | `vocal.voicebanks`, `voicebank_missing`, set_params bank checks; hermetic roots and the dev-bank opt-in; vocoders beside `$RESONANCE_VOICEBANK_DIR`; id fallback and duplicate precedence; rescan reuse | `tests/control/control_voicebanks.rs`, `control_jobs.rs` | same |
-| Install over a loopback server: available → installed, vocoder auto-fetch, terms in the result, no revision / undo, `already_installed`, sha mismatch installs nothing, a cut download resumes with `Range`, unknown id `not_found`, no project needed; the committed index proposal parses | `tests/control/control_voicebank_install.rs` (server: `tests/common/plok_server.rs`, `Act::{CutAfter, DelayMs}`) | same |
+| Install over a loopback server: available → installed, vocoder auto-fetch, terms in the result, no revision / undo, `already_installed`, sha mismatch installs nothing, a cut download resumes with `Range`, unknown id `not_found`, no project needed; the committed index proposal parses (the LUNAI four pinned, English, and with the built-in table's credit and terms) | `tests/control/control_voicebank_install.rs` (server: `tests/common/plok_server.rs`, `Act::{CutAfter, DelayMs}`) | same |
 | Guards: `../x`, `/abs`, `a/b`, `.hidden`, `..` dropped from the index and refused (nothing written outside the library), Delete refuses a non-id folder; two installs needing one vocoder fetch it once; a finished install's job settles when the bank is installed again before the tick; a failed index fetch is not `not_found`; the sweep (dead / own-idle / live-other staging, deleting, a cut replace restored, a landed replace's old copy removed); install records trusted for their own folder and, on a built-in bank, only for the index's pinned file | `tests/control/control_voicebank_install_safety.rs` | same |
 | Part-file protocol and the record-less-part age rule (shared with the drums) | `plugins/resonance-drums/tests/download.rs` (`a_starting_worker_sweeps_stale_download_leftovers`, resume and lock tests) | `./scripts/run-tests.py -p resonance-drums` |
 | Overlay: Library… opens it on the lane's bank, a download waits for Accept (Decline fetches nothing), Use sets the lane, Delete asks first, Cancel; progress patches one row and typing rebuilds none; goldens of the Installed tab, plok.org tab, accept-terms, downloading and confirm-delete states | `tests/compose/compose_voicebank_library.rs` → `compose_voicebank_library_{installed,plok,accept_terms,downloading,confirm_delete}-wgpu.png` | `RESONANCE_BLESS=1` to re-bless |
@@ -305,7 +343,10 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
 | Inspector pickers (installed bank + speaker; `lilia (not installed)`) | `tests/compose/compose_rail_collapse.rs` → `compose_vocal_rail_installed_bank-wgpu.png` | same |
 
 Not covered: a real install from GitHub (hundreds of MB) has not been run;
-the tests use a loopback server and fixture banks.
+the tests use a loopback server and fixture banks. The LUNAI four were
+unpacked by hand into the user voicebank folder, which the installer's
+plan would produce from the same zips (no wrapper, `configs/dsconfig.yaml`
+one level down).
 
 ## Decisions and deviations
 
@@ -347,6 +388,13 @@ the tests use a loopback server and fixture banks.
   contexts" and its vocoder is CC BY-NC-SA; D9 accepts both while
   Resonance is not commercial — see
   [vocal follow-ups](../../intents/compose/vocal-followups.md).
-- Comfortable ranges are per bank; no per-speaker ranges are known.
+- Per-speaker ranges exist for Allen Crow's `open` and `gentle` only.
+  Vocal fry modes (Keiro's, Liam's `vf`) hit their notes loosely
+  anywhere (pitch within 50 cents on 18–70 % of the notes for Keiro), and
+  growl modes lose their lowest notes; both keep their bank's range.
+- Meiji's range and gender are uncertain: the research notes call the
+  voice male (A2–D5), LUNAI's site describes a girl's voice. The range
+  stays B2–F♯4, which measures well and which the 12-voice listen
+  approved.
 - Non-English banks are listed (`english: false`) but cannot be used,
   because lyrics are English.

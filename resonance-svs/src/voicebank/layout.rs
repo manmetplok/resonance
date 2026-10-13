@@ -155,7 +155,7 @@ pub fn probe(dir: &Path) -> Result<BankLayout> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| root.display().to_string());
-    let id = slugify(&display_name);
+    let id = folder_id(&display_name);
 
     Ok(BankLayout {
         id,
@@ -474,6 +474,25 @@ fn read_languages_file(path: &Path) -> Result<BTreeMap<String, i64>> {
         _ => bail!("languages.json must be a JSON object or array"),
     }
     Ok(map)
+}
+
+/// The id a bank folder named `name` gets: the name itself when it is
+/// already one (lowercase ASCII letters, digits, `_` and `-`, starting
+/// with a letter or digit), else its [`slugify`]. A plok.org install
+/// unpacks into a folder named by the index id (`keiro_revenant`), so the
+/// bank must come back under that same id, not `keiro-revenant`.
+pub fn folder_id(name: &str) -> String {
+    let mut chars = name.chars();
+    let starts_well = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    let rest_ok =
+        chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+    if starts_well && rest_ok {
+        name.to_owned()
+    } else {
+        slugify(name)
+    }
 }
 
 /// Lowercase ASCII slug: alphanumeric runs joined by single `-`, trimmed.
