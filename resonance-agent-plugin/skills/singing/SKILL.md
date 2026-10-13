@@ -36,7 +36,7 @@ is missing:
 | A hand-written melody (3) | `notes.replace_all`, `notes.import_midi` |
 | Fixing a word's pronunciation (5) | `vocal.set_pronunciation` |
 | Expression curves (7) | `automation.set_lane`, `automation.add_points`, `automation.lanes` |
-| The intelligibility check (8) | `mixer.set_solo`, `render.mixdown` |
+| The intelligibility check (8) | `render.stems`, or else `mixer.set_solo` and `render.mixdown` |
 
 Then read:
 
@@ -213,19 +213,31 @@ Only after the words and notes are right. In order of reach:
 `song_vocal` is the check that always runs. For a word-level check of a
 finished take, when the user wants one:
 
-1. `mixer_set_solo` on the vocal track, `render_mixdown` to a WAV, then
-   **clear the solo**. Check the result's `soloed_track_ids` holds only the
-   vocal track. There is no per-track stem export; this is the way to get a
-   vocal-only file.
-2. In a resonance checkout, `scripts/vocal-intelligibility.py <dir>` scores
-   WAVs with Whisper (word accuracy against the lyric). Next to the WAV write
-   a `manifest.json` of the shape `{"text": "<the lyric as sung, every
-   placement in order>", "entries": [{"file": "vocal.wav", "bank": "tiger",
-   "speaker": "mystic"}]}`; without it the script scores against its own test
-   phrase.
+1. Get a vocal-only file. `render_stems {dir, track_ids: [<vocal track>]}`
+   writes `01-<track name>.wav` into `dir` (absolute; pass `overwrite: true`
+   to re-check after a fix) and its result lists the path. When
+   `render.stems` is missing from `control_hello`'s capabilities (an older
+   app), use `mixer_set_solo` on the vocal track, `render_mixdown` to a WAV,
+   then **clear the solo**, and check the result's `soloed_track_ids` holds
+   only the vocal track. Either way the file is the whole vocal track; pass
+   a `range` to score one section.
+2. Score it against the lyric it should sing, every placement in order:
+
+   ```
+   ${CLAUDE_SKILL_DIR}/scripts/intelligibility.py --text "<the lyric as sung>" <stem>.wav
+   ```
+
+   The lyric can be pasted in lyric syntax (breaks, holds, `AP` and `[..]`
+   are stripped); `--text-file` reads it from a file and `--json` gives
+   machine-readable output. It prints the word accuracy (1 − WER), what
+   Whisper heard and the words it missed, and trims the silence around the
+   vocal first. It needs uv on PATH (it fetches Whisper itself; the first
+   run downloads about 0.5 GB) and says how to install uv when it is
+   missing. If it cannot run, say so and stop here; `song_vocal` stands.
 3. Read the number comparatively — before and after a fix, one voice against
    another. Singing is hard for a speech recogniser; a low score points at the
-   lines to re-check in `song_vocal`, not at a verdict.
+   lines to re-check in `song_vocal` (the missed words show which), not at a
+   verdict. A take reported `SILENT` did not render: check `render_state`.
 
 `meter_stems` measures the vocal's level against the mix, which is the
 `mixing` skill's job, not this one's.

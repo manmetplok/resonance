@@ -35,7 +35,8 @@ Done when each option changes the written files and a test pins it.
 - Engine stem render: `resonance-audio/src/engine/bounce/stem.rs`.
 - Feature doc: [`../../features/audio-engine/stem-export.md`](../../features/audio-engine/stem-export.md).
 - MIDI tab: [`midi-project-export.md`](midi-project-export.md); control
-  API: [`../control-api/render-range-and-stems.md`](../control-api/render-range-and-stems.md).
+  API `render.stems` (built, tracks only, the dialog's defaults):
+  [`../../features/audio-engine/stem-export.md`](../../features/audio-engine/stem-export.md).
 
 ## Open decisions
 

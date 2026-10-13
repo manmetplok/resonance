@@ -156,6 +156,7 @@ impl Engine {
         export_for_test(
             path.to_string_lossy().into_owned(),
             &ExportSettings::default_wav(),
+            None,
             &AtomicBool::new(cancel),
             &self.shared,
             &self.tempo_map,

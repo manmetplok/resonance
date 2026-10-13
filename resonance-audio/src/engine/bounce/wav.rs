@@ -1,5 +1,5 @@
-//! Offline export driver: render the whole project and feed the mix to a
-//! pluggable encoder sink (doc #196).
+//! Offline export driver: render the whole project (or an explicit
+//! window) and feed the mix to a pluggable encoder sink (doc #196).
 //!
 //! Includes master FX + master volume + hard-clip so the file plays back
 //! identically outside the app (a normalized export skips the hard clip
@@ -235,6 +235,40 @@ pub fn normalize_buffer_for_test(
     Ok((bytes, lufs, measured.true_peak_dbtp))
 }
 
+/// Test surface: run the real export renderer ([`run_export`]) with
+/// explicit settings, automation snapshot and cancel token, and return
+/// every event it emitted (`Export*` family). Unlike [`super::to_wav`] this
+/// reaches the normalization passes and the cancel / temp-file paths.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
+pub fn export_for_test(
+    path: String,
+    settings: &ExportSettings,
+    range: Option<(SamplePos, SamplePos)>,
+    cancel: &AtomicBool,
+    shared: &Arc<SharedState>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &super::super::AutomationSnapshot,
+    sample_rate: u32,
+) -> Vec<AudioEvent> {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    run_export(
+        path,
+        settings,
+        range,
+        ExportReporter::Export,
+        shared,
+        cancel,
+        tempo_map,
+        automation,
+        sample_rate,
+        &tx,
+    );
+    drop(tx);
+    rx.try_iter().collect()
+}
+
 /// Outcome of one chunked render pass driven by [`render_range`].
 enum RenderOutcome {
     /// The whole range rendered and every chunk was consumed.
@@ -334,6 +368,7 @@ fn cancel_cleanup(
 pub(crate) fn run_export(
     path: String,
     settings: &ExportSettings,
+    range: Option<(SamplePos, SamplePos)>,
     reporter: ExportReporter,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
@@ -359,8 +394,17 @@ pub(crate) fn run_export(
     // audio for any retuned clip, identical to live playback (todo #358).
     let tuning = super::super::vocal_render::ensure_tuning_caches(shared, sample_rate);
 
-    // Compute project range from audio clips + MIDI clips.
-    let (render_start, render_end) = {
+    // An explicit window (a ranged `render.mixdown`) is rendered as asked:
+    // sample 0 of the file is its start, whatever the clips cover —
+    // silence included. Otherwise the project range from audio clips +
+    // MIDI clips.
+    let (render_start, render_end) = if let Some((start, end)) = range {
+        if end <= start {
+            reporter.error(event_tx, ExportErrorKind::NoAudio, "Empty render range".into());
+            return;
+        }
+        (start, end)
+    } else {
         let clips_guard = shared.clips();
         let graph = shared.graph.load();
         let midi_guard = &graph.midi_clips;

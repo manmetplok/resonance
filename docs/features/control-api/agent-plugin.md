@@ -1,6 +1,6 @@
 # Agent plugin (`resonance-agent-plugin`)
 
-> Verified against master @ `ad042afb` + the `singing` skill on 2026-10-13.
+> Verified against master @ `f9438e38` + `render.stems` and the singing intelligibility script on 2026-10-13.
 > Spec history: `docs/history/specs/warmth-width-depth.md` §8 (keys
 > blocks, the `spatial` skill); the plugin's own `README.md` is the
 > maintained guide and stays in place.
@@ -21,14 +21,43 @@ starts, so they cost no context otherwise.
 | `song-structure` | choosing a form, sections vs. placements, the `place: false` trap, bar math, tempo and signature tracks | `references/forms.md` |
 | `arranging` | chord grids, `generate_part`, hand-written MIDI, density and register | `references/generators.md` (and `forms.md`) |
 | `drumming` | the pattern library and hand-written grooves, odd metre | `references/drum-map.md`, `references/grooves.md` |
-| `singing` | the vocal synth: voice choice and install (terms, credit), one lane per section, generated or hand-written melody, singable lyrics and the lyric syntax, the `song_vocal` pre-flight, one batched render, expression, an intelligibility check, guide vocals | `references/lyrics.md`, `references/voicebanks.md` |
+| `singing` | the vocal synth: voice choice and install (terms, credit), one lane per section, generated or hand-written melody, singable lyrics and the lyric syntax, the `song_vocal` pre-flight, one batched render, expression, an intelligibility check, guide vocals | `references/lyrics.md`, `references/voicebanks.md`, `scripts/intelligibility.py` |
 | `mixing` | measure → diagnose → balance → verify: faults, balance, tone, character, dynamics | `references/reading-meters.md`, `character.md`, `roles.md` |
 | `spatial` | width and depth: mono-safe width, panning, one shared room, pre-delay, return EQ, ducking | `references/width.md`, `depth.md` (and `reading-meters.md`, `roles.md`) |
-| `mastering` | the master chain on `com.resonance.mastering` stage by stage, reference track, delivery targets | `references/delivery.md` (and `reading-meters.md`, `character.md`) |
+| `mastering` | the master chain on `com.resonance.mastering` stage by stage, reference track, delivery targets, stems | `references/delivery.md` (and `reading-meters.md`, `character.md`) |
 
 All seven are model-invocable (`name`, `description`, `when_to_use` in each
 `SKILL.md` front matter), and each hands off to the next by pointing at
 it. Skills point at each other's references with `${CLAUDE_PLUGIN_ROOT}`.
+
+### The intelligibility script
+
+`skills/singing/scripts/intelligibility.py` is the plugin's one bundled
+script, run by the `singing` skill's step 8 as
+`${CLAUDE_SKILL_DIR}/scripts/intelligibility.py --text "<lyric>" <wav>…`
+on a vocal stem from `render_stems {track_ids: [vocal]}` (or, when the
+running app lacks `render.stems`, a soloed `render_mixdown`).
+
+- **Input:** `--text` or `--text-file`; the vocal synth's lyric syntax is
+  stripped (`·` / `-` breaks joined, standalone `_` / `+` / `AP` dropped,
+  `[..]` phoneme blocks dropped). No manifest.
+- **Output:** per file the word accuracy (1 − WER on lowercased,
+  punctuation-free words, floored at 0), what Whisper heard and the lyric
+  words a minimal alignment misses; `--json` prints
+  `{reference, results: [{file, silent, accuracy, heard, missed}]}`.
+- **Audio:** Whisper's own 16 kHz load, then leading and trailing silence
+  trimmed (20 ms frames within 45 dB of the loudest and above -60 dBFS,
+  0.25 s padding); a file with nothing above -60 dBFS is reported silent
+  and not transcribed. Long takes go through Whisper's 30 s windowing.
+- **Whisper:** `small.en`; when `whisper` is not importable the script
+  re-runs itself through `uv` with a CPU PyTorch (the repo script's
+  recipe), and says how to install `uv` when it is missing. The model
+  downloads to `~/.cache/whisper` on first use.
+- **One implementation:** the repo's `scripts/vocal-intelligibility.py`
+  (the bank audition's scorer) imports this file by path and uses its
+  `word_accuracy`, `transcribe` and `load_model`, so both score a file
+  identically. `--self-test` checks the stripping, normalising, scoring,
+  missed-word alignment and trimming without Whisper.
 
 ### Rules the skills follow
 
@@ -56,7 +85,7 @@ Load the plugin with `claude --plugin-dir <repo>/resonance-agent-plugin`.
 ### Versioning
 
 Three things version separately: the skills (`version` in
-`.claude-plugin/plugin.json`, 0.4.0 today), `resonance-mcp` (this
+`.claude-plugin/plugin.json`, 0.5.0 today), `resonance-mcp` (this
 checkout), and the running app (whatever the user has open). Living in one
 repo pins the first two; `control_hello` covers the third at run time.
 Bump the plugin `version` whenever the skills change, or installed copies
@@ -95,7 +124,8 @@ via `resonance-dsp-test-support/src/skill_keys.rs`.
 | Manifest | `resonance-agent-plugin/.claude-plugin/plugin.json` | `name`, `version` |
 | Protocol pin | `resonance-agent-plugin/lockstep.json` | `control_protocol_version` |
 | Skills | `resonance-agent-plugin/skills/<skill>/SKILL.md`, `references/*.md` | front matter, `## 0. Preflight`, keys blocks |
-| Guide for authors | `resonance-agent-plugin/README.md` | keys-block rules, versioning |
+| Guide for authors | `resonance-agent-plugin/README.md` | keys-block rules, versioning, bundled scripts |
+| Intelligibility script | `resonance-agent-plugin/skills/singing/scripts/intelligibility.py` (shared by `scripts/vocal-intelligibility.py`) | `strip_lyric_syntax`, `word_accuracy`, `missed_words`, `sounding_bounds`, `transcribe`, `self_test` |
 | Lockstep test | `resonance-mcp/tests/agent_plugin_lockstep.rs` | `PROSE_TOKENS`, `KEY_SHAPED_WIRE_WORDS` |
 | Per-plugin key check | `resonance-dsp-test-support/src/skill_keys.rs`, `plugins/*/tests/skill_keys.rs` | `skill_keys_test!`, `WIRE_WORDS` |
 
@@ -114,9 +144,12 @@ via `resonance-dsp-test-support/src/skill_keys.rs`.
 |---|---|---|
 | Skills match the tool surface and protocol | `resonance-mcp/tests/agent_plugin_lockstep.rs` | `./scripts/run-tests.py -p resonance-mcp` |
 | Keys blocks match each plugin's real params and presets | `plugins/<name>/tests/skill_keys.rs` | `./scripts/run-tests.py -p resonance-<name>`; dump with `RESONANCE_SKILL_KEYS_DUMP=1` |
+| Intelligibility script: lyric stripping, normalising, WER, missed words, silence trim (no Whisper) | `intelligibility.py --self-test` | `resonance-agent-plugin/skills/singing/scripts/intelligibility.py --self-test` (by hand; not in the cargo suite) |
 
 Not covered: whether a procedure produces a good mix. That needs a live
-agent session against a real project, done by hand.
+agent session against a real project, done by hand. The intelligibility
+script's Whisper path was checked by hand: on an audition WAV it reports
+the same accuracy as `scripts/vocal-intelligibility.py`.
 
 ## Decisions and deviations
 

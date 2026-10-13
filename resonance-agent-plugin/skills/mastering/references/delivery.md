@@ -30,7 +30,7 @@ figure, do not change the -14 / -1 dBTP recommendation.
 
 ## The file
 
-`render_mixdown` writes the whole song. For a delivery file pass `platform`
+`render_mixdown` writes the whole song unless given a `range`. For a delivery file pass `platform`
 (or `normalize: {target_lufs, ceiling_dbtp}` for a custom target, never both).
 The mix is measured, gained to the target and true-peak limited at the ceiling;
 the project itself is untouched. Read the result's `normalize` block:
@@ -44,6 +44,20 @@ the project itself is untouched. Read the result's `normalize` block:
 - Render with nothing soloed: a non-empty `soloed_track_ids` in the result
   means the file is not the mix.
 - It refuses to overwrite until `overwrite: true`; ask before passing it.
+
+## Stems
+
+When the user wants stems (for a mastering engineer, a remix, a video edit),
+`render_stems {dir}` writes one WAV per top-level track into `dir`, 48 kHz
+24-bit, each after its own fader and effects but without the master chain, all
+over the same range so they line up from zero. `track_ids` limits it to some
+tracks. Like the mix it refuses to overwrite until `overwrite: true`, and it
+needs `render.stems` in `control_hello`'s capabilities; an older app has only
+the mixdown. Stems are not normalised or dithered: they are raw material, not a
+deliverable master.
+
+`render_mixdown` and `render_stems` both take a `range` to bounce one section
+for the user to audition (sample 0 of the file is the range start).
 
 ## Dither
 

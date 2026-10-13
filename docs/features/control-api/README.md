@@ -14,7 +14,7 @@ that owns it.
 |---|---|---|
 | Control API architecture | [overview.md](overview.md) | Socket, threads, dispatch order, mutation gate, one-undo-per-call, revision counter, remote indicator. |
 | Protocol and conventions | [protocol.md](protocol.md) | JSON-RPC envelope, framing, error kinds, `PROTOCOL_VERSION` and capabilities, strict params, ids and positions, the vertical-slice rule. |
-| Method catalogue | [method-catalogue.md](method-catalogue.md) | All 184 methods with their MCP tool, kind and owning area. |
+| Method catalogue | [method-catalogue.md](method-catalogue.md) | All 187 methods with their MCP tool, kind and owning area. |
 | Jobs | [jobs.md](jobs.md) | `job.status` / `job.wait`, which calls are jobs, retention, disconnects, MCP-side waiting. |
 | MCP server | [mcp-server.md](mcp-server.md) | `resonance-mcp`: registration, tool naming, schema normalisation, error mapping, connection handling. |
 | Agent plugin | [agent-plugin.md](agent-plugin.md) | The seven skills, their rules, and the lockstep test that keeps them in step with the tools. |

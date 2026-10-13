@@ -191,12 +191,12 @@ impl crate::Resonance {
             // dialog appear over it would invite the user into a state
             // change the engine isn't ready for.
             Overlay::BounceProgress => bounce_progress::view_bounce_progress_overlay(self),
-            // The WAV mixdown gates the same traffic as a bounce in place
-            // (`gates_message`), so it gets the same blocking modal at the
-            // same priority (code review FU-F1c).
+            // The WAV mixdown and a control stem export gate the same traffic as a
+            // bounce in place (`gates_message`): same modal, same priority (FU-F1c).
             Overlay::MixdownProgress => bounce_progress::view_mixdown_progress_overlay(self),
             // The freeze progress modal (doc #181, todo #582): a freeze IS a bounce in place.
             Overlay::FreezeProgress => bounce_progress::view_freeze_progress_overlay(self),
+            Overlay::StemsProgress => bounce_progress::view_stems_progress_overlay(self),
             Overlay::Palette => palette::view_palette_overlay(self),
             Overlay::ConfirmQuit => confirm_quit::view_confirm_quit_overlay(self),
             Overlay::ConfirmProjectSwitch => {

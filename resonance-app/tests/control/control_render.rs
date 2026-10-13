@@ -2,12 +2,18 @@
 //! WAV to an explicit path as a job — param validation, the overwrite
 //! `needs_confirmation` guard and the recording/in-flight `busy` guards,
 //! job completion keyed off the engine bounce events with the WAV's real
-//! duration + sample rate, and render.stems reported `unsupported`.
+//! duration + sample rate, a ranged mixdown riding `ExportAudio`; and
+//! render.stems as a job on the Export dialog's `ExportStems`, its names
+//! and defaults, resolved off the `StemExport*` events.
 
-use resonance_app::{Resonance};
-use resonance_audio::types::{AudioEvent, ExportErrorKind};
+use resonance_app::message::{ExportMessage, Message};
+use resonance_app::state::{ExportPhase, ExportSource, Overlay};
+use resonance_app::Resonance;
+use resonance_audio::types::{
+    AudioCommand, AudioEvent, EngineError, ExportErrorKind, StemBitDepth, StemSource, TrackType,
+};
 use resonance_control::job::{JobStarted, JobState, JobStatus};
-use resonance_control::methods::render::MixdownResult;
+use resonance_control::methods::render::{MixdownResult, StemsResult};
 use resonance_control::{ErrorKind, Request, Response};
 use serde_json::json;
 use std::io::Write;
@@ -250,24 +256,103 @@ fn mixdown_requires_a_wav_extension() {
     assert!(response.error.is_none(), "{:?}", response.error);
 }
 
+// ---------------- render.mixdown range ----------------
+
+/// An app whose engine commands are captured, with an active project.
+fn capture_app() -> (Resonance, crossbeam_channel::Receiver<AudioCommand>) {
+    let (mut app, _task, cmd_rx) = Resonance::new_for_test_with_capture();
+    app.test_set_active_project(true);
+    while cmd_rx.try_recv().is_ok() {}
+    (app, cmd_rx)
+}
+
+/// One bar at the test app's default 120 BPM in 4/4 on its 44.1 kHz
+/// tempo map.
+const BAR: u64 = 88_200;
+
 #[test]
-fn mixdown_rejects_a_partial_range_as_unsupported() {
+fn mixdown_renders_a_two_bar_range_as_an_export_with_that_window() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let target = dir.path().join("chorus.wav");
+    let (mut app, cmd_rx) = capture_app();
+    let job = started_job(roundtrip(
+        &mut app,
+        request(
+            1,
+            "render.mixdown",
+            json!({
+                "path": target.display().to_string(),
+                "range": { "start": { "bar": 3 }, "end": { "bar": 5 } }
+            }),
+        ),
+    ));
+    let sent: Vec<AudioCommand> = cmd_rx
+        .try_iter()
+        .filter(|c| {
+            matches!(c, AudioCommand::ExportAudio { .. } | AudioCommand::BounceToWav { .. })
+        })
+        .collect();
+    match sent.as_slice() {
+        [AudioCommand::ExportAudio { path, range, settings }] => {
+            assert_eq!(path, &target.display().to_string());
+            // Bars 3-4: two bars, starting two bars in. The file's
+            // length past the window is the engine's FX tail
+            // (`resonance-audio/tests/bounce/export_range.rs`).
+            assert_eq!(*range, Some((2 * BAR, 4 * BAR)));
+            assert!(!settings.normalize.enabled, "a plain ranged mix");
+        }
+        other => panic!("one ranged ExportAudio, got {other:?}"),
+    }
+    assert!(app.test_is_bouncing());
+
+    // Two bars plus the 2 s tail.
+    write_wav(&target, 44_100, (2 * BAR + 88_200) as u32);
+    app.test_apply_engine_event(AudioEvent::ExportComplete {
+        path: target.display().to_string(),
+        achieved_lufs: None,
+        achieved_dbtp: 0.0,
+        bytes: 0,
+    });
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Done);
+    let result: MixdownResult = serde_json::from_value(status.result.unwrap()).unwrap();
+    assert!((result.duration_s - 6.0).abs() < 1e-6, "{}", result.duration_s);
+    assert!(result.normalize.is_none(), "not normalized");
+    assert!(!app.test_is_bouncing());
+}
+
+#[test]
+fn a_failed_ranged_mixdown_fails_its_job() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let target = dir.path().join("verse.wav").display().to_string();
+    let (mut app, _cmd_rx) = capture_app();
+    let job = started_job(roundtrip(
+        &mut app,
+        request(1, "render.mixdown", json!({ "path": target, "range": { "end": { "bar": 2 } } })),
+    ));
+    app.test_apply_engine_event(AudioEvent::ExportError {
+        kind: ExportErrorKind::Io,
+        message: "disk full".to_owned(),
+    });
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Error);
+    assert_eq!(status.error.unwrap().message, "disk full");
+}
+
+#[test]
+fn mixdown_refuses_an_empty_range() {
     let dir = tempfile::tempdir().expect("temp dir");
     let target = dir.path().join("mix.wav").display().to_string();
     let mut app = app();
-
     let response = roundtrip(
         &mut app,
         request(
             1,
             "render.mixdown",
-            json!({ "path": target, "range": { "start": { "bar": 2 }, "end": { "bar": 5 } } }),
+            json!({ "path": target, "range": { "start": { "bar": 5 }, "end": { "bar": 5 } } }),
         ),
     );
-    assert_eq!(
-        response.error.expect("partial range").kind(),
-        ErrorKind::Unsupported
-    );
+    assert_eq!(response.error.expect("empty range").kind(), ErrorKind::InvalidParams);
     assert!(!app.test_is_bouncing());
 }
 
@@ -275,31 +360,226 @@ fn mixdown_rejects_a_partial_range_as_unsupported() {
 fn mixdown_accepts_an_explicitly_empty_whole_range() {
     let dir = tempfile::tempdir().expect("temp dir");
     let target = dir.path().join("mix.wav").display().to_string();
-    let mut app = app();
+    let (mut app, cmd_rx) = capture_app();
 
-    // An empty range object means "the whole song" and must not be
-    // rejected as a partial range.
+    // An empty range object means "the whole song": the plain bounce.
     let job = started_job(roundtrip(
         &mut app,
         request(1, "render.mixdown", json!({ "path": target, "range": {} })),
     ));
     assert_eq!(job_status(&mut app, job).state, JobState::Pending);
+    assert!(cmd_rx.try_iter().any(|c| matches!(c, AudioCommand::BounceToWav { .. })));
 }
 
 // ---------------- render.stems ----------------
 
+const VOX: u64 = 11;
+const GTR: u64 = 12;
+
+/// A two-track project (ids 11 "Lead Vox" and 12 "Gtr/DI").
+fn stems_app() -> (Resonance, crossbeam_channel::Receiver<AudioCommand>) {
+    let (mut app, cmd_rx) = capture_app();
+    app.test_add_track(VOX, TrackType::Vocal);
+    app.test_add_track(GTR, TrackType::Audio);
+    for (id, name) in [(VOX, "Lead Vox"), (GTR, "Gtr/DI")] {
+        let response = roundtrip(
+            &mut app,
+            request(1, "track.rename", json!({ "track_id": id, "name": name })),
+        );
+        assert!(response.error.is_none(), "{:?}", response.error);
+    }
+    while cmd_rx.try_recv().is_ok() {}
+    (app, cmd_rx)
+}
+
+fn stems(app: &mut Resonance, params: serde_json::Value) -> Response {
+    roundtrip(app, request(1, "render.stems", params))
+}
+
+/// The one `ExportStems` sent since the last drain.
+fn sent_stems(cmd_rx: &crossbeam_channel::Receiver<AudioCommand>) -> AudioCommand {
+    let sent: Vec<AudioCommand> = cmd_rx
+        .try_iter()
+        .filter(|c| matches!(c, AudioCommand::ExportStems { .. }))
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    sent.into_iter().next().unwrap()
+}
+
+fn target_paths(command: &AudioCommand) -> Vec<(StemSource, String)> {
+    match command {
+        AudioCommand::ExportStems { targets, .. } => {
+            targets.iter().map(|t| (t.source, t.path.clone())).collect()
+        }
+        other => panic!("not ExportStems: {other:?}"),
+    }
+}
+
 #[test]
-fn stems_is_unsupported_on_this_build() {
+fn stems_exports_every_track_named_as_the_export_dialog_names_them() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let mut app = app();
-    let response = roundtrip(
-        &mut app,
-        request(1, "render.stems", json!({ "dir": dir.path().display().to_string() })),
-    );
+    let out = dir.path().join("stems");
+    let (mut app, cmd_rx) = stems_app();
+
+    let job = started_job(stems(&mut app, json!({ "dir": out.display().to_string() })));
+    assert!(out.is_dir(), "the directory is created, as the dialog creates it");
+    let command = sent_stems(&cmd_rx);
+    let paths = target_paths(&command);
     assert_eq!(
-        response.error.expect("stems unsupported").kind(),
-        ErrorKind::Unsupported
+        paths,
+        vec![
+            (StemSource::Track(VOX), out.join("01-Lead Vox.wav").display().to_string()),
+            (StemSource::Track(GTR), out.join("02-Gtr_DI.wav").display().to_string()),
+        ]
     );
+    // The Export dialog's defaults: whole song, 48 kHz 24-bit, FX tail.
+    match &command {
+        AudioCommand::ExportStems {
+            range,
+            sample_rate,
+            bit_depth,
+            include_fx_tail,
+            ..
+        } => {
+            assert_eq!(*range, None);
+            assert_eq!(*sample_rate, 48_000);
+            assert_eq!(*bit_depth, StemBitDepth::Int24);
+            assert!(*include_fx_tail);
+        }
+        _ => unreachable!(),
+    }
+
+    // The same tracks ticked in the GUI dialog give the same files.
+    let (mut gui, gui_rx) = stems_app();
+    gui.test_set_project_path(dir.path().to_path_buf());
+    let _ = gui.update(Message::Export(ExportMessage::Open));
+    for id in [VOX, GTR] {
+        let _ = gui.update(Message::Export(ExportMessage::ToggleSource(ExportSource::Track(id))));
+    }
+    let _ = gui.update(Message::Export(ExportMessage::Confirm));
+    assert_eq!(target_paths(&sent_stems(&gui_rx)), paths);
+
+    // The engine renders both (stand-in WAVs: 3 s at 48 kHz).
+    assert_eq!(job_status(&mut app, job).state, JobState::Pending);
+    app.test_apply_engine_event(AudioEvent::StemExportProgress {
+        target_index: 0,
+        total: 2,
+        fraction: 0.0,
+    });
+    write_wav(Path::new(&paths[0].1), 48_000, 144_000);
+    app.test_apply_engine_event(AudioEvent::StemExportTargetDone {
+        index: 0,
+        path: paths[0].1.clone(),
+    });
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Running);
+    assert_eq!(status.progress, Some(0.5));
+    app.test_apply_engine_event(AudioEvent::StemExportProgress {
+        target_index: 1,
+        total: 2,
+        fraction: 0.5,
+    });
+    write_wav(Path::new(&paths[1].1), 48_000, 144_000);
+    app.test_apply_engine_event(AudioEvent::StemExportTargetDone {
+        index: 1,
+        path: paths[1].1.clone(),
+    });
+    app.test_apply_engine_event(AudioEvent::StemExportComplete {
+        files: paths.iter().map(|(_, p)| p.clone()).collect(),
+    });
+
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Done);
+    let result: StemsResult = serde_json::from_value(status.result.unwrap()).unwrap();
+    assert_eq!(result.paths, paths.iter().map(|(_, p)| p.clone()).collect::<Vec<_>>());
+    assert!((result.duration_s - 3.0).abs() < 1e-6, "{}", result.duration_s);
+    for path in &result.paths {
+        assert!(std::fs::metadata(path).unwrap().len() > 44, "{path} is non-empty");
+    }
+    // The job is over: nothing is rendering any more.
+    assert!(app.root_overlay().is_none(), "{:?}", app.root_overlay());
+}
+
+#[test]
+fn stems_track_ids_exports_only_those_tracks() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (mut app, cmd_rx) = stems_app();
+    let _ = started_job(stems(
+        &mut app,
+        json!({ "dir": dir.path().display().to_string(), "track_ids": [VOX] }),
+    ));
+    assert_eq!(
+        target_paths(&sent_stems(&cmd_rx)),
+        vec![(
+            StemSource::Track(VOX),
+            dir.path().join("01-Lead Vox.wav").display().to_string()
+        )]
+    );
+}
+
+#[test]
+fn stems_refuses_unknown_and_empty_track_ids() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (mut app, cmd_rx) = stems_app();
+    for track_ids in [json!([VOX, 999]), json!([])] {
+        let response = stems(
+            &mut app,
+            json!({ "dir": dir.path().display().to_string(), "track_ids": track_ids }),
+        );
+        assert_eq!(response.error.expect("refused").kind(), ErrorKind::InvalidParams);
+    }
+    assert!(!cmd_rx.try_iter().any(|c| matches!(c, AudioCommand::ExportStems { .. })));
+}
+
+#[test]
+fn stems_over_an_existing_file_requires_overwrite() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let existing = dir.path().join("02-Gtr_DI.wav");
+    std::fs::write(&existing, b"keep me").unwrap();
+    let (mut app, cmd_rx) = stems_app();
+
+    let response = stems(&mut app, json!({ "dir": dir.path().display().to_string() }));
+    let error = response.error.expect("overwrite guard");
+    assert_eq!(error.kind(), ErrorKind::NeedsConfirmation);
+    assert!(error.message.contains("02-Gtr_DI.wav"), "{}", error.message);
+    assert!(!cmd_rx.try_iter().any(|c| matches!(c, AudioCommand::ExportStems { .. })));
+    assert_eq!(std::fs::read(&existing).unwrap(), b"keep me");
+
+    // With overwrite the same names are used — no `_1` suffix.
+    let _ = started_job(stems(
+        &mut app,
+        json!({ "dir": dir.path().display().to_string(), "overwrite": true }),
+    ));
+    let paths = target_paths(&sent_stems(&cmd_rx));
+    assert_eq!(paths[1].1, existing.display().to_string());
+}
+
+#[test]
+fn stems_takes_a_range() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (mut app, cmd_rx) = stems_app();
+    let _ = started_job(stems(
+        &mut app,
+        json!({
+            "dir": dir.path().display().to_string(),
+            "range": { "start": { "bar": 2 }, "end": { "bar": 4 } }
+        }),
+    ));
+    match sent_stems(&cmd_rx) {
+        AudioCommand::ExportStems { range, .. } => assert_eq!(range, Some((BAR, 3 * BAR))),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn stems_validates_dir() {
+    let (mut app, _cmd_rx) = stems_app();
+    let response = stems(&mut app, json!({ "dir": "relative/stems" }));
+    assert_eq!(response.error.expect("relative").kind(), ErrorKind::InvalidParams);
+
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let response = stems(&mut app, json!({ "dir": file.path().display().to_string() }));
+    assert_eq!(response.error.expect("a file").kind(), ErrorKind::InvalidParams);
 }
 
 #[test]
@@ -311,4 +591,102 @@ fn stems_with_malformed_params_is_invalid_params() {
         response.error.expect("bad params").kind(),
         ErrorKind::InvalidParams
     );
+}
+
+#[test]
+fn a_stem_that_fails_fails_the_job_naming_what_was_written() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (mut app, cmd_rx) = stems_app();
+    let job = started_job(stems(&mut app, json!({ "dir": dir.path().display().to_string() })));
+    let paths = target_paths(&sent_stems(&cmd_rx));
+    app.test_apply_engine_event(AudioEvent::StemExportTargetDone {
+        index: 0,
+        path: paths[0].1.clone(),
+    });
+    app.test_apply_engine_event(AudioEvent::StemExportTargetError {
+        index: 1,
+        message: "write failed".to_owned(),
+    });
+    app.test_apply_engine_event(AudioEvent::StemExportComplete {
+        files: vec![paths[0].1.clone()],
+    });
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Error);
+    let message = status.error.unwrap().message;
+    assert!(message.contains("write failed"), "{message}");
+    assert!(message.contains("01-Lead Vox.wav"), "{message}");
+}
+
+#[test]
+fn a_stem_export_that_cannot_start_fails_with_its_kind() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (mut app, _cmd_rx) = stems_app();
+    let job = started_job(stems(&mut app, json!({ "dir": dir.path().display().to_string() })));
+    app.test_apply_engine_event(AudioEvent::StemExportError(EngineError::busy(
+        "Stop transport before exporting stems",
+    )));
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Error);
+    assert_eq!(status.error.unwrap().kind, Some(ErrorKind::Busy));
+    // The modal never saw it.
+    assert!(app.test_export_dialog().is_none());
+}
+
+#[test]
+fn the_progress_overlay_cancels_a_control_stem_job() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (mut app, cmd_rx) = stems_app();
+    let job = started_job(stems(&mut app, json!({ "dir": dir.path().display().to_string() })));
+    let _ = sent_stems(&cmd_rx);
+    assert_eq!(app.root_overlay(), Some(Overlay::StemsProgress));
+
+    let _ = app.update(Message::Export(ExportMessage::CancelRender));
+    assert!(cmd_rx.try_iter().any(|c| matches!(c, AudioCommand::CancelStemExport)));
+    app.test_apply_engine_event(AudioEvent::StemExportCancelled { files: Vec::new() });
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Error);
+    assert!(status.error.unwrap().message.contains("cancelled"));
+    assert!(app.root_overlay().is_none());
+}
+
+#[test]
+fn the_export_dialog_and_a_control_stem_job_refuse_each_other() {
+    let dir = tempfile::tempdir().expect("temp dir");
+
+    // A control job is rendering: the dialog does not open, and a second
+    // render.stems is busy.
+    let (mut app, _cmd_rx) = stems_app();
+    let _ = started_job(stems(&mut app, json!({ "dir": dir.path().display().to_string() })));
+    let _ = app.update(Message::Export(ExportMessage::Open));
+    assert!(app.test_export_dialog().is_none(), "the Export dialog is refused");
+    let other = dir.path().join("other");
+    let response = stems(&mut app, json!({ "dir": other.display().to_string() }));
+    assert_eq!(response.error.expect("busy").kind(), ErrorKind::Busy);
+
+    // The dialog is rendering: render.stems answers busy.
+    let (mut gui, _gui_rx) = stems_app();
+    gui.test_set_project_path(dir.path().to_path_buf());
+    let _ = gui.update(Message::Export(ExportMessage::Open));
+    let _ = gui.update(Message::Export(ExportMessage::ToggleSource(ExportSource::Track(VOX))));
+    let _ = gui.update(Message::Export(ExportMessage::Confirm));
+    assert!(gui.test_export_dialog().unwrap().is_rendering());
+    let response = stems(&mut gui, json!({ "dir": other.display().to_string() }));
+    assert_eq!(response.error.expect("busy").kind(), ErrorKind::Busy);
+    // The dialog's events still go to the dialog.
+    gui.test_apply_engine_event(AudioEvent::StemExportComplete { files: Vec::new() });
+    assert_eq!(
+        gui.test_export_dialog().unwrap().phase,
+        ExportPhase::Done(Vec::new())
+    );
+}
+
+#[test]
+fn hello_lists_render_stems() {
+    let mut app = app();
+    let response = roundtrip(
+        &mut app,
+        request(1, "control.hello", json!({ "protocol_version": resonance_control::PROTOCOL_VERSION })),
+    );
+    let hello: resonance_control::methods::control::HelloResult = response.result().unwrap();
+    assert!(hello.capabilities.iter().any(|m| m == "render.stems"), "{:?}", hello.capabilities);
 }

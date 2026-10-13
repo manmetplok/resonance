@@ -3,7 +3,9 @@
 ''':'
 exec python3 "$0" "$@"
 '''
-"""Score vocal renders for intelligibility: transcribe each WAV with
+# Assigned, not a bare docstring: the sh trampoline above is the module's
+# first string, so it would be `__doc__` and the --help text.
+__doc__ = """Score vocal renders for intelligibility: transcribe each WAV with
 Whisper and compare the words against the lyric it was meant to sing.
 
 Input is a directory written by the bank audition
@@ -19,6 +21,12 @@ insertions over the lyric's word count, by edit distance on lowercased
 words with punctuation stripped), floored at 0. Singing is hard for a
 speech recogniser, so read the numbers comparatively — bank against bank,
 before against after — not as an absolute grade.
+
+The scoring, the silence trim and the Whisper call are not defined here:
+they are imported from the singing skill's own checker,
+`resonance-agent-plugin/skills/singing/scripts/intelligibility.py`, so the
+audition and an agent scoring a vocal stem get the same number for the same
+file. That script's `--self-test` covers them.
 
 Whisper is an optional dependency. When `import whisper` fails, the script
 re-runs itself through `uv` with a CPU-only PyTorch:
@@ -37,37 +45,26 @@ Usage:
 """
 
 import argparse
+import importlib.util
 import json
-import os
-import re
-import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = REPO_ROOT / "resonance-app" / "tests" / "vocal" / "fixtures" / "bank_audition_song.json"
-REEXEC_MARK = "RESONANCE_INTELLIGIBILITY_REEXEC"
+SHARED = REPO_ROOT / "resonance-agent-plugin" / "skills" / "singing" / "scripts" / "intelligibility.py"
 
 
-def words(text: str) -> list[str]:
-    return re.findall(r"[a-z']+", text.lower().replace("’", "'"))
+def _load_shared():
+    """The singing skill's checker, imported by path (it ships in the
+    plugin, not as a package)."""
+    spec = importlib.util.spec_from_file_location("resonance_intelligibility", SHARED)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def edit_distance(ref: list[str], hyp: list[str]) -> int:
-    prev = list(range(len(hyp) + 1))
-    for i, r in enumerate(ref, 1):
-        cur = [i] + [0] * len(hyp)
-        for j, h in enumerate(hyp, 1):
-            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (r != h))
-        prev = cur
-    return prev[-1]
-
-
-def word_accuracy(ref_text: str, hyp_text: str) -> float:
-    ref, hyp = words(ref_text), words(hyp_text)
-    if not ref:
-        return 0.0
-    return max(0.0, 1.0 - edit_distance(ref, hyp) / len(ref))
+shared = _load_shared()
 
 
 def load_entries(directory: Path) -> list[dict]:
@@ -95,29 +92,13 @@ def load_entries(directory: Path) -> list[dict]:
     return [e for e in entries if (directory / e["file"]).exists()]
 
 
-def reexec_under_uv() -> None:
-    if os.environ.get(REEXEC_MARK):
-        sys.exit("whisper is still not importable under uv; see the install hint in --help")
-    cmd = [
-        "uv", "run", "--quiet", "--python", "3.12", "--with", "openai-whisper",
-        "--index-url", "https://download.pytorch.org/whl/cpu",
-        "--extra-index-url", "https://pypi.org/simple",
-        "python", str(Path(__file__).resolve()), *sys.argv[1:],
-    ]
-    env = dict(os.environ, **{REEXEC_MARK: "1"})
-    try:
-        raise SystemExit(subprocess.run(cmd, env=env).returncode)
-    except FileNotFoundError:
-        sys.exit("whisper is not installed and `uv` is not on PATH to fetch it "
-                 "(pip install openai-whisper, or install uv)")
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("dir", type=Path, help="audition output directory")
-    parser.add_argument("--model", default="small.en", help="Whisper model (default small.en)")
+    parser.add_argument("--model", default=shared.DEFAULT_MODEL,
+                        help=f"Whisper model (default {shared.DEFAULT_MODEL})")
     parser.add_argument("--json", type=Path, help="write per-file results here")
     args = parser.parse_args()
 
@@ -126,20 +107,15 @@ def main() -> int:
         print(f"no WAVs to score in {args.dir}", file=sys.stderr)
         return 1
 
-    try:
-        import whisper  # noqa: PLC0415 — optional dependency
-    except ImportError:
-        reexec_under_uv()
+    if not shared.whisper_available():
+        shared.reexec_under_uv(Path(__file__), sys.argv[1:])
         return 1
 
-    model = whisper.load_model(args.model)
+    model = shared.load_model(args.model)
     results = []
     for e in sorted(entries, key=lambda e: (e.get("bank", ""), e.get("speaker") or "")):
-        out = model.transcribe(
-            str(args.dir / e["file"]), language="en", fp16=False, temperature=0
-        )
-        heard = out["text"].strip()
-        acc = word_accuracy(e["text"], heard)
+        heard = shared.transcribe(model, args.dir / e["file"]) or ""
+        acc = shared.word_accuracy(e["text"], heard)
         results.append({
             "file": e["file"],
             "bank": e.get("bank"),

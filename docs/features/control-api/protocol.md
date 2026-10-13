@@ -50,9 +50,9 @@ kinds; it is never sent.
   `{app_version, protocol_version, capabilities}`. The app compares
   versions with `!=`: a mismatch marks the connection incompatible.
 - `capabilities` is `methods::capabilities()`: every method this build
-  answers, in namespace order (184 today). It is a contract. A name that
-  would always answer `unsupported` is kept out of it — that is why
-  `render.stems` is defined but not listed.
+  answers, in namespace order (187 today). It is a contract. A name that
+  would always answer `unsupported` is kept out of it (as `render.stems`
+  was until it was built).
 - What bumps the version: removing or renaming a method or field, or
   changing what an existing field means (CTL-01 changed what `beat`
   counts in 6/8; that kind of change needs a bump or a capability the
@@ -180,5 +180,3 @@ a version bump; that is a review rule.
 
 ## Known gaps
 
-- `render.stems`:
-  [render-stems-control](../../intents/control-api/render-range-and-stems.md).

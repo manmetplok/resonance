@@ -166,6 +166,34 @@ pub(crate) fn view_mixdown_progress_overlay<'a>(r: &'a Resonance) -> Element<'a,
     )
 }
 
+/// A control client's `render.stems` job (the Export modal is not open
+/// for it): the same blocking overlay, fed by the `StemExport*` events.
+/// Cancel dispatches `ExportMessage::CancelRender`, which stops the
+/// engine's queue between targets for this job as for the modal's.
+pub(crate) fn view_stems_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
+    let Some(stems) = r.control.pending_stems.as_ref() else {
+        return Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(0.0)).into();
+    };
+    let title = text("Exporting stems")
+        .size(18)
+        .font(theme::SERIF_ITALIC_FONT)
+        .color(theme::TEXT_1)
+        .into();
+    let shown = (stems.done + 1).min(stems.total);
+    let caption = if stems.cancel_requested {
+        format!("stem {shown} / {} \u{00b7} cancelling", stems.total)
+    } else {
+        format!("stem {shown} / {}", stems.total)
+    };
+    progress_dialog(
+        title,
+        "A remote client is rendering per-track stems offline.",
+        stems.fraction,
+        caption,
+        Message::Export(crate::message::ExportMessage::CancelRender),
+    )
+}
+
 /// The shared blocking progress dialog: dimmed click-swallowing backdrop,
 /// centered panel with title / detail / 14 px progress bar / mono caption,
 /// and a ghost Cancel that dispatches `cancel_msg`. Bounce and freeze

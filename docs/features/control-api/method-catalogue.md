@@ -1,11 +1,11 @@
 # Control method catalogue
 
-> Verified against master @ `ad042afb` + voice presets on 2026-10-13.
+> Verified against master @ `f9438e38` + voice presets + `render.stems` on 2026-10-13.
 > Source of truth: `resonance_control::methods::capabilities()` and each
 > method constant's doc comment in `resonance-control/src/methods/*.rs`.
 
 Every control method the app implements, the MCP tool that exposes it,
-and the feature area that owns it. 188 methods, 188 tools. The MCP tool
+and the feature area that owns it. 190 methods, 190 tools. The MCP tool
 is always the method name with its first `.` replaced by `_`; in Claude
 Code it is `mcp__resonance__<tool>`.
 
@@ -196,7 +196,8 @@ area; the sibling areas may refine it.
 | `vocal.voice_presets` | `vocal_voice_presets` | read | [compose](../compose/voice-presets.md) | list the voice presets: the built-ins (every voice the blind listen scored 3+, best first, with its score) and the user's, each with `installed` and its settings (no project needed) |
 | `vocal.apply_voice_preset` | `vocal_apply_voice_preset` | edit | [compose](../compose/voice-presets.md) | set a vocal lane's voicebank, speaker, voice, range and delivery from a preset, leaving lyrics, generator settings and curves; applies on a bank that is not installed and says so |
 | `vocal.save_voice_preset` | `vocal_save_voice_preset` | library | [compose](../compose/voice-presets.md) | save a vocal lane's voice and delivery as a user preset (`overwrite` to replace one; needs the open project for the lane, but no undo entry, no revision) |
-| `render.mixdown` | `render_mixdown` | job | [audio-engine](../audio-engine/offline-render-and-export.md) | bounce the master mix to a WAV file |
+| `render.mixdown` | `render_mixdown` | job | [audio-engine](../audio-engine/offline-render-and-export.md) | bounce the master mix to a WAV file, the whole song or a `range` |
+| `render.stems` | `render_stems` | job | [audio-engine](../audio-engine/stem-export.md) | one WAV per top-level track (or per `track_ids`) into a directory, named as the Export dialog names them |
 | `meter.measure` | `meter_measure` | job | [mixer](../mixer/meter-control-api.md) | measure one slice of the mix |
 | `meter.stems` | `meter_stems` | job | [mixer](../mixer/meter-control-api.md) | measure every track plus the master in one pass |
 | `meter.snapshot` | `meter_snapshot` | job | [mixer](../mixer/meter-control-api.md) | measure one slice and keep the numbers for a later `meter.compare` |
@@ -226,12 +227,6 @@ area; the sibling areas may refine it.
 | `presets.vocabulary` | `presets_vocabulary` | read | [plugins-effects](../plugins-instruments/plugin-preset-library.md) | the seeded facet values plus the ones in use, for consistent tagging |
 | `job.status` | `job_status` | read | [control-api](jobs.md) | read a job's current state |
 | `job.wait` | `job_wait` | read | [control-api](jobs.md) | block until the job is terminal or the timeout elapses; returns the then-current status |
-
-### Defined but not listed
-
-| Method | Status |
-|---|---|
-| `render.stems` | Wire types (`StemsParams`, `StemsResult`) and a handler that answers `unsupported` exist; kept out of `capabilities` and has no MCP tool. See [render-stems-control](../../intents/control-api/render-range-and-stems.md). |
 
 ## Where the logic lives
 
@@ -274,6 +269,5 @@ routed (an arm dropped from another namespace's dispatch would answer
 
 ## Known gaps
 
-- `render.stems` (above).
 - Drum pad map:
   [drum-pad-map-mcp](../../intents/control-api/drum-pad-map-mcp.md).

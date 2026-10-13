@@ -57,7 +57,7 @@ pub(crate) use measure::{measure_audio_spawn, measure_mix_spawn, measure_mix_spa
 pub use stem::{render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter};
 pub use stem_export::export_stems;
 pub(crate) use stem_export::export_stems_spawn;
-pub use wav::{encode_buffer_for_test, normalize_buffer_for_test};
+pub use wav::{encode_buffer_for_test, export_for_test, normalize_buffer_for_test};
 pub(crate) use wav::{run_export, ExportReporter};
 
 /// A render's output file while it is being written (code review ENG-13).
@@ -346,6 +346,7 @@ pub fn to_wav(
     run_export(
         path,
         &crate::types::ExportSettings::default_wav(),
+        None,
         ExportReporter::Bounce,
         shared,
         &cancel,
@@ -354,38 +355,6 @@ pub fn to_wav(
         sample_rate,
         event_tx,
     );
-}
-
-/// Test surface: run the real export renderer ([`run_export`]) with
-/// explicit settings, automation snapshot and cancel token, and return
-/// every event it emitted (`Export*` family). Unlike [`to_wav`] this
-/// reaches the normalization passes and the cancel / temp-file paths.
-#[doc(hidden)]
-#[allow(clippy::too_many_arguments)]
-#[cfg_attr(not(feature = "test-internals"), allow(dead_code))]
-pub fn export_for_test(
-    path: String,
-    settings: &ExportSettings,
-    cancel: &AtomicBool,
-    shared: &Arc<SharedState>,
-    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
-    automation: &super::AutomationSnapshot,
-    sample_rate: u32,
-) -> Vec<AudioEvent> {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    run_export(
-        path,
-        settings,
-        ExportReporter::Export,
-        shared,
-        cancel,
-        tempo_map,
-        automation,
-        sample_rate,
-        &tx,
-    );
-    drop(tx);
-    rx.try_iter().collect()
 }
 
 /// Spawn an offline export on a dedicated worker thread so the engine
@@ -407,6 +376,7 @@ pub fn export_for_test(
 pub(crate) fn export_spawn(
     path: String,
     settings: ExportSettings,
+    range: Option<(SamplePos, SamplePos)>,
     reporter: ExportReporter,
     shared: Arc<SharedState>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -437,6 +407,7 @@ pub(crate) fn export_spawn(
                     run_export(
                         path,
                         &settings,
+                        range,
                         reporter,
                         &shared,
                         &cancel_render,
