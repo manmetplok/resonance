@@ -151,6 +151,8 @@ impl UndoHistory {
         if self.coalesce_key.as_ref() == Some(key) && !self.undo.is_empty() {
             self.redo.clear();
             self.redo_labels.clear();
+            // The top entry now covers one more edit.
+            self.generation += 1;
             true
         } else {
             false

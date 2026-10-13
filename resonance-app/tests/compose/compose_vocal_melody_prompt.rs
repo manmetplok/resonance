@@ -11,11 +11,12 @@ use crate::common;
 use iced::widget::canvas::Program;
 use iced::{mouse, Point, Rectangle, Size};
 use iced_test::simulator::Simulator;
+use resonance_app::compose::messages::{ChordInspectorMsg, GeneratorKind};
 use resonance_app::compose::vocal_melody::VocalMelodyMsg;
 use resonance_app::compose::{
     ComposeMessage, RailPanelKey, SelectedLane, VocalMelodyChoice,
 };
-use resonance_app::message::{Message, MidiEditorMessage};
+use resonance_app::message::{GlobalTrackMessage, Message, MidiEditorMessage};
 use resonance_app::state::overlay::Overlay;
 use resonance_app::state::ViewMode;
 use resonance_app::view::compose::chord_lane::{ChordLaneCanvas, ChordLaneState};
@@ -344,4 +345,89 @@ fn the_badge_buttons_refit_and_regenerate() {
     let (mut app, def) = kept_lane();
     send(&mut app, VocalMelodyMsg::Regenerate { definition_id: def, track_id: LEAD_VOCAL });
     assert_eq!(lane_flags(&app, def), Default::default());
+}
+
+fn inspector(app: &mut Resonance, def: u64, msg: ChordInspectorMsg) {
+    let _ = app.update(Message::Compose(ComposeMessage::ChordInspector { definition_id: def, msg }));
+}
+
+fn substitution(app: &Resonance, def: u64) -> f32 {
+    match &app.compose_state().find_definition(def).unwrap().generator_spec {
+        Some(resonance_music_theory::GeneratorSpec::Schema { substitution, .. }) => *substitution,
+        other => panic!("a schema section, got {other:?}"),
+    }
+}
+
+/// The schema substitution slider coalesces its steps into one entry and
+/// can rewrite the chords: the question waits for the release, and a
+/// second drag after an answered first one is its own entry — Cancel
+/// takes back only that one (review finding 1).
+#[test]
+fn a_slider_asks_at_release_and_cancel_undoes_only_its_own_drag() {
+    let (mut app, def) = demo_app();
+    inspector(&mut app, def, ChordInspectorMsg::SetGeneratorKind(GeneratorKind::Schema));
+    inspector(&mut app, def, ChordInspectorMsg::Generate);
+    if app.compose_state().vocal_melody.prompt.is_some() {
+        send(&mut app, VocalMelodyMsg::Apply);
+    }
+
+    // First drag: two steps, then the release.
+    inspector(&mut app, def, ChordInspectorMsg::SetSchemaSubstitution(0.6));
+    inspector(&mut app, def, ChordInspectorMsg::SetSchemaSubstitution(1.0));
+    assert!(app.compose_state().vocal_melody.prompt.is_none(), "not under the held slider");
+    send(&mut app, VocalMelodyMsg::ControlReleased);
+    assert!(app.compose_state().vocal_melody.prompt.is_some(), "asks at the release");
+    send(&mut app, VocalMelodyMsg::Apply);
+    let chords_after_first = chords(&app, def);
+    let notes_after_first = lead_notes(&app);
+    let entries = undo_len(&app);
+
+    // Second drag.
+    inspector(&mut app, def, ChordInspectorMsg::SetSchemaSubstitution(0.0));
+    assert_eq!(undo_len(&app), entries + 1, "a new entry, not the answered run's");
+    send(&mut app, VocalMelodyMsg::ControlReleased);
+    assert!(app.compose_state().vocal_melody.prompt.is_some());
+    send(&mut app, VocalMelodyMsg::Cancel);
+    assert_eq!(substitution(&app, def), 1.0, "only the second drag is undone");
+    assert_eq!(chords(&app, def), chords_after_first);
+    assert_eq!(lead_notes(&app), notes_after_first, "the first drag's outcome stays");
+    assert_eq!(undo_len(&app), entries);
+}
+
+/// Mid-gesture chord changes touch no note: a meter dragged shorter (its
+/// chords trimmed) and back keeps the whole melody once the gesture ends
+/// and Keep is chosen (review finding 2).
+#[test]
+fn keep_after_a_gesture_relays_once_from_the_untouched_notes() {
+    let (mut app, def) = demo_app();
+    let notes = lead_notes(&app);
+    let _ = app.update(Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(0)));
+    for numerator in [2, 6] {
+        let _ = app.update(Message::GlobalTrack(GlobalTrackMessage::UpdateSignatureEvent {
+            index: 0,
+            numerator,
+            denominator: 8,
+        }));
+        assert_eq!(lead_notes(&app), notes, "nothing re-laid mid-gesture");
+        assert!(app.compose_state().vocal_melody.prompt.is_none());
+    }
+    assert!(lane_flags(&app, def).melody_predates_chords, "flagged while parked");
+    let _ = app.update(Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag));
+    assert!(app.compose_state().vocal_melody.prompt.is_some(), "asks after the gesture");
+    send(&mut app, VocalMelodyMsg::SetAllChoices(VocalMelodyChoice::Keep));
+    send(&mut app, VocalMelodyMsg::Apply);
+    assert_eq!(lead_notes(&app), notes, "the melody is intact at the final length");
+}
+
+/// Ctrl+Z while the question is open undoes the chord change; the notice
+/// says so rather than that melodies were kept (review finding 5).
+#[test]
+fn an_undo_that_closes_the_question_says_it_undid() {
+    let (mut app, def) = demo_app();
+    edit_first_chord(&mut app, def);
+    assert!(app.compose_state().vocal_melody.prompt.is_some());
+    let _ = app.update(Message::Undo);
+    assert!(app.compose_state().vocal_melody.prompt.is_none());
+    let notice = app.test_history_notice().unwrap_or_default().to_owned();
+    assert!(notice.contains("undone"), "{notice}");
 }

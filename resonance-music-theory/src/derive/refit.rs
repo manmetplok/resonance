@@ -16,11 +16,14 @@
 //! - **Every other note** moves to the nearest **scale tone**. With no
 //!   scale the key is inferred from the chords ([`infer_scale`]); with a
 //!   chromatic one the note keeps its pitch (every pitch is in it).
-//! - A note already on a fitting pitch class does not move.
-//! - **Tie-break:** when a pitch above and one below are equally near, the
-//!   one that alone keeps the original interval direction from the previous
-//!   note wins (contour; a repeated note counts, so a repeat stays a
-//!   repeat); otherwise the lower one.
+//! - **Contour.** Each note keeps the direction it had from the previous
+//!   note — up, down or a repeat — measured against the previous note *as
+//!   re-fitted*: of the fitting pitches within a tritone, the nearest one
+//!   that keeps that direction wins, and only when none does the nearest
+//!   fitting pitch overall. So a note that already fits stays put unless
+//!   the previous note's move would flip its direction, and a repeated note
+//!   stays a repeat whenever the repeat fits. Equal distances take the
+//!   lower pitch.
 //!
 //! A note under no chord (a gap in the grid) uses the scale rule.
 
@@ -127,38 +130,27 @@ fn pitch_class_set(pcs: impl Iterator<Item = u8>) -> [bool; 12] {
     set
 }
 
-/// The pitch nearest `pitch` whose class is in `targets`, with the
-/// contour tie-break. `prev` is `(previous original pitch, previous
+/// The fitting pitch for `pitch` (see the module docs): within a tritone,
+/// nearest first, preferring the candidates that keep the direction from
+/// the previous note. `prev` is `(previous original pitch, previous
 /// refitted pitch)`.
 fn nearest_fitting(pitch: u8, targets: &[bool; 12], prev: Option<(u8, u8)>) -> u8 {
-    if !targets.iter().any(|t| *t) || targets[usize::from(pitch % 12)] {
+    if !targets.iter().any(|t| *t) {
         return pitch;
     }
-    for distance in 1i16..=6 {
-        let below = i16::from(pitch) - distance;
-        let above = i16::from(pitch) + distance;
-        let fits = |p: i16| (0..=127).contains(&p) && targets[(p as usize) % 12];
-        match (fits(below), fits(above)) {
-            (false, false) => continue,
-            (true, false) => return below as u8,
-            (false, true) => return above as u8,
-            (true, true) => return tie_break(pitch, below as u8, above as u8, prev),
+    let candidates: Vec<u8> = (i16::from(pitch) - 6..=i16::from(pitch) + 6)
+        .filter(|p| (0..=127).contains(p) && targets[(*p as usize) % 12])
+        .map(|p| p as u8)
+        .collect();
+    let nearest = |pool: &mut dyn Iterator<Item = u8>| {
+        pool.min_by_key(|c| (c.abs_diff(pitch), *c))
+    };
+    if let Some((prev_orig, prev_new)) = prev {
+        let direction = pitch.cmp(&prev_orig);
+        let mut keeping = candidates.iter().copied().filter(|c| c.cmp(&prev_new) == direction);
+        if let Some(best) = nearest(&mut keeping) {
+            return best;
         }
     }
-    pitch
-}
-
-/// Two equally near candidates: the one that alone keeps the original
-/// interval direction from the previous note (a repeat counts as a
-/// direction); otherwise the lower one.
-fn tie_break(pitch: u8, below: u8, above: u8, prev: Option<(u8, u8)>) -> u8 {
-    let Some((prev_orig, prev_new)) = prev else {
-        return below;
-    };
-    let direction = pitch.cmp(&prev_orig);
-    let keeps = |candidate: u8| candidate.cmp(&prev_new) == direction;
-    match (keeps(below), keeps(above)) {
-        (false, true) => above,
-        _ => below,
-    }
+    nearest(&mut candidates.iter().copied()).unwrap_or(pitch)
 }

@@ -95,6 +95,9 @@ pub struct VocalMelodyPrompt {
     pub history_generation: u64,
     /// Whether the edit has an undo entry Cancel can take back.
     pub undoable: bool,
+    /// The undo stack's depth when the question opened, to tell an undo
+    /// that closed it from other history moves.
+    pub undo_len: usize,
 }
 
 impl VocalMelodyPrompt {
@@ -124,6 +127,14 @@ pub struct VocalMelodyState {
     pub undecided: Vec<VocalLaneKey>,
     /// The open question, when one is showing.
     pub prompt: Option<VocalMelodyPrompt>,
+    /// The undecided lanes came from a coalesced control (a slider drag):
+    /// the question waits for the control's release.
+    pub parked_run: bool,
+    /// Lanes a chord or length change reached while a Begin…Commit
+    /// gesture was open, with the choice that applied (`None`: ask). They
+    /// are only flagged until the gesture commits, then get their outcome
+    /// once, at the final length.
+    pub gesture_parked: Vec<(VocalLaneKey, Option<VocalMelodyChoice>)>,
 }
 
 /// Messages of the chord-change flow and the lane badge.
@@ -148,6 +159,10 @@ pub enum VocalMelodyMsg {
     /// Settings › Compose "Ask again about vocal melodies": forget the
     /// project's remembered choice.
     ForgetRememberedChoice,
+    /// A continuous control that can change chords (the schema
+    /// substitution slider) was released: a question its drag raised
+    /// opens now, not under the user's held mouse.
+    ControlReleased,
 }
 
 impl VocalMelodyMsg {
@@ -169,7 +184,8 @@ impl VocalMelodyMsg {
             | Self::SetAllChoices(_)
             | Self::ToggleRemember
             | Self::Apply
-            | Self::Cancel => UndoAction::Skip,
+            | Self::Cancel
+            | Self::ControlReleased => UndoAction::Skip,
         }
     }
 }

@@ -231,12 +231,17 @@ vocal lane goes through `update/compose/vocal_melody.rs`
     or more beats, a chord change) or a note a beat or longer; a scale tone
     otherwise (the section's scale, the chord track's key, or — with
     neither — the major / natural-minor key inferred from the chords,
-    `infer_scale`; a chromatic scale leaves weak notes alone). A note
-    already fitting does not move; a move is at most a tritone; an equal
-    choice above / below takes the one that alone keeps the previous
-    interval direction (a repeat counts), else the lower. Count, rhythm,
-    velocity and the lyric table never change, and the clip is edited in
-    place (same id). Clears `melody_predates_chords`.
+    `infer_scale`; a chromatic scale leaves weak notes alone). **Contour:**
+    each note keeps its direction from the previous note — up, down or a
+    repeat — measured against the previous note *as re-fitted*: of the
+    fitting pitches within a tritone, the nearest one that keeps the
+    direction wins, and only if none does the nearest overall (equal
+    distances take the lower). So a note that already fits stays put
+    unless the previous note's move would flip its direction, and a repeat
+    stays a repeat whenever the repeat fits. Count, rhythm, velocity and
+    the lyric table never change, and the clip is edited in place (same
+    id). Clears `melody_predates_chords` — only when the lane had a clip to
+    write to.
   - **Regenerate** — `rederive_vocal_melody`, the old behaviour.
 - **Who chooses.** A control call's `vocal_melody`; else the project's
   remembered choice; else, from the GUI, a question; from control, Keep.
@@ -256,8 +261,20 @@ vocal lane goes through `update/compose/vocal_melody.rs`
   drop the redo step. The question remembers the undo history's
   generation (`UndoHistory::generation`) and closes — lanes kept and
   flagged, a notice says so — if the history moves without it (an undo,
-  a control edit, a load). A chord drag publishes one `MoveChord` /
+  a control edit, a load); the notice says "undone" when an undo closed
+  it and "kept" otherwise. A chord drag publishes one `MoveChord` /
   `ResizeChord` at the release, so it asks once.
+- **Gestures and sliders.** While a Begin…Commit gesture is open, a
+  chord or length change touches no vocal note: the lane is flagged and
+  parked, and gets its outcome (Keep re-lays it) once, at the final
+  length, after the commit — then the question opens. The schema
+  substitution slider records one coalesced entry per drag: its lanes are
+  parked until its release (`VocalMelodyMsg::ControlReleased`, the
+  slider's `on_release`); any other edit before that leaves them kept and
+  flagged. Opening the question, Apply and Cancel each break the coalesce
+  run, and extending a run bumps the history generation, so a later
+  nudge is an entry of its own and Cancel never takes back an answered
+  one.
 - **Remembered choice.** `ProjectFile::vocal_melody_choice`
   (`compose.vocal_melody.remembered`): project state, saved and riding
   undo like the cycle-record mode. Settings › General › Compose "Ask
@@ -437,6 +454,18 @@ Not covered: theme/POV/clichés (they have no effect).
   a resize under a hand-written melody asks (and Keep re-lays the notes
   at the new length). A resize is reported with the same flag name,
   `melody_predates_chords`.
+- **A behaviour change without a protocol bump.** `harmony.*` and
+  `section.resize` used to regenerate every vocal melody they reached;
+  called without `vocal_melody` they now keep it (and flag the lane). No
+  field changed meaning and none was removed — `vocal_melody` and
+  `vocal_lanes_affected` are additions — so `PROTOCOL_VERSION` stays; the
+  default outcome changed, which the control-API conventions leave to the
+  docs, and there are no external clients yet. The agent plugin (0.6.0)
+  says so in `singing`.
+- **Lanes without a clip mapping.** A lane loaded from a project saved
+  before `ProjectFile::derived_clips` resolves its clips by position for
+  reading *and* writing (`lane_placement_clips`), and a resize re-lays it
+  too.
 - **Control surfaces.** `vocal_melody` is on `harmony.*` and
   `section.resize`. `arrangement.insert_bars` / `remove_bars` never
   re-derive a section, so they take none. A time-signature edit that
@@ -474,8 +503,6 @@ Not covered: theme/POV/clichés (they have no effect).
 - A lane that sings at several placements is judged and re-fitted from
   its first placement's clip; a hand edit made to another placement's clip
   only is not compared.
-- The Settings › General page already ran past a laptop-height window
-  before the Compose section was added; it still does not scroll.
 
 - Breaths are rendered (slice 12) but not drawn in the vocal roll.
 - An `s` edit is a lyric edit: the lane goes `stale` and, if it already

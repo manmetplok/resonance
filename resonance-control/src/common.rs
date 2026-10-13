@@ -194,7 +194,9 @@ pub enum VocalMelodyChoice {
     Keep,
     /// Move each pitch to the nearest note that fits the new chords
     /// (chord tones on strong beats and long notes, scale tones
-    /// elsewhere). Rhythm, note count, lyrics and `_` holds stay.
+    /// elsewhere), keeping each step's direction from the previous note
+    /// where a fitting pitch allows. Rhythm, note count, lyrics and `_`
+    /// holds stay.
     Refit,
     /// Re-derive the melody from the lane's generator, discarding hand
     /// edits — what every chord edit did before.

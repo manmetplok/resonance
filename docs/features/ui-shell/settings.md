@@ -50,6 +50,8 @@ nav rail with three pages:
 - **Recording:** "Distinct takes per loop pass", with a one-line
   explanation. This is the **project's** `loop_record_mode`, which is
   undoable and saved in the project, not in `settings.json`.
+- The General page scrolls (`GENERAL_PAGE_HEIGHT`), opening at the top;
+  it outgrew a laptop-height window.
 - **Compose:** "Ask again about vocal melodies" forgets the project's
   remembered answer to the chord-change question
   ([vocal lyrics and melody](../compose/vocal-lyrics-and-melody.md#chord-and-length-changes-under-a-melody-bug-70));

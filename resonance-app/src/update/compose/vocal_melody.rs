@@ -114,8 +114,16 @@ pub(crate) fn note_hand_edit(r: &mut crate::Resonance, clip_id: ClipId) {
     }
 }
 
-/// The lane's clips, one per placement that has one, in placement order.
-fn lane_clip_ids(r: &crate::Resonance, definition_id: u64, track_id: TrackId) -> Vec<ClipId> {
+/// The lane's clips, one per placement that has one, in placement order:
+/// `(placement_id, clip_id)`. The derived-clip map when it knows the lane;
+/// otherwise, for a lane loaded without its mapping, the clip on the
+/// track that starts where each placement starts — the way a render
+/// resolves it (`vocal_render::lane_midi_clip`).
+fn lane_placement_clips(
+    r: &crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+) -> Vec<(u64, ClipId)> {
     let placements: Vec<(u64, u32)> = r
         .compose
         .placements
@@ -123,20 +131,44 @@ fn lane_clip_ids(r: &crate::Resonance, definition_id: u64, track_id: TrackId) ->
         .filter(|p| p.definition_id == definition_id)
         .map(|p| (p.id, p.start_bar))
         .collect();
-    let mapped: Vec<ClipId> = placements
+    let mapped: Vec<(u64, ClipId)> = placements
         .iter()
         .filter_map(|(pid, _)| {
             r.compose
                 .derived_clips
                 .get(&(definition_id, *pid, track_id))
-                .copied()
+                .map(|clip| (*pid, *clip))
         })
         .collect();
     if !mapped.is_empty() {
         return mapped;
     }
-    super::vocal_render::lane_midi_clip(r, definition_id, track_id, &placements)
+    placements
+        .iter()
+        .filter_map(|(pid, start_bar)| {
+            let start = r.tempo_map.bar_to_sample(*start_bar);
+            r.midi_clips
+                .iter()
+                .find(|c| {
+                    c.track_id == track_id
+                        && c.start_sample == start
+                        && !r.compose.derived_clips.values().any(|id| *id == c.id)
+                })
+                .map(|c| (*pid, c.id))
+        })
+        .collect()
+}
+
+/// Whether the lane has a clip, mapped or found by position.
+pub(super) fn lane_has_clip(r: &crate::Resonance, definition_id: u64, track_id: TrackId) -> bool {
+    !lane_placement_clips(r, definition_id, track_id).is_empty()
+}
+
+/// The lane's clips, in placement order.
+fn lane_clip_ids(r: &crate::Resonance, definition_id: u64, track_id: TrackId) -> Vec<ClipId> {
+    lane_placement_clips(r, definition_id, track_id)
         .into_iter()
+        .map(|(_, clip)| clip)
         .collect()
 }
 
@@ -197,6 +229,18 @@ pub(super) fn on_chord_change(r: &mut crate::Resonance, definition_id: u64, trac
     }
     let state = &r.compose.vocal_melody;
     let chosen = state.requested.or(state.remembered);
+    if r.session.undo.has_pending() {
+        // Mid-gesture (a drag that keeps changing the length or chords):
+        // touch no note now — a re-lay at an intermediate length would cut
+        // notes for good. Flag the lane; it gets its outcome once, at the
+        // final length, when the gesture commits (`settle_gesture`).
+        update_flags(r, definition_id, track_id, |f| f.melody_predates_chords = true);
+        let parked = &mut r.compose.vocal_melody.gesture_parked;
+        if !parked.iter().any(|(lane, _)| *lane == (definition_id, track_id)) {
+            parked.push(((definition_id, track_id), chosen));
+        }
+        return;
+    }
     let outcome = chosen.unwrap_or(VocalMelodyChoice::Keep);
     apply_outcome(r, definition_id, track_id, outcome);
     let state = &mut r.compose.vocal_melody;
@@ -207,6 +251,20 @@ pub(super) fn on_chord_change(r: &mut crate::Resonance, definition_id: u64, trac
     });
     if chosen.is_none() && !state.undecided.contains(&(definition_id, track_id)) {
         state.undecided.push((definition_id, track_id));
+    }
+}
+
+/// A gesture that reached vocal lanes has committed: give each parked lane
+/// its outcome at the final length, and leave the unchosen ones (kept)
+/// for the question.
+pub(super) fn settle_gesture(r: &mut crate::Resonance) {
+    let parked = std::mem::take(&mut r.compose.vocal_melody.gesture_parked);
+    for ((definition_id, track_id), chosen) in parked {
+        apply_outcome(r, definition_id, track_id, chosen.unwrap_or(VocalMelodyChoice::Keep));
+        let undecided = &mut r.compose.vocal_melody.undecided;
+        if chosen.is_none() && !undecided.contains(&(definition_id, track_id)) {
+            undecided.push((definition_id, track_id));
+        }
     }
 }
 
@@ -285,7 +343,10 @@ pub(crate) fn refit_lane(
         .zip(&first)
         .filter(|(a, b)| a.note != b.note)
         .count();
-    rewrite_lane_notes(r, definition_id, track_id, refit);
+    if rewrite_lane_notes(r, definition_id, track_id, refit) == 0 {
+        // No clip to write to: nothing was re-fitted.
+        return None;
+    }
     update_flags(r, definition_id, track_id, |f| f.melody_predates_chords = false);
     Some(changed)
 }
@@ -294,30 +355,22 @@ pub(crate) fn refit_lane(
 /// length: a clip whose length still matches is edited in place (its id
 /// and lyric table stay), one whose section changed length is
 /// re-installed at the new length with the notes past its end cut.
+/// Returns how many clips it found (a clip `f` leaves alone counts).
 fn rewrite_lane_notes(
     r: &mut crate::Resonance,
     definition_id: u64,
     track_id: TrackId,
     f: impl Fn(&[MidiNote]) -> Vec<MidiNote>,
-) {
+) -> usize {
     let Some(duration) = section_ticks(r, definition_id) else {
-        return;
+        return 0;
     };
-    let placements: Vec<u64> = r
-        .compose
-        .placements
-        .iter()
-        .filter(|p| p.definition_id == definition_id)
-        .map(|p| p.id)
-        .collect();
-    for placement_id in placements {
-        let key = (definition_id, placement_id, track_id);
-        let Some(clip_id) = r.compose.derived_clips.get(&key).copied() else {
-            continue;
-        };
+    let mut found = 0;
+    for (placement_id, clip_id) in lane_placement_clips(r, definition_id, track_id) {
         let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) else {
             continue;
         };
+        found += 1;
         let old: Vec<MidiNote> = clip.notes.as_ref().clone();
         let notes = f(&old);
         if clip.duration_ticks == duration {
@@ -339,6 +392,14 @@ fn rewrite_lane_notes(
             .cloned()
             .unwrap_or_default();
         let (notes, lyrics) = cut_to(notes, lyrics, duration);
+        let key = (definition_id, placement_id, track_id);
+        if r.compose.derived_clips.get(&key) != Some(&clip_id) {
+            // A clip the map does not know: the install below only tears
+            // down mapped ones.
+            crate::engine_events::midi::send_mirrored_delete(r, clip_id);
+            r.midi_clips.retain(|c| c.id != clip_id);
+            r.compose.vocal_audio.clip_lyrics.remove(&clip_id);
+        }
         super::vocal_midi_install::VocalMidiInstall {
             definition_id,
             track_id,
@@ -350,6 +411,7 @@ fn rewrite_lane_notes(
         }
         .install(r);
     }
+    found
 }
 
 /// Drop the notes that start at or past `duration`, shorten the ones that

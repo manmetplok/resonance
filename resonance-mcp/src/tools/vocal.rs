@@ -55,8 +55,8 @@ impl ResonanceMcp {
     #[tool(
         description = "Re-fit a vocal lane's melody to its section's current chords: each \
                        pitch moves to the nearest note that fits (a chord tone on strong beats \
-                       and notes a beat or longer, a scale tone elsewhere), keeping the \
-                       contour. Rhythm, note count, lyrics and _ holds never change, so a \
+                       and notes a beat or longer, a scale tone elsewhere) that keeps its \
+                       step's direction (up, down or a repeat) from the previous note. Rhythm, note count, lyrics and _ holds never change, so a \
                        hand-written melody survives. Use it on a lane song_vocal reports with \
                        melody_predates_chords: true after a chord edit, or pass vocal_melody: \
                        \"refit\" to the harmony_* call instead. section_id picks the lane \

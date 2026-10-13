@@ -165,7 +165,19 @@ fn an_equal_choice_keeps_the_previous_interval_direction() {
     assert_eq!(refit[1].note, 60, "E -> D falls, so D becomes C");
 }
 
-/// A repeated note stays a repeat when the tie allows it.
+/// The previous note's move would turn a step up into a repeat: the note
+/// moves on up instead, though it already fitted. E over F major goes to
+/// F; the F that followed it rises to G.
+#[test]
+fn direction_is_kept_against_the_refitted_previous_note() {
+    let chords = vec![chord(PitchClass::F, ChordQuality::Maj, 0, 8)];
+    let line = vec![note(64, 0.0, 1.0), note(65, 1.5, 0.5)];
+    let refit = refit_melody(&line, &chords, Some(c_major()), TPB, 4);
+    assert_eq!(refit[0].note, 65, "E is no tone of F major: up to F");
+    assert_eq!(refit[1].note, 67, "the step up stays a step up");
+}
+
+/// A repeated note stays a repeat when the repeat fits.
 #[test]
 fn a_repeated_note_repeats_after_a_refit() {
     let chords = vec![chord(PitchClass::C, ChordQuality::Maj, 0, 8)];

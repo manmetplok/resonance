@@ -386,3 +386,42 @@ fn an_edit_that_changes_no_melody_reports_nothing() {
     assert!(result.vocal_lanes_affected.is_empty(), "{:?}", result.vocal_lanes_affected);
     assert!(!lane(&vocal_view(&mut app), verse).melody_predates_chords);
 }
+
+/// A lane loaded without its derived-clip mapping (a project from before
+/// `derived_clips`) is read *and* written through the same by-position
+/// lookup: Keep, Re-fit and a resize all reach its clip (review finding 4).
+#[test]
+fn a_lane_without_its_clip_mapping_is_refitted_and_relaid() {
+    let mut app = app_with_project();
+    let verse = rendered_lane(&mut app, "Verse", 1);
+    let written = hand_write(&mut app);
+    app.test_forget_derived_clips();
+
+    progression(&mut app, verse, None);
+    assert!(lane(&vocal_view(&mut app), verse).melody_predates_chords);
+    let result: RefitMelodyResult = call(
+        &mut app,
+        "vocal.refit_melody",
+        &json!({ "track_id": TRACK, "section_id": verse }),
+    )
+    .result()
+    .expect("vocal.refit_melody succeeds");
+    let refit = lane_clip(&app).1;
+    let moved = refit.iter().zip(&written).filter(|(a, b)| a.note != b.note).count();
+    assert!(result.notes_changed > 0);
+    assert_eq!(result.notes_changed, moved, "the reported change is the written one");
+    assert!(!lane(&vocal_view(&mut app), verse).melody_predates_chords);
+
+    let resized: ResizeResult = call(
+        &mut app,
+        "section.resize",
+        &json!({ "section_id": verse, "length_bars": 6, "vocal_melody": "keep" }),
+    )
+    .result()
+    .expect("section.resize succeeds");
+    assert_eq!(resized.vocal_lanes_affected.len(), 1);
+    let clips: Vec<_> = app.test_midi_clips().iter().filter(|c| c.track_id == TRACK).collect();
+    assert_eq!(clips.len(), 1, "re-laid, not duplicated");
+    assert_eq!(clips[0].duration_ticks, 6 * 4 * TPQ);
+    assert_eq!(shape(&clips[0].notes), shape(&refit));
+}

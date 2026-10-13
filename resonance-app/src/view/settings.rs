@@ -1,7 +1,9 @@
 //! Settings overlay (opened from the transport bar gear icon). Shows
 //! project open / save / save-as buttons and global MIDI clock
 //! settings.
-use iced::widget::{button, column, container, mouse_area, opaque, pick_list, row, stack, text, Space};
+use iced::widget::{
+    button, column, container, mouse_area, opaque, pick_list, row, scrollable, stack, text, Space,
+};
 use iced::{alignment, Element, Length};
 
 use crate::message::*;
@@ -297,14 +299,14 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         loop_record_toggle,
         loop_record_hint,
         Space::new().height(20),
+        audio_section,
+        Space::new().height(20),
+        plugins_section,
+        Space::new().height(20),
         section("Compose"),
         Space::new().height(6),
         ask_again,
         ask_again_hint,
-        Space::new().height(20),
-        audio_section,
-        Space::new().height(20),
-        plugins_section,
         Space::new().height(20),
         section("MIDI Clock"),
         Space::new().height(6),
@@ -363,7 +365,12 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     // One card size for both pages, so switching tabs doesn't jump.
     let page_width = crate::view::settings_keyboard::PAGE_WIDTH;
     let page: Element<'_, Message> = match tab {
-        SettingsTab::General => dialog_content.into(),
+        // The General page is taller than a laptop window; it scrolls (as
+        // the Keyboard page's list does), opening at the top.
+        SettingsTab::General => scrollable(dialog_content)
+            .spacing(10)
+            .height(GENERAL_PAGE_HEIGHT)
+            .into(),
         SettingsTab::Keyboard => crate::view::settings_keyboard::view_keyboard_page(r),
         SettingsTab::Midi => midi::view_midi_page(r, page_width),
     };
@@ -395,6 +402,10 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
 
     stack![backdrop, centered].into()
 }
+
+/// The General page's visible height: the dialog (page, padding, Close
+/// row) fits an 900-pixel-high window, and the page scrolls past it.
+const GENERAL_PAGE_HEIGHT: f32 = 740.0;
 
 /// An autosave interval in seconds, labelled for the picker. A stored
 /// value off the preset list still shows as itself.

@@ -142,6 +142,14 @@ impl Resonance {
         }
     }
 
+    /// Test-only: forget every derived-clip mapping, as a project saved
+    /// before `ProjectFile::derived_clips` existed loads (the clips stay;
+    /// lanes resolve them by position).
+    #[doc(hidden)]
+    pub fn test_forget_derived_clips(&mut self) {
+        self.compose.derived_clips.clear();
+    }
+
     /// Test-only: the in-flight SVS render epoch of a vocal lane, bumped
     /// once per queued render. The render itself runs off-thread, so this
     /// counter is what a test asserts on to prove a lane was actually
