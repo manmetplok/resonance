@@ -25,10 +25,30 @@ default bank's licence holds — plus a few small gaps the builders left.
      registered (their own models, ranges and terms in the built-in table)
      and have entries with pinned sha256 in
      [`plok-voicebank-index.json`](../../features/compose/plok-voicebank-index.json).
-     A fresh blind set of all 41 installed voices (the 12 plus their 29
-     modes) is waiting for a listen; the Whisper scores of every voice are
-     in [vocal rendering § Measurements](../../features/compose/vocal-rendering.md#measurements).
-     Which of them stay in the index is the open call.
+     The Whisper scores of every voice are in
+     [vocal rendering § Measurements](../../features/compose/vocal-rendering.md#measurements).
+   - **Blind scores of all 41 voices** (Jorrit, 2026-10-13, 1–5 with
+     `scripts/vocal-audition-score.py`, same phrase for all):
+     - Bank means: TIGER 4.00 (7), Katyusha 3.00 (4), Liam Thorne 3.00
+       (10), Lilia 3.00 (1), Meiji 2.75 (4), Allen Crow 2.60 (5), Keiro
+       Revenant 2.50 (10).
+     - 5: tiger/mystic. 4: allen_crow/heavy, katyusha/standard,
+       keiro_revenant/cold and standard, liam_thorne/deep, rock, standard
+       and tired, tiger/disco, electric, fresh, royal and vinyl.
+     - 3: allen_crow/open and standard, katyusha/delicate and strong,
+       keiro_revenant/aggressive, mellow, native and solid,
+       liam_thorne/aggressive, crispy, gentle and powerful, lilia,
+       meiji/hunter, lilith and phantom, tiger/glam.
+     - 2: allen_crow/gentle, katyusha/lullaby, keiro_revenant/fragile,
+       meiji/standard.
+     - 1 (effect modes, not lead voices on a plain line): allen_crow/whisper,
+       keiro_revenant/growl, vf and whisper, liam_thorne/growl and vf.
+   - Open from this: whether the default bank moves from Lilia (3) to
+     TIGER (4.00 mean, mystic 5), and whether effect modes (growl, vocal
+     fry, whisper) should be marked as such in the speaker picker so they
+     are not picked as a lead by accident. Every bank has at least one
+     voice scored 4 or more except Lilia and Meiji, so all seven can stay
+     in the index.
    - Peiton is not installed: it needs a manual download from Gumroad
      (https://nebm.gumroad.com/l/vvhyg), so it has no index entry and was
      in neither blind set.
