@@ -94,26 +94,9 @@ down before adding EQ to fix the collision later.
 **derives no notes** — it is for pinning a lane's config and for creating the
 vocal lane. To get MIDI now, call `generate_part`.
 
-A song that sings in several sections uses **one vocal lane per section on the
-same vocal track**, each addressed by passing its section as `section_id` to the
-`vocal_*` tools. For a vocal lane, `options` is a partial patch in snake_case
-(`{"style": "folk", "range": {"low": 55, "high": 72}}`) that merges into the
-lane and keeps its lyrics and seed. To change a lane's voice or generator later,
-read it with `vocal_get_params` and patch it with `vocal_set_params`; neither
-renders, so follow with `vocal_generate` or `vocal_render`. No edit you make
-re-renders a lane by itself: it reads `stale` in `song_vocal` (per lane, with
-the track's render state the worst lane's) until one `vocal_render` after
-your last edit brings it back to `rendered`. `vocal_voicebanks`
-lists the installed voicebanks with their speaker ids, comfortable ranges and
-which expression curves they take; a lane on a bank that is not installed
-renders nothing (`voicebank_missing`), so pick one from that list. A new lane
-sings TIGER's `mystic`. A speaker with `effect: true` (growl, vocal fry,
-whisper) is a colour for a line or a word, not a lead voice. Its
-`available` list holds the plok.org banks that are not installed yet:
-`vocal_voicebank_install` with one of those ids downloads it (and the vocoder
-it needs) as a job. Installing accepts the bank's terms for the user, so tell
-them what the result says (`credit`, `terms_url`, `commercial`) before you
-render with it. When you use a bank, pass its `credit` line on to the user.
+A vocal lane is not a `generate_part` role. Lanes, voicebanks, melody,
+lyrics, the `song_vocal` pre-flight and rendering are the `singing` skill's
+procedure: `${CLAUDE_PLUGIN_ROOT}/skills/singing/SKILL.md`.
 
 ## Reproducibility
 

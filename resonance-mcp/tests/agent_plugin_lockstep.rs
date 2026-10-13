@@ -299,7 +299,13 @@ const WIRE_FIELDS: &[&str] = &[
     "clip_id",
     "clip_ids",
     "pool_asset_id",
+    // `song_vocal`'s `g2p` value for a word set with `vocal_set_pronunciation`.
+    "project_dict",
     "reference_id",
+    // `vocal_generate`'s report that the melody was written but not rendered.
+    "render_error",
+    // `song_vocal`'s per-lane and per-track render state.
+    "render_state",
     "section_id",
     "track_id",
 ];
@@ -460,13 +466,17 @@ fn crate_names() -> BTreeSet<String> {
 }
 
 /// A span that is one word and is meant as a name: no whitespace, and not
-/// a number, a path, a file name, a placeholder or a JSON fragment. Those
+/// a number, a path, a file name, a placeholder, a JSON fragment or a
+/// syllable-broken lyric. Those
 /// are the spans [`skills_inline_identifiers_exist`] requires to be known.
 fn is_single_word_name(span: &str) -> bool {
     const FILE_EXTENSIONS: &[&str] = &[".md", ".rs", ".json", ".rproj", ".wav", ".flac", ".mid", ".sh"];
     !span.contains(char::is_whitespace)
         && !span.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '-' | '+' | '±' | '−' | '.'))
         && !span.contains(['/', '$', '{', '}', ':', '"', '=', '(', '<', '*', '[', ','])
+        // Lyric text with `·` syllable breaks (`re·mem·ber`), quoted as
+        // what to type, not as a name.
+        && !span.contains('·')
         && !span.starts_with("mcp__")
         && !FILE_EXTENSIONS.iter().any(|ext| span.ends_with(ext))
 }

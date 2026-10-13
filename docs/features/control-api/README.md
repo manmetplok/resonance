@@ -17,7 +17,7 @@ that owns it.
 | Method catalogue | [method-catalogue.md](method-catalogue.md) | All 184 methods with their MCP tool, kind and owning area. |
 | Jobs | [jobs.md](jobs.md) | `job.status` / `job.wait`, which calls are jobs, retention, disconnects, MCP-side waiting. |
 | MCP server | [mcp-server.md](mcp-server.md) | `resonance-mcp`: registration, tool naming, schema normalisation, error mapping, connection handling. |
-| Agent plugin | [agent-plugin.md](agent-plugin.md) | The six skills, their rules, and the lockstep test that keeps them in step with the tools. |
+| Agent plugin | [agent-plugin.md](agent-plugin.md) | The seven skills, their rules, and the lockstep test that keeps them in step with the tools. |
 
 Rules for adding a method: [docs/guides/control-api-conventions.md](../../guides/control-api-conventions.md).
 Open work: [docs/intents/control-api/](../../intents/control-api/).

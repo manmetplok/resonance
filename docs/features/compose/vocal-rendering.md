@@ -1,6 +1,6 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `f82be9b0` + the TIGER Mystic default and effect modes on 2026-10-13.
+> Verified against master @ `ad042afb` + the `singing` skill on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -509,8 +509,10 @@ It depends only on `resonance-music-theory`.
   protocol 2 (no external clients). Control edits never auto-render.
   `control.hello` carries the optional `svs_backend` (`cpu` / `cuda` /
   `migraphx`), absent until a render has run.
-- **Agent skills:** `mixing`, `spatial` read `song_vocal`; external
-  `singer-songwriter` and `resonance-studio` skills drive renders.
+- **Agent skills:** the agent plugin's `singing` skill drives renders
+  (batch, pre-flight, one `vocal_render`, read `render_state`) and the
+  Whisper check of a soloed bounce; `mixing`, `spatial` read `song_vocal`;
+  external `singer-songwriter` and `resonance-studio` defer to `singing`.
 
 ## Bank audition
 

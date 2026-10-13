@@ -1,13 +1,13 @@
 # Agent plugin (`resonance-agent-plugin`)
 
-> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
+> Verified against master @ `ad042afb` + the `singing` skill on 2026-10-13.
 > Spec history: `docs/history/specs/warmth-width-depth.md` §8 (keys
 > blocks, the `spatial` skill); the plugin's own `README.md` is the
 > maintained guide and stays in place.
 
-A Claude Code plugin of six **skills**: written procedures that tell an
+A Claude Code plugin of seven **skills**: written procedures that tell an
 agent how to use the MCP tools well for one craft — song structure,
-arranging, drumming, mixing, spatial staging, mastering. The tools say
+arranging, drumming, singing, mixing, spatial staging, mastering. The tools say
 what can be done; a skill says in what order, what a measurement
 justifies, and when to stop. Skills load only when a matching task
 starts, so they cost no context otherwise.
@@ -21,11 +21,12 @@ starts, so they cost no context otherwise.
 | `song-structure` | choosing a form, sections vs. placements, the `place: false` trap, bar math, tempo and signature tracks | `references/forms.md` |
 | `arranging` | chord grids, `generate_part`, hand-written MIDI, density and register | `references/generators.md` (and `forms.md`) |
 | `drumming` | the pattern library and hand-written grooves, odd metre | `references/drum-map.md`, `references/grooves.md` |
+| `singing` | the vocal synth: voice choice and install (terms, credit), one lane per section, generated or hand-written melody, singable lyrics and the lyric syntax, the `song_vocal` pre-flight, one batched render, expression, an intelligibility check, guide vocals | `references/lyrics.md`, `references/voicebanks.md` |
 | `mixing` | measure → diagnose → balance → verify: faults, balance, tone, character, dynamics | `references/reading-meters.md`, `character.md`, `roles.md` |
 | `spatial` | width and depth: mono-safe width, panning, one shared room, pre-delay, return EQ, ducking | `references/width.md`, `depth.md` (and `reading-meters.md`, `roles.md`) |
 | `mastering` | the master chain on `com.resonance.mastering` stage by stage, reference track, delivery targets | `references/delivery.md` (and `reading-meters.md`, `character.md`) |
 
-All six are model-invocable (`name`, `description`, `when_to_use` in each
+All seven are model-invocable (`name`, `description`, `when_to_use` in each
 `SKILL.md` front matter), and each hands off to the next by pointing at
 it. Skills point at each other's references with `${CLAUDE_PLUGIN_ROOT}`.
 
@@ -55,7 +56,7 @@ Load the plugin with `claude --plugin-dir <repo>/resonance-agent-plugin`.
 ### Versioning
 
 Three things version separately: the skills (`version` in
-`.claude-plugin/plugin.json`, 0.3.5 today), `resonance-mcp` (this
+`.claude-plugin/plugin.json`, 0.4.0 today), `resonance-mcp` (this
 checkout), and the running app (whatever the user has open). Living in one
 repo pins the first two; `control_hello` covers the third at run time.
 Bump the plugin `version` whenever the skills change, or installed copies
@@ -103,7 +104,9 @@ via `resonance-dsp-test-support/src/skill_keys.rs`.
 - **Claude Code:** `/resonance-agent-plugin:<skill>`, or invoked by the
   model when a request matches.
 - **Control API / MCP:** any tool; the mixing, spatial and mastering
-  skills rely on `meter_*`, `*_set_plugin_param`, `automation_*`.
+  skills rely on `meter_*`, `*_set_plugin_param`, `automation_*`; the
+  singing skill on `vocal_*`, `song_vocal` and the vocal curve target of
+  `automation_*`.
 
 ## How it's tested
 
@@ -122,12 +125,15 @@ agent session against a real project, done by hand.
   whole arranging procedure.
 - The protocol pin lives in `lockstep.json` rather than `plugin.json`,
   because `claude plugin validate` warns on unknown manifest keys.
-- `plugin.json`'s `description` still lists only mixing, spatial and
-  mastering; the plugin has six skills.
 - Other Resonance skills exist outside this repo, in the user's
   `~/.claude/skills/` (`resonance-studio`, `resonance-synth-design`,
   `industrial-post-metal`, `singer-songwriter`). The lockstep test does
-  not see them, so a tool rename can silently break them.
+  not see them, so a tool rename can silently break them. The vocal
+  procedure moved into the plugin's `singing` skill (0.4.0);
+  `resonance-studio`'s `references/vocals.md` now defers to it and keeps
+  only studio-specific notes.
+- The lockstep test's inline-code check skips spans with a `·` syllable
+  break: they are lyric text to type (`re·mem·ber`), not names.
 
 ## Known gaps
 

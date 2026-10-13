@@ -89,7 +89,9 @@ repeating a call is stable rather than random. To get a *different* take, change
 the seed deliberately.
 
 Drums are a separate job with its own idioms and its own note map — see
-`${CLAUDE_PLUGIN_ROOT}/skills/drumming/SKILL.md`.
+`${CLAUDE_PLUGIN_ROOT}/skills/drumming/SKILL.md`. The vocal is another:
+lanes, voicebanks, lyrics and rendering are in
+`${CLAUDE_PLUGIN_ROOT}/skills/singing/SKILL.md`.
 
 ### Writing by hand
 

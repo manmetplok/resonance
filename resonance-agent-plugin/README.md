@@ -18,18 +18,19 @@ instead of costing context on every session the way a tool description does.
 | `song-structure` | `/resonance-agent-plugin:song-structure` | Choosing a form and laying it out. Definitions vs. placements, the `place: false` trap, bar math, the tempo and signature tracks. |
 | `arranging` | `/resonance-agent-plugin:arranging` | Chord grids, `generate_part`, hand-written MIDI, density and register across sections. |
 | `drumming` | `/resonance-agent-plugin:drumming` | The pattern library, and hand-written grooves the library cannot reach — including odd metre, with or without a real meter change. |
+| `singing` | `/resonance-agent-plugin:singing` | A sung vocal on the voicebank synth: choosing and installing a voice, one lane per section, generated or hand-written melody, singable lyrics with exact breaks, holds and breaths, the `song_vocal` pre-flight, one batched render, expression curves, an intelligibility check. |
 | `mixing` | `/resonance-agent-plugin:mixing` | Measure → diagnose → balance → verify. Faults, balance, tone, character (warmth, de-harsh, tilt), dynamics, in that order. |
 | `spatial` | `/resonance-agent-plugin:spatial` | Width and depth: role → layer assignment, mono-safe width (mono-maker, pan with fader compensation, decorrelation, M/S), one shared room with pre-delay from tempo, return EQ and ducking, and the DRR ordering check. |
 | `mastering` | `/resonance-agent-plugin:mastering` | Master-bus chain on `com.resonance.mastering`, stage by stage with its real keys, the "sterile" test, a reference-track branch, to delivery targets. |
 
-All six are model-invocable, so Claude reaches for them when you just say "mix
+All seven are model-invocable, so Claude reaches for them when you just say "mix
 this" or "write a drum part" — you do not have to type the command.
 
-They run roughly in that order — structure, then parts, then balance, then
-space, then the master — and each
+They run roughly in that order — structure, then parts (and the vocal), then
+balance, then space, then the master — and each
 one hands off to the next by pointing at it. Claude Code has no notion of a
-nested "sub-skill", so `drumming` and `song-structure` are siblings of
-`arranging` rather than children of it. That is the better shape anyway: "write
+nested "sub-skill", so `drumming`, `singing` and `song-structure` are siblings
+of `arranging` rather than children of it. That is the better shape anyway: "write
 me a jazz drum part" is a complete request on its own and should not have to load
 the whole arranging procedure to get answered.
 
@@ -47,6 +48,8 @@ Reference files are shared across skills via `${CLAUDE_PLUGIN_ROOT}`:
 | `skills/arranging/references/generators.md` | `arranging` |
 | `skills/drumming/references/drum-map.md` | `drumming` |
 | `skills/drumming/references/grooves.md` | `drumming` |
+| `skills/singing/references/lyrics.md` | `singing` |
+| `skills/singing/references/voicebanks.md` | `singing` |
 
 `drum-map.md` is worth calling out: the kit is General MIDI in the middle and
 **not** GM at the edges (note 39 is a sidestick, not a clap; 21–29 are extended
@@ -129,7 +132,9 @@ installed copies keep teaching the old procedure. 0.2.0 was exactly that — epi
 `drumming` stopped telling agents to ask the user for a meter change. 0.3.0 was
 another: the meter details, snapshot/compare, the probe and the character and
 width plugins gave the skills a character pass, a `spatial` skill and a
-mastering chain named by key (warmth-width-depth.md W4).
+mastering chain named by key (warmth-width-depth.md W4). 0.4.0 added the
+`singing` skill, the shared procedure for vocal lanes that `arranging` used to
+cover in a paragraph.
 
 ## Naming plugin keys
 

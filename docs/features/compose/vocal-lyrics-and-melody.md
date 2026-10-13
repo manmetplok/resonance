@@ -1,6 +1,6 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `f82be9b0` + the TIGER Mystic default on 2026-10-13.
+> Verified against master @ `ad042afb` + the `singing` skill on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §3, §6 (slices 1, 3, 8); `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -270,8 +270,10 @@ line, re-rolled from a small template corpus, or set by an agent.
     compares `syllable_count` with the notes **minus the generator holds**
     (they are not lyric units), so a Mixed / Melismatic lane does not
     flag. New optional fields: no protocol bump.
-- **Agent skills:** `arranging` (vocal_generate); external skill
-  `singer-songwriter` drives the full lyric flow.
+- **Agent skills:** the agent plugin's `singing` skill is the procedure
+  for vocal lanes (voice, lanes, melody, lyrics, pre-flight, render,
+  expression); `arranging` points at it. External `singer-songwriter`
+  drives the songwriting around it.
 
 ## How it's tested
 
