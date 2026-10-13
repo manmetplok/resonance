@@ -8,5 +8,6 @@ Each intent follows [`../_template.md`](../_template.md).
 |---|---|---|
 | [Readouts an agent can't see yet](agent-readouts.md) | idea | An agent cannot hear, so anything the GUI shows as a warning or a meter and the control API does not return is invisible to it. |
 | [Drum pad ↔ piece ↔ MIDI note map over MCP](drum-pad-map-mcp.md) | idea | An agent writing drum MIDI cannot find out which note plays which piece of the loaded kit. |
-| [Ranged mixdown and `render.stems` over the control API](render-range-and-stems.md) | partly built | `render.mixdown` rejects a partial range and `render.stems` is `unsupported`, though the engine does both. |
+| [Ranged mixdown and `render.stems` over the control API](render-range-and-stems.md) | designed | `render.mixdown` rejects a partial range and `render.stems` is `unsupported`, though the engine does both. |
 | [Control API: review leftovers](review-leftovers-control-api.md) | idea | Small control-surface items the review campaigns left open. |
+| [Intelligibility check that ships with the singing skill](singing-intelligibility-check.md) | designed | An agent can't score a sung take outside a repo checkout. |

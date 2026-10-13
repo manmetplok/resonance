@@ -1,7 +1,7 @@
 # Ranged mixdown and `render.stems` over the control API
 
-> Status: **partly built** (engine supports stems and ranged measurement;
-> the control layer refuses both)
+> Status: **designed** (engine supports stems and ranged measurement;
+> the control layer refuses both; decisions taken 2026-10-13)
 > Area: control-api (the methods); the export itself is in audio-engine —
 > [offline-render-and-export.md](../../features/audio-engine/offline-render-and-export.md),
 > [stem-export.md](../../features/audio-engine/stem-export.md)
@@ -24,8 +24,9 @@ always starts at the earliest clip, not bar 1.
 
 - `render.mixdown` with a `range` renders exactly that window (offset 0 =
   the range start).
-- `render.stems {dir, range?, overwrite}` writes one WAV per track (the
-  modal's sources) into `dir` as a control job. The job result is
+- `render.stems {dir, range?, overwrite, track_ids?}` writes one WAV per
+  track (the modal's sources, or only `track_ids` when given — e.g. just
+  the vocal for an intelligibility check) into `dir` as a control job. The job result is
   `StemsResult {paths, duration_s}`. An existing file in `dir` without
   `overwrite: true` answers `needs_confirmation`. The method is listed in
   `capabilities` and published as the MCP tool `render_stems`.
@@ -55,7 +56,12 @@ always starts at the earliest clip, not bar 1.
 - Job plumbing to copy: `render.mixdown` (`JobToken::Export { path }`,
   `mixdown_result`, `fail_export_jobs`).
 
-## Open decisions
+## Decisions
+
+Taken 2026-10-13: all four recommendations below are adopted, and
+Jorrit added an optional `track_ids` filter (default every track) so an
+agent can bounce a single track.
+
 
 1. Range on `ExportAudio` or a new field on `ExportSettings`?
    Recommended: an optional `range` on `ExportAudio`, matching
