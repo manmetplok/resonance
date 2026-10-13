@@ -146,7 +146,7 @@ Totals: **124 feature docs**, **89 intents**, **45 known bugs**, 12 unbuilt prot
 | [Method catalogue](features/control-api/method-catalogue.md) | All 182 methods with their MCP tool, kind and owning area. |
 | [Jobs](features/control-api/jobs.md) | `job.status` / `job.wait`, which calls are jobs, retention, disconnects, MCP-side waiting. |
 | [MCP server](features/control-api/mcp-server.md) | `resonance-mcp`: registration, tool naming, schema normalisation, error mapping, connection handling. |
-| [Agent plugin](features/control-api/agent-plugin.md) | The six skills, their rules, and the lockstep test that keeps them in step with the tools. |
+| [Agent plugin](features/control-api/agent-plugin.md) | The seven skills, their rules, and the lockstep test that keeps them in step with the tools. |
 
 ### UI shell
 

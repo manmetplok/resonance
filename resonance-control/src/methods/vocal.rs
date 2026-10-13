@@ -82,7 +82,7 @@ pub struct SetLyricsParams {
     /// standalone markers change that: `_` (alias `+`) holds the previous
     /// syllable onto one more note (a melisma — `love _ _` is one syllable
     /// over three notes), and an uppercase `AP` marks a breath before the
-    /// next word and takes no note (not yet rendered as a breath sound).
+    /// next word and takes no note (sung as an audible breath).
     pub text: String,
     /// Split multi-syllable words across notes (default `true`).
     ///

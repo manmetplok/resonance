@@ -73,7 +73,10 @@ default bank's licence holds — plus a few small gaps the builders left.
      far only a loopback server and fixture banks have been installed.
 3. **The live MCP session** (the vocal spec's §13 "Live"): an agent
    installs a bank, sets params, writes a melisma and breaths, edits a
-   curve, renders, and nothing goes through the GUI.
+   curve, renders, and nothing goes through the GUI. Run it with the agent
+   plugin's `singing` skill loaded (`resonance-agent-plugin/skills/singing/`,
+   plugin 0.4.0) — the session checks the skill's procedure as much as the
+   tools, and its findings go to the skill as well as to bugs. Still open.
 4. **Licences before any commercial release.**
    - Lilia's ToU forbids "AI-generated music and other generative AI
      contexts" and asks porters to contact the creator. D9 accepted this
@@ -150,7 +153,8 @@ default bank's licence holds — plus a few small gaps the builders left.
    the committed index proposal (the LUNAI four are in it and
    `the_committed_index_proposal_parses` checks them); Peiton by hand.
 2. Hash, inspect and publish the index; one real install per entry.
-3. The live MCP session, with its findings filed as bugs.
+3. The live MCP session, driven by the `singing` skill, with its findings
+   filed as bugs (and skill fixes).
 4. The licence follow-up (mail; a decision recorded in the feature docs).
 5. The small gaps, each a vertical slice of its own.
 6. The intelligibility leftovers, measured with

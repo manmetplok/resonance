@@ -1,6 +1,6 @@
 # Voicebank library (registry, plok.org install, library overlay)
 
-> Verified against master @ `f82be9b0` + the TIGER Mystic default and effect modes on 2026-10-13.
+> Verified against master @ `ad042afb` + the `singing` skill on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4–§5 (slices 4 and 7); research [`singing-voicebank-options-2026`](../../history/research/singing-voicebank-options-2026.md).
 
 Voicebanks are content a user installs, not three banks fixed in the code.
@@ -346,9 +346,10 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
   - `vocal.set_params` accepts any installed bank, the seven built-in ids
     and an id the index lists (English when its `languages` name `en` or
     nothing) — see [lyrics and melody](vocal-lyrics-and-melody.md).
-- **Agent skills:** the `arranging` skill's generator reference names the
-  bank ids; external `singer-songwriter` / `resonance-studio` skills pick
-  banks.
+- **Agent skills:** the agent plugin's `singing` skill
+  (`references/voicebanks.md`) chooses and installs banks and passes the
+  terms and credit on; external `singer-songwriter` / `resonance-studio`
+  defer to it.
 
 ## How it's tested
 

@@ -20,7 +20,7 @@
 
 `resonance-mcp` exposes the running app's control surface as MCP tools;
 `resonance-agent-plugin/` is a Claude Code plugin of **skills** (`arranging`,
-`drumming`, `mastering`, `mixing`, `song-structure`, `spatial`) that use them. It ships no `.mcp.json` on purpose — register the
+`drumming`, `mastering`, `mixing`, `singing`, `song-structure`, `spatial`) that use them. It ships no `.mcp.json` on purpose — register the
 server with `claude mcp add` so the tools stay named `mcp__resonance__<tool>`.
 
 The two are kept in step by `resonance-mcp/tests/agent_plugin_lockstep.rs`: a
