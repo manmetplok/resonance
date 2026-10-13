@@ -523,3 +523,59 @@ pub(crate) fn missing_voicebank_choices(
         .map(|b| VoicebankChoice::not_installed(&resonance_music_theory::VoicebankId::new(b.id)))
         .collect()
 }
+
+/// One entry of the Voice preset picker.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct VoicePresetChoice {
+    /// The preset's id (`tiger-mystic`, `user:<name>`).
+    pub id: std::rc::Rc<str>,
+    pub name: std::rc::Rc<str>,
+    /// What the picker shows: `5/5 · TIGER Mystic`, or a user preset under
+    /// the `User ‹` group prefix.
+    pub label: std::rc::Rc<str>,
+    pub builtin: bool,
+    pub score: Option<u8>,
+    pub description: std::rc::Rc<str>,
+    /// What it sets, to tell which preset a lane matches.
+    pub settings: std::rc::Rc<crate::compose::vocal_svs::voice_presets::VoiceSettings>,
+}
+
+impl std::fmt::Display for VoicePresetChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// The group prefix user presets carry in the Voice preset picker.
+pub(crate) const USER_PRESET_GROUP: &str = "User";
+
+/// The Voice preset picker's options: the built-ins best first, then the
+/// user's presets by name.
+pub(crate) fn voice_preset_choices(
+    user: &[crate::compose::vocal_svs::voice_presets::VoicePreset],
+) -> Vec<VoicePresetChoice> {
+    crate::compose::vocal_svs::voice_presets::all(user)
+        .map(|p| {
+            // No "(not installed)" suffix: the rail is too narrow for it
+            // after a long name; the card says so once the preset is on
+            // the lane (and the Voicebank picker reads `<id> (not
+            // installed)`).
+            let label = match (p.builtin, p.score) {
+                // The UI font has no ★ (the card draws the stars with the
+                // icon font beside the picker); a list row reads `5/5 ·`.
+                (true, Some(score)) => format!("{score}/5 \u{00B7} {}", p.name),
+                (true, None) => p.name.clone(),
+                (false, _) => format!("{USER_PRESET_GROUP} \u{2039} {}", p.name),
+            };
+            VoicePresetChoice {
+                id: p.id.as_str().into(),
+                name: p.name.as_str().into(),
+                label: label.into(),
+                builtin: p.builtin,
+                score: p.score,
+                description: p.description.as_str().into(),
+                settings: std::rc::Rc::new(p.settings.clone()),
+            }
+        })
+        .collect()
+}

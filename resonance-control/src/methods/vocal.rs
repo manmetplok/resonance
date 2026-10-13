@@ -47,6 +47,18 @@ pub const VOICEBANKS: &str = "vocal.voicebanks";
 /// job's result is a [`VoicebankInstallResult`]). Needs no project; no
 /// undo entry, no revision bump.
 pub const VOICEBANK_INSTALL: &str = "vocal.voicebank_install";
+/// `vocal.voice_presets` — the voice presets: the built-ins (the voices
+/// the blind listen scored 3 or more, best first) and the user's own (no
+/// params -> [`VoicePresetList`]). Read-only, needs no project.
+pub const VOICE_PRESETS: &str = "vocal.voice_presets";
+/// `vocal.apply_voice_preset` — set a vocal lane's voice and delivery from
+/// a preset, as one undoable edit ([`ApplyVoicePresetParams`] ->
+/// [`ApplyVoicePresetResult`]).
+pub const APPLY_VOICE_PRESET: &str = "vocal.apply_voice_preset";
+/// `vocal.save_voice_preset` — save a vocal lane's voice and delivery as a
+/// user preset ([`SaveVoicePresetParams`] -> [`SaveVoicePresetResult`]).
+/// A library write: no undo entry, no revision bump.
+pub const SAVE_VOICE_PRESET: &str = "vocal.save_voice_preset";
 
 /// All `vocal.*` method names.
 pub const METHODS: &[&str] = &[
@@ -60,6 +72,9 @@ pub const METHODS: &[&str] = &[
     SET_PARAMS,
     VOICEBANKS,
     VOICEBANK_INSTALL,
+    VOICE_PRESETS,
+    APPLY_VOICE_PRESET,
+    SAVE_VOICE_PRESET,
 ];
 
 /// Params for `vocal.set_lyrics`: bulk text, one line per lyric line.
@@ -810,4 +825,151 @@ pub struct VoicebankInstallResult {
     /// downloaded.
     #[serde(default)]
     pub already_installed: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Voice presets (`vocal.voice_presets` / `.apply_voice_preset` /
+// `.save_voice_preset`)
+// ---------------------------------------------------------------------------
+
+/// Result of `vocal.voice_presets`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicePresetList {
+    /// The built-ins best first (by `score`), then the user's presets by
+    /// name.
+    pub presets: Vec<VoicePresetView>,
+}
+
+/// One voice preset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicePresetView {
+    /// What `vocal.apply_voice_preset` takes as `preset` (the name works
+    /// too): `<bank>-<speaker>` (`tiger-mystic`) for a built-in,
+    /// `user:<name>` for a user preset.
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Register (`low`, `mid`, `high`), character (`gentle`, `powerful`,
+    /// `aggressive`, ...) and mode words.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// The voice's score, 1..5, in the blind listen the built-ins come
+    /// from; absent on a user preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<u8>,
+    /// Ships with the app (`false`: saved by the user).
+    pub builtin: bool,
+    /// The voicebank it sings with (`vocal.voicebanks` id).
+    pub voicebank: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    /// Whether that voicebank is installed. A preset on a bank that is not
+    /// still applies, but the lane cannot render until the bank is
+    /// installed (`vocal.voicebank_install`).
+    pub installed: bool,
+    pub settings: VoicePresetSettings,
+}
+
+/// Everything a voice preset sets on a lane: the voice (bank, speaker,
+/// voice type, range) and the delivery. Never lyrics, the melody or lyric
+/// generator settings, or expression curves. Field meanings are
+/// `vocal.get_params`'.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VoicePresetSettings {
+    pub voicebank: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    pub voice: VocalVoice,
+    pub range: VocalRange,
+    pub timbre: VocalTimbre,
+    pub tension: f32,
+    pub tension_velocity_amount: f32,
+    pub tension_contour_amount: f32,
+    pub vibrato: f32,
+    pub vibrato_rate: f32,
+    pub portamento_ms: f32,
+    pub articulation: f32,
+    pub consonant_emphasis: f32,
+    pub velocity_dynamics: f32,
+    pub rest_threshold_beats: f32,
+    pub bank_timing: bool,
+    pub bank_pitch: bool,
+}
+
+/// Params for `vocal.apply_voice_preset`.
+///
+/// Sets exactly the preset's settings on the lane — voicebank, speaker,
+/// voice, range and the delivery fields — and leaves its lyrics, melody
+/// and lyric generator settings and expression curves alone. One undo
+/// entry. Never renders: the lane reads `stale` in `song.vocal` until
+/// `vocal.render`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ApplyVoicePresetParams {
+    pub track_id: TrackId,
+    /// Which of the track's vocal lanes to set (`definition_id` from
+    /// `song.vocal`'s `lanes`). Omitted resolves the track's first vocal
+    /// lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
+    /// A preset id from `vocal.voice_presets`, or its name
+    /// (case-insensitive).
+    pub preset: String,
+}
+
+/// Result of `vocal.apply_voice_preset`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ApplyVoicePresetResult {
+    pub track_id: TrackId,
+    pub section_id: SectionDefinitionId,
+    /// The preset applied.
+    pub preset_id: String,
+    pub preset_name: String,
+    /// The lane's full settings after the call.
+    pub params: VocalParamsView,
+    /// Whether the preset's voicebank (and its vocoder) is installed.
+    /// `false`: the preset was applied, but rendering fails with
+    /// `voicebank_missing` until it is installed.
+    pub installed: bool,
+    /// What is missing and how to install it, when `installed` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    pub revision: u64,
+}
+
+/// Params for `vocal.save_voice_preset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SaveVoicePresetParams {
+    pub track_id: TrackId,
+    /// Which of the track's vocal lanes to capture. Omitted resolves the
+    /// track's first vocal lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
+    /// The preset's name. A built-in's name is refused.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Required (`true`) to replace a user preset of the same name.
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// Result of `vocal.save_voice_preset`: the preset as `vocal.voice_presets`
+/// now lists it. A library write — no `revision`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SaveVoicePresetResult {
+    pub preset: VoicePresetView,
+    /// It replaced a user preset of the same name.
+    #[serde(default)]
+    pub replaced: bool,
 }

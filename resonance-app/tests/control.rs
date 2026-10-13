@@ -199,3 +199,5 @@ mod control_voicebank_install;
 mod control_voicebank_install_safety;
 #[path = "control/control_voicebanks.rs"]
 mod control_voicebanks;
+#[path = "control/control_voice_presets.rs"]
+mod control_voice_presets;

@@ -53,6 +53,13 @@ default bank's licence holds — plus a few small gaps the builders left.
      stays a lead mode. See
      [voicebank library](../../features/compose/voicebank-library.md) and
      [lyrics and melody](../../features/compose/vocal-lyrics-and-melody.md).
+   - **The scores seed the built-in voice presets (2026-10-13):** every
+     voice scored 3 or more (31) is a built-in preset carrying its score,
+     best first, in the lane inspector's Voice preset picker and
+     `vocal.voice_presets` — see
+     [voice presets](../../features/compose/voice-presets.md). The table
+     lives in code as `voice_presets::builtin::AUDITION_SCORES`; a new
+     listen updates it there.
    - Every bank has at least one voice scored 4 or more except Lilia and
      Meiji, so all seven can stay in the index.
    - Peiton is not installed: it needs a manual download from Gumroad

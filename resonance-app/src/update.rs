@@ -53,6 +53,7 @@ pub mod transport_nav;
 pub mod ui;
 pub mod viewport;
 pub mod voicebank_library;
+pub mod voice_presets;
 pub mod vocal_tuning;
 
 pub(crate) use project_io::{
@@ -260,6 +261,7 @@ impl crate::Resonance {
             Message::Ui(m) => ui::handle(self, m),
             Message::Browser(m) => browser::handle(self, m),
             Message::VoicebankLibrary(m) => voicebank_library::handle(self, m),
+            Message::VoicePreset(m) => voice_presets::handle(self, m),
             Message::Drag(m) => drag::handle(self, m),
             Message::Control(m) => control::handle(self, m),
             Message::Tick => tick::handle_tick(self),

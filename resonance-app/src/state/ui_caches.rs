@@ -21,7 +21,8 @@ use resonance_audio::types::{InputDeviceInfo, ScannedPlugin};
 use crate::state::picks::{
     bank_choices, device_choices, input_channel_choices, midi_choices_base,
     output_channel_choices, output_choices_for, program_choices, BankChoice, DevicePresetChoice,
-    MidiChannelChoice, MidiPickerChoice, OutputChoice, ProgramChoice, VoicebankChoice,
+    MidiChannelChoice, MidiPickerChoice, OutputChoice, ProgramChoice, VoicePresetChoice,
+    VoicebankChoice,
 };
 use crate::state::BusState;
 
@@ -71,6 +72,10 @@ pub(crate) struct UiViewCaches {
     /// The picker's selection for a lane on a built-in bank that is not
     /// installed, one per such bank; rebuilt with `voicebank_choices`.
     pub missing_voicebank_choices: Rc<[VoicebankChoice]>,
+    /// The vocal inspector's Voice preset picker: the built-ins best
+    /// first, then the user's presets. Rebuilt with `voicebank_choices`
+    /// and after every user preset save, rename or delete.
+    pub voice_preset_choices: Rc<[VoicePresetChoice]>,
     /// Revision memo keying the Compose right rail's `lazy` (UX-10).
     pub compose_rail: RevisionMemo<ComposeRailInputs>,
 }
@@ -102,6 +107,7 @@ impl Default for UiViewCaches {
             device_choices: Rc::from(device_choices(&[])),
             voicebank_choices: Rc::from(Vec::<VoicebankChoice>::new()),
             missing_voicebank_choices: Rc::from(Vec::<VoicebankChoice>::new()),
+            voice_preset_choices: Rc::from(Vec::<VoicePresetChoice>::new()),
             compose_rail: RevisionMemo::default(),
         }
     }
@@ -123,13 +129,18 @@ impl UiViewCaches {
     /// Rebuild the device-preset picker options off the device registry's
     /// current `list()`. Call after the registry is (re-)scanned; today the
     /// registry is built once at startup.
-    /// Rebuild the Voicebank picker's options from `registry`. An
-    /// unchanged list keeps its `Rc`, so the Compose rail's memo sees no
-    /// change.
+    /// Rebuild the Voicebank and Voice preset pickers' options from
+    /// `registry` and the user voice presets. An unchanged list keeps its
+    /// `Rc`, so the Compose rail's memo sees no change.
     pub fn rebuild_voicebank_choices(
         &mut self,
         registry: &crate::compose::vocal_svs::VoicebankRegistry,
+        user_presets: &[crate::compose::vocal_svs::voice_presets::VoicePreset],
     ) {
+        let presets = crate::state::picks::voice_preset_choices(user_presets);
+        if *self.voice_preset_choices != *presets {
+            self.voice_preset_choices = Rc::from(presets);
+        }
         let choices = crate::state::picks::voicebank_choices(registry);
         if *self.voicebank_choices != *choices {
             self.voicebank_choices = Rc::from(choices);
@@ -310,4 +321,21 @@ pub(crate) struct VocalRailContext {
     /// The lane's render state, for the stale / error badge (as settled
     /// after the last update; `None` before the first).
     pub render_status: Option<crate::compose::VocalLaneRenderStatus>,
+    /// The Voice preset picker's options
+    /// ([`UiViewCaches::voice_preset_choices`]).
+    pub voice_presets: Rc<[VoicePresetChoice]>,
+    /// The voice preset card's prompt and pending delete, when they
+    /// belong to this lane.
+    pub preset_ui: VoicePresetUi,
+}
+
+/// The voice preset controls' transient state for the selected lane.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct VoicePresetUi {
+    /// The open name prompt (save or rename).
+    pub prompt: Option<crate::state::voice_presets::VoicePresetPrompt>,
+    /// The user preset whose Delete waits for a confirming press.
+    pub confirm_delete: Option<String>,
+    /// The last save / rename / delete failure.
+    pub error: Option<String>,
 }
