@@ -34,7 +34,7 @@ Templates: [feature doc](features/_template.md) · [intent](intents/_template.md
 | **Plugins — effects** | EQ, compressor, gate, delay, granular delay, reverb, stereo, color, IR, mastering, mastering-assist engine, de-harsh | [12 docs](features/plugins-effects/README.md) | [6 intents](intents/plugins-effects/README.md) (1 partly built) |
 | **Plugins — instruments & platform** | Wavetable, drums + kit library, amp + NAM library, preset library, plugin SDK, editor runtimes, DSP/metering crates, 3rd-party hosting, bundling | [13 docs](features/plugins-instruments/README.md) | [9 intents](intents/plugins-instruments/README.md) (6 partly built) |
 
-Totals: **125 feature docs**, **88 intents**, **45 known bugs**, 12 unbuilt prototypes.
+Totals: **125 feature docs**, **88 intents**, **46 known bugs**, 12 unbuilt prototypes.
 
 ## Guides
 
