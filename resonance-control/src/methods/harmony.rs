@@ -1,17 +1,17 @@
 //! `harmony.*` — chords on a section definition's grid, plus
 //! music-theory progression application.
 
-use crate::common::KeyScale;
+use crate::common::{KeyScale, VocalLaneAffected, VocalMelodyChoice};
 use crate::ids::{ChordId, SectionDefinitionId};
 use serde::{Deserialize, Serialize};
 
 /// `harmony.add_chord` — add a chord ([`AddChordParams`] -> [`AddChordResult`]).
 pub const ADD_CHORD: &str = "harmony.add_chord";
 /// `harmony.edit_chord` — change symbol/position/length of a chord
-/// ([`EditChordParams`] -> `MutationAck`).
+/// ([`EditChordParams`] -> [`ChordEditResult`]).
 pub const EDIT_CHORD: &str = "harmony.edit_chord";
 /// `harmony.delete_chord` — remove a chord
-/// ([`DeleteChordParams`] -> `MutationAck`).
+/// ([`DeleteChordParams`] -> [`ChordEditResult`]).
 pub const DELETE_CHORD: &str = "harmony.delete_chord";
 /// `harmony.apply_progression` — render a whole progression onto a
 /// section's grid ([`ApplyProgressionParams`] -> [`ApplyProgressionResult`]).
@@ -31,14 +31,36 @@ pub struct AddChordParams {
     pub duration_beats: f64,
     /// Chord symbol, e.g. `"Am7"`.
     pub symbol: String,
+    /// What to do with a vocal lane in this section whose melody the edit
+    /// would change: `keep` (default — notes untouched, lane flagged
+    /// `melody_predates_chords`), `refit` (pitches moved to fit the new
+    /// chords, rhythm and lyrics kept) or `regenerate` (re-derived from
+    /// the generator; hand edits lost). Omitted: the project's remembered
+    /// choice, else `keep`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocal_melody: Option<VocalMelodyChoice>,
 }
 
 /// Result of `harmony.add_chord`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AddChordResult {
     pub chord_id: ChordId,
     pub revision: u64,
+    /// The section's vocal lanes whose melody the edit would have
+    /// changed, and what was done with each. Empty when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocal_lanes_affected: Vec<VocalLaneAffected>,
+}
+
+/// Result of `harmony.edit_chord` / `harmony.delete_chord`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ChordEditResult {
+    pub revision: u64,
+    /// See [`AddChordResult::vocal_lanes_affected`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocal_lanes_affected: Vec<VocalLaneAffected>,
 }
 
 /// Params for `harmony.edit_chord`; omitted fields stay unchanged.
@@ -54,6 +76,14 @@ pub struct EditChordParams {
     pub start_beat: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_beats: Option<f64>,
+    /// What to do with a vocal lane in this section whose melody the edit
+    /// would change: `keep` (default — notes untouched, lane flagged
+    /// `melody_predates_chords`), `refit` (pitches moved to fit the new
+    /// chords, rhythm and lyrics kept) or `regenerate` (re-derived from
+    /// the generator; hand edits lost). Omitted: the project's remembered
+    /// choice, else `keep`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocal_melody: Option<VocalMelodyChoice>,
 }
 
 /// Params for `harmony.delete_chord`.
@@ -63,6 +93,14 @@ pub struct EditChordParams {
 pub struct DeleteChordParams {
     pub section_id: SectionDefinitionId,
     pub chord_id: ChordId,
+    /// What to do with a vocal lane in this section whose melody the edit
+    /// would change: `keep` (default — notes untouched, lane flagged
+    /// `melody_predates_chords`), `refit` (pitches moved to fit the new
+    /// chords, rhythm and lyrics kept) or `regenerate` (re-derived from
+    /// the generator; hand edits lost). Omitted: the project's remembered
+    /// choice, else `keep`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocal_melody: Option<VocalMelodyChoice>,
 }
 
 /// Params for `harmony.apply_progression`.
@@ -94,6 +132,14 @@ pub struct ApplyProgressionParams {
     /// Add sevenths when rendering numerals/presets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sevenths: Option<bool>,
+    /// What to do with a vocal lane in this section whose melody the edit
+    /// would change: `keep` (default — notes untouched, lane flagged
+    /// `melody_predates_chords`), `refit` (pitches moved to fit the new
+    /// chords, rhythm and lyrics kept) or `regenerate` (re-derived from
+    /// the generator; hand edits lost). Omitted: the project's remembered
+    /// choice, else `keep`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocal_melody: Option<VocalMelodyChoice>,
 }
 
 impl ApplyProgressionParams {
@@ -107,6 +153,7 @@ impl ApplyProgressionParams {
             preset: None,
             beats_per_chord: None,
             sevenths: None,
+            vocal_melody: None,
         }
     }
 }
@@ -118,4 +165,7 @@ pub struct ApplyProgressionResult {
     /// Ids of the chords now on the grid, in order.
     pub chord_ids: Vec<ChordId>,
     pub revision: u64,
+    /// See [`AddChordResult::vocal_lanes_affected`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocal_lanes_affected: Vec<VocalLaneAffected>,
 }

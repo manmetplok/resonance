@@ -26,6 +26,7 @@ pub(super) fn set_generator(
                     LaneGeneratorConfig {
                         kind: LaneGeneratorKind::Bass(BassParams::default()),
                         seed: seed_from_id(definition_id),
+                        melody: Default::default(),
                     },
                 );
             }
@@ -35,6 +36,7 @@ pub(super) fn set_generator(
                     LaneGeneratorConfig {
                         kind: LaneGeneratorKind::Melody(MelodyParams::default()),
                         seed: definition_id.wrapping_mul(0x517CC1B727220A95),
+                        melody: Default::default(),
                     },
                 );
             }
@@ -44,6 +46,7 @@ pub(super) fn set_generator(
                     LaneGeneratorConfig {
                         kind: LaneGeneratorKind::Pad(PadParams::default()),
                         seed: definition_id.wrapping_mul(0x6C62272E07BB0142),
+                        melody: Default::default(),
                     },
                 );
             }
@@ -53,6 +56,7 @@ pub(super) fn set_generator(
                     LaneGeneratorConfig {
                         kind: LaneGeneratorKind::Vocal(VocalParams::default()),
                         seed: definition_id.wrapping_mul(0xBF58476D1CE4E5B9),
+                        melody: Default::default(),
                     },
                 );
             }

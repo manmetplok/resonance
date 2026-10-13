@@ -50,6 +50,9 @@ use resonance_music_theory::{VocalParams, VoicebankId};
 
 use super::view_model;
 
+/// `vocal.refit_melody` (vocal-melody-on-chord-change).
+mod refit;
+
 // The `vocal.*` writes route ComposeMessages, so they answer with the
 // compose-aware acknowledgement rather than a bare one: a reducer that
 // refused parks its reason on `compose.last_error` instead of returning
@@ -72,6 +75,7 @@ pub(super) fn try_handle(
         proto::SET_PARAMS => set_params(app, request),
         proto::VOICEBANKS => voicebanks(app, request),
         proto::VOICEBANK_INSTALL => voicebank_install(app, conn, request),
+        proto::REFIT_MELODY => refit::refit_melody(app, request),
         _ => return None,
     };
     Some(handled)
@@ -364,6 +368,7 @@ fn set_params(app: &mut Resonance, request: &Request) -> (Response, Task<Message
             config: Some(Box::new(crate::compose::LaneGeneratorConfig {
                 kind: crate::compose::LaneGeneratorKind::Vocal(vocal),
                 seed,
+                melody: Default::default(),
             })),
         }),
     );

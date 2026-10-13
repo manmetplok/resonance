@@ -82,6 +82,7 @@ pub fn describe(message: &Message) -> String {
             ComposeMessage::DeleteSectionDefinition { .. } => "delete section",
             ComposeMessage::RenameSection { .. } => "rename section",
             ComposeMessage::ResizeSection { .. } => "resize section",
+            ComposeMessage::VocalMelody(_) => "vocal melody",
             _ => "arrangement edit",
         },
         Message::ChordTrack(_) => "chord edit",

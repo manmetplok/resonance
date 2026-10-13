@@ -1,7 +1,7 @@
 //! `section.*` — section definitions and arrangement placements.
 //! Chords on a section's grid live under `harmony.*`.
 
-use crate::common::KeyScale;
+use crate::common::{KeyScale, VocalLaneAffected, VocalMelodyChoice};
 use crate::ids::{SectionDefinitionId, SectionPlacementId, TrackId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,7 +19,7 @@ pub const CREATE: &str = "section.create";
 /// `section.rename` — rename a definition ([`RenameParams`] -> `MutationAck`).
 pub const RENAME: &str = "section.rename";
 /// `section.resize` — change a definition's length
-/// ([`ResizeParams`] -> `MutationAck`).
+/// ([`ResizeParams`] -> [`ResizeResult`]).
 pub const RESIZE: &str = "section.resize";
 /// `section.delete` — delete a definition and its placements;
 /// destructive, requires `"confirm": true` ([`DeleteParams`] -> `MutationAck`).
@@ -98,6 +98,25 @@ pub struct ResizeParams {
     pub section_id: SectionDefinitionId,
     /// New length in bars, 1..=100000 ([`crate::MAX_BARS`]).
     pub length_bars: u32,
+    /// What to do with a vocal lane in this section whose melody the
+    /// resize would re-derive differently: `keep` (default — notes
+    /// untouched and re-laid at the new length, notes past a shrunk end
+    /// cut; lane flagged `melody_predates_chords`), `refit` or
+    /// `regenerate` (hand edits lost). Omitted: the project's remembered
+    /// choice, else `keep`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocal_melody: Option<VocalMelodyChoice>,
+}
+
+/// Result of `section.resize`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ResizeResult {
+    pub revision: u64,
+    /// The section's vocal lanes whose melody the resize would have
+    /// changed, and what was done with each. Empty when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocal_lanes_affected: Vec<VocalLaneAffected>,
 }
 
 /// Params for `section.delete`.

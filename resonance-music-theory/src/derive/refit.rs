@@ -14,8 +14,8 @@
 //!   a chord change; or a note at least a beat long) move to the nearest
 //!   **chord tone** of the chord sounding at its start.
 //! - **Every other note** moves to the nearest **scale tone**. With no
-//!   scale (or a chromatic one) it keeps its pitch: a passing note has
-//!   nothing to be wrong against.
+//!   scale the key is inferred from the chords ([`infer_scale`]); with a
+//!   chromatic one the note keeps its pitch (every pitch is in it).
 //! - A note already on a fitting pitch class does not move.
 //! - **Tie-break:** when a pitch above and one below are equally near, the
 //!   one that alone keeps the original interval direction from the previous
@@ -40,7 +40,9 @@ pub fn refit_melody(
 ) -> Vec<GeneratedNote> {
     let tpb = u64::from(ticks_per_beat.max(1));
     let bpb = u64::from(beats_per_bar.max(1));
-    let scale = scale.filter(|s| s.mode != crate::Mode::Chromatic);
+    let scale = scale
+        .or_else(|| infer_scale(chords))
+        .filter(|s| s.mode != crate::Mode::Chromatic);
     let mut out: Vec<GeneratedNote> = Vec::with_capacity(notes.len());
     for (i, n) in notes.iter().enumerate() {
         let chord = chord_at(chords, n.start_tick, tpb);
@@ -61,6 +63,37 @@ pub fn refit_melody(
         out.push(GeneratedNote { note, ..*n });
     }
     out
+}
+
+/// The major or natural-minor key that holds the most of `chords`' tones,
+/// weighted by how long each chord lasts; on a tie, the key on the first
+/// chord's root, then major. `None` without chords.
+pub fn infer_scale(chords: &[TimedChord]) -> Option<Scale> {
+    use crate::{Mode, PitchClass};
+    let first_root = chords.first()?.chord.root;
+    let mut best: Option<(u32, u8, Scale)> = None;
+    for semitone in 0u8..12 {
+        let root = PitchClass::from_semitone(semitone);
+        for (mode, mode_rank) in [(Mode::Major, 1u8), (Mode::Minor, 0)] {
+            let scale = Scale::new(root, mode);
+            let score: u32 = chords
+                .iter()
+                .map(|c| {
+                    let inside = c
+                        .chord
+                        .pitch_classes()
+                        .filter(|p| scale.contains(p.to_semitone()))
+                        .count() as u32;
+                    inside * c.duration_beats.max(1)
+                })
+                .sum();
+            let rank = u8::from(root == first_root) * 2 + mode_rank;
+            if best.is_none_or(|(s, r, _)| (score, rank) > (s, r)) {
+                best = Some((score, rank, scale));
+            }
+        }
+    }
+    best.map(|(_, _, scale)| scale)
 }
 
 /// The chord whose span holds `tick`'s beat.

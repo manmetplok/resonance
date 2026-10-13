@@ -13,6 +13,22 @@ use serde::{Deserialize, Serialize};
 pub struct LaneGeneratorConfig {
     pub kind: LaneGeneratorKind,
     pub seed: u64,
+    /// A vocal lane's melody provenance (hand-edited, predates the
+    /// chords); clear on every other kind. Left out of the file when
+    /// clear (vocal-melody-on-chord-change).
+    #[serde(default, skip_serializing_if = "super::LaneMelodyFlags::is_clear")]
+    pub melody: super::LaneMelodyFlags,
+}
+
+impl LaneGeneratorConfig {
+    /// A lane config with clear melody flags.
+    pub fn new(kind: LaneGeneratorKind, seed: u64) -> Self {
+        Self {
+            kind,
+            seed,
+            melody: super::LaneMelodyFlags::default(),
+        }
+    }
 }
 
 /// What kind of generator drives a lane.

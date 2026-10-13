@@ -13,6 +13,11 @@
 //! `resonance_music_theory::parse_chord` / `Display` (the same pair
 //! `song.sections` uses to render them).
 //!
+//! Every method takes an optional `vocal_melody` (`keep` | `refit` |
+//! `regenerate`) for the section's vocal lanes whose melody the chord
+//! change would rewrite, and reports them as `vocal_lanes_affected`
+//! ([`vocal_melody`], BUG-70).
+//!
 //! Frozen tracks are not refused here (code review FU-M4b): chords are
 //! the section's shared harmony, not one track's input, and the GUI's
 //! chord edits are not gated either. A frozen lane the cascade rewrites
@@ -30,8 +35,11 @@ use resonance_control::methods::harmony as proto;
 use resonance_control::{Request, Response, RpcError};
 use resonance_music_theory::{diatonic_chord, parse_chord, Chord, Scale};
 
-use super::reply::{ack_or_compose_error, ack_task, reject};
+use super::reply::{ack_task, reject};
 use super::section::{definition_missing, parse_key_scale, take_compose_error};
+
+pub(super) mod vocal_melody;
+use vocal_melody::run_with_vocal_melody;
 
 pub(super) fn try_handle(
     app: &mut Resonance,
@@ -50,6 +58,34 @@ pub(super) fn try_handle(
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
+
+/// Write `specs` as the section's grid and answer `harmony.edit_chord` /
+/// `harmony.delete_chord`: the revision and the vocal lanes the change
+/// reached, or the reducer's refusal.
+fn chord_edit_reply(
+    app: &mut Resonance,
+    request: &Request,
+    choice: Option<resonance_control::VocalMelodyChoice>,
+    definition_id: u64,
+    specs: Vec<SectionChordSpec>,
+) -> (Response, Task<Message>) {
+    let (task, vocal_lanes_affected) = run_with_vocal_melody(
+        app,
+        choice,
+        Message::Compose(ComposeMessage::ReplaceSectionChords {
+            definition_id,
+            chords: specs,
+        }),
+    );
+    if let Some(error) = take_compose_error(app) {
+        return reject(request, RpcError::invalid_params(error));
+    }
+    let result = proto::ChordEditResult {
+        revision: app.revision(),
+        vocal_lanes_affected,
+    };
+    (super::success(request, &result), task)
+}
 
 fn add_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::AddChordParams = match request.params() {
@@ -78,8 +114,9 @@ fn add_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
         duration_beats,
         chord,
     });
-    let task = super::run_via_update(
+    let (task, vocal_lanes_affected) = run_with_vocal_melody(
         app,
+        params.vocal_melody,
         Message::Compose(ComposeMessage::ReplaceSectionChords {
             definition_id,
             chords: specs,
@@ -97,6 +134,7 @@ fn add_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
     let result = proto::AddChordResult {
         chord_id: chord_id.into(),
         revision: app.revision(),
+        vocal_lanes_affected,
     };
     (super::success(request, &result), task)
 }
@@ -142,14 +180,7 @@ fn edit_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message
             Err(e) => return reject(request, e),
         };
     }
-    let task = super::run_via_update(
-        app,
-        Message::Compose(ComposeMessage::ReplaceSectionChords {
-            definition_id,
-            chords: specs,
-        }),
-    );
-    ack_or_compose_error(app, request, task)
+    chord_edit_reply(app, request, params.vocal_melody, definition_id, specs)
 }
 
 fn delete_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
@@ -173,14 +204,7 @@ fn delete_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Messa
             )),
         );
     }
-    let task = super::run_via_update(
-        app,
-        Message::Compose(ComposeMessage::ReplaceSectionChords {
-            definition_id,
-            chords: specs,
-        }),
-    );
-    ack_or_compose_error(app, request, task)
+    chord_edit_reply(app, request, params.vocal_melody, definition_id, specs)
 }
 
 fn apply_progression(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
@@ -240,8 +264,9 @@ fn apply_progression(app: &mut Resonance, request: &Request) -> (Response, Task<
             chord,
         })
         .collect();
-    let task = super::run_via_update(
+    let (task, vocal_lanes_affected) = run_with_vocal_melody(
         app,
+        params.vocal_melody,
         Message::Compose(ComposeMessage::ReplaceSectionChords {
             definition_id,
             chords: specs,
@@ -256,6 +281,7 @@ fn apply_progression(app: &mut Resonance, request: &Request) -> (Response, Task<
             .map(ChordId::from)
             .collect(),
         revision: app.revision(),
+        vocal_lanes_affected,
     };
     (super::success(request, &result), task)
 }

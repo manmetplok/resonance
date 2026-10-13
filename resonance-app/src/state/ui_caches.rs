@@ -310,4 +310,7 @@ pub(crate) struct VocalRailContext {
     /// The lane's render state, for the stale / error badge (as settled
     /// after the last update; `None` before the first).
     pub render_status: Option<crate::compose::VocalLaneRenderStatus>,
+    /// The lane's melody flags, for the "melody predates chord change"
+    /// badge (vocal-melody-on-chord-change).
+    pub melody: crate::compose::LaneMelodyFlags,
 }

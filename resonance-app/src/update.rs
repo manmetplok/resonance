@@ -75,6 +75,9 @@ impl crate::Resonance {
         let grants = outermost && !matches!(message, Message::Control(_));
         let is_tick = matches!(message, Message::Tick);
         let before = grants.then(|| self.timeline_delete_targets());
+        if outermost {
+            crate::update::compose::vocal_melody_prompt::begin_update(self);
+        }
         self.update_depth += 1;
         let task = self.update_inner(message);
         self.update_depth -= 1;
@@ -96,6 +99,10 @@ impl crate::Resonance {
         // palette, instrument-picker cue) is pruned to the channel the
         // inspector now describes and to what still exists.
         let task = if outermost {
+            // A GUI chord or length edit that kept vocal melodies asks
+            // what to do with them; a control edit just keeps them
+            // (vocal-melody-on-chord-change).
+            crate::update::compose::vocal_melody_prompt::settle(self, grants);
             crate::update::chain_ui::settle(self);
             let settled = crate::update::inline_rename::settle(self);
             // Vocal render state follows every edit, whichever path made

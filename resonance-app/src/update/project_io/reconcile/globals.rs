@@ -160,6 +160,9 @@ impl Reconcile for ComposeSections {
     fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, _: &ReconcileCtx<'_>) {
         r.compose
             .load_from_project(&new.section_definitions, &new.section_placements);
+        // Project state beside the sections: the vocal-melody question's
+        // remembered answer rides undo and load alike.
+        r.compose.vocal_melody.remembered = new.vocal_melody_choice;
     }
 }
 

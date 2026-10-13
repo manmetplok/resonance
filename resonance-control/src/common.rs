@@ -179,3 +179,35 @@ pub enum TransportState {
 pub struct MutationAck {
     pub revision: u64,
 }
+
+/// What a chord or section-length edit does to a vocal lane whose melody
+/// it would change (the optional `vocal_melody` on `harmony.*` and
+/// `section.resize`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VocalMelodyChoice {
+    /// Leave the notes as they are; the lane reads
+    /// `melody_predates_chords: true` in `song.vocal` until it is
+    /// re-fitted, regenerated or its notes are edited. The default
+    /// (unless the user told the project to remember another choice).
+    Keep,
+    /// Move each pitch to the nearest note that fits the new chords
+    /// (chord tones on strong beats and long notes, scale tones
+    /// elsewhere). Rhythm, note count, lyrics and `_` holds stay.
+    Refit,
+    /// Re-derive the melody from the lane's generator, discarding hand
+    /// edits — what every chord edit did before.
+    Regenerate,
+}
+
+/// One vocal lane whose melody a chord or length edit would have
+/// changed, and what was done with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VocalLaneAffected {
+    /// The lane's section definition (`section_id` in `vocal.*`).
+    pub definition_id: crate::ids::SectionDefinitionId,
+    pub track_id: crate::ids::TrackId,
+    pub outcome: VocalMelodyChoice,
+}

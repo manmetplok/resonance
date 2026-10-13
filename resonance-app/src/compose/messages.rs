@@ -292,6 +292,11 @@ pub enum ComposeMessage {
         voicebank: VoicebankId,
     },
 
+    /// What a chord or section-length change does to vocal melodies:
+    /// the GUI question, its remembered choice and the lane badge's
+    /// Re-fit / Regenerate (vocal-melody-on-chord-change).
+    VocalMelody(crate::compose::vocal_melody::VocalMelodyMsg),
+
     // ---- Chord lane inspector ----
     ChordInspector {
         definition_id: u64,
@@ -408,6 +413,7 @@ impl ComposeMessage {
             // coalesce (FU-A10b) — `ChordInspectorMsg` itself doesn't carry
             // the section identity.
             Self::ChordInspector { definition_id, msg } => msg.undo_action(*definition_id),
+            Self::VocalMelody(m) => m.undo_action(),
             // Everything else in Compose mutates project state.
             Self::CreateMidiClipInSection { .. }
             | Self::ConfirmCreateSection

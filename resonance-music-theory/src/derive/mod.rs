@@ -36,7 +36,7 @@ pub use motif_source::{
     toggle_manual_motif_cell, ManualMotifCell, ManualMotifNote, MotifParams, MotifSource,
 };
 pub use pad::{derive_pad, PadParams};
-pub use refit::refit_melody;
+pub use refit::{infer_scale, refit_melody};
 pub use vocal::{
     count_syllables, derive_vocal, derive_vocal_with_holds, derive_vocal_with_meter,
     derive_vocal_with_motif, VocalDerivation,

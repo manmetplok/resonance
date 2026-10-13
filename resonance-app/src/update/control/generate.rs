@@ -117,7 +117,7 @@ fn part(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(k) => k,
         Err(e) => return reject(request, e),
     };
-    let config = LaneGeneratorConfig { kind, seed };
+    let config = LaneGeneratorConfig { kind, seed, melody: Default::default() };
 
     let task = super::run_via_update(
         app,

@@ -68,7 +68,7 @@ pub mod socket;
 
 pub use common::{
     check_max_bars, BeatRange, KeyScale, MutationAck, PositionSpec, SongPosition, TimeSignature, TrackKind,
-    TrackOutput, TransportState, MAX_BARS,
+    TrackOutput, TransportState, VocalLaneAffected, VocalMelodyChoice, MAX_BARS,
 };
 pub use framing::{write_message, FramingError, MessageReader};
 pub use job::{JobStarted, JobState, JobStatus};

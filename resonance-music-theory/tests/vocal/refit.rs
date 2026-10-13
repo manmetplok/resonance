@@ -4,7 +4,7 @@
 //! can (vocal-melody-on-chord-change, BUG-70).
 
 use resonance_music_theory::{
-    derive_vocal, generate_lyrics, refit_melody, Chord, ChordQuality, GeneratedNote, Mode,
+    derive_vocal, generate_lyrics, infer_scale, refit_melody, Chord, ChordQuality, GeneratedNote, Mode,
     PitchClass, Scale, TimedChord, VocalParams,
 };
 
@@ -120,15 +120,34 @@ fn notes_that_already_fit_do_not_move() {
     assert_eq!(refit, line);
 }
 
-/// A weak note with no scale to fit (none, or chromatic) keeps its pitch:
-/// a passing tone has nothing to be wrong against.
+/// A weak note in a chromatic scale keeps its pitch: every pitch is in
+/// it. With no scale at all the key comes from the chords.
 #[test]
-fn a_weak_note_without_a_scale_keeps_its_pitch() {
+fn a_weak_note_fits_the_inferred_key_when_the_section_has_none() {
     let line = vec![note(66, 1.5, 0.5)];
     let chords = vec![chord(PitchClass::C, ChordQuality::Maj, 0, 4)];
-    assert_eq!(refit_melody(&line, &chords, None, TPB, 4), line);
     let chromatic = Scale::new(PitchClass::C, Mode::Chromatic);
     assert_eq!(refit_melody(&line, &chords, Some(chromatic), TPB, 4), line);
+    let refit = refit_melody(&line, &chords, None, TPB, 4);
+    assert!(c_major().contains(refit[0].note), "F# moves into C major: {}", refit[0].note);
+}
+
+#[test]
+fn the_key_is_inferred_from_the_chords() {
+    let a_minor_loop = vec![
+        chord(PitchClass::A, ChordQuality::Min, 0, 4),
+        chord(PitchClass::F, ChordQuality::Maj, 4, 4),
+        chord(PitchClass::C, ChordQuality::Maj, 8, 4),
+        chord(PitchClass::G, ChordQuality::Maj, 12, 4),
+    ];
+    assert_eq!(infer_scale(&a_minor_loop), Some(Scale::new(PitchClass::A, Mode::Minor)));
+    let d_major = vec![
+        chord(PitchClass::D, ChordQuality::Maj, 0, 4),
+        chord(PitchClass::A, ChordQuality::Maj, 4, 4),
+        chord(PitchClass::G, ChordQuality::Maj, 8, 4),
+    ];
+    assert_eq!(infer_scale(&d_major), Some(Scale::new(PitchClass::D, Mode::Major)));
+    assert_eq!(infer_scale(&[]), None);
 }
 
 /// D on a C-major downbeat is a tone from both C and E: the contour

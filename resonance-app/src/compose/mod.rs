@@ -8,6 +8,7 @@ pub mod expression_lanes;
 pub mod generate;
 pub mod invariants;
 pub mod messages;
+pub mod vocal_melody;
 pub mod vocal_render_status;
 pub mod vocal_svs;
 
@@ -40,6 +41,7 @@ pub use section::{
     SectionPlacementState, SelectedLane,
 };
 pub use state::{ComposeState, RailPanelKey, VocalTakeSources};
+pub use vocal_melody::{LaneMelodyFlags, VocalMelodyChoice};
 pub use vocal_render_status::{
     VocalLaneErrorKind, VocalLaneKey, VocalLaneRenderState, VocalLaneRenderStatus,
 };

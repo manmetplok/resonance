@@ -1,6 +1,7 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `ad042afb` + the `singing` skill on 2026-10-13.
+> Verified against master @ `f9438e38` + the `singing` skill and the
+> chord-change melody flow (BUG-70) on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §3, §6 (slices 1, 3, 8); `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -208,6 +209,78 @@ line, re-rolled from a small template corpus, or set by an agent.
   older files miss it, and those were last heard on Lilia
   (`params/legacy.rs`, `LEGACY_VOICEBANK`).
 
+### Chord and length changes under a melody (BUG-70)
+
+A chord edit (add / edit / move / resize / delete / replace, a generated
+progression) or a section-length change re-derives the section's lanes. A
+vocal lane goes through `update/compose/vocal_melody.rs`
+(`on_chord_change`) instead of being re-derived blindly:
+
+- **Nothing to lose.** When the lane holds no notes yet, nothing derives
+  (no draft, no chords), or the re-derived melody equals what the lane
+  holds (notes *and* the per-note lyric table, so a toggled slur counts),
+  it is re-derived as before, unasked and unreported.
+- **Otherwise** the lane gets one of three outcomes:
+  - **Keep** — notes untouched; the lane is flagged
+    `melody_predates_chords`. On a length change the kept notes are
+    re-installed at the new clip length (notes past a shrunk end cut,
+    grown bars silent).
+  - **Re-fit** — `resonance_music_theory::refit_melody` moves each pitch to
+    the nearest fitting note: a chord tone of the chord sounding at its
+    start for a strong-beat note (bar start, middle of an even bar of four
+    or more beats, a chord change) or a note a beat or longer; a scale tone
+    otherwise (the section's scale, the chord track's key, or — with
+    neither — the major / natural-minor key inferred from the chords,
+    `infer_scale`; a chromatic scale leaves weak notes alone). A note
+    already fitting does not move; a move is at most a tritone; an equal
+    choice above / below takes the one that alone keeps the previous
+    interval direction (a repeat counts), else the lower. Count, rhythm,
+    velocity and the lyric table never change, and the clip is edited in
+    place (same id). Clears `melody_predates_chords`.
+  - **Regenerate** — `rederive_vocal_melody`, the old behaviour.
+- **Who chooses.** A control call's `vocal_melody`; else the project's
+  remembered choice; else, from the GUI, a question; from control, Keep.
+- **The GUI question** (`update/compose/vocal_melody_prompt.rs`,
+  `view/compose/vocal_melody_prompt.rs`, root overlay
+  `Overlay::VocalMelodyPrompt`). The edit dispatches as usual with the
+  lanes kept and parked as undecided; after the outermost update (and,
+  for a Begin…Commit gesture, after its commit) the modal lists every
+  affected lane — section · track, "Notes edited by hand" / "Generated,
+  untouched" — with Keep / Re-fit / Regenerate, pre-set to Keep for a
+  hand-edited lane and Regenerate for an untouched one. "Apply to all
+  lanes" sets every row; "Remember for this project" needs one choice for
+  every row. **Apply** carries the choices out and marks the project
+  edited without a history entry, so the chord edit's own entry (its
+  snapshot predates the edit) takes back both with one undo, and redo
+  brings both back. **Cancel**, Esc and the backdrop undo that entry and
+  drop the redo step. The question remembers the undo history's
+  generation (`UndoHistory::generation`) and closes — lanes kept and
+  flagged, a notice says so — if the history moves without it (an undo,
+  a control edit, a load). A chord drag publishes one `MoveChord` /
+  `ResizeChord` at the release, so it asks once.
+- **Remembered choice.** `ProjectFile::vocal_melody_choice`
+  (`compose.vocal_melody.remembered`): project state, saved and riding
+  undo like the cycle-record mode. Settings › General › Compose "Ask
+  again about vocal melodies" clears it (one undoable edit); it is dimmed
+  when nothing is remembered and the hint says what is.
+- **Flags** (`LaneMelodyFlags` on `LaneGeneratorConfig::melody`, left out
+  of the file when clear, so they save and ride undo):
+  `hand_edited` is set by every note-editing `MidiEditorMessage` on the
+  lane's clip — vocal roll, `notes.*`, `notes.import_midi`, a slur toggle
+  — through `vocal_melody::note_hand_edit` (the clip comes from
+  `gates::midi_editor_target`, shared with the frozen-input gate), and
+  also clears `melody_predates_chords` (edited again since). Any
+  (re)generate clears both (`install_vocal_melody`). A vocal config that
+  replaces a vocal config with clear flags (`vocal.set_params`,
+  `section.set_lane_generator`) keeps the old flags.
+- **Badge.** While `melody_predates_chords` is set the lane inspector
+  shows a warm "MELODY PREDATES CHORD CHANGE" card with Re-fit and
+  Regenerate (`view/compose/vocal_melody_badge.rs`), and the vocal-roll
+  toolbar the same chip and buttons. Regenerate here re-derives with the
+  lane's seed (no seed bump).
+- A kept, re-fitted or regenerated lane goes `stale` like any edit: the
+  GUI debounce re-renders, a control client calls `vocal.render`.
+
 ## Where the logic lives
 
 | Concern | Location | Key items |
@@ -223,6 +296,10 @@ line, re-rolled from a small template corpus, or set by an agent.
 | Lane lookup for control | `resonance-app/src/update/compose/vocal_control.rs` | `first_vocal_definition`, `vocal_definitions_for_track`, `control_set_lyrics`, `control_set_line` |
 | Views | `resonance-app/src/view/compose/lane_inspector/vocal/` (`lyrics_group`, `draft_group`, `melody_group`, `voice_group`, `generate_group`), `vocal_lane/`, `vocal_roll/` | right rail, lane row (lyrics + contour), vocal roll editor |
 | Control | `resonance-app/src/update/control/vocal.rs`, `song.rs`, `section.rs`, `view_model/vocal_params.rs` | `normalize_lyric_text`, `apply_params_patch`, `vocal_params_view`, `build_vocal_lane_config`, `song.vocal` view model |
+| Chord-change outcomes | `resonance-app/src/update/compose/vocal_melody.rs`; model `resonance-app/src/compose/vocal_melody.rs` | `on_chord_change`, `apply_outcome`, `refit_lane`, `note_hand_edit`, `with_requested_choice`, `LaneMelodyFlags`, `VocalMelodyChoice` |
+| The question | `resonance-app/src/update/compose/vocal_melody_prompt.rs`, `view/compose/vocal_melody_prompt.rs`, `view/compose/vocal_melody_badge.rs` | `begin_update`, `settle`, `apply`, `cancel`; modal, badge card / chip |
+| Re-fit | `resonance-music-theory/src/derive/refit.rs` | `refit_melody`, `infer_scale` |
+| Control | `resonance-app/src/update/control/harmony/vocal_melody.rs`, `update/control/vocal/refit.rs` | `run_with_vocal_melody`, `refit_melody` |
 
 ## Surfaces
 
@@ -269,7 +346,18 @@ line, re-rolled from a small template corpus, or set by an agent.
     `update/control/view_model/vocal_notes.rs`. `counts_mismatch`
     compares `syllable_count` with the notes **minus the generator holds**
     (they are not lyric units), so a Mixed / Melismatic lane does not
-    flag. New optional fields: no protocol bump.
+    flag. Per lane `hand_edited` and `melody_predates_chords`. New
+    optional fields: no protocol bump.
+  - `vocal.refit_melody` → `vocal_refit_melody` (`track_id`, optional
+    `section_id` — the track's first lane): re-fits the lane's pitches to
+    its section's current chords; returns `{revision, section_id,
+    note_count, notes_changed}`; refuses a lane without notes.
+  - `harmony.add_chord` / `edit_chord` / `delete_chord` /
+    `apply_progression` and `section.resize` take an optional
+    `vocal_melody: keep | refit | regenerate` and report
+    `vocal_lanes_affected: [{definition_id, track_id, outcome}]` (edit /
+    delete now answer `ChordEditResult`, resize `ResizeResult`: the old
+    `{revision}` plus the list).
 - **Agent skills:** the agent plugin's `singing` skill is the procedure
   for vocal lanes (voice, lanes, melody, lyrics, pre-flight, render,
   expression); `arranging` points at it. External `singer-songwriter`
@@ -292,6 +380,10 @@ line, re-rolled from a small template corpus, or set by an agent.
 | `s` key (insert / remove / in-word / line start / auto → user, undo, survives `vocal.generate`), `slur` / `g2p` / `syllable_warning`, `counts_mismatch` with auto holds | `resonance-app/tests/control/control_vocal_holds.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Vocal roll user / auto hold and split-warning golden | `tests/compose/vocal_roll_holds.rs` → `tests/snapshots/compose_vocal_roll_holds-wgpu.png` | `RESONANCE_BLESS=1` |
 | Goldens | `tests/snapshots/compose_vocal_*-wgpu.png` (placeholder, wired up, lyrics draft folded) | `RESONANCE_BLESS=1` |
+| Chord change over control: hand-written melody kept and flagged, generated lane kept by default, a note edit clears the flag, `regenerate` equals `vocal.generate` with the lane's seed, `refit` keeps rhythm / count / velocity / lyrics and fits the new chords, `vocal.refit_melody` (and its refusal), one `edit.undo` takes back edit + outcome, a remembered choice answers control, resize keeps and re-lays, an unchanged melody reports nothing | `resonance-app/tests/control/control_vocal_melody.rs` | `./scripts/run-tests.py -p resonance-app` |
+| The question: asks and keeps until answered, Apply + edit = one undo entry (undo / redo both), Cancel / Esc restores the chords and leaves no redo, remember skips it until "Ask again", hand-edited rows default to Keep, a chord-lane drag asks once at its release, the badge's Re-fit / Regenerate | `resonance-app/tests/compose/compose_vocal_melody_prompt.rs` | same |
+| Goldens: the question, the rail badge, the vocal-roll chip | `tests/snapshots/compose_vocal_melody_prompt-wgpu.png`, `compose_vocal_rail_melody_predates-wgpu.png`, `compose_vocal_roll_melody_predates-wgpu.png` | `RESONANCE_BLESS=1` |
+| Re-fit theory: invariants, already-fitting notes stay, contour tie-break, repeats, inferred key, a generated melody re-fitted to another progression | `resonance-music-theory/tests/vocal/refit.rs` (module of `vocal`) | `./scripts/run-tests.py -p resonance-music-theory` |
 
 Not covered: theme/POV/clichés (they have no effect).
 
@@ -318,9 +410,36 @@ Not covered: theme/POV/clichés (they have no effect).
   re-rolls repeat lines quickly.
 - `lane_generator.rs` still says vocal generation is "stubbed in
   `derive_vocal`"; it is not — that comment is stale.
-- Vocal lanes regenerate MIDI on chord edits without rendering: a GUI
-  chord edit leaves the lane `stale` and arms the debounced re-render; a
-  control edit waits for `vocal.render`.
+- A chord edit never renders a vocal lane: whatever its outcome, the lane
+  goes `stale`; a GUI edit arms the debounced re-render, a control edit
+  waits for `vocal.render`.
+- **The chord edit is not staged** (BUG-70 design). It dispatches with
+  the affected lanes kept, the safe outcome; the question's Apply folds
+  its outcome into the edit's undo entry instead of recording one, and
+  Cancel is an undo of that entry plus dropping its redo step. Staging the
+  edit until the answer would have left the history entry the edit's
+  `Record` classification already pushed empty.
+- **Defaults and remember.** Keep for hand-edited rows, Regenerate for
+  untouched ones; over control the default is always Keep (never lose
+  notes silently). "Remember" stores one choice, so it needs every row on
+  the same choice (the toggle is disabled otherwise). The remembered
+  choice is project state and rides undo: undoing the edit whose answer
+  set it forgets it again.
+- **What "affected" means.** A lane is asked about only when a
+  re-derive would change its notes or lyric table — so a resize of an
+  untouched lane, whose chords did not change, re-derives silently, while
+  a resize under a hand-written melody asks (and Keep re-lays the notes
+  at the new length). A resize is reported with the same flag name,
+  `melody_predates_chords`.
+- **Control surfaces.** `vocal_melody` is on `harmony.*` and
+  `section.resize`. `arrangement.insert_bars` / `remove_bars` never
+  re-derive a section, so they take none. A time-signature edit that
+  trims a section's chords (`transport.set_time_signature`,
+  `global.*_signature_event`) re-derives too; it takes no `vocal_melody`
+  and follows the default (remembered, else Keep) — see Known gaps.
+- `vocal.refit_melody` with no `section_id` re-fits the track's first
+  lane, like the other lane-addressed `vocal.*` writes (not every lane,
+  as `vocal.render` does).
 - Generator holds live in the existing per-note side table as `"+"` —
   no new marker. A `"+"` left by the old per-note `s` toggle in an older
   project therefore reads as a generator hold (no external users).
@@ -342,6 +461,15 @@ Not covered: theme/POV/clichés (they have no effect).
   `syllable_warning`.
 
 ## Known gaps
+
+- Signature edits that trim chords take no `vocal_melody` and do not
+  list `vocal_lanes_affected`; their lanes are kept (or get the
+  remembered choice).
+- A lane that sings at several placements is judged and re-fitted from
+  its first placement's clip; a hand edit made to another placement's clip
+  only is not compared.
+- The Settings › General page already ran past a laptop-height window
+  before the Compose section was added; it still does not scroll.
 
 - Breaths are rendered (slice 12) but not drawn in the vocal roll.
 - An `s` edit is a lyric edit: the lane goes `stale` and, if it already

@@ -17,7 +17,7 @@ pub use derive::{
     derive_melody_fill_vocal, derive_vocal_with_holds, derive_vocal_with_meter,
     derive_vocal_with_motif, VocalDerivation,
     generate_lyrics, lyric_corpus_lines, motif_intervals, phrase_grammar_roles,
-    plan_motif_transforms, refit_melody,
+    plan_motif_transforms, infer_scale, refit_melody,
     section_climax_phrase, toggle_manual_motif_cell,
     vocal_phrase_spans, BassMotifMode, BassMotifPhrase,
     BassParams, BassStyle, ContourPreference, EmbellishmentStyle, GeneratedNote, LyricLine,

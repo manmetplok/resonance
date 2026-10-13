@@ -1,6 +1,6 @@
 # Lane generators and derived clips
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `f9438e38` + the chord-change vocal melody flow (BUG-70) on 2026-10-13.
 > Spec history: `docs/history/refactor/A-6-derived-clips.md` (derived-clip map), `docs/history/specs/melody-generation-research.md` + `todo.md` (generator quality).
 
 Each `(section definition, track)` pair is a **lane**. A lane can carry a
@@ -39,12 +39,16 @@ Manual: the user writes its clips by hand.
 - **When lanes regenerate.**
   - Any chord edit (add/edit/move/resize/delete/replace, or a new generated
     progression) regenerates every Bass/Melody/Pad/Vocal lane of the
-    section (`propagate_chord_change`). Vocal lanes get new MIDI here but no
-    new audio; the user re-renders.
+    section (`propagate_chord_change`). A vocal lane whose melody that
+    would change is kept, re-fitted or regenerated as the caller, the
+    project or the user chooses
+    ([vocal lyrics and melody](vocal-lyrics-and-melody.md#chord-and-length-changes-under-a-melody-bug-70));
+    either way it gets no new audio until a render.
   - The lane inspector's Regenerate bumps the lane seed and re-derives that
     lane. Changing a parameter in the inspector does **not** regenerate by
     itself.
-  - A section resize re-derives lanes that already have clips.
+  - A section resize re-derives lanes that already have clips (a vocal
+    lane by the same chord-change rule).
   - A lane with no chords produces nothing (`regenerate_lane` returns early).
 - **Chord-track overlay.** Before deriving, `apply_chord_track_harmony`
   replaces the symbol of any section chord that falls inside a **pinned**

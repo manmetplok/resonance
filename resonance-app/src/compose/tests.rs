@@ -229,6 +229,7 @@ fn migration_lifts_legacy_melody_motif_knobs_onto_section() {
         LaneGeneratorConfig {
             kind: LaneGeneratorKind::Melody(custom_melody),
             seed: 0xCAFEBABE,
+            melody: Default::default(),
         },
     );
 
@@ -285,6 +286,7 @@ fn migration_skips_when_motif_already_customized() {
         LaneGeneratorConfig {
             kind: LaneGeneratorKind::Melody(custom_melody),
             seed: 1234,
+            melody: Default::default(),
         },
     );
 

@@ -1,11 +1,11 @@
 # Control method catalogue
 
-> Verified against master @ `f82be9b0` + speaker `effect` flags on 2026-10-13.
+> Verified against master @ `f9438e38` + speaker `effect` flags and `vocal.refit_melody` on 2026-10-13.
 > Source of truth: `resonance_control::methods::capabilities()` and each
 > method constant's doc comment in `resonance-control/src/methods/*.rs`.
 
 Every control method the app implements, the MCP tool that exposes it,
-and the feature area that owns it. 185 methods, 185 tools. The MCP tool
+and the feature area that owns it. 186 methods, 186 tools. The MCP tool
 is always the method name with its first `.` replaced by `_`; in Claude
 Code it is `mcp__resonance__<tool>`.
 
@@ -145,13 +145,13 @@ area; the sibling areas may refine it.
 | `edit.status` | `edit_status` | read | [project-core](../project-core/undo-redo.md) | what undo/redo would do, without doing it |
 | `section.create` | `section_create` | edit | [compose](../compose/sections-and-placements.md) | create a definition; also places it after the last placement unless `place: false` |
 | `section.rename` | `section_rename` | edit | [compose](../compose/sections-and-placements.md) | rename a definition |
-| `section.resize` | `section_resize` | edit | [compose](../compose/sections-and-placements.md) | change a definition's length |
+| `section.resize` | `section_resize` | edit | [compose](../compose/sections-and-placements.md) | change a definition's length (`vocal_melody`, reports `vocal_lanes_affected`) |
 | `section.delete` | `section_delete` | edit | [compose](../compose/sections-and-placements.md) | delete a definition and its placements; destructive, requires `"confirm": true` |
 | `section.place` | `section_place` | edit | [compose](../compose/sections-and-placements.md) | place a definition in the arrangement |
 | `section.remove_placement` | `section_remove_placement` | edit | [compose](../compose/sections-and-placements.md) | remove one placement (the definition survives |
 | `section.set_scale` | `section_set_scale` | edit | [compose](../compose/sections-and-placements.md) | set a definition's key/scale |
 | `section.set_lane_generator` | `section_set_lane_generator` | edit | [compose](../compose/lane-generators.md) | configure (or clear) the generator on a `(section definition, track)` lane |
-| `harmony.add_chord` | `harmony_add_chord` | edit | [compose](../compose/section-chords-and-progressions.md) | add a chord |
+| `harmony.add_chord` | `harmony_add_chord` | edit | [compose](../compose/section-chords-and-progressions.md) | add a chord (every `harmony.*`: optional `vocal_melody` keep / refit / regenerate, reports `vocal_lanes_affected`) |
 | `harmony.edit_chord` | `harmony_edit_chord` | edit | [compose](../compose/section-chords-and-progressions.md) | change symbol/position/length of a chord |
 | `harmony.delete_chord` | `harmony_delete_chord` | edit | [compose](../compose/section-chords-and-progressions.md) | remove a chord |
 | `harmony.apply_progression` | `harmony_apply_progression` | edit | [compose](../compose/section-chords-and-progressions.md) | render a whole progression onto a section's grid |
@@ -187,6 +187,7 @@ area; the sibling areas may refine it.
 | `vocal.clear_pronunciation` | `vocal_clear_pronunciation` | edit | [compose](../compose/pronunciation.md) | remove a per-word override |
 | `vocal.render` | `vocal_render` | job | [compose](../compose/vocal-rendering.md) | kick off an SVS render |
 | `vocal.generate` | `vocal_generate` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | generate a vocal lane's melody (and lyrics) into its derived clip |
+| `vocal.refit_melody` | `vocal_refit_melody` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | move a vocal lane's pitches onto its section's current chords, keeping rhythm, count and lyrics |
 | `vocal.get_params` | `vocal_get_params` | read | [compose](../compose/vocal-lyrics-and-melody.md) | read a vocal lane's full settings and seed |
 | `vocal.set_params` | `vocal_set_params` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | merge a partial patch into a vocal lane's settings (incl. `rest_threshold_beats`, `velocity_dynamics`, `bank_timing`, `bank_pitch`; a new lane starts on `tiger` / `mystic`) |
 | `vocal.voicebanks` | `vocal_voicebanks` | read | [compose](../compose/voicebank-library.md) | list the installed voicebanks and what each can do (incl. `models`: its own duration / pitch / variance models; `effect: true` on a speaker that is an effect mode — growl, vocal fry, whisper — not a lead voice), and the plok.org index's others (`available`) (no project needed) |

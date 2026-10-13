@@ -126,16 +126,21 @@ pub(super) fn propagate_chord_change(r: &mut crate::Resonance, definition_id: u6
 }
 
 /// [`regenerate_lane`] as the side effect of another edit (a chord or
-/// section-length change). A vocal lane's melody is re-derived without a
-/// render ([`rederive_vocal_melody`]): its old audio keeps playing, now
-/// `stale`, and the edit's origin decides what follows — a GUI edit arms
-/// the debounced re-render (`vocal_render_state::settle`), a control edit
-/// waits for `vocal.render`. That also means a lane whose bank is not
+/// section-length change). A vocal lane goes to
+/// [`vocal_melody::on_chord_change`]: a melody the edit would change is
+/// kept, re-fitted or re-derived as the caller, the project or the user
+/// chooses (BUG-70); one it would not change is re-derived as before.
+/// Either way nothing renders ([`rederive_vocal_melody`]): its old audio
+/// keeps playing, now `stale`, and the edit's origin decides what follows
+/// — a GUI edit arms the debounced re-render
+/// (`vocal_render_state::settle`), a control edit waits for
+/// `vocal.render`. That also means a lane whose bank is not
 /// installed raises no banner here; one already showing is put back
 /// should anything have replaced it: the edit itself succeeded, and the
 /// missing bank is reported when the lane renders.
 ///
 /// [`rederive_vocal_melody`]: super::vocal_render::rederive_vocal_melody
+/// [`vocal_melody::on_chord_change`]: super::vocal_melody::on_chord_change
 pub(super) fn regenerate_lane_as_side_effect(
     r: &mut crate::Resonance,
     definition_id: u64,
@@ -148,7 +153,7 @@ pub(super) fn regenerate_lane_as_side_effect(
         .and_then(|d| d.lane_generators.get(&track_id))
         .is_some_and(|cfg| matches!(cfg.kind, LaneGeneratorKind::Vocal(_)));
     let task = if is_vocal {
-        super::vocal_render::rederive_vocal_melody(r, definition_id, track_id);
+        super::vocal_melody::on_chord_change(r, definition_id, track_id);
         iced::Task::none()
     } else {
         regenerate_lane(r, definition_id, track_id)

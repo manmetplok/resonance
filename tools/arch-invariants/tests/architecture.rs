@@ -2230,7 +2230,7 @@ const MOD_RS_ALLOWANCE: &[(&str, usize)] = &[
     ("plugins/resonance-wavetable/src/dsp/render/mod.rs", 398),
     ("resonance-plugin/src/clap_bridge/mod.rs", 383),
     ("resonance-app/src/view/compose/vocal_lane/mod.rs", 375),
-    ("resonance-app/src/view/mod.rs", 369),
+    ("resonance-app/src/view/mod.rs", 302),
     ("plugins/resonance-wavetable/src/user_wavetable/mod.rs", 358),
     ("plugins/resonance-wavetable/src/params/mod.rs", 356),
     ("resonance-dsp/src/timestretch/mod.rs", 354),

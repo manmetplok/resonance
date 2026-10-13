@@ -181,6 +181,8 @@ mod control_vocal_holds;
 mod control_vocal_lanes;
 #[path = "control/control_vocal_params.rs"]
 mod control_vocal_params;
+#[path = "control/control_vocal_melody.rs"]
+mod control_vocal_melody;
 #[path = "control/control_vocal_pronunciation_persistence.rs"]
 mod control_vocal_pronunciation_persistence;
 #[path = "control/control_vocal_render_all_lanes.rs"]

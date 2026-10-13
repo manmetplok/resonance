@@ -1,6 +1,6 @@
 # Undo and redo
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `f9438e38` + the chord-change vocal melody flow (BUG-70) on 2026-10-13.
 > Spec history: `docs/history/refactor/refactor-intent.md` (Epic A),
 > `docs/history/refactor/arch-migration-plan.md` (ARCH-01, ARCH-06 A6-4,
 > ARCH-09), `docs/history/refactor/A-13-reconcile.md`;
@@ -34,6 +34,12 @@ delegates to an exhaustive `XMessage::undo_action()` beside each handler):
 - **Recordings** land through `record_recording_edit`: all clips, takes and
   live-MIDI captures of one recording run coalesce into a single "Record"
   entry. A take that lands mid-drag splits the drag around it.
+- **The vocal-melody question** (BUG-70): a GUI chord edit that would
+  rewrite a vocal melody records its entry as usual; the question's Apply
+  (classified `Skip`) mutates and calls `mark_edited_without_history`, so
+  it rides that entry, and Cancel undoes it and drops the redo step
+  (`UndoHistory::drop_redo_top`). The question holds the history's
+  `generation` (bumped by every stack change) and closes if it moves.
 - **Control calls**: `control::execute` wraps every mutating call in a
   compound group (`with_compound_undo`), so a call that fans out into many
   messages is one entry and one revision bump. A failure part-way leaves the

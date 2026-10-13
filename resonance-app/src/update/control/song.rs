@@ -372,6 +372,9 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
                     .collect(),
                 })
                 .collect(),
+            // Melody provenance (vocal-melody-on-chord-change).
+            hand_edited: config.melody.hand_edited,
+            melody_predates_chords: config.melody.melody_predates_chords,
         });
     }
 

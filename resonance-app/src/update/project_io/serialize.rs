@@ -642,5 +642,6 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         // an override whose lane was deleted is kept, so undoing the
         // delete brings the lane back with its pronunciation.
         pronunciation: r.compose.pronunciation.to_project(),
+        vocal_melody_choice: r.compose.vocal_melody.remembered,
     }
 }

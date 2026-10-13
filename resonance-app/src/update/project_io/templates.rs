@@ -866,6 +866,7 @@ fn build_vocal_songwriting() -> BuiltinProject {
         LaneGeneratorConfig {
             kind: LaneGeneratorKind::Vocal(vocal_params.clone()),
             seed: SEED,
+            melody: Default::default(),
         },
     );
 

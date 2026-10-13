@@ -1,6 +1,7 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `ad042afb` + the `singing` skill on 2026-10-13.
+> Verified against master @ `f9438e38` + the `singing` skill and the chord-change
+> vocal melody flow (BUG-70) on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -38,9 +39,11 @@ only marks the lane stale.
   keeps the old audio, raises the banner and fails any job waiting on the
   lane with `voicebank_missing`; `vocal.generate` writes the melody,
   skips its auto-render and reports `render_error {kind:
-  voicebank_missing}`; a chord or length edit re-derives the lane's
-  melody without rendering at all (`regenerate_lane_as_side_effect` →
-  `rederive_vocal_melody`), so it raises no banner and keeps whatever
+  voicebank_missing}`; a chord or length edit keeps, re-fits or re-derives
+  the lane's melody without rendering at all (`regenerate_lane_as_side_effect` →
+  `vocal_melody::on_chord_change`, see
+  [vocal lyrics and melody](vocal-lyrics-and-melody.md#chord-and-length-changes-under-a-melody-bug-70)),
+  so it raises no banner and keeps whatever
   one was showing. A bank deleted mid-render fails
   asynchronously (`VocalAudioFailed` with kind `VoicebankMissing`, banner
   + job `error.kind`), naming the user voicebank folder like the
@@ -372,8 +375,9 @@ only marks the lane stale.
     only the changed units. A lane never rendered waits for Generate /
     Re-render. **Control** edits never arm it: an agent batches its edits
     and calls `vocal.render` once; `vocal.generate` keeps its auto-render.
-  - *Chord and length edits* re-derive the lane's melody without
-    rendering (`rederive_vocal_melody`), so they follow the same rule
+  - *Chord and length edits* keep, re-fit or re-derive the lane's melody
+    without rendering (`vocal_melody::on_chord_change`), so they follow the
+    same rule
     (D21). They used to queue a render whose task was dropped, leaving the
     lane without audio and stuck `rendering`. Expression-curve edits no
     longer render on every breakpoint move either: the debounce covers

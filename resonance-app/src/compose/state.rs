@@ -316,6 +316,10 @@ pub struct ComposeState {
     /// replay, demo seeding) so `view_compose` doesn't re-filter the
     /// registry every frame.
     pub track_count: usize,
+    /// The chord-change flow for vocal melodies: the remembered choice,
+    /// the open question, and what the edit in flight did to each lane
+    /// (vocal-melody-on-chord-change).
+    pub vocal_melody: super::vocal_melody::VocalMelodyState,
 }
 
 impl Default for ComposeState {
@@ -361,6 +365,7 @@ impl Default for ComposeState {
             section_lanes_collapsed: false,
             track_lanes_collapsed: false,
             track_count: 0,
+            vocal_melody: super::vocal_melody::VocalMelodyState::default(),
         }
     }
 }
@@ -946,6 +951,7 @@ impl ComposeState {
                             LaneGeneratorConfig {
                                 kind: LaneGeneratorKind::Bass(def.generate_params.bass),
                                 seed: def.progression_seed,
+                                melody: Default::default(),
                             },
                         );
                     }
@@ -955,6 +961,7 @@ impl ComposeState {
                             LaneGeneratorConfig {
                                 kind: LaneGeneratorKind::Melody(def.generate_params.melody),
                                 seed: def.progression_seed,
+                                melody: Default::default(),
                             },
                         );
                     }
@@ -964,6 +971,7 @@ impl ComposeState {
                             LaneGeneratorConfig {
                                 kind: LaneGeneratorKind::Pad(def.generate_params.pad),
                                 seed: def.progression_seed,
+                                melody: Default::default(),
                             },
                         );
                     }

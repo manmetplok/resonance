@@ -212,6 +212,39 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     .size(10)
     .color(theme::TEXT_3);
 
+    // Compose (vocal-melody-on-chord-change): the project's remembered
+    // answer to "what about the vocal melodies?" after a chord change, and
+    // the way back to being asked.
+    let remembered = r.compose.vocal_melody.remembered;
+    // Disabled (dimmed, no press) while nothing is remembered.
+    let ask_tone = if remembered.is_some() { theme::TEXT_1 } else { theme::TEXT_3 };
+    let ask_again = button(
+        row![
+            theme::icon(fa::ARROW_ROTATE_LEFT).size(13).color(ask_tone),
+            Space::new().width(10),
+            text("Ask again about vocal melodies").size(13).color(ask_tone),
+        ]
+        .align_y(alignment::Vertical::Center),
+    )
+    .on_press_maybe(remembered.is_some().then(|| {
+        Message::Compose(crate::compose::ComposeMessage::VocalMelody(
+            crate::compose::vocal_melody::VocalMelodyMsg::ForgetRememberedChoice,
+        ))
+    }))
+    .padding([8, 14])
+    .width(Length::Fill)
+    .style(|_theme, status| theme::ghost_button_style(status));
+    let ask_again_hint = text(match remembered {
+        Some(choice) => format!(
+            "Chord changes in this project apply \u{201C}{}\u{201D} to vocal melodies \
+             without asking.",
+            choice.label()
+        ),
+        None => "Chord changes ask what to do with vocal melodies they would rewrite.".to_owned(),
+    })
+    .size(10)
+    .color(theme::TEXT_3);
+
     // I/O latency (doc #260 finding #13): queried on open and whenever
     // the input device list re-enumerates (`UiMessage::OpenSettings`,
     // `engine_events::transport::input_devices_listed`).
@@ -263,6 +296,11 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         Space::new().height(6),
         loop_record_toggle,
         loop_record_hint,
+        Space::new().height(20),
+        section("Compose"),
+        Space::new().height(6),
+        ask_again,
+        ask_again_hint,
         Space::new().height(20),
         audio_section,
         Space::new().height(20),

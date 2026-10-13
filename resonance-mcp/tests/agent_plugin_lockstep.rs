@@ -308,6 +308,10 @@ const WIRE_FIELDS: &[&str] = &[
     "render_state",
     "section_id",
     "track_id",
+    // The `harmony_*` / `section_resize` choice for a vocal melody the edit
+    // would rewrite, and the reply's report of it.
+    "vocal_lanes_affected",
+    "vocal_melody",
 ];
 
 /// Namespace-shaped keys of the plugin's own files (`lockstep.json`).

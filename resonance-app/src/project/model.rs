@@ -233,6 +233,12 @@ pub struct ProjectFile {
     /// with none.
     #[serde(default, skip_serializing_if = "crate::project::ProjectPronunciation::is_empty")]
     pub pronunciation: crate::project::ProjectPronunciation,
+    /// "Remember for this project" from the vocal-melody question: what a
+    /// chord or section-length edit does to vocal melodies when it names
+    /// no choice itself. `None` asks (GUI) or keeps (control). Left out
+    /// of the file when unset (vocal-melody-on-chord-change).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocal_melody_choice: Option<crate::compose::VocalMelodyChoice>,
 }
 
 /// An empty project at the current format version with neutral
@@ -286,6 +292,7 @@ impl Default for ProjectFile {
             chord_track: ProjectChordTrack::default(),
             derived_clips: None,
             pronunciation: crate::project::ProjectPronunciation::default(),
+            vocal_melody_choice: None,
         }
     }
 }

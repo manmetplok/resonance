@@ -136,6 +136,7 @@ impl Resonance {
                 LaneGeneratorConfig {
                     kind: LaneGeneratorKind::Vocal(resonance_music_theory::VocalParams::default()),
                     seed: 1,
+                    melody: Default::default(),
                 },
             );
         }

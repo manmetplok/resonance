@@ -47,6 +47,10 @@ pub const VOICEBANKS: &str = "vocal.voicebanks";
 /// job's result is a [`VoicebankInstallResult`]). Needs no project; no
 /// undo entry, no revision bump.
 pub const VOICEBANK_INSTALL: &str = "vocal.voicebank_install";
+/// `vocal.refit_melody` — move a vocal lane's pitches onto its section's
+/// current chords, keeping rhythm, note count and lyrics
+/// ([`RefitMelodyParams`] -> [`RefitMelodyResult`]).
+pub const REFIT_MELODY: &str = "vocal.refit_melody";
 
 /// All `vocal.*` method names.
 pub const METHODS: &[&str] = &[
@@ -60,6 +64,7 @@ pub const METHODS: &[&str] = &[
     SET_PARAMS,
     VOICEBANKS,
     VOICEBANK_INSTALL,
+    REFIT_MELODY,
 ];
 
 /// Params for `vocal.set_lyrics`: bulk text, one line per lyric line.
@@ -810,4 +815,31 @@ pub struct VoicebankInstallResult {
     /// downloaded.
     #[serde(default)]
     pub already_installed: bool,
+}
+
+/// Params for `vocal.refit_melody`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RefitMelodyParams {
+    pub track_id: TrackId,
+    /// Which of the track's vocal lanes to re-fit (`definition_id` from
+    /// `song.vocal`'s `lanes`). Omitted resolves the track's first vocal
+    /// lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
+}
+
+/// Result of `vocal.refit_melody`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RefitMelodyResult {
+    pub revision: u64,
+    /// The lane that was re-fitted.
+    pub section_id: SectionDefinitionId,
+    /// Notes in the lane's clip (unchanged by a re-fit).
+    pub note_count: usize,
+    /// How many of them moved to another pitch; `0` when every note
+    /// already fitted.
+    pub notes_changed: usize,
 }
