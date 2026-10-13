@@ -26,6 +26,12 @@ pub struct BuiltinSpeaker {
     /// the acoustic config's `speakers` entries (`tiger_disco` matches
     /// `dsacoustic/tiger_disco` and `tiger_disco`).
     pub model_key: &'static str,
+    /// An effect mode — growl, vocal fry, whisper: a colour for a line or
+    /// a word, not a lead voice on a plain line (every one scored 1 in the
+    /// 41-voice blind listen of 2026-10-13). Still selectable; the Speaker
+    /// picker lists them after the other modes under "Effects", and no
+    /// bank's default speaker is one.
+    pub effect: bool,
 }
 
 /// How the shipped banks spell English phonemes when the bank is not
@@ -91,61 +97,75 @@ const TIGER_SPEAKERS: &[BuiltinSpeaker] = &[
         id: "glam",
         name: "Glam",
         model_key: "tiger_glam",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "fresh",
         name: "Fresh",
         model_key: "tiger_fresh",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "disco",
         name: "Disco",
         model_key: "tiger_disco",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "royal",
         name: "Royal",
         model_key: "tiger_royal",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "electric",
         name: "Electric",
         model_key: "tiger_electric",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "mystic",
         name: "Mystic",
         model_key: "tiger_mystic",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "vinyl",
         name: "Vinyl",
         model_key: "tiger_vinyl",
+        effect: false,
     },
 ];
 
 /// Meiji's modes: character variants of one voice (neutral, strong,
-/// mature, whisper).
+/// mature, whispery). `phantom` ("whispery and husky", a whisper bank
+/// turned into a mode) is not an effect mode: it sings a whole line
+/// clearly (Whisper 100 %) and the blind listen scored it 3 as a lead,
+/// above Meiji's own `standard`.
 const MEIJI_SPEAKERS: &[BuiltinSpeaker] = &[
     BuiltinSpeaker {
         id: "standard",
         name: "Standard",
         model_key: "standard",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "hunter",
         name: "Hunter",
         model_key: "hunter",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "lilith",
         name: "Lilith",
         model_key: "lilith",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "phantom",
         name: "Phantom",
         model_key: "phantom",
+        effect: false,
     },
 ];
 
@@ -157,160 +177,192 @@ const KATYUSHA_SPEAKERS: &[BuiltinSpeaker] = &[
         id: "standard",
         name: "Standard",
         model_key: "standard",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "strong",
         name: "Strong",
         model_key: "strong",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "delicate",
         name: "Delicate",
         model_key: "delicate",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "lullaby",
         name: "Lullaby",
         model_key: "lullaby",
+        effect: false,
     },
 ];
 
 /// Keiro Revenant's modes, in his character file's order (`vf` is vocal
-/// fry; native is his pre-2023 tone).
+/// fry; native is his pre-2023 tone). Vocal fry, whisper and growl are
+/// effect modes.
 const KEIRO_SPEAKERS: &[BuiltinSpeaker] = &[
     BuiltinSpeaker {
         id: "standard",
         name: "Standard",
         model_key: "standard",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "native",
         name: "Native",
         model_key: "native",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "cold",
         name: "Cold",
         model_key: "cold",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "fragile",
         name: "Fragile",
         model_key: "fragile",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "mellow",
         name: "Mellow",
         model_key: "mellow",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "aggressive",
         name: "Aggressive",
         model_key: "aggressive",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "solid",
         name: "Solid",
         model_key: "solid",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "vf",
         name: "Vocal fry",
         model_key: "vf",
+        effect: true,
     },
     BuiltinSpeaker {
         id: "whisper",
         name: "Whisper",
         model_key: "whisper",
+        effect: true,
     },
     BuiltinSpeaker {
         id: "growl",
         name: "Growl",
         model_key: "growl",
+        effect: true,
     },
 ];
 
 /// Liam Thorne's modes, in his character file's order (`vf` is vocal fry).
+/// Vocal fry and growl are effect modes.
 const LIAM_SPEAKERS: &[BuiltinSpeaker] = &[
     BuiltinSpeaker {
         id: "standard",
         name: "Standard",
         model_key: "standard",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "gentle",
         name: "Gentle",
         model_key: "gentle",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "tired",
         name: "Tired",
         model_key: "tired",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "deep",
         name: "Deep",
         model_key: "deep",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "powerful",
         name: "Powerful",
         model_key: "powerful",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "aggressive",
         name: "Aggressive",
         model_key: "aggressive",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "rock",
         name: "Rock",
         model_key: "rock",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "crispy",
         name: "Crispy",
         model_key: "crispy",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "vf",
         name: "Vocal fry",
         model_key: "vf",
+        effect: true,
     },
     BuiltinSpeaker {
         id: "growl",
         name: "Growl",
         model_key: "growl",
+        effect: true,
     },
 ];
 
 /// Allen Crow's modes, in his character file's order (LUNAI's site: open
-/// and gentle are "intended for notes above C4").
+/// and gentle are "intended for notes above C4"). Whisper is an effect
+/// mode.
 const ALLEN_SPEAKERS: &[BuiltinSpeaker] = &[
     BuiltinSpeaker {
         id: "standard",
         name: "Standard",
         model_key: "standard",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "heavy",
         name: "Heavy",
         model_key: "heavy",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "open",
         name: "Open",
         model_key: "open",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "gentle",
         name: "Gentle",
         model_key: "gentle",
+        effect: false,
     },
     BuiltinSpeaker {
         id: "whisper",
         name: "Whisper",
         model_key: "whisper",
+        effect: true,
     },
 ];
 

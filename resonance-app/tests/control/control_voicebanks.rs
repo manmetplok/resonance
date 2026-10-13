@@ -421,8 +421,67 @@ fn render_with_a_missing_bank_fails_naming_it() {
         json!({ "track_id": TRACK, "section_id": def }),
     ));
     assert_eq!(kind, ErrorKind::VoicebankMissing);
-    assert!(message.contains("\"lilia\""), "names the bank: {message}");
+    // A new lane sings TIGER, which a test app does not have.
+    assert!(message.contains("\"tiger\""), "names the bank: {message}");
     assert!(message.contains("vocal_voicebanks"), "{message}");
+    // It says how to install it, from an agent and from the GUI.
+    assert!(
+        message.contains("vocal_voicebank_install") && message.contains("Library\u{2026}"),
+        "{message}"
+    );
+}
+
+/// Effect modes (growl, vocal fry, whisper) are marked `effect` in
+/// `vocal.voicebanks` — left out of the JSON on a lead mode — and are
+/// never the bank's default; `vocal.set_params` still takes one.
+#[test]
+fn voicebanks_marks_effect_modes_and_set_params_accepts_them() {
+    let mut app = app_with_project();
+    let def = vocal_lane(&mut app);
+    app.test_install_voicebank(
+        "liam_thorne",
+        &VoicebankFixture {
+            speakers: ["standard", "vf", "growl", "deep"]
+                .iter()
+                .map(|s| format!("embeds/{s}"))
+                .collect(),
+            ..VoicebankFixture::default()
+        },
+    );
+    let raw: Value = call(&mut app, proto::VOICEBANKS, Value::Null)
+        .result()
+        .expect("vocal.voicebanks");
+    let liam = raw["installed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["id"] == "liam_thorne")
+        .expect("listed");
+    let modes: Vec<(&str, bool)> = liam["speakers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["id"].as_str().unwrap(), s["effect"] == json!(true)))
+        .collect();
+    assert_eq!(
+        modes,
+        [("standard", false), ("deep", false), ("vf", true), ("growl", true)],
+        "the table's order; vocal fry and growl are effect modes"
+    );
+    let standard = &liam["speakers"][0];
+    assert!(standard.get("effect").is_none(), "a lead mode omits it: {standard}");
+    assert_eq!(liam["default_speaker"], "standard");
+
+    // The typed view reads the same.
+    let list = voicebanks(&mut app);
+    let liam = list.installed.iter().find(|b| b.id == "liam_thorne").unwrap();
+    assert!(liam.speakers.iter().any(|s| s.id == "growl" && s.effect));
+
+    let got: proto::ParamsResult =
+        set_params(&mut app, def, json!({ "voicebank": "liam_thorne", "speaker": "growl" }))
+            .result()
+            .expect("an effect mode is still a speaker");
+    assert_eq!(got.params.speaker.as_deref(), Some("growl"));
 }
 
 #[test]
@@ -430,10 +489,10 @@ fn render_with_a_missing_vocoder_fails_naming_the_vocoder() {
     let mut app = app_with_project();
     let def = vocal_lane(&mut app);
     app.test_install_voicebank(
-        "lilia",
+        "tiger",
         &VoicebankFixture {
             vocoder: false,
-            ..VoicebankFixture::shipped("lilia")
+            ..VoicebankFixture::shipped("tiger")
         },
     );
     generate(&mut app);
@@ -458,7 +517,7 @@ fn generate_reports_the_missing_bank_instead_of_succeeding_silently() {
         .render_error
         .expect("the render step's failure is reported");
     assert_eq!(error.kind, ErrorKind::VoicebankMissing);
-    assert!(error.message.contains("lilia"), "{}", error.message);
+    assert!(error.message.contains("tiger"), "{}", error.message);
 
     // With the bank installed, generate reports nothing.
     app.test_install_shipped_voicebanks();
@@ -492,7 +551,7 @@ fn a_render_with_a_missing_bank_keeps_the_old_audio() {
     assert_eq!(app.test_vocal_audio_clips(TRACK), [(def, 900_777)], "old audio kept");
     assert_eq!(app.test_vocal_render_epoch(def, TRACK), epoch, "nothing queued");
     let banner = app.compose_state().last_error.clone().expect("a banner");
-    assert!(banner.contains("\"lilia\"") && banner.contains("voicebanks"), "{banner}");
+    assert!(banner.contains("\"tiger\"") && banner.contains("voicebanks"), "{banner}");
 
     let result = generate(&mut app);
     assert_eq!(
@@ -558,15 +617,16 @@ fn add_clip(app: &mut Resonance, notes: u64) {
 fn song_vocal_lines_and_notes_agree_on_a_bank_dictionary_word() {
     let mut app = app_with_project();
     let def = vocal_lane(&mut app);
-    // CMU sings `tomato` with `ey`; this Lilia reads it with `aa`.
+    // CMU sings `tomato` with `ey`; this TIGER (the new lane's bank)
+    // reads it with `aa`.
     app.test_install_voicebank(
-        "lilia",
+        "tiger",
         &VoicebankFixture {
             english_dict: vec![(
                 "tomato".to_owned(),
                 ["t", "ah", "m", "aa", "t", "ow"].map(str::to_owned).to_vec(),
             )],
-            ..VoicebankFixture::shipped("lilia")
+            ..VoicebankFixture::shipped("tiger")
         },
     );
     call(

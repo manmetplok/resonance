@@ -38,6 +38,10 @@ pub struct SpeakerInfo {
     /// The acoustic config's `speakers` entry the render passes
     /// (`dsacoustic/tiger_disco`, `embeds/phantom`).
     pub model_key: String,
+    /// An effect mode (growl, vocal fry, whisper), not a lead voice:
+    /// [`super::BuiltinSpeaker::effect`]. Only the built-in table marks
+    /// one; a speaker of a bank it does not list is never an effect.
+    pub effect: bool,
 }
 
 /// Where a comfortable range comes from.
@@ -100,8 +104,8 @@ impl std::fmt::Display for VoicebankMissing {
         }
         write!(
             f,
-            "voicebank {:?} is not installed; install it (vocal_voicebank_install, or the \
-             voicebank library",
+            "voicebank {:?} is not installed; install it (vocal_voicebank_install, or \
+             Library\u{2026} beside the vocal lane's Voicebank picker",
             self.bank
         )?;
         if let Some(dir) = &self.install_dir {
@@ -296,6 +300,7 @@ impl BankProfile {
                     id: s.id.to_owned(),
                     name: s.name.to_owned(),
                     model_key: s.model_key.to_owned(),
+                    effect: s.effect,
                 })
                 .collect(),
             (None, None) => Vec::new(),
@@ -468,6 +473,7 @@ pub(super) fn offered_speakers(
                     id: s.id.to_owned(),
                     name: s.name.to_owned(),
                     model_key: singer.id.clone(),
+                    effect: s.effect,
                 })
             })
             .collect(),
@@ -482,6 +488,7 @@ pub(super) fn offered_speakers(
                     name: title_case(&id),
                     id,
                     model_key: singer.id.clone(),
+                    effect: false,
                 });
             }
             out

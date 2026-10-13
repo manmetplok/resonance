@@ -7,7 +7,9 @@
 //! English banks, cached in `UiViewCaches::voicebank_choices`, and the
 //! speakers are the chosen bank's own. A lane on a built-in bank that is
 //! not installed shows it as `<id> (not installed)`, from the cached
-//! `UiViewCaches::missing_voicebank_choices`.
+//! `UiViewCaches::missing_voicebank_choices`. The Speaker picker lists a
+//! bank's lead modes first, then its effect modes (growl, vocal fry,
+//! whisper) as `Effects ‹ <name>` (`state::picks::speaker_choices`).
 
 use iced::widget::{button, column, pick_list, row, slider, text, Space};
 use iced::{Element, Length};

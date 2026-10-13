@@ -81,12 +81,14 @@ impl ResonanceMcp {
                        snake_case, e.g. style \"pop_ballad\", pov \"first_singular\", voice \
                        \"mezzo_soprano\", range {low: 55, high: 77}); everything else is kept. \
                        voicebank is an id from vocal_voicebanks (an installed bank) or one of \
-                       \"tiger\", \"lilia\" (the default), \"meiji\"; any other id, or a bank \
+                       \"tiger\" (a new lane's default, speaker mystic), \"lilia\", \"meiji\"; \
+                       any other id, or a bank \
                        that cannot sing English, is refused. Switching it resets speaker to \
                        that bank's default unless the same patch sets speaker (one of the \
                        bank's speakers ids from vocal_voicebanks — tiger: glam, fresh, disco, \
                        royal, electric, mystic, vinyl; meiji: standard, hunter, lilith, \
-                       phantom; lilia has one voice and refuses a speaker). The merged \
+                       phantom; lilia has one voice and refuses a speaker; effect modes \
+                       such as growl, vf (vocal fry) and whisper are accepted). The merged \
                        result is validated before anything \
                        changes and a bad value is rejected naming the field (0..1 sliders, \
                        tension -1..1, vibrato_rate 1..20 Hz, portamento_ms 0..500, \
@@ -209,7 +211,10 @@ impl ResonanceMcp {
                        folder, not part of the project, so no project needs to be open): per \
                        bank its id (what vocal_set_params takes as voicebank), name, version, \
                        english (false banks are refused — lyrics are English), speakers (the \
-                       ids speaker takes; empty for a single-voice bank) with default_speaker, \
+                       ids speaker takes; empty for a single-voice bank; effect: true marks an \
+                       effect mode — growl, vocal fry, whisper — which is a colour for a line \
+                       or a word, not a lead voice: do not pick one for a plain lead line) with \
+                       default_speaker (never an effect mode), \
                        comfortable_range {low, high, range_source: builtin | default} per \
                        bank and per speaker, missing_phonemes and the substitutions they are \
                        sung as, curves (which of dynamics, tension, breathiness, pitch_bend \

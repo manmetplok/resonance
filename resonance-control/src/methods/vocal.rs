@@ -433,8 +433,8 @@ pub struct VocalRange {
 pub struct VocalParamsPatch {
     // ---- Voice / render ----
     /// Voicebank id: any installed bank's id (`vocal.voicebanks` lists
-    /// them), or one of the known `tiger`, `lilia` (the default),
-    /// `meiji`. A bank that cannot sing English is refused. Changing it
+    /// them), or one of the known `tiger` (a new lane's default, with
+    /// speaker `mystic`), `lilia`, `meiji`. A bank that cannot sing English is refused. Changing it
     /// resets `speaker` to that bank's default unless the same patch sets
     /// `speaker` too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -557,7 +557,8 @@ pub struct VocalParamsView {
     // ---- Voice / render ----
     /// Voicebank id (`vocal.voicebanks` lists the installed ones).
     pub voicebank: String,
-    /// The bank's speaker; absent on a single-voice bank (`lilia`).
+    /// The bank's speaker (`mystic` on a new lane's `tiger`); absent on a
+    /// single-voice bank (`lilia`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
     pub timbre: VocalTimbre,
@@ -697,6 +698,11 @@ pub struct VoicebankSpeaker {
     pub id: String,
     pub name: String,
     pub comfortable_range: VoicebankRange,
+    /// An effect mode (growl, vocal fry, whisper): a colour for a line or
+    /// a word, not a lead voice on a plain line. `speaker` still takes
+    /// it; no bank's `default_speaker` is one. Absent means `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub effect: bool,
 }
 
 /// A comfortable MIDI range (inclusive).

@@ -106,7 +106,9 @@ the track's render state the worst lane's) until one `vocal_render` after
 your last edit brings it back to `rendered`. `vocal_voicebanks`
 lists the installed voicebanks with their speaker ids, comfortable ranges and
 which expression curves they take; a lane on a bank that is not installed
-renders nothing (`voicebank_missing`), so pick one from that list. Its
+renders nothing (`voicebank_missing`), so pick one from that list. A new lane
+sings TIGER's `mystic`. A speaker with `effect: true` (growl, vocal fry,
+whisper) is a colour for a line or a word, not a lead voice. Its
 `available` list holds the plok.org banks that are not installed yet:
 `vocal_voicebank_install` with one of those ids downloads it (and the vocoder
 it needs) as a job. Installing accepts the bank's terms for the user, so tell

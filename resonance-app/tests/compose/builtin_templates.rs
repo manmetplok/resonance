@@ -190,14 +190,17 @@ fn vocal_songwriting_contents() {
     assert_eq!(f.section_placements.len(), 1);
     assert_eq!(f.section_placements[0].definition_id, section.id);
 
-    // A Compose vocal line on the Lilia voicebank, keyed to the vocal track.
+    // A Compose vocal line on TIGER (Mystic), keyed to the vocal track, in
+    // a range TIGER sings clearly.
     let cfg = section.lane_generators.get(&vocal.id).expect("vocal lane generator");
-    match &cfg.kind {
+    let range = match &cfg.kind {
         LaneGeneratorKind::Vocal(params) => {
-            assert_eq!(params.voicebank, "lilia");
+            assert_eq!(params.voicebank, "tiger");
+            assert_eq!(params.speaker.as_deref(), Some("mystic"));
+            params.range
         }
         other => panic!("expected a Vocal lane generator, got {other:?}"),
-    }
+    };
 
     // The melody is pre-baked: one MIDI clip on the vocal track, with notes
     // carried in `midi_notes` keyed by the clip id (no .mid file on disk).
@@ -206,8 +209,9 @@ fn vocal_songwriting_contents() {
     assert_eq!(clip.track_id, vocal.id);
     let notes = built.midi_notes.get(&clip.id).expect("baked vocal notes");
     assert!(!notes.is_empty(), "vocal melody should generate notes");
-    // Notes stay within the clip's tick span.
+    // Notes stay within the clip's tick span and the lane's range.
     assert!(notes.iter().all(|n| n.start_tick < clip.duration_ticks));
+    assert!(notes.iter().all(|n| (range.0..=range.1).contains(&n.note)), "{notes:?}");
 }
 
 /// Every plugin a built-in template names is a first-party plugin, by the

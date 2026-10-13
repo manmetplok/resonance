@@ -1,6 +1,6 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `e3d187e9` + bank models on 2026-10-08.
+> Verified against master @ `f82be9b0` + the TIGER Mystic default on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §3, §6 (slices 1, 3, 8); `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -151,11 +151,17 @@ line, re-rolled from a small template corpus, or set by an agent.
   `vocal_phrase_spans` (the synth fill) sees the same time spans.
 - **Seeds.** GUI generate buttons and `vocal.generate` without a seed bump
   the lane seed; an explicit seed is installed first (reproducible).
-- **Default voicebank.** A lane's `VocalParams::voicebank` defaults to
-  Lilia (`default_voicebank`; spec D9 — Lilia's licence terms are accepted
-  while Resonance is not commercial). `vocal.render` without a voicebank
-  renders every lane with the bank it holds, so an explicitly chosen TIGER
-  is honoured (BUG-52 fixed).
+- **Default voicebank.** A new lane sings TIGER's `mystic`
+  (`VocalParams::default()`: `VoicebankId::DEFAULT` = `tiger`,
+  `VocalParams::DEFAULT_SPEAKER` = `mystic`) whatever its voice type — the
+  voice that scored best in the 41-voice blind listen of 2026-10-13
+  ([vocal follow-ups](../../intents/compose/vocal-followups.md)). Only a
+  bank *switch* picks the speaker by voice type (the bank's default). A
+  lane keeps the bank and speaker it stored. `vocal.render` without a
+  voicebank renders every lane with the bank it holds, so an explicit
+  choice is honoured (BUG-52 fixed). The built-in Vocal songwriting
+  template sings TIGER Mystic too, in a tenor range inside TIGER's
+  comfortable C3–A4.
 - **Settings over the wire.** `vocal.get_params` / `vocal.set_params`
   read and patch a lane's settings (everything but the draft) through
   snake_case wire types (`VocalParamsPatch`, `VocalParamsView` in
@@ -170,7 +176,8 @@ line, re-rolled from a small template corpus, or set by an agent.
   [voicebank library](voicebank-library.md)); any other id is
   `invalid_params` (a typo guard), and so is a bank that cannot sing
   English. `speaker` is one of
-  that bank's speaker ids (a single-voice bank refuses one); a bank switch
+  that bank's speaker ids, effect modes included (a single-voice bank
+  refuses one); a bank switch
   without `speaker` resets it to the bank's default
   (`VocalParams::switch_voicebank` with `BankProfile::default_speaker`,
   which `vocal.render {voicebank}` and the inspector's picker use too). A `theme` over 240 characters (`THEME_MAX_CHARS`, the
@@ -196,7 +203,10 @@ line, re-rolled from a small template corpus, or set by an agent.
   per-bank `singer` (TIGER, `"Glam"` …) / `singer_meiji` (Meiji,
   `"Standard"` …) become `speaker` from the field that belonged to the
   lane's bank (`disco` / `standard` when absent); they are never written
-  back. A missing bank reads as `lilia`.
+  back. A missing bank reads as `lilia`, not the current TIGER default:
+  every file since phase 2 of the vocal spec stores the field, so only
+  older files miss it, and those were last heard on Lilia
+  (`params/legacy.rs`, `LEGACY_VOICEBANK`).
 
 ## Where the logic lives
 
@@ -272,7 +282,7 @@ line, re-rolled from a small template corpus, or set by an agent.
 | Wire shapes | `resonance-control/tests/{methods,views}.rs` | `./scripts/run-tests.py -p resonance-control` |
 | Vocal roll | `tests/compose/vocal_roll_keys.rs`, `vocal_roll_key_focus.rs`, `vocal_roll_fingerprint.rs` | same |
 | Placeholder rows | `tests/compose/compose_vocal_placeholder.rs` | same |
-| Bank id / speaker and legacy migration | `resonance-music-theory/tests/vocal.rs` (`legacy_enum_bank_and_singer_fields_map_onto_id_and_speaker`, …) | `./scripts/run-tests.py -p resonance-music-theory` |
+| Bank id / speaker and legacy migration; a new lane is TIGER Mystic, a file without `voicebank` Lilia | `resonance-music-theory/tests/vocal.rs` (`legacy_enum_bank_and_singer_fields_map_onto_id_and_speaker`, `a_new_lane_sings_tiger_mystic_whatever_its_voice_type`, …), `resonance-app/tests/control/control_vocal_params.rs` (`a_new_lane_starts_on_tiger_mystic`) | `./scripts/run-tests.py -p resonance-music-theory` |
 | Theory | `resonance-music-theory/tests/{vocal,vocal_climax,vocal_syncopation,vocal_melody_golden,vocal_params_validate,vocal_enum_labels,g2p,g2p_apis}.rs` | `./scripts/run-tests.py -p resonance-music-theory` |
 | Draft markers, exact breaks, corpus all-CMU | `resonance-music-theory/tests/g2p_apis/lyric_markers.rs` (module of `g2p_apis`) | same |
 | In-word holds, `set_holds_after`, `hold_origins` | `resonance-music-theory/tests/g2p_apis/holds.rs` | same |
@@ -296,10 +306,12 @@ Not covered: theme/POV/clichés (they have no effect).
   `PROTOCOL_VERSION` to 2, with the agent plugin's lockstep re-read.
   The patch never carries `draft` or the expression curves (those are
   `automation.*`, see [automation control API](../timeline/automation-control-api.md)).
-- **Default bank** (slice 1, D9): Lilia, accepted while Resonance is not
-  commercial (its ToU bans generative-AI use; see
-  [vocal follow-ups](../../intents/compose/vocal-followups.md)). The
-  `vocal.render` Lilia remap went with it (BUG-52).
+- **Default bank.** Slice 1 (D9) made Lilia the default; the 41-voice
+  blind listen of 2026-10-13 moved it to TIGER `mystic` (scored 5; TIGER's
+  mean 4.00 against Lilia's 3). It also takes the default off Lilia's ToU,
+  which bans generative-AI use. TIGER's terms are `paid` (see the
+  [voicebank library](voicebank-library.md)). The `vocal.render` Lilia
+  remap went with slice 1 (BUG-52).
 - Lyrics are template-based (no language model); the corpus is small, so
   re-rolls repeat lines quickly.
 - `lane_generator.rs` still says vocal generation is "stubbed in

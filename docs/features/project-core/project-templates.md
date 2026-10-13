@@ -1,6 +1,6 @@
 # Project templates
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `f82be9b0` + the TIGER Mystic default on 2026-10-13.
 > Spec history: ba impl-plan doc #197 / design #192, todos #665/#666 (not in
 > the repo); prototype `docs/intents/prototypes/project-templates-starter-sessions/index.html`.
 
@@ -15,7 +15,7 @@ template itself is never overwritten.
 
 | Slug | Name | Content |
 |---|---|---|
-| `vocal-songwriting` | Vocal songwriting | chord progression, a Compose vocal line on the Lilia voicebank, pad/bass bed |
+| `vocal-songwriting` | Vocal songwriting | chord progression, a Compose vocal line on the TIGER voicebank (Mystic, a tenor line in TIGER's comfortable C3–A4), pad/bass bed |
 | `band-recording` | Band recording | six mic/DI audio tracks routed to drum and instrument busses, master chain |
 | `beatmaking` | Beatmaking | drum sampler and wavetable synth with reverb and delay return busses |
 | `empty` | Empty | blank project at the default tempo and meter |

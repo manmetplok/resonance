@@ -537,15 +537,10 @@ fn vocal_style_round_trips_through_serde() {
 }
 
 #[test]
-fn a_new_lane_sings_lilia_with_its_single_voice() {
-    let p = VocalParams::default();
-    assert_eq!(p.voicebank, VoicebankId::new("lilia"));
-    assert_eq!(p.speaker, None);
-}
-
-#[test]
 fn switching_bank_resets_the_speaker_and_reselecting_keeps_it() {
     let mut p = VocalParams::default();
+    p.switch_voicebank(VoicebankId::new("lilia"), None);
+    assert_eq!(p.speaker, None, "Lilia has one voice");
     p.switch_voicebank(VoicebankId::new("tiger"), Some("royal".into()));
     assert_eq!(p.voicebank, "tiger");
     assert_eq!(p.speaker.as_deref(), Some("royal"));
@@ -646,9 +641,28 @@ fn vibrato_rate_and_bank_default_when_missing_from_json() {
     let p: VocalParams = serde_json::from_str(json).expect("deserialize legacy");
     // Vibrato rate falls back to the historic 5 Hz constant.
     assert!((p.vibrato_rate - 5.0).abs() < 0.001);
-    // No voicebank field: the default bank, Lilia, with its one voice.
+    // No voicebank field: a file from before lanes stored their bank
+    // reads as Lilia (the default it was written under), with her one
+    // voice — not the current TIGER default.
     assert_eq!(p.voicebank, "lilia");
     assert_eq!(p.speaker, None);
+}
+
+#[test]
+fn a_new_lane_sings_tiger_mystic_whatever_its_voice_type() {
+    let p = VocalParams::default();
+    assert_eq!(p.voicebank, "tiger");
+    assert_eq!(p.voicebank, VoicebankId::DEFAULT);
+    assert_eq!(p.speaker.as_deref(), Some("mystic"));
+    assert_eq!(VocalParams::DEFAULT_SPEAKER, "mystic");
+    // A stored bank and speaker win over the new default on reload.
+    let mut stored = VocalParams::default();
+    stored.voicebank = VoicebankId::new("lilia");
+    stored.speaker = None;
+    let back: VocalParams =
+        serde_json::from_str(&serde_json::to_string(&stored).unwrap()).unwrap();
+    assert_eq!(back.voicebank, "lilia");
+    assert_eq!(back.speaker, None);
 }
 
 #[test]

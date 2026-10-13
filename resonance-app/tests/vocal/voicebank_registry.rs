@@ -360,6 +360,7 @@ fn lunai_v170_banks_register_under_their_folder_ids_with_the_builtin_facts() {
     let keiro = reg.profile(&VoicebankId::new("keiro_revenant"));
     let fry = keiro.speakers().into_iter().find(|s| s.id == "vf").unwrap();
     assert_eq!(fry.name, "Vocal fry");
+    assert!(fry.effect, "vocal fry is an effect mode");
     let target = keiro
         .render_target(Some("growl"), VoiceType::Tenor, None)
         .unwrap();
@@ -371,4 +372,93 @@ fn lunai_v170_banks_register_under_their_folder_ids_with_the_builtin_facts() {
     assert_eq!(missing.phoneme_name("ah"), "en/ah");
     assert_eq!(missing.language_id("ah"), Some(3));
     assert!(missing.curve_support().tension);
+}
+
+/// The built-in table marks exactly the growl, vocal fry and whisper modes
+/// as effect modes (Meiji's `phantom`, whispery but a lead, is not one),
+/// and no bank's default speaker — for any voice type — is an effect mode.
+#[test]
+fn effect_modes_are_marked_and_never_a_banks_default() {
+    use resonance_app::compose::vocal_svs::registry::BUILTIN_BANKS;
+
+    let mut effects: Vec<(&str, &str)> = Vec::new();
+    for bank in BUILTIN_BANKS {
+        for s in bank.speakers.iter().filter(|s| s.effect) {
+            effects.push((bank.id, s.id));
+        }
+        for voice in VoiceType::ALL.iter().copied() {
+            let Some(default) = (bank.default_speaker)(voice) else {
+                continue;
+            };
+            let speaker = bank
+                .speakers
+                .iter()
+                .find(|s| s.id == default)
+                .unwrap_or_else(|| panic!("{}: default {default:?} is not a speaker", bank.id));
+            assert!(!speaker.effect, "{}: default {default:?} is an effect mode", bank.id);
+        }
+        // The not-installed profile (what a lane on a missing bank reports)
+        // agrees with the table.
+        let profile = BankProfile::not_installed(bank.id);
+        if let Some(default) = profile.default_speaker(VoiceType::Alto) {
+            let info = profile.speakers().into_iter().find(|s| s.id == default).unwrap();
+            assert!(!info.effect, "{}: {default:?}", bank.id);
+        }
+    }
+    assert_eq!(
+        effects,
+        [
+            ("keiro_revenant", "vf"),
+            ("keiro_revenant", "whisper"),
+            ("keiro_revenant", "growl"),
+            ("liam_thorne", "vf"),
+            ("liam_thorne", "growl"),
+            ("allen_crow", "whisper"),
+        ]
+    );
+}
+
+/// The Speaker picker lists a bank's lead modes in the bank's order, then
+/// its effect modes under an `Effects ‹` prefix — here for Keiro Revenant
+/// not installed (the picker's not-installed entry) and installed.
+#[test]
+fn the_speaker_picker_lists_effect_modes_last_under_effects() {
+    let (mut app, _task) = resonance_app::Resonance::new_for_test();
+    let expected: Vec<(String, String)> = [
+        ("standard", "Standard"),
+        ("native", "Native"),
+        ("cold", "Cold"),
+        ("fragile", "Fragile"),
+        ("mellow", "Mellow"),
+        ("aggressive", "Aggressive"),
+        ("solid", "Solid"),
+        ("vf", "Effects \u{2039} Vocal fry"),
+        ("whisper", "Effects \u{2039} Whisper"),
+        ("growl", "Effects \u{2039} Growl"),
+    ]
+    .iter()
+    .map(|(id, label)| (id.to_string(), label.to_string()))
+    .collect();
+    assert_eq!(
+        app.test_speaker_choices("keiro_revenant").as_ref(),
+        Some(&expected),
+        "not installed"
+    );
+
+    let speakers = expected.iter().rev().map(|(id, _)| format!("embeds/{id}")).collect();
+    app.test_install_voicebank(
+        "keiro_revenant",
+        &VoicebankFixture {
+            speakers,
+            ..VoicebankFixture::default()
+        },
+    );
+    assert_eq!(
+        app.test_speaker_choices("keiro_revenant").as_ref(),
+        Some(&expected),
+        "installed: the table's order, whatever the model's"
+    );
+    // A bank without effect modes keeps its plain names.
+    let tiger = app.test_speaker_choices("tiger").expect("tiger (not installed)");
+    assert!(tiger.iter().all(|(_, label)| !label.contains("Effects")), "{tiger:?}");
 }
