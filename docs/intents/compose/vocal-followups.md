@@ -16,11 +16,24 @@ default bank's licence holds — plus a few small gaps the builders left.
 ## What it would do
 
 1. **Bank choice (Jorrit).** A blind listen of the audition renders decides
-   which banks join the plok.org index: Peiton, LUNAI Katyusha, Keiro
-   Revenant and Liam Thorne (and maybe Allen Crow), and Meiji v170, against
-   the current TIGER, Lilia and Meiji v160. Their index entries (with
-   terms, credit and commercial) are then added to
-   [`plok-voicebank-index.json`](../../features/compose/plok-voicebank-index.json).
+   which banks join the plok.org index.
+   - The first blind set (12 voices: TIGER ×7, Lilia, Meiji v160 ×4,
+     after the bank-model work) got the verdict "most voicebanks sound
+     good now" (2026-10-13).
+   - The LUNAI English singers — Katyusha, Keiro Revenant, Liam Thorne and
+     Allen Crow (v170) — are installed in the user voicebank folder,
+     registered (their own models, ranges and terms in the built-in table)
+     and have entries with pinned sha256 in
+     [`plok-voicebank-index.json`](../../features/compose/plok-voicebank-index.json).
+     A fresh blind set of all 41 installed voices (the 12 plus their 29
+     modes) is waiting for a listen; the Whisper scores of every voice are
+     in [vocal rendering § Measurements](../../features/compose/vocal-rendering.md#measurements).
+     Which of them stay in the index is the open call.
+   - Peiton is not installed: it needs a manual download from Gumroad
+     (https://nebm.gumroad.com/l/vvhyg), so it has no index entry and was
+     in neither blind set.
+   - Meiji v170 is listed in the index but was not auditioned (the dev
+     models root holds v160).
 2. **A published index.** `https://resonance.plok.org/index.json` serves
    `voicebanks[]` and `vocoders[]` (server work, outside the repo):
    - compute the missing sha256 of TIGER's `TIGER_DS_v106_PACK.zip` and of
@@ -56,8 +69,12 @@ default bank's licence holds — plus a few small gaps the builders left.
      with it (`ORT_LIB_LOCATION`), and neither has run on a GPU.
    - The energy path (velocity and the Dynamics curve → energy) runs on no
      shipped bank and has not been heard.
-   - Comfortable ranges are per bank; `speaker_ranges` can hold a
-     speaker's own, but none is known (Meiji's modes might differ).
+   - Per-speaker ranges: only Allen Crow's `open` and `gentle` have
+     their own (G3–D5). Vocal fry and growl modes keep their bank's range
+     though they hit their low (growl) or any (fry) notes loosely; Meiji's
+     range and gender are uncertain (the research notes say male, LUNAI's
+     site a girl's voice) — the listen should say whether B2–F♯4 suits
+     her.
 6. **Intelligibility, what is left** (after the 2026-10-08 fixes, see
    [vocal rendering § Measurements](../../features/compose/vocal-rendering.md#measurements)).
    - The 2026-10-07 audition renders predate the fixes (TIGER sang the
@@ -88,9 +105,9 @@ default bank's licence holds — plus a few small gaps the builders left.
 
 ## Open decisions
 
-1. Which audition candidates join the index — Jorrit, by ear.
-   Recommended: add every candidate that renders the audition phrase
-   cleanly and passes the listen; keep TIGER and Meiji v160 installable.
+1. Which audition candidates stay in the index — Jorrit, by ear, from the
+   41-voice blind set. Recommended: keep every bank whose voices pass the
+   listen; keep TIGER and Meiji installable.
 2. The default bank if julieraptor does not approve agent use.
    Recommended: the best-rated LUNAI English singer from the listen
    (`permission` terms, but no generative-AI ban), or Peiton if its terms
@@ -100,8 +117,9 @@ default bank's licence holds — plus a few small gaps the builders left.
 
 ## Slices
 
-1. Listen and pick; add the chosen entries (with terms) to the committed
-   index proposal; extend `the_committed_index_proposal_parses`.
+1. Listen to the 41-voice set and pick; drop the entries not chosen from
+   the committed index proposal (the LUNAI four are in it and
+   `the_committed_index_proposal_parses` checks them); Peiton by hand.
 2. Hash, inspect and publish the index; one real install per entry.
 3. The live MCP session, with its findings filed as bugs.
 4. The licence follow-up (mail; a decision recorded in the feature docs).
