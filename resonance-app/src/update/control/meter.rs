@@ -1384,7 +1384,7 @@ pub(super) fn resolve_range(
     }
     if end <= start {
         return Err(RpcError::invalid_params(format!(
-            "empty measurement range: {start}..{end} samples (the song spans \
+            "empty range: {start}..{end} samples (the song spans \
              0..{song_end})"
         )));
     }

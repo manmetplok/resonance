@@ -8,10 +8,11 @@
 //! Cancelled (code review ARCH2-01). The MIDI tab has no exporter on the
 //! engine side yet, so its primary action stays disabled.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use iced::Task;
-use resonance_audio::types::{AudioCommand, StemBitDepth, StemSource, StemTarget};
+use resonance_audio::types::{AudioCommand, SamplePos, StemBitDepth, StemSource, StemTarget};
 
 use crate::message::Message;
 use crate::state::{
@@ -43,6 +44,16 @@ pub enum ExportMessage {
     /// Stop the running stem export between targets
     /// (`AudioCommand::CancelStemExport`).
     CancelRender,
+    /// A control client's `render.stems` (job `job_id`): send its queue
+    /// with the dialog's default format and track it in
+    /// `ControlEndpointState::pending_stems`. The control handler built
+    /// and validated `targets`; this only starts the render, so control
+    /// reaches the engine through `update()` like every other edit.
+    RenderStems {
+        job_id: u64,
+        targets: Vec<StemTarget>,
+        range: Option<(SamplePos, SamplePos)>,
+    },
 }
 
 impl ExportMessage {
@@ -62,7 +73,8 @@ impl ExportMessage {
             | Self::ChooseDestination
             | Self::DestinationChosen(..)
             | Self::Confirm
-            | Self::CancelRender => UndoAction::Skip,
+            | Self::CancelRender
+            | Self::RenderStems { .. } => UndoAction::Skip,
         }
     }
 }
@@ -120,7 +132,21 @@ pub fn handle(r: &mut Resonance, msg: ExportMessage) -> Task<Message> {
             }
         }
         ExportMessage::Confirm => start_stem_export(r),
+        ExportMessage::RenderStems {
+            job_id,
+            targets,
+            range,
+        } => start_control_stem_export(r, job_id, targets, range),
         ExportMessage::CancelRender => {
+            // A control `render.stems` job's progress overlay cancels
+            // through the same message (the queue is the engine's one).
+            if let Some(stems) = r.control.pending_stems.as_mut() {
+                if !stems.cancel_requested {
+                    stems.cancel_requested = true;
+                    let _ = r.engine.send(AudioCommand::CancelStemExport);
+                }
+                return Task::none();
+            }
             if let Some(dialog) = r.modals.export_dialog.as_mut() {
                 if dialog.is_rendering() && !dialog.cancel_requested {
                     dialog.cancel_requested = true;
@@ -184,11 +210,7 @@ fn start_stem_export(r: &mut Resonance) {
         targets,
         range,
         sample_rate: format.sample_rate,
-        bit_depth: match format.bit_depth {
-            ExportBitDepth::Int16 => StemBitDepth::Int16,
-            ExportBitDepth::Int24 => StemBitDepth::Int24,
-            ExportBitDepth::Float32 => StemBitDepth::Float32,
-        },
+        bit_depth: stem_bit_depth(format.bit_depth),
         include_fx_tail: format.include_fx_tail,
     };
     if let Some(dialog) = r.modals.export_dialog.as_mut() {
@@ -199,14 +221,58 @@ fn start_stem_export(r: &mut Resonance) {
     let _ = r.engine.send(command);
 }
 
+/// `RenderStems`: send a control job's queue with the dialog's default
+/// format; on success the job owns the `StemExport*` events until its
+/// terminal one. A send that fails leaves `pending_stems` unset, which
+/// the control handler reads as "did not start".
+fn start_control_stem_export(
+    r: &mut Resonance,
+    job_id: u64,
+    targets: Vec<StemTarget>,
+    range: Option<(SamplePos, SamplePos)>,
+) {
+    let total = targets.len();
+    let format = crate::state::ExportFormat::default();
+    let command = AudioCommand::ExportStems {
+        targets,
+        range,
+        sample_rate: format.sample_rate,
+        bit_depth: stem_bit_depth(format.bit_depth),
+        include_fx_tail: format.include_fx_tail,
+    };
+    if r.engine.send(command).is_ok() {
+        r.control.pending_stems = Some(crate::state::PendingStems {
+            job_id,
+            total,
+            done: 0,
+            fraction: 0.0,
+            cancel_requested: false,
+            errors: Vec::new(),
+        });
+    }
+}
+
 /// One target per selected source, in the selection's (deterministic)
-/// order: `NN-<name>.wav` in `dir`, where `NN` is the 1-based queue
-/// position, so two tracks with the same name never share a file. Under
+/// order — see [`stem_targets_for`].
+pub fn stem_targets(r: &Resonance, dialog: &ExportDialogState, dir: &Path) -> Vec<StemTarget> {
+    stem_targets_for(r, &dialog.selected_sources, dir, dialog.overwrite)
+}
+
+/// One target per source, in the set's (deterministic) order:
+/// `NN-<name>.wav` in `dir`, where `NN` is the 1-based queue position,
+/// so two tracks with the same name never share a file. Under
 /// [`ExportOverwrite::Suffix`] (and `Ask`, which has no prompt yet) a
 /// name already on disk gets `_1`, `_2`, …; `Overwrite` replaces it.
-pub fn stem_targets(r: &Resonance, dialog: &ExportDialogState, dir: &Path) -> Vec<StemTarget> {
-    dialog
-        .selected_sources
+///
+/// The one definition of stem file names: the Export modal and the
+/// control API's `render.stems` both build their queue here.
+pub(crate) fn stem_targets_for(
+    r: &Resonance,
+    sources: &BTreeSet<ExportSource>,
+    dir: &Path,
+    overwrite: ExportOverwrite,
+) -> Vec<StemTarget> {
+    sources
         .iter()
         .enumerate()
         .map(|(i, source)| {
@@ -231,7 +297,7 @@ pub fn stem_targets(r: &Resonance, dialog: &ExportDialogState, dir: &Path) -> Ve
             };
             let base = format!("{:02}-{}", i + 1, sanitize_file_stem(&label));
             let mut path = dir.join(format!("{base}.wav"));
-            if dialog.overwrite != ExportOverwrite::Overwrite {
+            if overwrite != ExportOverwrite::Overwrite {
                 let mut n = 1;
                 while path.exists() {
                     path = dir.join(format!("{base}_{n}.wav"));
@@ -244,6 +310,15 @@ pub fn stem_targets(r: &Resonance, dialog: &ExportDialogState, dir: &Path) -> Ve
             }
         })
         .collect()
+}
+
+/// The engine encoding for a stem bit depth.
+pub(crate) fn stem_bit_depth(depth: ExportBitDepth) -> StemBitDepth {
+    match depth {
+        ExportBitDepth::Int16 => StemBitDepth::Int16,
+        ExportBitDepth::Int24 => StemBitDepth::Int24,
+        ExportBitDepth::Float32 => StemBitDepth::Float32,
+    }
 }
 
 /// A track / bus name made safe as a file stem: path separators and

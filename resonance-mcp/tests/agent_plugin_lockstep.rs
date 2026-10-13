@@ -308,6 +308,8 @@ const WIRE_FIELDS: &[&str] = &[
     "render_state",
     "section_id",
     "track_id",
+    // `render_stems`' filter: the tracks to export.
+    "track_ids",
 ];
 
 /// Namespace-shaped keys of the plugin's own files (`lockstep.json`).

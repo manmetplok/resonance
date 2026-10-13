@@ -1,6 +1,6 @@
 # Offline render, mixdown export and bounce in place
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `f9438e38` on 2026-10-13 (plus the render.stems change).
 > Spec history: "doc #196" (export pipeline, todos #650–#655) is cited in
 > code; prototype `docs/intents/prototypes/compressed-loudness-export-formats/`;
 > code-review findings ENG-06, ENG-07, ENG-08, ENG-13, MIX-02.
@@ -45,10 +45,13 @@ measurement and freeze use the same core and have their own pages:
 
 - Range: earliest clip start (audio or MIDI) to the latest clip end, plus a
   2 s FX tail (`BOUNCE_TAIL_SECONDS`). Offset 0 in the file is the earliest
-  clip, not bar 1. An empty project fails with `NoAudio`.
+  clip, not bar 1. An empty project fails with `NoAudio`. `ExportAudio`'s
+  optional `range: Option<(SamplePos, SamplePos)>` renders exactly that
+  window instead (offset 0 = its start, silence included), plus the same
+  tail; an empty window fails with `NoAudio`.
 - Includes master FX and master volume (master-gain automation ramps per
   chunk at the comp-delayed position), then a hard clip, unless normalising.
-- `ExportAudio { path, settings: ExportSettings }`:
+- `ExportAudio { path, settings: ExportSettings, range }`:
   - `format`: `Wav { bit_depth: I16 | I24 | F32, sample_rate }`,
     `Flac { bit_depth, sample_rate, compression: Fast | Default | Max }`
     (pure-Rust `flacenc`), `Mp3 { mode: Cbr | Vbr, bitrate_kbps }`
@@ -101,7 +104,7 @@ measurement and freeze use the same core and have their own pages:
 | Bounce in place | `resonance-audio/src/engine/bounce/clip.rs`, `engine/bounce_realtime.rs`, `engine/bounce_common.rs` | `to_audio_clip`, `apply_bounced_clip`, `PendingBounce`, `poll_pending_bounce`, `midi_render_range`, `BOUNCE_TAIL_SECONDS` |
 | Settings types | `resonance-audio/src/types/export.rs` | `ExportSettings`, `ExportFormat`, `NormalizeSpec`, `ExportMetadata` |
 | Dispatch | `resonance-audio/src/engine/thread/dispatch/bounce.rs` | `dispatch_bounce` |
-| App: control mixdown | `resonance-app/src/update/control/render.rs` | `normalize_request`, `start_normalized_export` |
+| App: control mixdown | `resonance-app/src/update/control/render.rs` | `normalize_request`, `start_export`, `meter::resolve_range` |
 
 ## Surfaces
 
@@ -113,11 +116,15 @@ measurement and freeze use the same core and have their own pages:
 - **Control API / MCP:** `render.mixdown` → `mcp__resonance__render_mixdown`.
   A path ending in `.wav`; `overwrite`; optional `platform` (Spotify, Apple,
   YouTube, Tidal, Amazon, Deezer, Club) or `normalize { target_lufs,
-  ceiling_dbtp }` → `ExportAudio` with normalisation; otherwise
-  `BounceToWav`. Only the whole song (a partial `range` is rejected). Runs
-  as a job (`job_status`, `job_wait`).
+  ceiling_dbtp }` → `ExportAudio` with normalisation; optional `range`
+  (`RangeSpec`, resolved and clamped to the song like a `meter.*` range;
+  empty → `invalid_params`) → `ExportAudio` with that window; neither →
+  `BounceToWav`. Normalised and ranged jobs resolve off `ExportComplete`
+  through `ControlEndpointState::pending_exports`. Runs as a job
+  (`job_status`, `job_wait`). Per-track stems are `render.stems`
+  ([stem-export.md](stem-export.md)).
 - **Agent skills:** `mastering` (delivery, `render_mixdown` with a
-  platform).
+  platform; `render_stems` and ranged bounces in its delivery reference).
 
 ## How it's tested
 
@@ -125,7 +132,7 @@ measurement and freeze use the same core and have their own pages:
 |---|---|---|
 | Fidelity vs playback | `resonance-audio/tests/bounce/offline_render_fidelity.rs` | `./scripts/run-tests.py -p resonance-audio` |
 | Encoders, settings, normalise | `tests/bounce/export_encoders.rs`, `export_settings.rs`, `export_normalize.rs`, `delivery_normalize.rs` | same |
-| Range, tail, tempo, MIDI, automation | `tests/bounce/bounce_render_range_tempo.rs`, `bounce_tail_and_master_latency.rs`, `bounce_midi_events.rs`, `automation_render.rs` | same |
+| Range, tail, tempo, MIDI, automation | `tests/bounce/bounce_render_range_tempo.rs`, `export_range.rs` (an explicit window: length = window + tail, offset 0 = its start), `bounce_tail_and_master_latency.rs`, `bounce_midi_events.rs`, `automation_render.rs` | same |
 | Transport guard, plugin lock, render mode | `tests/bounce/bounce_transport_guard.rs`, `bounce_plugin_lock.rs`, `offline_render_mode.rs` | same |
 | External offsets, reference exclusion, vocal tuning | `tests/bounce/bounce_external_offsets.rs`, `reference_export_exclusion.rs`, `vocal_tuning_bounce.rs` | same |
 | App + control | `resonance-app/tests/control/control_render.rs`, `control_render_normalize.rs`, `control_render_wav_geometry.rs`; `tests/io/mixdown_progress_modal.rs`, `offline_render_gate.rs` | `./scripts/run-tests.py -p resonance-app` |
@@ -137,7 +144,8 @@ app with a real instrument.
 ## Decisions and deviations
 
 - The prototype's format and loudness choices exist engine-side, but the
-  only caller of `ExportAudio` is the control layer's normalised WAV.
+  only caller of `ExportAudio` is the control layer's normalised or ranged
+  WAV.
 - A normalised export skips the hard clip and lets the limiter set the
   ceiling (ENG-06).
 - `TruePeak` normalise mode trims by measured dBTP; the control API only
@@ -148,5 +156,3 @@ app with a real instrument.
 - FLAC/MP3/Opus, export sample rate and metadata have no GUI or control
   surface, and WAV/FLAC/MP3 drop the metadata:
   [export-formats-and-metadata](../../intents/audio-engine/export-formats-and-metadata.md).
-- `render.mixdown` cannot render a range:
-  [render-range-and-stems-control](../../intents/control-api/render-range-and-stems.md).

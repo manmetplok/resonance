@@ -25,11 +25,13 @@ fn dispatch_export(
     ctx: &HandlerCtx,
     path: String,
     settings: ExportSettings,
+    range: Option<(SamplePos, SamplePos)>,
     reporter: bounce::ExportReporter,
 ) -> Arc<AtomicBool> {
     bounce::export_spawn(
         path,
         settings,
+        range,
         reporter,
         Arc::clone(ctx.shared),
         Arc::clone(ctx.tempo_map),
@@ -55,12 +57,22 @@ pub(super) fn dispatch_bounce(
                 ctx,
                 path,
                 ExportSettings::default_wav(),
+                None,
                 bounce::ExportReporter::Bounce,
             ));
         }
-        AudioCommand::ExportAudio { path, settings } => {
-            state.bounce_cancel =
-                Some(dispatch_export(ctx, path, settings, bounce::ExportReporter::Export));
+        AudioCommand::ExportAudio {
+            path,
+            settings,
+            range,
+        } => {
+            state.bounce_cancel = Some(dispatch_export(
+                ctx,
+                path,
+                settings,
+                range,
+                bounce::ExportReporter::Export,
+            ));
         }
         AudioCommand::BounceTrackToAudio {
             source_track_id,

@@ -1,16 +1,23 @@
 //! `render.*` control handlers (ba doc #265, todo #1157): offline audio
 //! export to EXPLICIT paths, as jobs returning the written file path.
 //!
-//! `render.mixdown` reuses the app's maintained WAV bounce path — the
-//! path-carrying `BouncePathSelected(Some(path))` message, which drives
-//! `AudioCommand::BounceToWav` — never the rfd bounce dialog. The job is
-//! keyed off the engine's bounce completion (`BounceComplete` /
-//! `BounceError`, mirrored in `engine_events::transport`) via
-//! [`JobToken::Export`], which carries the target path so a completion
-//! resolves exactly the job that requested it.
+//! A plain whole-song `render.mixdown` reuses the app's maintained WAV
+//! bounce path — the path-carrying `BouncePathSelected(Some(path))`
+//! message, which drives `AudioCommand::BounceToWav` — never the rfd
+//! bounce dialog. A ranged or normalized one sends
+//! `AudioCommand::ExportAudio` (same 32-bit-float WAV) and is resolved by
+//! `ExportComplete` through `ControlEndpointState::pending_exports`. The
+//! job is keyed via [`JobToken::Export`], which carries the target path
+//! so a completion resolves exactly the job that requested it.
+//!
+//! `render.stems` sends `AudioCommand::ExportStems`, the Export modal's
+//! command, with the modal's defaults and file names
+//! (`update::export::stem_targets_for`); its job ([`JobToken::StemExport`])
+//! is resolved from the `StemExport*` events by the `stems_*` hooks
+//! below, which `engine_events::export` calls ahead of the modal.
 //!
 //! Rendering never mutates project or undo state; it only reads the
-//! current mix and writes a file.
+//! current mix and writes files.
 //!
 //! Guards (doc #265):
 //! - an existing file at `path` without `"overwrite": true` →
@@ -18,25 +25,24 @@
 //! - a relative path, or one whose parent directory is missing →
 //!   `invalid_params`;
 //! - the transport recording, or another render already in flight →
-//!   `busy`.
-//!
-//! `render.stems` is `unsupported` in this todo: the stem-export
-//! orchestration is not wired into the app on this branch, and doc #265
-//! says not to build new stem plumbing here.
+//!   `busy`;
+//! - an empty `range` (after clamping to the song) → `invalid_params`.
 
 use crate::control_jobs::JobToken;
 use crate::control_socket::ConnId;
 use crate::message::{Message, ProjectIoMessage};
+use crate::state::ExportSource;
 use crate::Resonance;
 use iced::Task;
 use resonance_audio::types::{
-    AudioCommand, ExportSettings, NormalizeMode, NormalizeSpec,
+    AudioCommand, EngineError, ExportSettings, NormalizeMode, NormalizeSpec, SamplePos,
 };
 use resonance_control::methods::render::{
-    self as proto, MixdownParams, NormalizeReport, RangeSpec, StemsParams,
+    self as proto, MixdownParams, NormalizeReport, StemsParams,
 };
-use resonance_control::{Request, Response, RpcError};
-use std::path::Path;
+use resonance_control::{ErrorKind, Request, Response, RpcError};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 /// Handle a `render.*` request, or `None` when `method` belongs to
 /// another namespace. Mutating dispatch: the returned [`Task`] must
@@ -48,7 +54,7 @@ pub(super) fn try_handle(
 ) -> Option<(Response, Task<Message>)> {
     let handled = match request.method.as_str() {
         proto::MIXDOWN => mixdown(app, conn, request),
-        proto::STEMS => stems(request),
+        proto::STEMS => stems(app, conn, request),
         _ => return None,
     };
     Some(handled)
@@ -63,24 +69,6 @@ fn mixdown(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
         Ok(p) => p,
         Err(e) => return (super::failure(request, e), Task::none()),
     };
-
-    // The maintained WAV bounce renders the whole project; a partial
-    // range would need the stem/export range plumbing that isn't wired
-    // here. Accept an omitted or explicitly-whole range, reject the rest.
-    if let Some(range) = params.range {
-        if !is_whole(&range) {
-            return (
-                super::failure(
-                    request,
-                    RpcError::unsupported(
-                        "render.mixdown renders the whole project; a partial \
-                         range is not supported on this build",
-                    ),
-                ),
-                Task::none(),
-            );
-        }
-    }
 
     if let Some(error) = busy_guard(app) {
         return (super::failure(request, error), Task::none());
@@ -144,6 +132,13 @@ fn mixdown(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
         );
     }
 
+    // `None` for the whole song (omitted or `{}`); a window is clamped to
+    // the song like a `meter.*` range, and an empty one is refused.
+    let range = match super::meter::resolve_range(app, params.range) {
+        Ok(r) => r,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+
     // Correlate the eventual `BounceComplete { path }` back to this job:
     // the engine echoes the requested path verbatim.
     let started = app.start_control_job(
@@ -155,16 +150,18 @@ fn mixdown(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
         Some(conn),
     );
 
-    let task = match normalize {
-        // Plain mix: the path-carrying bounce message (never the dialog).
-        None => super::run_via_update(
+    let task = match (normalize, range) {
+        // Plain whole-song mix: the path-carrying bounce message (never
+        // the dialog).
+        (None, None) => super::run_via_update(
             app,
             Message::ProjectIo(ProjectIoMessage::BouncePathSelected(Some(params.path))),
         ),
-        // Normalized: the generalized export command with a normalize
-        // stage, resolved by `ExportComplete` (`export_complete`).
-        Some(report) => {
-            start_normalized_export(app, &params.path, report);
+        // Normalized or ranged: the generalized export command (with a
+        // normalize stage and/or a window), resolved by `ExportComplete`
+        // (`engine_events::transport::export_complete`).
+        (normalize, range) => {
+            start_export(app, &params.path, normalize, range);
             Task::none()
         }
     };
@@ -215,12 +212,19 @@ fn normalize_request(params: &MixdownParams) -> Result<Option<NormalizeReport>, 
     }))
 }
 
-/// Start a normalized WAV export: the same 32-bit-float WAV at the engine
-/// rate the plain mixdown writes, with the engine's two-pass normalize
-/// stage (measure, gain to the target, true-peak limit at the ceiling,
-/// re-measure) in front of the encoder. Sets the same bounce state the
-/// plain path does, so the busy guards and the progress modal hold.
-fn start_normalized_export(app: &mut Resonance, path: &str, report: NormalizeReport) {
+/// Start a WAV export through `AudioCommand::ExportAudio`: the same
+/// 32-bit-float WAV at the engine rate the plain mixdown writes, over
+/// `range` when given (sample 0 = the range start), and with the
+/// engine's two-pass normalize stage (measure, gain to the target,
+/// true-peak limit at the ceiling, re-measure) in front of the encoder
+/// when `normalize` is given. Sets the same bounce state the plain path
+/// does, so the busy guards and the progress modal hold.
+fn start_export(
+    app: &mut Resonance,
+    path: &str,
+    normalize: Option<NormalizeReport>,
+    range: Option<(SamplePos, SamplePos)>,
+) {
     app.io.bouncing = true;
     app.io.bounce_fraction = 0.0;
     app.io.bounce_cancel_requested = false;
@@ -229,33 +233,32 @@ fn start_normalized_export(app: &mut Resonance, path: &str, report: NormalizeRep
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_owned());
     app.control
-        .pending_normalize
-        .insert(Path::new(path).to_path_buf(), report);
-    let settings = ExportSettings {
-        normalize: NormalizeSpec {
-            enabled: true,
-            mode: NormalizeMode::IntegratedLufs,
-            target_db: report.target_lufs as f32,
-            ceiling_dbtp: report.ceiling_dbtp as f32,
+        .pending_exports
+        .insert(Path::new(path).to_path_buf(), normalize);
+    let settings = match normalize {
+        Some(report) => ExportSettings {
+            normalize: NormalizeSpec {
+                enabled: true,
+                mode: NormalizeMode::IntegratedLufs,
+                target_db: report.target_lufs as f32,
+                ceiling_dbtp: report.ceiling_dbtp as f32,
+            },
+            ..ExportSettings::default_wav()
         },
-        ..ExportSettings::default_wav()
+        None => ExportSettings::default_wav(),
     };
     if app
         .engine
         .send(AudioCommand::ExportAudio {
             path: path.to_owned(),
             settings,
+            range,
         })
         .is_err()
     {
         app.io.bouncing = false;
+        app.control.pending_exports.remove(Path::new(path));
     }
-}
-
-/// True when a range covers the whole song — no start and no end
-/// coordinates given.
-fn is_whole(range: &RangeSpec) -> bool {
-    range.start.is_none_or(|p| p.is_empty()) && range.end.is_none_or(|p| p.is_empty())
 }
 
 /// Build the `render.mixdown` job result for a completed bounce. Reads
@@ -384,25 +387,282 @@ fn read_wav_geometry(path: &Path) -> Option<WavGeometry> {
 }
 
 // ---------------------------------------------------------------------------
-// render.stems (unsupported here)
+// render.stems
 // ---------------------------------------------------------------------------
 
-fn stems(request: &Request) -> (Response, Task<Message>) {
-    // Validate params so a malformed call still gets `invalid_params`
-    // rather than a misleading `unsupported`.
-    if let Err(e) = request.params::<StemsParams>() {
-        return (super::failure(request, e), Task::none());
+/// `render.stems`: one WAV per top-level track (or per `track_ids`
+/// entry) into `dir`, through the Export modal's `ExportStems` command
+/// (sent by `ExportMessage::RenderStems`) with the modal's defaults
+/// (`ExportFormat::default()`: 48 kHz, 24-bit, FX tail) and its file
+/// names (`NN-<track name>.wav`, numbered in track id order).
+fn stems(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<Message>) {
+    let params: StemsParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    if let Some(error) = busy_guard(app) {
+        return (super::failure(request, error), Task::none());
     }
-    (
-        super::failure(
-            request,
-            RpcError::unsupported(
-                "render.stems is not available on this build; stem export lands \
-                 with the export epic (doc #196)",
+    // The mutation gate already refuses while a stem export runs; say so
+    // in this method's own words when it is reached directly.
+    if app.stem_export_in_progress() {
+        return (
+            super::failure(request, RpcError::busy("a stem export is already in progress")),
+            Task::none(),
+        );
+    }
+
+    let dir = PathBuf::from(&params.dir);
+    if !dir.is_absolute() {
+        return (
+            super::failure(
+                request,
+                RpcError::invalid_params(format!("dir must be absolute, got {:?}", params.dir)),
             ),
+            Task::none(),
+        );
+    }
+    if dir.exists() && !dir.is_dir() {
+        return (
+            super::failure(
+                request,
+                RpcError::invalid_params(format!("{:?} exists and is not a directory", params.dir)),
+            ),
+            Task::none(),
+        );
+    }
+    let sources = match stem_sources(app, params.track_ids.as_deref()) {
+        Ok(s) => s,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let range = match super::meter::resolve_range(app, params.range) {
+        Ok(r) => r,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+
+    // The modal's names, never suffixed: a name already on disk is the
+    // file this call would replace, so it needs `overwrite`.
+    let targets = crate::update::export::stem_targets_for(
+        app,
+        &sources,
+        &dir,
+        crate::state::ExportOverwrite::Overwrite,
+    );
+    if !params.overwrite {
+        let existing: Vec<&str> = targets
+            .iter()
+            .filter(|t| Path::new(&t.path).exists())
+            .map(|t| t.path.as_str())
+            .collect();
+        if !existing.is_empty() {
+            return (
+                super::failure(
+                    request,
+                    RpcError::needs_confirmation(format!(
+                        "{} stem file(s) already exist and would be overwritten: {}; pass \
+                         \"overwrite\": true to replace them",
+                        existing.len(),
+                        existing.join(", ")
+                    )),
+                ),
+                Task::none(),
+            );
+        }
+    }
+    // Created like the modal creates its destination.
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return (
+            super::failure(
+                request,
+                RpcError::invalid_params(format!("can't create {}: {e}", dir.display())),
+            ),
+            Task::none(),
+        );
+    }
+
+    let total = targets.len();
+    let started = app.start_control_job(
+        proto::STEMS,
+        &format!("Export {total} stem(s) to {}", dir.display()),
+        JobToken::StemExport { dir },
+        Some(conn),
+    );
+    let job_id = u64::from(started.job_id);
+    let task = super::run_via_update(
+        app,
+        Message::Export(crate::message::ExportMessage::RenderStems {
+            job_id,
+            targets,
+            range,
+        }),
+    );
+    // `RenderStems` sends synchronously; if it did not start, fail the
+    // job now rather than leave the client waiting out the timeout.
+    if app.control.pending_stems.is_none() {
+        app.control
+            .jobs
+            .fail(job_id, "stem export did not start (engine unavailable)");
+    }
+    (super::success(request, &started), task)
+}
+
+/// The sources a `render.stems` call exports: every top-level track (the
+/// Export modal's track list — a track's stem carries its sub-tracks), or
+/// exactly `track_ids`, each of which must name one.
+fn stem_sources(
+    app: &Resonance,
+    track_ids: Option<&[resonance_control::ids::TrackId]>,
+) -> Result<BTreeSet<ExportSource>, RpcError> {
+    let Some(ids) = track_ids else {
+        let all: BTreeSet<ExportSource> = app
+            .registry
+            .tracks
+            .iter()
+            .filter(|t| t.sub_track.is_none())
+            .map(|t| ExportSource::Track(t.id))
+            .collect();
+        if all.is_empty() {
+            return Err(RpcError::invalid_params("the project has no tracks to export"));
+        }
+        return Ok(all);
+    };
+    if ids.is_empty() {
+        return Err(RpcError::invalid_params(
+            "track_ids is empty; omit it to export every track",
+        ));
+    }
+    let mut sources = BTreeSet::new();
+    for id in ids {
+        let Some(track) = app.registry.tracks.iter().find(|t| t.id == id.0) else {
+            return Err(RpcError::invalid_params(format!(
+                "track_ids names no track with id {id}"
+            )));
+        };
+        if let Some(link) = &track.sub_track {
+            return Err(RpcError::invalid_params(format!(
+                "track {id} is a sub-track; its parent's stem carries it (export track {})",
+                link.parent_track_id
+            )));
+        }
+        sources.insert(ExportSource::Track(track.id));
+    }
+    Ok(sources)
+}
+
+/// The `render.stems` job result: the written paths, and the length of
+/// the first (every stem renders over the same range, so all match),
+/// read from its header as for a mixdown.
+fn stems_result(files: &[String]) -> serde_json::Value {
+    let duration_s = files
+        .first()
+        .and_then(|f| read_wav_geometry(Path::new(f)))
+        .map_or(0.0, |geo| geo.duration_s());
+    serde_json::to_value(proto::StemsResult {
+        paths: files.to_vec(),
+        duration_s,
+    })
+    .unwrap_or(serde_json::Value::Null)
+}
+
+// The `StemExport*` hooks, called by `engine_events::export` ahead of the
+// modal. Each returns `true` when a control job owns the running export
+// (the event is then fully handled here) and `false` when the event is
+// the modal's.
+
+/// `StemExportProgress`: target `target_index` is starting.
+pub(crate) fn stems_progress(
+    app: &mut Resonance,
+    target_index: usize,
+    total: usize,
+    fraction: f32,
+) -> bool {
+    let Some(stems) = app.control.pending_stems.as_mut() else {
+        return false;
+    };
+    stems.done = target_index.min(total);
+    stems.fraction = fraction.clamp(0.0, 1.0);
+    app.control.jobs.set_progress(stems.job_id, stems.fraction);
+    true
+}
+
+/// `StemExportTargetDone`: one stem is on disk.
+pub(crate) fn stems_target_done(app: &mut Resonance, index: usize) -> bool {
+    let Some(stems) = app.control.pending_stems.as_mut() else {
+        return false;
+    };
+    stems.done = (index + 1).max(stems.done).min(stems.total);
+    stems.fraction = stems.done as f32 / stems.total.max(1) as f32;
+    app.control.jobs.set_progress(stems.job_id, stems.fraction);
+    true
+}
+
+/// `StemExportTargetError`: one stem failed; the queue goes on, and the
+/// job fails once it finishes.
+pub(crate) fn stems_target_error(app: &mut Resonance, index: usize, message: &str) -> bool {
+    let Some(stems) = app.control.pending_stems.as_mut() else {
+        return false;
+    };
+    stems.errors.push(format!("stem {}: {message}", index + 1));
+    stems_target_done(app, index)
+}
+
+/// `StemExportComplete`: done with every path when every target wrote.
+/// Any target error fails the job instead: a result listing only the
+/// stems that wrote would read as "done" to a client that does not count
+/// them, so the message carries both the errors and what was written.
+pub(crate) fn stems_complete(app: &mut Resonance, files: &[String]) -> bool {
+    let Some(stems) = app.control.pending_stems.take() else {
+        return false;
+    };
+    if stems.errors.is_empty() {
+        app.control.jobs.complete(stems.job_id, stems_result(files));
+    } else {
+        app.control.jobs.fail_with_kind(
+            stems.job_id,
+            format!("{}; written: {}", stems.errors.join("; "), written_list(files)),
+            Some(ErrorKind::Internal),
+        );
+    }
+    true
+}
+
+/// `StemExportError`: the export could not start; nothing was written.
+pub(crate) fn stems_error(app: &mut Resonance, e: &EngineError) -> bool {
+    let Some(stems) = app.control.pending_stems.take() else {
+        return false;
+    };
+    app.control.jobs.fail_with_kind(
+        stems.job_id,
+        e.message.clone(),
+        Some(super::job::engine_kind_to_rpc(e.kind)),
+    );
+    true
+}
+
+/// `StemExportCancelled`: the user cancelled from the progress overlay;
+/// the stems written before it stay on disk.
+pub(crate) fn stems_cancelled(app: &mut Resonance, files: &[String]) -> bool {
+    let Some(stems) = app.control.pending_stems.take() else {
+        return false;
+    };
+    app.control.jobs.fail(
+        stems.job_id,
+        format!(
+            "stem export cancelled in the app after {} of {} stem(s); written: {}",
+            files.len(),
+            stems.total,
+            written_list(files)
         ),
-        Task::none(),
-    )
+    );
+    true
+}
+
+fn written_list(files: &[String]) -> String {
+    if files.is_empty() {
+        "none".to_owned()
+    } else {
+        files.join(", ")
+    }
 }
 
 // ---------------------------------------------------------------------------

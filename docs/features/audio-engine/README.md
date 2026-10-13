@@ -27,8 +27,8 @@ areas ([../mixer](../mixer/), [../timeline](../timeline/),
 | CLAP plugin hosting | [clap-hosting.md](clap-hosting.md) | Scanning, loading, running and removing CLAP plugins; thread roles; host extensions; bypass; editors. |
 | Plugin params, state and presets | [clap-params-and-presets.md](clap-params-and-presets.md) | Param description and flush, plugin-made edits, state save/load, preset-state and preset-load, discovery. |
 | Latency compensation | [latency-compensation.md](latency-compensation.md) | Two-stage PDC, live latency changes, offline trim, device I/O latency. |
-| Offline render and export | [offline-render-and-export.md](offline-render-and-export.md) | Chunked offline render core, mixdown export (formats, normalise), bounce in place. |
-| Stem export | [stem-export.md](stem-export.md) | Track / bus / master stems over one shared range, sequential with partial-failure reporting. |
+| Offline render and export | [offline-render-and-export.md](offline-render-and-export.md) | Chunked offline render core, mixdown export (formats, normalise, ranged), bounce in place. |
+| Stem export | [stem-export.md](stem-export.md) | Track / bus / master stems over one shared range, sequential with partial-failure reporting; the Export dialog and `render.stems`. |
 | Offline measurement and chain probe | [offline-measurement.md](offline-measurement.md) | Render-and-measure loudness and details (incl. depth), measure files/references, probe a cloned chain. |
 | Track freeze (engine side) | [track-freeze.md](track-freeze.md) | Freeze-cache render, cache format, rate conversion and playback substitution. |
 | Clip loading and import | [clip-loading.md](clip-loading.md) | Pool import, mmapped clip loading with tickets and fences, clip WAV persistence. |

@@ -1,11 +1,11 @@
 # Control method catalogue
 
-> Verified against master @ `f82be9b0` + speaker `effect` flags on 2026-10-13.
+> Verified against master @ `f9438e38` + `render.stems` on 2026-10-13.
 > Source of truth: `resonance_control::methods::capabilities()` and each
 > method constant's doc comment in `resonance-control/src/methods/*.rs`.
 
 Every control method the app implements, the MCP tool that exposes it,
-and the feature area that owns it. 185 methods, 185 tools. The MCP tool
+and the feature area that owns it. 187 methods, 187 tools. The MCP tool
 is always the method name with its first `.` replaced by `_`; in Claude
 Code it is `mcp__resonance__<tool>`.
 
@@ -191,7 +191,8 @@ area; the sibling areas may refine it.
 | `vocal.set_params` | `vocal_set_params` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | merge a partial patch into a vocal lane's settings (incl. `rest_threshold_beats`, `velocity_dynamics`, `bank_timing`, `bank_pitch`; a new lane starts on `tiger` / `mystic`) |
 | `vocal.voicebanks` | `vocal_voicebanks` | read | [compose](../compose/voicebank-library.md) | list the installed voicebanks and what each can do (incl. `models`: its own duration / pitch / variance models; `effect: true` on a speaker that is an effect mode — growl, vocal fry, whisper — not a lead voice), and the plok.org index's others (`available`) (no project needed) |
 | `vocal.voicebank_install` | `vocal_voicebank_install` | job | [compose](../compose/voicebank-library.md) | install a voicebank from the plok.org index, and the vocoder it needs; result carries its terms (no project needed, no undo) |
-| `render.mixdown` | `render_mixdown` | job | [audio-engine](../audio-engine/offline-render-and-export.md) | bounce the master mix to a WAV file |
+| `render.mixdown` | `render_mixdown` | job | [audio-engine](../audio-engine/offline-render-and-export.md) | bounce the master mix to a WAV file, the whole song or a `range` |
+| `render.stems` | `render_stems` | job | [audio-engine](../audio-engine/stem-export.md) | one WAV per top-level track (or per `track_ids`) into a directory, named as the Export dialog names them |
 | `meter.measure` | `meter_measure` | job | [mixer](../mixer/meter-control-api.md) | measure one slice of the mix |
 | `meter.stems` | `meter_stems` | job | [mixer](../mixer/meter-control-api.md) | measure every track plus the master in one pass |
 | `meter.snapshot` | `meter_snapshot` | job | [mixer](../mixer/meter-control-api.md) | measure one slice and keep the numbers for a later `meter.compare` |
@@ -221,12 +222,6 @@ area; the sibling areas may refine it.
 | `presets.vocabulary` | `presets_vocabulary` | read | [plugins-effects](../plugins-instruments/plugin-preset-library.md) | the seeded facet values plus the ones in use, for consistent tagging |
 | `job.status` | `job_status` | read | [control-api](jobs.md) | read a job's current state |
 | `job.wait` | `job_wait` | read | [control-api](jobs.md) | block until the job is terminal or the timeout elapses; returns the then-current status |
-
-### Defined but not listed
-
-| Method | Status |
-|---|---|
-| `render.stems` | Wire types (`StemsParams`, `StemsResult`) and a handler that answers `unsupported` exist; kept out of `capabilities` and has no MCP tool. See [render-stems-control](../../intents/control-api/render-range-and-stems.md). |
 
 ## Where the logic lives
 
@@ -269,6 +264,5 @@ routed (an arm dropped from another namespace's dispatch would answer
 
 ## Known gaps
 
-- `render.stems` (above).
 - Drum pad map:
   [drum-pad-map-mcp](../../intents/control-api/drum-pad-map-mcp.md).

@@ -100,7 +100,7 @@ pub(crate) use clip::{import_result, place_result, tempo_detected as clip_tempo_
 pub(crate) use job::export_kind_to_rpc;
 pub(crate) use plugin_presets::{write_saved_state as write_plugin_preset, SavedStateKind};
 pub(crate) use meter::{chain_probe_error, chain_probed, mix_measure_error, mix_measured};
-pub(crate) use {render::mixdown_result, vocal::voicebank_install_settled};
+pub(crate) use {render::{mixdown_result, stems_cancelled, stems_complete, stems_error, stems_progress, stems_target_done, stems_target_error}, vocal::voicebank_install_settled};
 pub use amp_models::{AmpLibraryCache, AmpLibraryRoots};
 pub(crate) use amp_models::roots_for as amp_library_roots;
 pub use drum_kits::{DrumKitLibraryCache, DrumKitLibraryRoots};

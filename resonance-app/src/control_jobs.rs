@@ -69,6 +69,14 @@ pub enum JobToken {
     VocalRender { lanes: Vec<(u64, u64)> },
     /// Completes on bounce/export completion (todo #1157).
     Export { path: std::path::PathBuf },
+    /// A `render.stems` export into `dir`: completes on
+    /// `AudioEvent::StemExportComplete` when every target wrote, fails on
+    /// a target error, `StemExportError` or `StemExportCancelled`
+    /// (`engine_events::export`). The events carry no correlation id;
+    /// one stem export runs at a time (the modal and the control job
+    /// refuse each other), so `ControlEndpointState::pending_stems` names
+    /// the job they belong to.
+    StemExport { dir: std::path::PathBuf },
     /// A media-pool import started over the control endpoint: `pool.import`,
     /// or a `clip.place` whose file was not in the pool yet.
     ///

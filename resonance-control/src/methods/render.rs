@@ -14,23 +14,14 @@ pub const MIXDOWN: &str = "render.mixdown";
 /// `render.stems` — export per-track stems into a directory
 /// ([`StemsParams`] -> job -> [`StemsResult`]).
 ///
-/// **Not implemented on this build**, and deliberately NOT in
-/// [`METHODS`] because of that: `control.hello`'s `capabilities` is a
-/// contract, and a name listed there that always answers `unsupported`
-/// makes the whole list untrustworthy — a client cannot then use it to
-/// decide anything (ba doc #275 P4). The method name stays defined so
-/// the handler can keep returning a specific `unsupported` message
-/// rather than `method_not_found`, and so it lands back in `METHODS`
-/// unchanged when the export plumbing is wired.
-///
-/// The engine half already exists (`AudioCommand::ExportStems`, with
-/// per-target progress events); what is missing is the control-side job
-/// plumbing.
+/// One WAV per top-level track (or per [`StemsParams::track_ids`] entry),
+/// rendered over one shared range so the stems re-import sample-aligned,
+/// with the Export modal's defaults (48 kHz, 24-bit, FX tail) and file
+/// names (`NN-<track name>.wav`).
 pub const STEMS: &str = "render.stems";
 
-/// All `render.*` method names. `STEMS` is excluded until it is
-/// implemented — see its doc comment.
-pub const METHODS: &[&str] = &[MIXDOWN];
+/// All `render.*` method names.
+pub const METHODS: &[&str] = &[MIXDOWN, STEMS];
 
 /// A render time range; omitted ends default to song start/end.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -44,6 +35,10 @@ pub struct RangeSpec {
 }
 
 /// Params for `render.mixdown`.
+///
+/// With a `range`, sample 0 of the file is the range start; without one
+/// the file spans every clip and sample 0 is the earliest clip's start.
+/// Either way the shared FX tail is rendered past the end.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -175,6 +170,10 @@ pub struct StemsParams {
     /// Required (`true`) to replace existing files in `dir`.
     #[serde(default)]
     pub overwrite: bool,
+    /// Export only these tracks (top-level tracks; a track's stem carries
+    /// its sub-tracks). Omitted: every top-level track.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_ids: Option<Vec<crate::ids::TrackId>>,
 }
 
 /// Job payload once a `render.stems` job completes.
@@ -183,6 +182,6 @@ pub struct StemsParams {
 pub struct StemsResult {
     /// Absolute paths of the written stem files.
     pub paths: Vec<String>,
-    /// Rendered audio length in seconds.
+    /// Rendered audio length in seconds (every stem has the same length).
     pub duration_s: f64,
 }
