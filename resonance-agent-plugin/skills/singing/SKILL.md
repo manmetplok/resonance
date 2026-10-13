@@ -82,6 +82,10 @@ register and character from its `tags`, then fine-tune with
 - **Curves and models differ per bank.** `curves` says which expression
   curves reach the model; `models` says whether `bank_timing` / `bank_pitch`
   have anything to use.
+- **A different singer is a different level.** Two voices singing the same
+  notes can differ by 10 dB or more. After `vocal_apply_voice_preset` or a
+  bank switch, render and re-measure the part before judging it, and re-set
+  its fader.
 - **Installing is the user's call.** `vocal_voicebank_install` downloads
   hundreds of MB and accepts the bank's terms on the user's behalf. Tell
   them the `credit`, `terms_url` and `commercial` terms first, install only
@@ -134,6 +138,14 @@ Two ways in, chosen per lane:
   run `vocal_refit_melody` afterwards on a lane `song_vocal` reports with
   `melody_predates_chords: true`. `vocal_melody: "regenerate"` replaces it.
   The reply's `vocal_lanes_affected` says what each lane got.
+- **Every placement sings the first placement's clip.** Each placement of
+  the section gets its own MIDI clip, but the lane renders once, from the
+  first one, and lays that take on every placement. Write and fix notes in
+  that clip; the others keep whatever they were created with (often the raw
+  generator output — a reason a second placement *looks* wrong in
+  `song_notes` while it sings right). Emptying the first clip makes the lane
+  refuse to render, so silencing one placement is a track volume lane, not a
+  note edit (`references/backing-vocals.md`).
 
 Either way: one note per syllable or hold, stressed syllables on strong beats
 and long notes, a rest between phrases, and every note inside the voice's
@@ -201,6 +213,13 @@ pre-flight it, then render once:
 - Renders are deterministic: the same lane renders the same audio every
   time, so re-rendering unchanged material changes nothing. Change the
   melody, the words or the settings, not the dice.
+- **Re-render after arrangement edits.** A take starts a little before its
+  section (the singer's pre-roll), so `arrangement_insert_bars` /
+  `arrangement_remove_bars` at a section boundary can cut it or leave it
+  behind, and a section placed again (`section_place`) can read `rendered`
+  in `song_vocal` with no take on it. After any of these, `vocal_render
+  {track_id}` and confirm in `song_tracks` that every placement has its
+  audio clip.
 
 ## 7. Expression
 
@@ -220,10 +239,33 @@ Only after the words and notes are right. In order of reach:
 - **Curves** — `automation_set_lane` / `automation_add_points` on the target
   `{vocal: {track_id, curve}}` with `curve` one of `dynamics`, `tension`,
   `breathiness`, `pitch_bend`. Points are written at song positions but
-  stored per section, so every placement of that section follows. `dynamics`
-  and `pitch_bend` work on every bank; the others only where `song_vocal`'s
-  `curves` reads `supported`. Units: 0..1 with 0.5 unchanged, pitch bend
-  ±50 cents. Curves are rendered into the take, so `vocal_render` after.
+  stored per section, so every placement of that section follows. **Check
+  `vocal_voicebanks`' `curves` for the lane's bank before drawing one**: a
+  curve the bank does not take is accepted, stored and silently ignored.
+  When this was written `pitch_bend` worked on every installed bank,
+  `tension` on every bank but TIGER, and **`dynamics` and `breathiness` on
+  none** — loudness phrasing is note velocity × `velocity_dynamics`.
+  Units: 0..1 with 0.5 unchanged, pitch bend ±50 cents. Curves are rendered
+  into the take, so `vocal_render` after.
+- **Tension is the intensity lever.** On a bank that takes it, a tension
+  curve rising section by section is how a song builds: at 1.0 a line came
+  out about 3 dB louder and markedly brighter (+7 dB above 2 kHz) and still
+  scored 100 % intelligible. Low tension (under about 0.45) is what sounds
+  breathy. Two placements of one section share the curve, so a section that
+  ends both the pre-bridge and the song peaks in both places. A tension
+  build also raises the lead's level and loudness range in the mix: re-check
+  its fader and the master's PSR after one.
+
+## 7b. Backing vocals
+
+A harmony, a double or a counter-line is a second vocal track with its own
+lane, written by hand. The craft — a third below rather than above, every
+note checked against the chord, oblique motion, loosened timing and
+velocities, its own tension, a volume lane to keep it out of a placement,
+choosing a non-breathy backing voice, and levelling it about 6 LU under the
+lead after every voice switch — is in
+`${CLAUDE_SKILL_DIR}/references/backing-vocals.md`. Read it before writing
+the first backing note.
 
 ## 8. Verify without ears
 
@@ -290,5 +332,8 @@ range). Every edit went through undo; `edit_undo` reverses one call at a time.
   `song_vocal` fields each mistake shows up in.
 - `${CLAUDE_SKILL_DIR}/references/voicebanks.md` — the banks, speakers,
   ranges, terms and listening-test results, and how to match a voice to a song.
+- `${CLAUDE_SKILL_DIR}/references/backing-vocals.md` — harmonies, doubles and
+  counter-lines: writing them so they sound sung, keeping a part out of one
+  placement, choosing and levelling the backing voice.
 - `${CLAUDE_PLUGIN_ROOT}/skills/arranging/references/generators.md` — the
   instrumental generators, for the parts around the vocal.

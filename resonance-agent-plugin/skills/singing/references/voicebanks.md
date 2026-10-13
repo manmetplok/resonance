@@ -37,9 +37,11 @@ download list right now (see `index_error`).
 | Allen Crow | male | C3–A4 (open and gentle: G3–D5) | standard, heavy, open, gentle | whisper | permission; LUNAI Project |
 
 A new lane sings TIGER `mystic`. All of these banks ship their own duration
-and pitch models. Lilia and Meiji also ship a variance model and take the
-tension curve; TIGER takes neither — read `curves` for the others. No bank
-known here takes breathiness; dynamics and pitch bend work on every bank.
+and pitch models, and all but TIGER a variance model and the tension curve.
+Pitch bend works on every bank. **No installed bank takes the dynamics or
+the breathiness curve** (`curves` reports both `false` everywhere): shape
+loudness with note velocities and `velocity_dynamics`, and avoid an airy
+sound by the speaker you choose and a tension of 0.5 or more.
 
 Meiji's `phantom` is described as whispery, but it is a lead mode: it sings a
 whole line clearly.
@@ -57,6 +59,17 @@ A blind listen of every installed voice on the same phrase (1–5, 2026-10-13):
 
 Start from a 4 or 5 in the right range unless the song needs a specific
 colour.
+
+In a song (a trip-hop track, 2026-10-13), as backing vocals under a
+Katyusha lead:
+
+- **Liam Thorne `rock`** — gritty without being breathy, 100 %
+  intelligible, and about 11 dB hotter than Keiro `standard` on the same
+  notes. The user's pick for backing.
+- **Keiro Revenant `standard`** and **Liam Thorne `standard`** — clean and
+  clear (92–100 %), less character.
+- **Katyusha delicate** — airy; 86–92 % as a backing voice, and its "light"
+  kept coming out as "night".
 
 ## Matching the voice to the song
 
@@ -85,7 +98,8 @@ Two things that are per lane, not per note:
   that section sings only that line.
 - **Two lanes singing the same notes with the same bank, speaker and settings
   render identical audio.** There is no automatic doubling: a double needs a
-  different speaker, different notes or different settings.
+  different speaker, different notes or different settings
+  (`backing-vocals.md`).
 
 `timbre` (`airy`, `warm`, `edged`, `bright`) leans the voice's formant a
 little; it does not change the singer.
