@@ -28,13 +28,13 @@ Templates: [feature doc](features/_template.md) · [intent](intents/_template.md
 | **Mixer** | Mix tab: strips, inspector, busses, sends, sidechain, master, plugin chains, reference A/B, meters, `meter.*`, `master.assist` | [12 docs](features/mixer/README.md) | [6 intents](intents/mixer/README.md) (2 partly built) |
 | **Compose** | Sections, lane generators, chords, drum arrangement, vocals (lyrics, melody, DiffSinger render, voicebank library, pronunciation), music theory | [12 docs](features/compose/README.md) | [16 intents](intents/compose/README.md) (8 partly built) |
 | **Hardware I/O** | Audio devices, input/monitoring, recording, transport, external instruments, device presets, MIDI I/O, MIDI learn, SMF import | [10 docs](features/hardware-io/README.md) | [11 intents](intents/hardware-io/README.md) (3 partly built) |
-| **Control API** | `resonance-control` protocol, the app control layer, jobs, `resonance-mcp`, the agent plugin, the full method catalogue | [6 docs](features/control-api/README.md) | [4 intents](intents/control-api/README.md) |
+| **Control API** | `resonance-control` protocol, the app control layer, jobs, `resonance-mcp`, the agent plugin, the full method catalogue | [6 docs](features/control-api/README.md) | [3 intents](intents/control-api/README.md) |
 | **UI shell** | Commands, palette, keymap, views, overlays, settings, startup/recovery, media browser, preset browser, plugin windows, performance mode, theme, UI goldens | [13 docs](features/ui-shell/README.md) | [7 intents](intents/ui-shell/README.md) (4 partly built) |
 | **Project core** | File format, save/open, autosave, clip storage, templates, undo, Reconcile, ids, app state, update loop, hermetic tests, arch invariants | [12 docs](features/project-core/README.md) | [4 intents](intents/project-core/README.md) (2 partly built) |
 | **Plugins — effects** | EQ, compressor, gate, delay, granular delay, reverb, stereo, color, IR, mastering, mastering-assist engine, de-harsh | [12 docs](features/plugins-effects/README.md) | [6 intents](intents/plugins-effects/README.md) (1 partly built) |
 | **Plugins — instruments & platform** | Wavetable, drums + kit library, amp + NAM library, preset library, plugin SDK, editor runtimes, DSP/metering crates, 3rd-party hosting, bundling | [13 docs](features/plugins-instruments/README.md) | [9 intents](intents/plugins-instruments/README.md) (6 partly built) |
 
-Totals: **124 feature docs**, **90 intents**, **44 known bugs**, 12 unbuilt prototypes.
+Totals: **124 feature docs**, **89 intents**, **44 known bugs**, 12 unbuilt prototypes.
 
 ## Guides
 

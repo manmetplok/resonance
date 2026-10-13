@@ -134,7 +134,15 @@ another: the meter details, snapshot/compare, the probe and the character and
 width plugins gave the skills a character pass, a `spatial` skill and a
 mastering chain named by key (warmth-width-depth.md W4). 0.4.0 added the
 `singing` skill, the shared procedure for vocal lanes that `arranging` used to
-cover in a paragraph.
+cover in a paragraph. 0.5.0 gave `singing` its own intelligibility checker
+(`skills/singing/scripts/intelligibility.py`) fed by a vocal stem from the new
+`render_stems`, and told `mastering` about stems and ranged bounces.
+
+A skill may bundle a script under `skills/<name>/scripts/` and point at it
+through the skill-directory variable, as `singing` does for its checker; the
+lockstep test holds that path like any other. Keep such a script standalone
+(standard library, optional heavy dependencies fetched on demand) and give it a
+`--self-test` that runs without them.
 
 ## Naming plugin keys
 
