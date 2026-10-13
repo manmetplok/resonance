@@ -149,7 +149,23 @@ Two ways in, chosen per lane:
 
 Either way: one note per syllable or hold, stressed syllables on strong beats
 and long notes, a rest between phrases, and every note inside the voice's
-range. Transposing a written melody into range is a `notes_replace_all` with
+range.
+
+**Timing that sounds sung, not sequenced.** A singer does not land every
+syllable on the grid, and does not space quick syllables evenly:
+- Keep each phrase's first word and its held end where the music wants
+  them; move the syllables *inside* the phrase by a few tens of ms (about
+  -25..+65 ms, mostly late for a laid-back feel), and let the spacing
+  between them vary.
+- A syllable under about a third of a beat (≈250 ms) is heard as clipped.
+  Give it room by borrowing time from its neighbours inside the phrase, not
+  by moving the phrase — and never leave the result evenly spaced: that is
+  what makes a line sound programmed.
+- A line's first syllable on the downbeat of every line is a tell too; vary
+  the entries (the "and" of a beat is often right).
+- After a timing pass, run the intelligibility check: a syllable moved
+  late or shortened can turn into another word ("on" heard as "up"); put
+  that one note back. Transposing a written melody into range is a `notes_replace_all` with
 every pitch moved — by an octave when the key must stay.
 
 ## 4. The lyrics

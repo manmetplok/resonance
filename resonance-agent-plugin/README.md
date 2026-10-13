@@ -139,7 +139,7 @@ cover in a paragraph. 0.5.0 gave `singing` its own intelligibility checker
 `render_stems`, and told `mastering` about stems and ranged bounces. 0.6.0
 taught `singing` that a chord or length edit now keeps a melody (flagged
 `melody_predates_chords`) and how to re-fit it: `vocal_melody` on the chord
-call, or `vocal_refit_melody` afterwards. 0.6.1 pointed `singing`'s voice choice at the voice presets. 0.6.2 corrected which expression curves reach the banks (no installed bank takes dynamics or breathiness), made tension the intensity lever, and added backing vocals (`references/backing-vocals.md`) and the one-take-per-lane rule for repeated sections.
+call, or `vocal_refit_melody` afterwards. 0.6.1 pointed `singing`'s voice choice at the voice presets. 0.6.2 corrected which expression curves reach the banks (no installed bank takes dynamics or breathiness), made tension the intensity lever, and added backing vocals (`references/backing-vocals.md`) and the one-take-per-lane rule for repeated sections. 0.6.3 added timing that sounds sung: uneven, laid-back inner syllables instead of grid-even ones.
 
 A skill may bundle a script under `skills/<name>/scripts/` and point at it
 through the skill-directory variable, as `singing` does for its checker; the
