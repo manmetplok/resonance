@@ -1,6 +1,7 @@
 # Agent plugin (`resonance-agent-plugin`)
 
-> Verified against master @ `f9438e38` + `render.stems` and the singing intelligibility script on 2026-10-13.
+> Verified against master @ `f9438e38` + `render.stems`, the singing intelligibility script and the 0.6.0
+> chord-change melody edit on 2026-10-13.
 > Spec history: `docs/history/specs/warmth-width-depth.md` §8 (keys
 > blocks, the `spatial` skill); the plugin's own `README.md` is the
 > maintained guide and stays in place.
@@ -85,7 +86,7 @@ Load the plugin with `claude --plugin-dir <repo>/resonance-agent-plugin`.
 ### Versioning
 
 Three things version separately: the skills (`version` in
-`.claude-plugin/plugin.json`, 0.5.0 today), `resonance-mcp` (this
+`.claude-plugin/plugin.json`, 0.6.0 today), `resonance-mcp` (this
 checkout), and the running app (whatever the user has open). Living in one
 repo pins the first two; `control_hello` covers the third at run time.
 Bump the plugin `version` whenever the skills change, or installed copies

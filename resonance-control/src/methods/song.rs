@@ -432,6 +432,16 @@ pub struct VocalLaneView {
     /// `automation.*` on the target `{vocal: {track_id, curve}}`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub curves: Vec<VocalCurveSummary>,
+    /// The lane's notes were changed by something other than the
+    /// generator (a vocal-roll edit, `notes.*`, `notes.import_midi`) since
+    /// it was last generated. `vocal.generate` clears it.
+    #[serde(default)]
+    pub hand_edited: bool,
+    /// A chord or section-length edit kept this lane's melody: its notes
+    /// were written against chords the section no longer has. Cleared by
+    /// `vocal.refit_melody`, `vocal.generate` or the next note edit.
+    #[serde(default)]
+    pub melody_predates_chords: bool,
 }
 
 /// One expression curve of a vocal lane.

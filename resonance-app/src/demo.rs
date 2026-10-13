@@ -269,6 +269,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
                 resonance_music_theory::VocalParams::default(),
             ),
             seed: 0x00C0_FFEE_FACE_F00D,
+            melody: Default::default(),
         },
     );
 

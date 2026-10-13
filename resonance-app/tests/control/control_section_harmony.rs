@@ -276,6 +276,7 @@ fn rename_and_resize() {
         &section_proto::ResizeParams {
             section_id: id.into(),
             length_bars: 8,
+            vocal_melody: None,
         },
     );
     let _: MutationAck = response.result().expect("resize succeeds");
@@ -312,6 +313,7 @@ fn resize_that_strands_chords_is_rejected() {
             start_beat: 12.0,
             duration_beats: 4.0,
             symbol: "C".to_owned(),
+            vocal_melody: None,
         },
     );
     let _: harmony_proto::AddChordResult = response.result().expect("chord added");
@@ -323,6 +325,7 @@ fn resize_that_strands_chords_is_rejected() {
         &section_proto::ResizeParams {
             section_id: id.into(),
             length_bars: 2,
+            vocal_melody: None,
         },
     );
     let message = expect_error(response, ErrorKind::InvalidParams);
@@ -489,6 +492,7 @@ fn add_chord_preserves_full_symbol() {
             start_beat: 0.0,
             duration_beats: 4.0,
             symbol: "Am7".to_owned(),
+            vocal_melody: None,
         },
     );
     let added: harmony_proto::AddChordResult = response.result().expect("add succeeds");
@@ -503,6 +507,7 @@ fn add_chord_preserves_full_symbol() {
             start_beat: 4.0,
             duration_beats: 4.0,
             symbol: "C/E".to_owned(),
+            vocal_melody: None,
         },
     );
     let _: harmony_proto::AddChordResult = response.result().expect("slash chord adds");
@@ -529,6 +534,7 @@ fn add_chord_validates() {
                 start_beat: start,
                 duration_beats: dur,
                 symbol: symbol.to_owned(),
+                vocal_melody: None,
             },
         )
     };
@@ -557,6 +563,7 @@ fn add_chord_validates() {
             start_beat: 0.0,
             duration_beats: 4.0,
             symbol: "C".to_owned(),
+            vocal_melody: None,
         },
     );
     expect_error(response, ErrorKind::NotFound);
@@ -577,6 +584,7 @@ fn edit_chord_patches_in_one_transaction() {
             start_beat: 0.0,
             duration_beats: 4.0,
             symbol: "C".to_owned(),
+            vocal_melody: None,
         },
     );
     let added: harmony_proto::AddChordResult = response.result().expect("add succeeds");
@@ -592,6 +600,7 @@ fn edit_chord_patches_in_one_transaction() {
             symbol: Some("Fmaj7".to_owned()),
             start_beat: Some(8.0),
             duration_beats: Some(8.0),
+            vocal_melody: None,
         },
     );
     let ack: MutationAck = response.result().expect("edit succeeds");
@@ -614,6 +623,7 @@ fn edit_chord_patches_in_one_transaction() {
             symbol: Some("C".to_owned()),
             start_beat: None,
             duration_beats: None,
+            vocal_melody: None,
         },
     );
     expect_error(response, ErrorKind::NotFound);
@@ -632,6 +642,7 @@ fn delete_chord_removes_only_that_chord() {
                 start_beat: beat,
                 duration_beats: 4.0,
                 symbol: symbol.to_owned(),
+                vocal_melody: None,
             },
         );
         assert!(response.error.is_none());
@@ -644,6 +655,7 @@ fn delete_chord_removes_only_that_chord() {
         &harmony_proto::DeleteChordParams {
             section_id: id.into(),
             chord_id: first,
+            vocal_melody: None,
         },
     );
     let _: MutationAck = response.result().expect("delete succeeds");
@@ -655,6 +667,7 @@ fn delete_chord_removes_only_that_chord() {
         &harmony_proto::DeleteChordParams {
             section_id: id.into(),
             chord_id: first,
+            vocal_melody: None,
         },
     );
     expect_error(response, ErrorKind::NotFound);
@@ -673,6 +686,7 @@ fn apply_progression_symbols_replaces_grid_in_one_undo_step() {
             start_beat: 0.0,
             duration_beats: 4.0,
             symbol: "E7".to_owned(),
+            vocal_melody: None,
         },
     );
     let added: harmony_proto::AddChordResult = response.result().expect("add succeeds");
@@ -859,6 +873,7 @@ fn huge_bar_values_are_invalid_params() {
                 &section_proto::ResizeParams {
                     section_id: id.into(),
                     length_bars,
+                    vocal_melody: None,
                 },
             ),
             ErrorKind::InvalidParams,

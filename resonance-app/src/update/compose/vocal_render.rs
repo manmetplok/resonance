@@ -120,6 +120,36 @@ fn derive_vocal_melody(
     definition_id: u64,
     track_id: TrackId,
 ) -> Option<VocalRenderRequest> {
+    let derived = compute_vocal_melody(r, definition_id, track_id)?;
+    Some(install_vocal_melody(r, derived))
+}
+
+/// A vocal lane's melody as its generator derives it from the section's
+/// chords right now — computed, not installed. What a regenerate would
+/// put on the lane, so the chord-change flow can tell whether it differs
+/// from what the lane holds (`vocal_melody::on_chord_change`).
+pub(super) struct DerivedVocalMelody {
+    pub definition_id: u64,
+    pub track_id: TrackId,
+    pub midi_notes: Vec<resonance_audio::types::MidiNote>,
+    /// The per-note side table: the generator's own melisma holds.
+    pub lyrics: Vec<String>,
+    params: resonance_music_theory::VocalParams,
+    /// The clip length at the section's current length and meter.
+    pub duration_ticks: u64,
+    name: String,
+    /// `(placement_id, section_start_sample)` for every placement.
+    placement_starts: Vec<(u64, u64)>,
+}
+
+/// [`DerivedVocalMelody`] for the lane, or `None` when there is nothing to
+/// derive (no chords, an empty draft, invalid params — the last recorded
+/// as the lane's error, as a derive always did).
+pub(super) fn compute_vocal_melody(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+) -> Option<DerivedVocalMelody> {
     use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 
     if !super::track_exists(r, track_id) {
@@ -171,8 +201,7 @@ fn derive_vocal_melody(
         Some(&motif_intervals),
         cfg.seed,
     );
-    let notes = &derived.notes;
-    if notes.is_empty() {
+    if derived.notes.is_empty() {
         return None;
     }
 
@@ -187,7 +216,8 @@ fn derive_vocal_melody(
         .unwrap_or("Vocal");
     let name = format!("{} \u{00B7} {}", def.name, track_name);
 
-    let midi_notes: Vec<MidiNote> = notes
+    let midi_notes: Vec<MidiNote> = derived
+        .notes
         .iter()
         .map(|n| MidiNote {
             note: n.note,
@@ -197,46 +227,70 @@ fn derive_vocal_melody(
         })
         .collect();
 
-    let placements: Vec<(u64, u32)> = r
+    let placement_starts: Vec<(u64, u64)> = r
         .compose
         .placements
         .iter()
         .filter(|p| p.definition_id == definition_id)
-        .map(|p| (p.id, p.start_bar))
-        .collect();
-
-    let placement_starts: Vec<(u64, u64)> = placements
-        .iter()
-        .map(|(pid, start_bar)| (*pid, r.tempo_map.bar_to_sample(*start_bar)))
+        .map(|p| (p.id, r.tempo_map.bar_to_sample(p.start_bar)))
         .collect();
     // The generator's own melisma holds ride in the per-note side table.
-    let initial_lyrics = super::vocal_midi_install::auto_hold_annotations(&derived.auto_holds);
+    let lyrics = super::vocal_midi_install::auto_hold_annotations(&derived.auto_holds);
+    Some(DerivedVocalMelody {
+        definition_id,
+        track_id,
+        midi_notes,
+        lyrics,
+        params,
+        duration_ticks,
+        name,
+        placement_starts,
+    })
+}
+
+/// Install a derived melody as the lane's MIDI clip at every placement.
+/// The lane is generated again: its melody flags clear.
+pub(super) fn install_vocal_melody(
+    r: &mut crate::Resonance,
+    derived: DerivedVocalMelody,
+) -> VocalRenderRequest {
+    let DerivedVocalMelody {
+        definition_id,
+        track_id,
+        midi_notes,
+        lyrics,
+        params,
+        duration_ticks,
+        name,
+        placement_starts,
+    } = derived;
     VocalMidiInstall {
         definition_id,
         track_id,
         placements: &placement_starts,
         duration_ticks,
         midi_notes: &midi_notes,
-        lyrics: &initial_lyrics,
+        lyrics: &lyrics,
         name: &name,
     }
     .install(r);
-    Some(VocalRenderRequest {
+    super::vocal_melody::clear_lane_flags(r, definition_id, track_id);
+    VocalRenderRequest {
         definition_id,
         track_id,
         midi_notes,
-        lyrics: initial_lyrics,
+        lyrics,
         params,
         placement_starts,
         clip_name: name,
-    })
+    }
 }
 
 /// One lane's request to render: what to sing, and where its audio
 /// belongs. Bundled rather than passed as nine parallel arguments —
 /// [`enqueue_vocal_render`] hands most of it straight to the planner and
 /// the off-thread job.
-struct VocalRenderRequest {
+pub(super) struct VocalRenderRequest {
     definition_id: u64,
     track_id: TrackId,
     midi_notes: Vec<resonance_audio::types::MidiNote>,

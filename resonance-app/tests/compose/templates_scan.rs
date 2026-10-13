@@ -59,6 +59,7 @@ fn make_minimal_project() -> ProjectFile {
         chord_track: Default::default(),
         derived_clips: None,
         pronunciation: Default::default(),
+        vocal_melody_choice: None,
     }
 }
 

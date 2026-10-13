@@ -199,6 +199,14 @@ impl crate::Resonance {
                         .cloned(),
                     _ => None,
                 };
+                let melody = match &self.compose.selected_lane {
+                    SelectedLane::Instrument(track_id) => definition
+                        .lane_generators
+                        .get(track_id)
+                        .map(|g| g.melody)
+                        .unwrap_or_default(),
+                    _ => Default::default(),
+                };
                 let preset_ui = match &self.compose.selected_lane {
                     SelectedLane::Instrument(track_id) => {
                         let presets = &self.voice_presets;
@@ -214,6 +222,7 @@ impl crate::Resonance {
                     _ => crate::state::ui_caches::VoicePresetUi::default(),
                 };
                 let vocal = crate::state::ui_caches::VocalRailContext {
+                    melody,
                     tempo_warning: vocal_tempo_warning,
                     voicebanks: self.ui.view_caches.voicebank_choices.clone(),
                     missing_voicebanks: self.ui.view_caches.missing_voicebank_choices.clone(),

@@ -72,7 +72,6 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
 | BUG-51 | compose | Drum group Swing, Humanize and "Fills (last bar)" sliders change nothing in the generated drums. | sliders `app/view/compose/lane_inspector/drums/rhythm.rs:44-97`; stored at `app/update/compose/drum_groups.rs:315-324`; never read | intent [compose/drum-groove-feel.md](compose/drum-groove-feel.md) |
-| BUG-70 | compose | A chord or section-length edit re-derives a vocal lane's melody and replaces hand-written (or MIDI-imported) notes on it; user `_` holds survive in the lyrics, the notes do not. | `app/update/compose/regenerate.rs:98` (`propagate_chord_change`) → `app/update/compose/vocal_render.rs:107` (`rederive_vocal_melody`) | singing skill write-up 2026-10-13; intent [compose/vocal-melody-on-chord-change.md](compose/vocal-melody-on-chord-change.md) |
 
 ## Project, save and export
 

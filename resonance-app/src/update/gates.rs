@@ -388,6 +388,23 @@ fn midi_editor_edit_clip(
     }
 }
 
+/// The MIDI clip whose notes or lyrics a [`MidiEditorMessage`] edits: the
+/// clip it names, or for the bulk Quantize / Humanize / Groove edits the
+/// open editor clip. `None` for the variants that edit nothing. Shared by
+/// the frozen-input gate and the vocal lane's hand-edit flag.
+///
+/// [`MidiEditorMessage`]: crate::message::MidiEditorMessage
+pub(crate) fn midi_editor_target(
+    r: &crate::Resonance,
+    m: &crate::message::MidiEditorMessage,
+) -> Option<resonance_audio::types::ClipId> {
+    midi_editor_edit_clip(m).or_else(|| {
+        midi_editor_edits_open_clip(m)
+            .then(|| r.ui.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id))
+            .flatten()
+    })
+}
+
 /// The bulk note mutators of the Quantize / Humanize / Groove panel carry
 /// no clip id — they operate on the *open* editor clip — so they're gated
 /// through the live editor state rather than the message payload.
@@ -564,13 +581,9 @@ impl crate::Resonance {
             // Note + lyric edits, keyed by the clip's owning track. The
             // bulk quantize/humanize/groove mutators carry no clip id and
             // apply to the open editor clip instead.
-            Message::MidiEditor(m) => midi_editor_edit_clip(m)
-                .or_else(|| {
-                    midi_editor_edits_open_clip(m)
-                        .then(|| self.ui.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id))
-                        .flatten()
-                })
-                .and_then(|clip_id| self.track_of_midi_clip(clip_id)),
+            Message::MidiEditor(m) => {
+                midi_editor_target(self, m).and_then(|clip_id| self.track_of_midi_clip(clip_id))
+            }
             // Deleting a MIDI clip removes its notes from the render.
             Message::MidiClip(MidiClipMessage::DeleteMidiClip(clip_id)) => {
                 self.track_of_midi_clip(*clip_id)

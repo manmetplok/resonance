@@ -50,6 +50,8 @@ use resonance_music_theory::{VocalParams, VoicebankId};
 
 use super::view_model;
 
+/// `vocal.refit_melody` (vocal-melody-on-chord-change).
+mod refit;
 mod presets;
 
 // The `vocal.*` writes route ComposeMessages, so they answer with the
@@ -74,6 +76,7 @@ pub(super) fn try_handle(
         proto::SET_PARAMS => set_params(app, request),
         proto::VOICEBANKS => voicebanks(app, request),
         proto::VOICEBANK_INSTALL => voicebank_install(app, conn, request),
+        proto::REFIT_MELODY => refit::refit_melody(app, request),
         proto::VOICE_PRESETS => presets::list(app, request),
         proto::APPLY_VOICE_PRESET => presets::apply(app, request),
         proto::SAVE_VOICE_PRESET => presets::save(app, request),
@@ -369,6 +372,7 @@ fn set_params(app: &mut Resonance, request: &Request) -> (Response, Task<Message
             config: Some(Box::new(crate::compose::LaneGeneratorConfig {
                 kind: crate::compose::LaneGeneratorKind::Vocal(vocal),
                 seed,
+                melody: Default::default(),
             })),
         }),
     );

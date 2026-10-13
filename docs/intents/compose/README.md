@@ -20,5 +20,4 @@ Each intent follows [`../_template.md`](../_template.md).
 | [Section placement editing (fill on place, move, place-again)](section-placement-editing.md) | partly built | Placing a section with generated parts gives a silent, empty placement. |
 | [Vocals: what is left after the MCP-control and quality work](vocal-followups.md) | partly built | The vocal spec is built; which banks join the plok.org index (blind listen), publishing the index, a live MCP session, Lilia's licence and a few small gaps are not. |
 | [Vocal harmony and doubling generator](vocal-harmony-doubling.md) | designed | A single synthesized lead sounds thin; there is no harmony or double generator. |
-| [Vocal melody on a chord change: ask, don't overwrite](vocal-melody-on-chord-change.md) | designed | A chord or length edit silently replaces a hand-written vocal melody (BUG-70). |
 | [Vocal pitch editor (graphical tuning of recorded vocals)](vocal-pitch-editor.md) | partly built | Pitch detection and retune render exist, but no editor view opens, so tuning is unreachable. |

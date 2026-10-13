@@ -331,6 +331,11 @@ pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
                     msg: ChordInspectorMsg::SetSchemaSubstitution(v),
                 })
             })
+            // A drag that rewrites chords under a vocal melody asks about
+            // it once, at the release (vocal-melody-on-chord-change).
+            .on_release(Message::Compose(ComposeMessage::VocalMelody(
+                crate::compose::vocal_melody::VocalMelodyMsg::ControlReleased,
+            )))
             .step(0.01)
             .width(Length::Fill);
 

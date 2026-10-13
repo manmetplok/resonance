@@ -34,6 +34,7 @@ is missing:
 |---|---|
 | Choosing or installing a voice (1) | `vocal.voicebanks`, `vocal.voicebank_install` |
 | A hand-written melody (3) | `notes.replace_all`, `notes.import_midi` |
+| Changing chords under a melody (3) | `vocal.refit_melody` |
 | Fixing a word's pronunciation (5) | `vocal.set_pronunciation` |
 | Expression curves (7) | `automation.set_lane`, `automation.add_points`, `automation.lanes` |
 | The intelligibility check (8) | `render.stems`, or else `mixer.set_solo` and `render.mixdown` |
@@ -47,8 +48,10 @@ mcp__resonance__song_vocal       # existing vocal lanes, if any
 ```
 
 **Sections and chords come first.** The melody generator walks the section's
-chord grid and does nothing without one, and a chord or length edit *after*
-the melody re-derives the lane's notes and throws hand-written ones away. No
+chord grid and does nothing without one. A chord or length edit *after* the
+melody keeps the lane's notes by default and flags the lane
+`melody_predates_chords` in `song_vocal` — they now clash with the new
+chords until you deal with them (step 3). No
 sections: `${CLAUDE_PLUGIN_ROOT}/skills/song-structure/SKILL.md`. No chords:
 `${CLAUDE_PLUGIN_ROOT}/skills/arranging/SKILL.md`, step 1. Settle both before
 writing a note of melody.
@@ -115,8 +118,12 @@ Two ways in, chosen per lane:
   then replace its notes: `notes_replace_all` (with `confirm: true`) or
   `notes_import_midi` for a long line. The lane sings the clip
   `vocal_generate` returned (its first placement) at every placement. A later
-  `vocal_generate`, chord edit or section resize overwrites it — so the
-  chords are final before you write.
+  `vocal_generate` overwrites it. A chord edit or section resize keeps it;
+  pass `vocal_melody: "refit"` to the `harmony_*` / `section_resize` call to
+  move its pitches onto the new chords (rhythm, lyrics and holds stay), or
+  run `vocal_refit_melody` afterwards on a lane `song_vocal` reports with
+  `melody_predates_chords: true`. `vocal_melody: "regenerate"` replaces it.
+  The reply's `vocal_lanes_affected` says what each lane got.
 
 Either way: one note per syllable or hold, stressed syllables on strong beats
 and long notes, a rest between phrases, and every note inside the voice's

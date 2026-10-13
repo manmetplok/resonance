@@ -19,16 +19,22 @@ pub mod scale_stripe;
 pub mod strip;
 pub mod tracks;
 pub mod vocal_lane;
+pub(crate) mod vocal_melody_badge;
+pub(crate) mod vocal_melody_prompt;
 pub(crate) mod vocal_render_badge;
 pub mod vocal_roll;
 pub(crate) mod voicebank_library;
 
-/// The Compose tab's root overlays: the drum-groups manager, and the
-/// voicebank library a vocal lane's Library… button opens.
+/// The Compose tab's root overlays: the drum-groups manager, the
+/// voicebank library a vocal lane's Library… button opens, and the
+/// vocal-melody question a chord edit asks.
 pub(crate) fn view_overlay(r: &crate::Resonance) -> iced::Element<'_, crate::message::Message> {
     match r.root_overlay() {
         Some(crate::state::overlay::Overlay::VoicebankLibrary) => {
             voicebank_library::view_voicebank_library_overlay(r)
+        }
+        Some(crate::state::overlay::Overlay::VocalMelodyPrompt) => {
+            vocal_melody_prompt::view(r)
         }
         _ => drum_groups_manager::view(r),
     }

@@ -53,6 +53,27 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Re-fit a vocal lane's melody to its section's current chords: each \
+                       pitch moves to the nearest note that fits (a chord tone on strong beats \
+                       and notes a beat or longer, a scale tone elsewhere) that keeps its \
+                       step's direction (up, down or a repeat) from the previous note. Rhythm, note count, lyrics and _ holds never change, so a \
+                       hand-written melody survives. Use it on a lane song_vocal reports with \
+                       melody_predates_chords: true after a chord edit, or pass vocal_melody: \
+                       \"refit\" to the harmony_* call instead. section_id picks the lane \
+                       (default: the track's first). Refused when the lane has no notes. \
+                       Returns note_count and notes_changed; the lane goes stale, so \
+                       vocal_render afterwards.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<vocal::RefitMelodyResult>()
+    )]
+    async fn vocal_refit_melody(
+        &self,
+        Parameters(params): Parameters<vocal::RefitMelodyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(vocal::REFIT_MELODY, &params).await
+    }
+
+    #[tool(
         description = "Read a vocal lane's full settings: voicebank and speaker, timbre, \
                        vibrato, vibrato_rate, tension, tension_velocity_amount, \
                        tension_contour_amount, portamento_ms, articulation, consonant_emphasis, \

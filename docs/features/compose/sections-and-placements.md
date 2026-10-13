@@ -1,6 +1,6 @@
 # Sections and placements
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `f9438e38` + the chord-change vocal melody flow (BUG-70) on 2026-10-13.
 > Spec history: none in `docs/history/specs/`; leads in `docs/history/refactor/A-6-derived-clips.md` and `docs/history/reviews/code-review-2026-10-02.md` (VIEW-04/05/12/13/17).
 
 A song in the Compose tab is built from **section definitions** (Intro,
@@ -29,7 +29,10 @@ creates, renames, resizes, recolours, places and deletes sections here.
 - **Resize.** Growing fails if any placement would overlap its neighbour.
   Shrinking fails if a chord would fall outside the new length. On success
   every lane that already has derived clips is re-derived at the new length
-  (`rederive_section_clips`); a drum arrangement that filled the old length
+  (`rederive_section_clips`; a vocal lane whose melody that would rewrite
+  follows `section.resize`'s `vocal_melody` — keep by default — see
+  [vocal lyrics and melody](vocal-lyrics-and-melody.md#chord-and-length-changes-under-a-melody-bug-70));
+  a drum arrangement that filled the old length
   is extended to fill the new one. Resizing never generates a lane that had
   no clips.
 - **Meter.** A section's beats-per-bar and BPM come from the tempo map at

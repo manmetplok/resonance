@@ -242,6 +242,11 @@ impl MidiEditorMessage {
 }
 
 pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
+    // A note or lyric edit on a vocal lane's clip makes its melody the
+    // user's own (vocal-melody-on-chord-change).
+    if let Some(clip_id) = crate::update::gates::midi_editor_target(r, &m) {
+        crate::update::compose::vocal_melody::note_hand_edit(r, clip_id);
+    }
     match m {
         MidiEditorMessage::OpenMidiEditor(clip_id) => {
             clips::open_midi_editor(r, clip_id);

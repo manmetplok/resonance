@@ -2,6 +2,9 @@
 
 #![allow(clippy::field_reassign_with_default)]
 
+#[path = "vocal/refit.rs"]
+mod refit;
+
 use resonance_music_theory::{
     derive_vocal, derive_vocal_with_meter, generate_lyrics, vocal_phrase_spans, Chord,
     ChordQuality, LyricLine, PitchClass, TimedChord, VocalContour, VocalMood, VocalParams,

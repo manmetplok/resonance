@@ -390,6 +390,8 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
                 points: 3,
                 supported: true,
             }],
+            hand_edited: true,
+            melody_predates_chords: false,
         }],
         pronunciation_overrides: overrides,
         render_state: VocalRenderState::Error,

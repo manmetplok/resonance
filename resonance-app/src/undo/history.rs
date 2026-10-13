@@ -44,6 +44,11 @@ pub struct UndoHistory {
     /// revision bump per mutating call). GUI paths never open one.
     compound: CompoundPhase,
     capacity: usize,
+    /// Bumped by every change to the stacks (a record, a commit, an undo
+    /// or redo, a clear). Something that refers to "the entry on top"
+    /// (the vocal-melody question) holds the generation it saw and is
+    /// still about that entry only while the generation is unchanged.
+    generation: u64,
 }
 
 /// Phase of the control layer's compound group: while one is open, the
@@ -74,6 +79,7 @@ impl UndoHistory {
             split_gesture: None,
             compound: CompoundPhase::Closed,
             capacity: DEFAULT_HISTORY_CAPACITY,
+            generation: 0,
         }
     }
 
@@ -94,6 +100,20 @@ impl UndoHistory {
         self.pending.is_some()
     }
 
+    /// The stacks' change counter (see the field).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Forget the newest redo entry: an undo that was not the user's
+    /// choice of history step (the vocal-melody question's Cancel takes
+    /// back the edit that raised it, which nothing should redo).
+    pub fn drop_redo_top(&mut self) {
+        self.redo.pop_back();
+        self.redo_labels.pop_back();
+        self.generation += 1;
+    }
+
     /// Record a finished action. Clears the redo stack — any new mutation
     /// invalidates the redo history — and trims to `capacity`.
     pub fn record(&mut self, snapshot: UndoSnapshot, label: String) {
@@ -103,6 +123,7 @@ impl UndoHistory {
         self.redo_labels.clear();
         self.trim();
         self.coalesce_key = None;
+        self.generation += 1;
     }
 
     /// What the next undo would back out, if anything.
@@ -130,6 +151,8 @@ impl UndoHistory {
         if self.coalesce_key.as_ref() == Some(key) && !self.undo.is_empty() {
             self.redo.clear();
             self.redo_labels.clear();
+            // The top entry now covers one more edit.
+            self.generation += 1;
             true
         } else {
             false
@@ -151,6 +174,7 @@ impl UndoHistory {
         self.redo_labels.clear();
         self.trim();
         self.coalesce_key = Some(key);
+        self.generation += 1;
     }
 
     /// Pop the newest undo entry. The caller is responsible for pushing
@@ -158,6 +182,7 @@ impl UndoHistory {
     /// restoring the popped snapshot.
     pub fn pop_undo(&mut self) -> Option<(UndoSnapshot, String)> {
         self.coalesce_key = None;
+        self.generation += 1;
         let snapshot = self.undo.pop_back()?;
         let label = self.undo_labels.pop_back().unwrap_or_default();
         Some((snapshot, label))
@@ -168,6 +193,7 @@ impl UndoHistory {
     /// restoring the popped snapshot.
     pub fn pop_redo(&mut self) -> Option<(UndoSnapshot, String)> {
         self.coalesce_key = None;
+        self.generation += 1;
         let snapshot = self.redo.pop_back()?;
         let label = self.redo_labels.pop_back().unwrap_or_default();
         Some((snapshot, label))
@@ -180,6 +206,7 @@ impl UndoHistory {
         self.redo.push_back(snapshot);
         self.redo_labels.push_back(label);
         self.coalesce_key = None;
+        self.generation += 1;
     }
 
     /// Push a snapshot onto the undo stack without clearing the redo stack.
@@ -190,6 +217,7 @@ impl UndoHistory {
         self.undo_labels.push_back(label);
         self.trim();
         self.coalesce_key = None;
+        self.generation += 1;
     }
 
     /// Every snapshot the history holds — undo, redo and an open
@@ -349,6 +377,7 @@ impl UndoHistory {
         self.split_gesture = None;
         self.coalesce_key = None;
         self.compound = CompoundPhase::Closed;
+        self.generation += 1;
     }
 
     fn trim(&mut self) {

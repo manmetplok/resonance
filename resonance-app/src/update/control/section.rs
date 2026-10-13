@@ -157,14 +157,24 @@ fn resize(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     if let Err(e) = resonance_control::check_max_bars("length_bars", params.length_bars) {
         return reject(request, e);
     }
-    let task = super::run_via_update(
+    // A resize re-derives the section's lanes at the new length; a vocal
+    // lane whose melody that would rewrite follows `vocal_melody`.
+    let (task, vocal_lanes_affected) = super::harmony::vocal_melody::run_with_vocal_melody(
         app,
+        params.vocal_melody,
         Message::Compose(ComposeMessage::ResizeSection {
             definition_id: params.section_id.into(),
             length_bars: params.length_bars,
         }),
     );
-    ack_or_compose_error(app, request, task)
+    if let Some(error) = take_compose_error(app) {
+        return reject(request, RpcError::invalid_params(error));
+    }
+    let result = proto::ResizeResult {
+        revision: app.revision(),
+        vocal_lanes_affected,
+    };
+    (super::success(request, &result), task)
 }
 
 fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
@@ -372,6 +382,7 @@ fn build_lane_config(
     Ok(Some(LaneGeneratorConfig {
         kind,
         seed: params.seed.unwrap_or(default_seed),
+        melody: Default::default(),
     }))
 }
 
@@ -403,6 +414,7 @@ fn build_vocal_lane_config(
     Ok(LaneGeneratorConfig {
         kind: LaneGeneratorKind::Vocal(vocal),
         seed: params.seed.unwrap_or(seed),
+        melody: Default::default(),
     })
 }
 

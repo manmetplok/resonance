@@ -127,6 +127,7 @@ fn a_chord_at_u32_max_is_rejected_without_panicking() {
             start_beat: f64::from(u32::MAX),
             duration_beats: 1.0,
             symbol: "Am".to_owned(),
+            vocal_melody: None,
         },
     );
     assert!(response.error.is_some(), "a chord at beat u32::MAX was accepted");

@@ -21,6 +21,7 @@ mod generate_group;
 mod lyrics_group;
 mod melody_group;
 mod voice_group;
+mod warnings;
 
 use draft_group::draft_group;
 use generate_group::generate_group;
@@ -86,46 +87,6 @@ pub(in crate::view::compose::lane_inspector) fn toggle_row<'a>(
     .into()
 }
 
-/// The text of the FU-M11b warning: the section's vocal is rendered at
-/// one tempo, but some placed bar plays at another.
-pub(crate) fn tempo_warning_text(w: crate::update::compose::VocalTempoMismatch) -> String {
-    format!(
-        "Sung at {:.0} BPM (the first placement's tempo), but part of this \
-         section plays at {:.0} BPM \u{2014} the vocal drifts off the grid there.",
-        w.rendered_bpm, w.other_bpm
-    )
-}
-
-/// Warm warning card (icon + bordered box, so it never relies on color
-/// alone) shown above the vocal groups when the one render can't fit
-/// every placed bar's tempo (FU-M11b).
-fn tempo_warning_card<'a>(w: crate::update::compose::VocalTempoMismatch) -> Element<'a, Message> {
-    let body = row![
-        theme::icon(theme::fa::TRIANGLE_EXCLAMATION)
-            .size(12)
-            .color(theme::WARM),
-        text(tempo_warning_text(w)).size(11.5).color(theme::TEXT_1),
-    ]
-    .spacing(8)
-    .align_y(alignment::Vertical::Top);
-    container(body)
-        .padding([8, 10])
-        .width(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Background::Color(iced::Color {
-                a: 0.08,
-                ..theme::WARM
-            })),
-            border: Border {
-                color: theme::WARM_LINE,
-                width: 1.0,
-                radius: theme::RADIUS_MD.into(),
-            },
-            ..Default::default()
-        })
-        .into()
-}
-
 // ===========================================================================
 // Main body
 // ===========================================================================
@@ -171,10 +132,8 @@ pub(in crate::view::compose::lane_inspector) fn vocal_controls<'a>(
     );
     let generate_group = generate_group(definition_id, track_id, seed);
 
-    let warning: Element<'a, Message> = match vocal.tempo_warning {
-        Some(w) => column![tempo_warning_card(w), Space::new().height(18)].into(),
-        None => Space::new().height(0).into(),
-    };
+    let warning = warnings::tempo_warning(vocal.tempo_warning);
+    let melody = warnings::melody_notice(definition_id, track_id, vocal.melody);
     let badge = vocal.render_status.as_ref().and_then(render_card);
     let badge: Element<'a, Message> = match badge {
         Some(card) => column![card, Space::new().height(18)].into(),
@@ -183,6 +142,7 @@ pub(in crate::view::compose::lane_inspector) fn vocal_controls<'a>(
 
     column![
         badge,
+        melody,
         warning,
         lyrics_group,
         Space::new().height(18),

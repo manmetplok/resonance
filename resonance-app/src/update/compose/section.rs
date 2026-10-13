@@ -501,6 +501,21 @@ fn rederive_section_clips(r: &mut crate::Resonance, definition_id: u64) -> Task<
         .filter(|(d, _, _)| *d == definition_id)
         .map(|(_, _, t)| *t)
         .collect();
+    // A vocal lane loaded without its clip mapping still has a clip, found
+    // by position; it is re-laid at the new length too.
+    if let Some(def) = r.compose.find_definition(definition_id) {
+        let vocal: Vec<_> = def
+            .lane_generators
+            .iter()
+            .filter(|(_, cfg)| matches!(cfg.kind, crate::compose::LaneGeneratorKind::Vocal(_)))
+            .map(|(t, _)| *t)
+            .collect();
+        for track_id in vocal {
+            if super::vocal_melody::lane_has_clip(r, definition_id, track_id) {
+                tracks.push(track_id);
+            }
+        }
+    }
     tracks.sort_unstable();
     tracks.dedup();
     let has_drums = tracks.iter().any(|t| {

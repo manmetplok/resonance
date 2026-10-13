@@ -124,6 +124,7 @@ fn chord_fit_does_not_depend_on_the_playhead() {
             start_beat: 13.0,
             duration_beats: 3.0,
             symbol: "Am".to_owned(),
+            vocal_melody: None,
         },
     );
     assert!(response.error.is_none(), "chord at beat 13 rejected: {:?}", response.error);

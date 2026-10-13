@@ -55,14 +55,23 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Change a section definition's length in bars (affects every placement \
-                       of it).",
-        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+                       of it). Its generated parts are re-laid at the new length. \
+                       A vocal lane in the section whose melody the change would rewrite \
+                       KEEPS its notes by default (song_vocal then reads \
+                       melody_predates_chords: true); pass vocal_melody: \"refit\" to move \
+                       its pitches onto the new chords (rhythm, note count and lyrics kept) \
+                       or \"regenerate\" to re-derive it from the generator (hand edits \
+                       lost). vocal_lanes_affected lists each such lane and what it got. A \
+                       kept vocal melody is re-laid at the new length too, notes past a shrunk \
+                       end cut.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<section::ResizeResult>()
     )]
     async fn section_resize(
         &self,
         Parameters(params): Parameters<section::ResizeParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.invoke(section::RESIZE, &params).await
+        self.invoke_structured(section::RESIZE, &params).await
     }
 
     #[tool(
@@ -159,7 +168,13 @@ impl ResonanceMcp {
     #[tool(
         description = "Add one chord to a section's grid: 0-based start_beat within the \
                        section, duration in beats, symbol like \"Am7\". Returns chord_id. For \
-                       whole progressions prefer harmony_apply_progression.",
+                       whole progressions prefer harmony_apply_progression. \
+                       A vocal lane in the section whose melody the change would rewrite \
+                       KEEPS its notes by default (song_vocal then reads \
+                       melody_predates_chords: true); pass vocal_melody: \"refit\" to move \
+                       its pitches onto the new chords (rhythm, note count and lyrics kept) \
+                       or \"regenerate\" to re-derive it from the generator (hand edits \
+                       lost). vocal_lanes_affected lists each such lane and what it got.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<harmony::AddChordResult>()
     )]
@@ -172,25 +187,39 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Edit a chord's symbol, start_beat and/or duration_beats; omitted fields \
-                       stay unchanged (chord_id from song_sections).",
-        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+                       stay unchanged (chord_id from song_sections). \
+                       A vocal lane in the section whose melody the change would rewrite \
+                       KEEPS its notes by default (song_vocal then reads \
+                       melody_predates_chords: true); pass vocal_melody: \"refit\" to move \
+                       its pitches onto the new chords (rhythm, note count and lyrics kept) \
+                       or \"regenerate\" to re-derive it from the generator (hand edits \
+                       lost). vocal_lanes_affected lists each such lane and what it got.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<harmony::ChordEditResult>()
     )]
     async fn harmony_edit_chord(
         &self,
         Parameters(params): Parameters<harmony::EditChordParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.invoke(harmony::EDIT_CHORD, &params).await
+        self.invoke_structured(harmony::EDIT_CHORD, &params).await
     }
 
     #[tool(
-        description = "Remove one chord from a section's grid.",
-        annotations(destructive_hint = false, open_world_hint = false)
+        description = "Remove one chord from a section's grid. \
+                       A vocal lane in the section whose melody the change would rewrite \
+                       KEEPS its notes by default (song_vocal then reads \
+                       melody_predates_chords: true); pass vocal_melody: \"refit\" to move \
+                       its pitches onto the new chords (rhythm, note count and lyrics kept) \
+                       or \"regenerate\" to re-derive it from the generator (hand edits \
+                       lost). vocal_lanes_affected lists each such lane and what it got.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<harmony::ChordEditResult>()
     )]
     async fn harmony_delete_chord(
         &self,
         Parameters(params): Parameters<harmony::DeleteChordParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.invoke(harmony::DELETE_CHORD, &params).await
+        self.invoke_structured(harmony::DELETE_CHORD, &params).await
     }
 
     #[tool(
@@ -210,7 +239,13 @@ impl ResonanceMcp {
                        beats_per_chord must be a whole number of beats and defaults to one bar \
                        per chord; the progression must fit the section's length or it is \
                        rejected with the arithmetic. sevenths enriches numeral/preset voicings \
-                       only. Returns the new chord ids in order.",
+                       only. Returns the new chord ids in order. \
+                       A vocal lane in the section whose melody the change would rewrite \
+                       KEEPS its notes by default (song_vocal then reads \
+                       melody_predates_chords: true); pass vocal_melody: \"refit\" to move \
+                       its pitches onto the new chords (rhythm, note count and lyrics kept) \
+                       or \"regenerate\" to re-derive it from the generator (hand edits \
+                       lost). vocal_lanes_affected lists each such lane and what it got.",
         annotations(destructive_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<harmony::ApplyProgressionResult>()
     )]

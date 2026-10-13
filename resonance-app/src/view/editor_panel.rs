@@ -63,10 +63,17 @@ impl crate::Resonance {
         // The piano roll carries the Quantize panel (todo #392); the vocal
         // roll has its own timing affordances, so it gets `None`.
         let mut render_chip = None;
+        let mut melody_chip = None;
         let (body, toolbar_label, toolbar_accent, panel_height, quantize_panel) = match variant {
             EditorVariant::Vocal => {
                 let vocal_canvas = vocal_roll::build_canvas(self, clip)?;
                 // The lane's stale / error badge (vocal render state §7).
+                // The lane's "melody predates chord change" badge
+                // (vocal-melody-on-chord-change).
+                melody_chip = vocal_roll::lane_for_clip(self, clip).and_then(|(def, track)| {
+                    let flags = crate::update::compose::vocal_melody::lane_flags(self, def, track);
+                    crate::view::compose::vocal_melody_badge::chip(def, track, flags)
+                });
                 render_chip = vocal_roll::lane_for_clip(self, clip)
                     .and_then(|lane| self.compose.vocal_audio.status.lanes.get(&lane))
                     .and_then(crate::view::compose::vocal_render_badge::render_chip);
@@ -158,6 +165,9 @@ impl crate::Resonance {
             note_count,
         ];
         if let Some(chip) = render_chip {
+            toolbar_row = toolbar_row.push(chip);
+        }
+        if let Some(chip) = melody_chip {
             toolbar_row = toolbar_row.push(chip);
         }
         let toolbar_row = toolbar_row

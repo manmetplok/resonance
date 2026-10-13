@@ -105,6 +105,7 @@ fn resize(app: &mut Resonance, section_id: SectionDefinitionId, length_bars: u32
         &section_proto::ResizeParams {
             section_id,
             length_bars,
+            vocal_melody: None,
         },
     );
     assert!(response.error.is_none(), "section.resize failed: {:?}", response.error);

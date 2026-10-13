@@ -38,6 +38,8 @@ pub(crate) mod vocal_render;
 mod vocal_render_events;
 pub mod vocal_render_plan;
 pub(crate) mod vocal_render_state;
+pub(crate) mod vocal_melody;
+pub(crate) mod vocal_melody_prompt;
 
 /// Pure drum-note builder — exposed so integration tests in `tests/` can
 /// assert the materialized `MidiNote` sequence for an arrangement's
@@ -522,6 +524,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::ChordInspector { definition_id, msg } => {
             chord_inspector::handle(r, definition_id, msg)
         }
+        ComposeMessage::VocalMelody(m) => vocal_melody_prompt::handle(r, m),
         ComposeMessage::LaneInspector {
             definition_id,
             track_id,
@@ -615,9 +618,7 @@ pub(crate) fn control_set_lane_generator(
 ) {
     if let Some(def) = r.compose.find_definition_mut(definition_id) {
         match config {
-            Some(config) => {
-                def.lane_generators.insert(track_id, config);
-            }
+            Some(config) => vocal_melody::install_lane_config(def, track_id, config),
             None => {
                 def.lane_generators.remove(&track_id);
             }

@@ -163,6 +163,7 @@ fn app() -> Resonance {
                 ..VocalParams::default()
             }),
             seed: 0,
+            melody: Default::default(),
         },
     );
     app.test_push_section_definition(def);

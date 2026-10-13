@@ -1,7 +1,9 @@
 //! Settings overlay (opened from the transport bar gear icon). Shows
 //! project open / save / save-as buttons and global MIDI clock
 //! settings.
-use iced::widget::{button, column, container, mouse_area, opaque, pick_list, row, stack, text, Space};
+use iced::widget::{
+    button, column, container, mouse_area, opaque, pick_list, row, scrollable, stack, text, Space,
+};
 use iced::{alignment, Element, Length};
 
 use crate::message::*;
@@ -212,6 +214,39 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     .size(10)
     .color(theme::TEXT_3);
 
+    // Compose (vocal-melody-on-chord-change): the project's remembered
+    // answer to "what about the vocal melodies?" after a chord change, and
+    // the way back to being asked.
+    let remembered = r.compose.vocal_melody.remembered;
+    // Disabled (dimmed, no press) while nothing is remembered.
+    let ask_tone = if remembered.is_some() { theme::TEXT_1 } else { theme::TEXT_3 };
+    let ask_again = button(
+        row![
+            theme::icon(fa::ARROW_ROTATE_LEFT).size(13).color(ask_tone),
+            Space::new().width(10),
+            text("Ask again about vocal melodies").size(13).color(ask_tone),
+        ]
+        .align_y(alignment::Vertical::Center),
+    )
+    .on_press_maybe(remembered.is_some().then(|| {
+        Message::Compose(crate::compose::ComposeMessage::VocalMelody(
+            crate::compose::vocal_melody::VocalMelodyMsg::ForgetRememberedChoice,
+        ))
+    }))
+    .padding([8, 14])
+    .width(Length::Fill)
+    .style(|_theme, status| theme::ghost_button_style(status));
+    let ask_again_hint = text(match remembered {
+        Some(choice) => format!(
+            "Chord changes in this project apply \u{201C}{}\u{201D} to vocal melodies \
+             without asking.",
+            choice.label()
+        ),
+        None => "Chord changes ask what to do with vocal melodies they would rewrite.".to_owned(),
+    })
+    .size(10)
+    .color(theme::TEXT_3);
+
     // I/O latency (doc #260 finding #13): queried on open and whenever
     // the input device list re-enumerates (`UiMessage::OpenSettings`,
     // `engine_events::transport::input_devices_listed`).
@@ -267,6 +302,11 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         audio_section,
         Space::new().height(20),
         plugins_section,
+        Space::new().height(20),
+        section("Compose"),
+        Space::new().height(6),
+        ask_again,
+        ask_again_hint,
         Space::new().height(20),
         section("MIDI Clock"),
         Space::new().height(6),
@@ -325,7 +365,12 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     // One card size for both pages, so switching tabs doesn't jump.
     let page_width = crate::view::settings_keyboard::PAGE_WIDTH;
     let page: Element<'_, Message> = match tab {
-        SettingsTab::General => dialog_content.into(),
+        // The General page is taller than a laptop window; it scrolls (as
+        // the Keyboard page's list does), opening at the top.
+        SettingsTab::General => scrollable(dialog_content)
+            .spacing(10)
+            .height(GENERAL_PAGE_HEIGHT)
+            .into(),
         SettingsTab::Keyboard => crate::view::settings_keyboard::view_keyboard_page(r),
         SettingsTab::Midi => midi::view_midi_page(r, page_width),
     };
@@ -357,6 +402,10 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
 
     stack![backdrop, centered].into()
 }
+
+/// The General page's visible height: the dialog (page, padding, Close
+/// row) fits an 900-pixel-high window, and the page scrolls past it.
+const GENERAL_PAGE_HEIGHT: f32 = 740.0;
 
 /// An autosave interval in seconds, labelled for the picker. A stored
 /// value off the preset list still shows as itself.

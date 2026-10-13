@@ -50,6 +50,15 @@ pub(crate) fn call<T: serde::Serialize>(
 }
 
 fn apply_progression(app: &mut Resonance, def: u64, numerals: [&str; 4]) {
+    apply_progression_with(app, def, numerals, None);
+}
+
+fn apply_progression_with(
+    app: &mut Resonance,
+    def: u64,
+    numerals: [&str; 4],
+    vocal_melody: Option<resonance_control::VocalMelodyChoice>,
+) {
     let mut params = resonance_control::methods::harmony::ApplyProgressionParams::for_section(
         SectionDefinitionId(def),
     );
@@ -58,6 +67,7 @@ fn apply_progression(app: &mut Resonance, def: u64, numerals: [&str; 4]) {
         scale: "minor".to_owned(),
     });
     params.numerals = Some(numerals.into_iter().map(str::to_owned).collect());
+    params.vocal_melody = vocal_melody;
     call(app, "harmony.apply_progression", &params)
         .result::<resonance_control::methods::harmony::ApplyProgressionResult>()
         .expect("progression applies");
@@ -217,7 +227,8 @@ fn set_params_makes_the_lane_stale() {
     assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
 }
 
-/// A chord edit regenerates the lane's melody. It used to queue a render
+/// A chord edit that regenerates the lane's melody (`vocal_melody:
+/// regenerate`; the default keeps it, BUG-70). It used to queue a render
 /// and drop its task, leaving the lane audio-less and `rendering` forever;
 /// over the control API it now only goes stale, old audio kept.
 #[test]
@@ -227,7 +238,12 @@ fn a_control_chord_edit_goes_stale_and_keeps_the_old_audio() {
     let audio_before = app.test_vocal_audio_clips(TRACK);
     let epoch = app.test_vocal_render_epoch(verse, TRACK);
 
-    apply_progression(&mut app, verse, ["VI", "III", "VII", "i"]);
+    apply_progression_with(
+        &mut app,
+        verse,
+        ["VI", "III", "VII", "i"],
+        Some(resonance_control::VocalMelodyChoice::Regenerate),
+    );
 
     let view = vocal_view(&mut app);
     assert_eq!(lane_state(&view, verse), VocalRenderState::Stale);
@@ -294,6 +310,11 @@ fn a_gui_chord_edit_arms_the_re_render_instead_of_dropping_it() {
         chord_id: chord.id,
         chord: edited,
     }));
+    // The edit asks what to do with the melody (BUG-70); a generated lane
+    // defaults to Regenerate.
+    let _ = app.update(Message::Compose(ComposeMessage::VocalMelody(
+        resonance_app::compose::vocal_melody::VocalMelodyMsg::Apply,
+    )));
     assert!(!app.test_vocal_render_in_flight(verse, TRACK), "nothing queued yet");
     assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Stale);
     assert!(app.test_vocal_auto_render_pending(verse, TRACK).is_some());

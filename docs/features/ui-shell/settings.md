@@ -1,6 +1,6 @@
 # Settings
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `f9438e38` + the Compose section (BUG-70) on 2026-10-13.
 > Spec history: `docs/history/specs/command-palette.md` §8 (nav rail);
 > autosave from epic #32 / doc #171; code review FU-V3b, FU-M12a.
 
@@ -50,6 +50,14 @@ nav rail with three pages:
 - **Recording:** "Distinct takes per loop pass", with a one-line
   explanation. This is the **project's** `loop_record_mode`, which is
   undoable and saved in the project, not in `settings.json`.
+- The General page scrolls (`GENERAL_PAGE_HEIGHT`), opening at the top;
+  it outgrew a laptop-height window.
+- **Compose:** "Ask again about vocal melodies" forgets the project's
+  remembered answer to the chord-change question
+  ([vocal lyrics and melody](../compose/vocal-lyrics-and-melody.md#chord-and-length-changes-under-a-melody-bug-70));
+  dimmed when nothing is remembered, with a line saying which choice
+  applies. Project state like the cycle-record mode: undoable and saved
+  with the project.
 - **Audio:** input, output and round-trip latency in samples and ms. Opening
   Settings sends `AudioCommand::QueryIoLatency`, and the readout refreshes
   when input devices re-enumerate.

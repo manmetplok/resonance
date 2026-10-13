@@ -63,6 +63,8 @@ mod compose_rail_collapse;
 mod compose_voicebank_library;
 #[path = "compose/compose_vocal_render_badge.rs"]
 mod compose_vocal_render_badge;
+#[path = "compose/compose_vocal_melody_prompt.rs"]
+mod compose_vocal_melody_prompt;
 #[path = "compose/compose_track_count.rs"]
 mod compose_track_count;
 #[path = "compose/compose_tracks_ignore_arrange_scroll.rs"]

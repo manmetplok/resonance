@@ -308,6 +308,10 @@ const WIRE_FIELDS: &[&str] = &[
     "render_state",
     "section_id",
     "track_id",
+    // The `harmony_*` / `section_resize` choice for a vocal melody the edit
+    // would rewrite, and the reply's report of it.
+    "vocal_lanes_affected",
+    "vocal_melody",
     // `render_stems`' filter: the tracks to export.
     "track_ids",
 ];

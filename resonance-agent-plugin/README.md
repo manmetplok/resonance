@@ -136,7 +136,10 @@ mastering chain named by key (warmth-width-depth.md W4). 0.4.0 added the
 `singing` skill, the shared procedure for vocal lanes that `arranging` used to
 cover in a paragraph. 0.5.0 gave `singing` its own intelligibility checker
 (`skills/singing/scripts/intelligibility.py`) fed by a vocal stem from the new
-`render_stems`, and told `mastering` about stems and ranged bounces.
+`render_stems`, and told `mastering` about stems and ranged bounces. 0.6.0
+taught `singing` that a chord or length edit now keeps a melody (flagged
+`melody_predates_chords`) and how to re-fit it: `vocal_melody` on the chord
+call, or `vocal_refit_melody` afterwards.
 
 A skill may bundle a script under `skills/<name>/scripts/` and point at it
 through the skill-directory variable, as `singing` does for its checker; the
