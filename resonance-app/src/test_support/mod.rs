@@ -33,5 +33,6 @@ mod tracks;
 mod transport;
 mod vocal_compose;
 mod vocal_render_state;
+mod voice_presets;
 mod voicebanks;
 pub use voicebanks::{write_voicebank_fixture, VoicebankFixture};

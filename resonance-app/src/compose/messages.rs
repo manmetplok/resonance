@@ -753,6 +753,10 @@ pub enum LaneInspectorMsg {
     ToggleVocalBankTiming,
     /// Flip `bank_pitch`: the pitch line from the bank's pitch model.
     ToggleVocalBankPitch,
+    /// Set the lane's voice and delivery from a voice preset (bank,
+    /// speaker, voice type, range, delivery sliders) in one edit; lyrics,
+    /// generator settings and curves stay.
+    ApplyVoicePreset(Box<crate::compose::vocal_svs::voice_presets::VoiceSettings>),
 
     // Vocal — actions
     GenerateVocalAll,
@@ -965,6 +969,7 @@ impl LaneInspectorMsg {
             | Self::ToggleVocalUseSectionMotif
             | Self::ToggleVocalBankTiming
             | Self::ToggleVocalBankPitch
+            | Self::ApplyVoicePreset(..)
             | Self::SetVocalTimbre(..)
             | Self::SetVocalVoicebank(..)
             | Self::SetVocalSpeaker(..)

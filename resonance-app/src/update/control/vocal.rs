@@ -50,6 +50,8 @@ use resonance_music_theory::{VocalParams, VoicebankId};
 
 use super::view_model;
 
+mod presets;
+
 // The `vocal.*` writes route ComposeMessages, so they answer with the
 // compose-aware acknowledgement rather than a bare one: a reducer that
 // refused parks its reason on `compose.last_error` instead of returning
@@ -72,6 +74,9 @@ pub(super) fn try_handle(
         proto::SET_PARAMS => set_params(app, request),
         proto::VOICEBANKS => voicebanks(app, request),
         proto::VOICEBANK_INSTALL => voicebank_install(app, conn, request),
+        proto::VOICE_PRESETS => presets::list(app, request),
+        proto::APPLY_VOICE_PRESET => presets::apply(app, request),
+        proto::SAVE_VOICE_PRESET => presets::save(app, request),
         _ => return None,
     };
     Some(handled)
@@ -251,7 +256,7 @@ fn generate(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
 
 /// Why the lane's render cannot run — its bank or the bank's vocoder is
 /// not installed — or `None` when it can.
-fn lane_bank_missing(
+pub(super) fn lane_bank_missing(
     app: &Resonance,
     definition_id: u64,
     track_id: u64,
@@ -387,7 +392,7 @@ fn lane_params(app: &Resonance, definition_id: u64, track_id: u64) -> Option<(Vo
         })
 }
 
-fn params_result(app: &Resonance, definition_id: u64, track_id: u64) -> Option<proto::ParamsResult> {
+pub(super) fn params_result(app: &Resonance, definition_id: u64, track_id: u64) -> Option<proto::ParamsResult> {
     let (vocal, seed) = lane_params(app, definition_id, track_id)?;
     Some(proto::ParamsResult {
         track_id: resonance_control::ids::TrackId(track_id),
@@ -1105,7 +1110,7 @@ fn lane_has_notes(app: &Resonance, definition_id: u64, track_id: u64) -> bool {
 
 /// Resolve the vocal lane a track addresses (its first in placement
 /// order), or a precise error when the track has none.
-fn resolve_vocal_lane(
+pub(super) fn resolve_vocal_lane(
     app: &Resonance,
     track_id: u64,
     section_id: Option<resonance_control::ids::SectionDefinitionId>,

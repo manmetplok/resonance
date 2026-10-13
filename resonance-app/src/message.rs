@@ -18,6 +18,7 @@ pub use crate::update::arrangement::ArrangementMessage;
 pub use crate::update::automation::AutomationMessage;
 pub use crate::update::browser::BrowserMessage;
 pub use crate::update::voicebank_library::VoicebankLibraryMessage;
+pub use crate::update::voice_presets::VoicePresetMessage;
 pub use crate::update::bus::BusMessage;
 pub use crate::update::chord_track::ChordTrackMessage;
 pub use crate::update::clip_warp::ClipWarpMessage;
@@ -106,6 +107,10 @@ pub enum Message {
     /// project: no undo, no revision. Handled by
     /// `update::voicebank_library::handle`.
     VoicebankLibrary(VoicebankLibraryMessage),
+    /// The vocal lane inspector's voice presets: pick (re-enters as a lane
+    /// edit), save, rename, delete. The user preset folder is machine
+    /// state: no undo, no revision. Handled by `update::voice_presets`.
+    VoicePreset(VoicePresetMessage),
     /// Drag-to-timeline placement gesture (doc #175, todo #605): dragging a
     /// media-browser row over the arrangement to preview and drop a clip.
     /// Transient preview — none of it is undoable or persisted; the drop

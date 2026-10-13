@@ -473,6 +473,112 @@ async fn master_assist_round_trips_params_and_result() {
     assert_eq!(serde_json::to_value(&assist).unwrap(), result_payload);
 }
 
+/// Voice presets round-trip: `vocal.apply_voice_preset`'s typed params go
+/// out in wire shape and its result (an `ApplyVoicePresetResult`) comes
+/// back structured; `vocal.voice_presets` takes no params.
+#[tokio::test]
+async fn voice_preset_tools_round_trip() {
+    use resonance_control::ids::TrackId;
+    use resonance_control::methods::vocal::{
+        ApplyVoicePresetParams, ApplyVoicePresetResult, VoicePresetList,
+    };
+    let seen: Arc<std::sync::Mutex<Vec<(String, Option<Value>)>>> = Arc::default();
+    let captured = Arc::clone(&seen);
+    let app = FakeApp::spawn(PROTOCOL_VERSION, move |req| {
+        captured
+            .lock()
+            .unwrap()
+            .push((req.method.clone(), req.params.clone()));
+        match req.method.as_str() {
+            "vocal.voice_presets" => ok(req, &json!({"presets": []})),
+            "vocal.apply_voice_preset" => ok(
+                req,
+                &json!({
+                    "track_id": 3, "section_id": 9, "preset_id": "katyusha-strong",
+                    "preset_name": "Katyusha \u{2014} Strong alto",
+                    "params": serde_json::to_value(sample_params_view()).unwrap(),
+                    "installed": false,
+                    "warning": "voicebank \"katyusha\" is not installed",
+                    "revision": 4
+                }),
+            ),
+            other => panic!("unexpected method {other}"),
+        }
+    });
+    let mcp = server(&app);
+    let list = mcp
+        .invoke_structured("vocal.voice_presets", &())
+        .await
+        .unwrap();
+    let list: VoicePresetList = serde_json::from_value(structured(&list)).unwrap();
+    assert!(list.presets.is_empty());
+
+    let params = ApplyVoicePresetParams {
+        track_id: TrackId(3),
+        section_id: None,
+        preset: "katyusha-strong".into(),
+    };
+    let result = mcp
+        .invoke_structured("vocal.apply_voice_preset", &params)
+        .await
+        .unwrap();
+    assert!(!is_error(&result), "{}", text(&result));
+    let applied: ApplyVoicePresetResult = serde_json::from_value(structured(&result)).unwrap();
+    assert!(!applied.installed);
+    assert_eq!(applied.revision, 4);
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(
+        calls.last().unwrap(),
+        &(
+            "vocal.apply_voice_preset".to_owned(),
+            Some(json!({"track_id": 3, "preset": "katyusha-strong"}))
+        )
+    );
+}
+
+/// A full `VocalParamsView` for fake replies.
+fn sample_params_view() -> resonance_control::methods::vocal::VocalParamsView {
+    use resonance_control::methods::vocal::*;
+    VocalParamsView {
+        voicebank: "katyusha".into(),
+        speaker: Some("strong".into()),
+        timbre: VocalTimbre::Warm,
+        vibrato: 0.3,
+        vibrato_rate: 5.0,
+        tension: 0.7,
+        tension_velocity_amount: 0.6,
+        tension_contour_amount: 0.6,
+        portamento_ms: 40.0,
+        articulation: 0.7,
+        consonant_emphasis: 0.5,
+        rest_threshold_beats: 0.5,
+        velocity_dynamics: 0.6,
+        bank_timing: true,
+        bank_pitch: true,
+        voice: VocalVoice::Alto,
+        range: VocalRange { low: 55, high: 74 },
+        style: VocalStyle::PopBallad,
+        contour: VocalContour::Arch,
+        syllable_mode: VocalSyllableMode::Syllabic,
+        chord_tone_anchor: 0.65,
+        leap_range: 0.15,
+        phrase_length_bars: 2,
+        breath: 0.45,
+        stay_in_scale: true,
+        avoid_clashes: true,
+        use_section_motif: false,
+        theme: String::new(),
+        mood: VocalMood::Yearning,
+        pov: VocalPov::FirstSingular,
+        rhyme: VocalRhyme::Abab,
+        lines: 4,
+        syllables_min: 8,
+        syllables_max: 11,
+        match_syllables_to_melody: true,
+        avoid_cliches: true,
+    }
+}
+
 /// ARCH2-06: an argument a tool does not declare is a tool error naming
 /// it, before anything reaches the app; a tool with no params refuses
 /// every argument; the declared ones pass.

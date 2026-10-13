@@ -37,6 +37,7 @@ mod render_cache;
 mod rests;
 mod segment;
 mod validate;
+pub mod voice_presets;
 
 pub use dynamics::{
     apply_dynamics_gain, apply_dynamics_gain_layers, dynamics_gain_envelope,

@@ -199,11 +199,27 @@ impl crate::Resonance {
                         .cloned(),
                     _ => None,
                 };
+                let preset_ui = match &self.compose.selected_lane {
+                    SelectedLane::Instrument(track_id) => {
+                        let presets = &self.voice_presets;
+                        crate::state::ui_caches::VoicePresetUi {
+                            prompt: presets
+                                .prompt
+                                .clone()
+                                .filter(|p| p.definition_id == definition.id && p.track_id == *track_id),
+                            confirm_delete: presets.confirm_delete.clone(),
+                            error: presets.error.clone(),
+                        }
+                    }
+                    _ => crate::state::ui_caches::VoicePresetUi::default(),
+                };
                 let vocal = crate::state::ui_caches::VocalRailContext {
                     tempo_warning: vocal_tempo_warning,
                     voicebanks: self.ui.view_caches.voicebank_choices.clone(),
                     missing_voicebanks: self.ui.view_caches.missing_voicebank_choices.clone(),
                     render_status,
+                    voice_presets: self.ui.view_caches.voice_preset_choices.clone(),
+                    preset_ui,
                 };
                 // The rail is `lazy` (UX-10): the Compose tab repaints at the
                 // 16 ms playback tick, and nothing in the rail moves with the

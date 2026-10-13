@@ -59,6 +59,9 @@ pub(crate) fn bypasses_mutation_gate(method: &str) -> bool {
         // `vocal.voicebank_install` downloads into the same per-user
         // folder; no project needs to be open, nothing is undoable.
         || method == methods::vocal::VOICEBANK_INSTALL
+        // `vocal.voice_presets` lists the built-in and the user's voice
+        // presets: a per-user library, no project needed.
+        || method == methods::vocal::VOICE_PRESETS
         || resonance_control::job::METHODS.contains(&method)
 }
 
@@ -144,6 +147,9 @@ fn reads_open_project_only(method: &str) -> bool {
             track::PLUGIN_PRESETS,
             track::PRESETS,
             vocal::GET_PARAMS,
+            // Reads the lane, writes the user's preset folder (no project
+            // edit).
+            vocal::SAVE_VOICE_PRESET,
         ]
         .contains(&method)
 }

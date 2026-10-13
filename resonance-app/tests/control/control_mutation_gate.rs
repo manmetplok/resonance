@@ -102,6 +102,7 @@ fn mutating_methods() -> Vec<&'static str> {
         *m != methods::track::PLUGIN_PARAMS
             && *m != methods::vocal::VOICEBANKS
             && *m != methods::vocal::VOICEBANK_INSTALL
+            && *m != methods::vocal::VOICE_PRESETS
     });
     methods
 }
@@ -119,6 +120,8 @@ fn allowlisted_methods() -> Vec<&'static str> {
         methods::track::PLUGIN_PARAMS,
         methods::vocal::VOICEBANKS,
         methods::vocal::VOICEBANK_INSTALL,
+        // The voice preset library (the user's folder plus the built-ins).
+        methods::vocal::VOICE_PRESETS,
     ];
     for namespace in [
         methods::song::METHODS,

@@ -238,6 +238,71 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "List the voice presets: a singer (voicebank, speaker, voice, range) plus \
+                       a delivery (timbre, tension, tension_velocity_amount, \
+                       tension_contour_amount, vibrato, vibrato_rate, portamento_ms, \
+                       articulation, consonant_emphasis, velocity_dynamics, \
+                       rest_threshold_beats, bank_timing, bank_pitch) to put on a vocal lane in \
+                       one step. The built-ins come first, best first: one per voice scored 3 \
+                       or more (of 5) in a blind listen of every installed voice, with that \
+                       score; then the user's own (builtin: false, no score). Per preset: id \
+                       (what vocal_apply_voice_preset takes), name, description, tags \
+                       (register low | mid | high, a character such as gentle, powerful, \
+                       aggressive, weary, and mode words), score, voicebank, speaker, \
+                       installed (false: the bank must be installed with \
+                       vocal_voicebank_install before the lane can render) and settings. No \
+                       project needed. Read-only.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<vocal::VoicePresetList>()
+    )]
+    async fn vocal_voice_presets(&self) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(vocal::VOICE_PRESETS, &()).await
+    }
+
+    #[tool(
+        description = "Put a voice preset on a vocal lane: sets exactly the preset's \
+                       voicebank, speaker, voice, range and delivery fields (see \
+                       vocal_voice_presets) and leaves the lane's lyrics, melody and lyric \
+                       generator settings and expression curves alone — so a singer can be \
+                       swapped on a finished part. preset is an id from vocal_voice_presets \
+                       (e.g. \"tiger-mystic\", \"user:My lead\") or a preset name \
+                       (case-insensitive); an unknown one is refused not_found. section_id \
+                       picks the lane; omitted, the track's FIRST vocal lane. One undo step. \
+                       It never renders: the lane reads stale in song_vocal until \
+                       vocal_render. A preset whose voicebank is not installed is still \
+                       applied; the result's installed is false and warning says how to \
+                       install it (vocal_voicebank_install). Returns the lane's full params.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<vocal::ApplyVoicePresetResult>()
+    )]
+    async fn vocal_apply_voice_preset(
+        &self,
+        Parameters(params): Parameters<vocal::ApplyVoicePresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(vocal::APPLY_VOICE_PRESET, &params).await
+    }
+
+    #[tool(
+        description = "Save a vocal lane's voice and delivery as a user voice preset named \
+                       name (with optional description and tags), so vocal_apply_voice_preset \
+                       can put it on another lane or project. It captures the same fields a \
+                       preset sets (voicebank, speaker, voice, range, delivery) — never lyrics, \
+                       melody or curves. A built-in preset's name is refused; an existing user \
+                       preset's name needs overwrite: true (needs_confirmation otherwise). \
+                       section_id picks the lane; omitted, the track's FIRST vocal lane. It \
+                       writes the user's preset library, not the project: no undo step, no \
+                       revision bump. Returns the preset as vocal_voice_presets lists it.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<vocal::SaveVoicePresetResult>()
+    )]
+    async fn vocal_save_voice_preset(
+        &self,
+        Parameters(params): Parameters<vocal::SaveVoicePresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(vocal::SAVE_VOICE_PRESET, &params).await
+    }
+
+    #[tool(
         description = "Install a voicebank from the plok.org index: id is one of \
                        vocal_voicebanks' available ids (or an installed bank's id, to update it \
                        to the index's version). Downloads the creator's own file (plok.org \

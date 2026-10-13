@@ -280,6 +280,15 @@ impl crate::Resonance {
     /// install, and on every `vocal.voicebanks`.
     pub(crate) fn rescan_voicebanks(&mut self) {
         self.voicebanks.rescan();
-        self.ui.view_caches.rebuild_voicebank_choices(&self.voicebanks);
+        self.refresh_vocal_choices();
+    }
+
+    /// Rebuild the inspector's cached Voicebank, Speaker and Voice preset
+    /// options from the registry and the user voice presets (a preset's
+    /// label says whether its bank is installed).
+    pub(crate) fn refresh_vocal_choices(&mut self) {
+        self.ui
+            .view_caches
+            .rebuild_voicebank_choices(&self.voicebanks, &self.voice_presets.user);
     }
 }

@@ -168,6 +168,10 @@ pub struct Resonance {
     /// (vocal-mcp-control-and-quality.md §5). Machine state like
     /// `voicebanks`; a test app has no index until a test gives it one.
     pub(crate) voicebank_library: state::voicebank_library::VoicebankLibraryState,
+    /// The user's voice presets (`$DATA/resonance/voice-presets/`, a
+    /// private folder in a test app) and the lane inspector's save prompt.
+    /// Machine state like `voicebanks`.
+    pub(crate) voice_presets: state::voice_presets::VoicePresetState,
 
     /// Tempo change events on the tempo track (sorted by bar number).
     pub(crate) tempo_events: Vec<state::TempoEvent>,
@@ -696,6 +700,14 @@ impl Resonance {
                 Host::Machine => compose::vocal_svs::registry::LibraryConfig::plok(),
                 Host::None => compose::vocal_svs::registry::LibraryConfig::offline(),
             }),
+            voice_presets: state::voice_presets::VoicePresetState::new(match host {
+                Host::Machine => compose::vocal_svs::voice_presets::store::machine_dir(
+                    std::env::var_os(compose::vocal_svs::voice_presets::VOICE_PRESET_DIR_ENV)
+                        .map(std::path::PathBuf::from),
+                    user_dirs::data_dir(),
+                ),
+                Host::None => Some(user_dirs::hermetic_subdir("voice-presets")),
+            }),
 
             tempo_events: vec![state::TempoEvent { bar: 0, bpm: 120.0 }],
             signature_events: vec![state::SignatureEvent {
@@ -771,7 +783,9 @@ impl Resonance {
         // Derive the transport label strings once so the very first
         // frame (rendered before the first `Tick`) shows real values.
         app.refresh_transport_labels();
-        app.ui.view_caches.rebuild_voicebank_choices(&app.voicebanks);
+        app.ui
+            .view_caches
+            .rebuild_voicebank_choices(&app.voicebanks, &app.voice_presets.user);
 
         // Build the tempo map's bar table up front. `TempoMap::default()`
         // has an empty table and `table_sample_rate: 0`, under which
