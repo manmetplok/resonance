@@ -571,7 +571,10 @@ durations, pitch, tension). The manifest records each take's
 
 ```sh
 RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models scripts/vocal-audition.py
-# listen to target/audition/*.wav blind, then:
+# listen and score each file right after it plays (1-5, r replay, n note,
+# s skip, q quit; resumable, scores in scores.json, names revealed at the end):
+scripts/vocal-audition-score.py target/audition
+# or listen by hand, then:
 scripts/vocal-audition.py --reveal
 scripts/vocal-intelligibility.py target/audition
 ```
