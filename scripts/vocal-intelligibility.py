@@ -151,14 +151,14 @@ def main() -> int:
         speaker = e.get("speaker") or "-"
         shift = e.get("transpose")
         shift = f"{shift:+d}" if isinstance(shift, int) else ""
-        print(f"{e.get('bank', '?'):<8} {speaker:<10} {shift:>4} {acc:6.0%}  | {heard}", flush=True)
+        print(f"{e.get('bank', '?'):<15} {speaker:<11} {shift:>4} {acc:6.0%}  | {heard}", flush=True)
 
     by_bank: dict[str, list[float]] = {}
     for r in results:
         by_bank.setdefault(r["bank"] or "?", []).append(r["accuracy"])
     print()
     for bank, accs in sorted(by_bank.items()):
-        print(f"{bank:<8} best {max(accs):6.0%}  mean {sum(accs) / len(accs):6.0%}  ({len(accs)} takes)")
+        print(f"{bank:<15} best {max(accs):6.0%}  mean {sum(accs) / len(accs):6.0%}  ({len(accs)} takes)")
     if args.json:
         args.json.write_text(json.dumps(results, indent=2) + "\n")
     return 0

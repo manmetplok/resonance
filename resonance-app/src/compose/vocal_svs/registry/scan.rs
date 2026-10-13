@@ -2,10 +2,12 @@
 //! are banks, the id each one gets, which of two banks with one id wins,
 //! and keeping a bank whose files have not changed since the last scan.
 //!
-//! **Ids.** A user bank's id is its folder name as a slug
-//! ([`layout::slugify`]). A folder whose name slugs to nothing (`日本語`,
-//! `___`) takes the slug of the name its character file gives; with no
-//! usable name either it is skipped with a warning.
+//! **Ids.** A user bank's id is its folder name when that is already an
+//! id (`keiro_revenant`: what a plok.org install of that index id unpacks
+//! into), else the name as a slug ([`layout::folder_id`]). A folder
+//! whose name slugs to nothing (`日本語`, `___`) takes the slug of the
+//! name its character file gives; with no usable name either it is
+//! skipped with a warning.
 //!
 //! **Precedence when two banks share an id.** The user voicebank folder
 //! beats every development root, so an installed bank replaces the
@@ -50,7 +52,10 @@ impl VoicebankRegistry {
         self.revision += 1;
         for models in self.roots.dev_models.clone() {
             for b in BUILTIN_BANKS {
-                let dir = models.join(b.dev_dir);
+                let Some(dev_dir) = b.dev_dir else {
+                    continue;
+                };
+                let dir = models.join(dev_dir);
                 if !dir.is_dir() {
                     continue;
                 }
@@ -95,7 +100,7 @@ impl VoicebankRegistry {
         }
         let folder = dir.file_name()?.to_string_lossy().into_owned();
         let manifest = scan_manifest(dir, &folder)?;
-        let mut id = layout::slugify(&folder);
+        let mut id = layout::folder_id(&folder);
         if id.is_empty() {
             id = manifest
                 .details

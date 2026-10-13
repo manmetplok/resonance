@@ -193,15 +193,17 @@ impl AcousticStage {
         if self.flags.multi_speakers {
             let emb = std::mem::take(&mut pd.spk_embed)
                 .ok_or_else(|| anyhow!("acoustic model expects spk_embed but none was prepared"))?;
-            let frames_check = emb.len() / SPK_EMBED_SIZE;
-            if frames_check != n_frames {
+            // One embedding per frame, as wide as the bank's `hidden_size`
+            // (256 on the shipped banks, 384 on the LUNAI v170 singers).
+            let width = if n_frames == 0 { 0 } else { emb.len() / n_frames };
+            if width == 0 || width * n_frames != emb.len() {
                 return Err(anyhow!(
-                    "spk_embed frame count {} != f0 frame count {}",
-                    frames_check,
+                    "spk_embed of {} values is not {} frames of one embedding",
+                    emb.len(),
                     n_frames
                 ));
             }
-            let arr = Array3::<f32>::from_shape_vec((1, n_frames, SPK_EMBED_SIZE), emb)
+            let arr = Array3::<f32>::from_shape_vec((1, n_frames, width), emb)
                 .context("packing spk_embed")?;
             inputs.push(("spk_embed".into(), Value::from_array(arr)?.into()));
         }
@@ -265,8 +267,6 @@ impl AcousticStage {
     }
 }
 
-pub const SPK_EMBED_SIZE: usize = 256;
-
 /// At most how many noise values per frame the acoustic models draw:
 /// `num_mel_bins` (128) times up to two feature channels. Only the first
 /// run of a session is fed this many; it then feeds what the model draws
@@ -287,7 +287,7 @@ pub struct PreprocessedAcoustic {
     pub tension: Option<Vec<f32>>,
     pub energy: Option<Vec<f32>>,
     pub breathiness: Option<Vec<f32>>,
-    /// Length `n_frames * SPK_EMBED_SIZE`, row-major over frames.
+    /// Length `n_frames * hidden_size`, row-major over frames.
     pub spk_embed: Option<Vec<f32>>,
 }
 

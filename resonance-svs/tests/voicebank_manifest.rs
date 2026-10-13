@@ -862,3 +862,117 @@ fn a_unit_uses_only_the_bank_models_that_know_its_phonemes() {
         all.facts(ModelKind::Duration).unwrap().files_digest
     );
 }
+
+/// A folder whose name is already an id keeps it (`keiro_revenant`, the
+/// folder a plok.org install of that index id unpacks into); any other
+/// name is slugged.
+#[test]
+fn a_folder_already_named_as_an_id_keeps_it() {
+    use resonance_svs::voicebank::layout::folder_id;
+    assert_eq!(folder_id("keiro_revenant"), "keiro_revenant");
+    assert_eq!(folder_id("allen-crow2"), "allen-crow2");
+    assert_eq!(folder_id("Keiro_Revenant"), "keiro-revenant");
+    assert_eq!(folder_id("My Bank_v2"), "my-bank-v2");
+    assert_eq!(folder_id("_hidden"), "hidden");
+    assert_eq!(folder_id("v1.7"), "v1-7");
+
+    let dir = fresh_dir("liam_thorne");
+    build_bank(&dir, &BankSpec::default());
+    assert_eq!(scan(&dir).expect("scans").id, "liam_thorne");
+}
+
+/// The LUNAI v170 layout (Katyusha, Keiro Revenant, Liam Thorne, Allen
+/// Crow, Meiji v170): the acoustic config one level down in `configs/`,
+/// models, phonemes and `languages.json` in `files/`, the vocoder bundled
+/// in `tgm_hifigan/` and named through `configs/dsvocoder/`, the English
+/// dictionary in `configs/dsdur/`, and speaker embeddings 384 floats wide
+/// (`hidden_size: 384`).
+#[test]
+fn a_lunai_v170_bank_scans_and_loads_its_384_wide_embeddings() {
+    let bank = fresh_dir("lunai_v170");
+    write(
+        &bank,
+        "configs/dsconfig.yaml",
+        "acoustic: ../files/acoustic.onnx\nphonemes: ../files/phonemes.json\n\
+         languages: ../files/languages.json\nvocoder: dsvocoder\nhidden_size: 384\n\
+         use_lang_id: true\nuse_tension_embed: true\nuse_energy_embed: false\n\
+         speakers:\n- embeds/standard\n- embeds/growl\nnum_lang: 14\n\
+         dictionaries:\n  en: ../../files/dictionary-en.txt\n",
+    );
+    write(
+        &bank,
+        "files/phonemes.json",
+        r#"{"AP": 1, "SP": 2, "hh": 3, "en/ah": 4, "ru/a": 5, "ar/gh": 6, "ru/gh": 6}"#,
+    );
+    write(&bank, "files/languages.json", r#"{"ar": 1, "en": 3, "ru": 11}"#);
+    write(
+        &bank,
+        "configs/dsvocoder/vocoder.yaml",
+        "name: tgm_hifigan_v110\nmodel: ../../tgm_hifigan/tgm_hifigan_v110.onnx\n",
+    );
+    write(&bank, "tgm_hifigan/tgm_hifigan_v110.onnx", "stub");
+    write(
+        &bank,
+        "configs/dsdur/dsdict-en.yaml",
+        "symbols:\n- {symbol: en/ah, type: vowel}\nreplacements:\n- {from: ah, to: en/ah}\n\
+         - {from: q, to: en/cl}\n",
+    );
+    let emb = |floats: usize| -> Vec<u8> {
+        (0..floats)
+            .flat_map(|i| (i as f32 * 0.25).to_le_bytes())
+            .collect()
+    };
+    let embeds = bank.join("configs/embeds");
+    std::fs::create_dir_all(&embeds).unwrap();
+    std::fs::write(embeds.join("standard.emb"), emb(384)).unwrap();
+    std::fs::write(embeds.join("growl.emb"), emb(384)).unwrap();
+
+    let m = scan(&bank).expect("scans");
+    assert!(m.acoustic_config.ends_with("configs/dsconfig.yaml"));
+    assert!(m
+        .vocoder_config
+        .as_deref()
+        .is_some_and(|v| v.ends_with("dsvocoder/vocoder.yaml")));
+    assert!(m
+        .details
+        .english_dict
+        .as_deref()
+        .is_some_and(|d| d.ends_with("dsdur/dsdict-en.yaml")));
+    assert_eq!(m.languages.get("en"), Some(&3));
+    assert!(m.accepts_language_id);
+    assert_eq!(m.singers.len(), 2);
+
+    let loaded =
+        resonance_svs::pipeline::speaker_embeddings(&m.acoustic_config).expect("loads");
+    assert_eq!(loaded["embeds/standard"].len(), 384);
+    assert_eq!(loaded["embeds/growl"][4], 1.0);
+
+    // An embedding of another width than hidden_size is refused, naming it.
+    std::fs::write(embeds.join("growl.emb"), emb(256)).unwrap();
+    let err = resonance_svs::pipeline::speaker_embeddings(&m.acoustic_config)
+        .expect_err("a 256-wide embedding in a 384 bank")
+        .to_string();
+    assert!(
+        err.contains("embeds/growl") && err.contains("hidden_size 384"),
+        "{err}"
+    );
+}
+
+/// A bank whose config names no `hidden_size` takes 256-wide embeddings
+/// (TIGER's, Lilia's and Meiji v160's width).
+#[test]
+fn embeddings_default_to_256_wide() {
+    let dir = fresh_dir("emb_default");
+    build_bank(
+        &dir,
+        &BankSpec {
+            speakers: vec!["embeds/a"],
+            ..BankSpec::default()
+        },
+    );
+    std::fs::create_dir_all(dir.join("embeds")).unwrap();
+    std::fs::write(dir.join("embeds/a.emb"), vec![0u8; 256 * 4]).unwrap();
+    let loaded =
+        resonance_svs::pipeline::speaker_embeddings(&dir.join("dsconfig.yaml")).expect("loads");
+    assert_eq!(loaded["embeds/a"].len(), 256);
+}

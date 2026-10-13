@@ -6,13 +6,14 @@
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::audio::{mix_into_timeline, write_mono_f32_wav};
 use crate::config::{load_acoustic, load_phoneme_dict, load_vocoder, AcousticConfig};
 use crate::ds::{load_ds_file, DsSegment};
-use crate::stages::acoustic::{AcousticFlags, AcousticStage, PreprocessedAcoustic, SPK_EMBED_SIZE};
+use crate::stages::acoustic::{AcousticFlags, AcousticStage, PreprocessedAcoustic};
 use crate::stages::common::ExecutionProvider;
 use crate::stages::session_cache;
 use crate::stages::vocoder::VocoderStage;
@@ -399,7 +400,7 @@ fn preprocess_acoustic(
         let emb = speaker_embeddings
             .get(speaker)
             .ok_or_else(|| anyhow!("speaker `{speaker}` not found in voicebank"))?;
-        let mut out = Vec::with_capacity(n_frames * SPK_EMBED_SIZE);
+        let mut out = Vec::with_capacity(n_frames * emb.len());
         for _ in 0..n_frames {
             out.extend_from_slice(emb);
         }
@@ -513,6 +514,14 @@ pub fn phoneme_durations_to_frames(seconds: &[f64], frame_length: f64) -> Vec<i6
 
 type SpeakerEmbeddings = HashMap<String, Vec<f32>>;
 
+/// The speaker embeddings the acoustic config at `acoustic_config` lists,
+/// by speaker key: what a render loads. Each `.emb` file must hold
+/// `hidden_size` little-endian floats (256 on the shipped banks, 384 on
+/// the LUNAI v170 singers); a missing file is skipped with a warning.
+pub fn speaker_embeddings(acoustic_config: &Path) -> Result<HashMap<String, Vec<f32>>> {
+    load_speaker_embeddings(&crate::config::load_acoustic(acoustic_config)?)
+}
+
 fn load_speaker_embeddings(cfg: &AcousticConfig) -> Result<SpeakerEmbeddings> {
     let mut map = SpeakerEmbeddings::new();
     if cfg.speakers.is_empty() {
@@ -529,12 +538,16 @@ fn load_speaker_embeddings(cfg: &AcousticConfig) -> Result<SpeakerEmbeddings> {
             continue;
         }
         let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        if bytes.len() != SPK_EMBED_SIZE * std::mem::size_of::<f32>() {
+        // An embedding is `hidden_size` floats: 256 on the shipped banks,
+        // 384 on the LUNAI v170 singers.
+        let expected = cfg.hidden_size.max(0) as usize * std::mem::size_of::<f32>();
+        if bytes.len() != expected {
             return Err(anyhow!(
-                "speaker embedding `{}` has unexpected size {} (expected {})",
+                "speaker embedding `{}` has unexpected size {} (expected {}: hidden_size {})",
                 speaker,
                 bytes.len(),
-                SPK_EMBED_SIZE * std::mem::size_of::<f32>()
+                expected,
+                cfg.hidden_size
             ));
         }
         let floats: Vec<f32> = bytes

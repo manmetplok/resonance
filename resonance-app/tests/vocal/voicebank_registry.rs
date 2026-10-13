@@ -209,3 +209,166 @@ fn a_bank_that_is_not_installed_answers_from_the_built_in_table() {
         .unwrap_err();
     assert!(missing.to_string().contains("\"someone\" is not installed"));
 }
+
+/// A LUNAI v170 bank as its zip unpacks (Katyusha, Keiro Revenant, Liam
+/// Thorne, Allen Crow): the acoustic config in `configs/`, the models and
+/// lists in `files/`, the bank's own dur / pitch / variance models (the
+/// duration model with only the `standard` speaker), the English
+/// dictionary in `configs/dsdur/`, the vocoder in `tgm_hifigan/`.
+fn write_lunai_v170_bank(bank: &Path, speakers: &[&str]) {
+    let speaker_list: String = speakers.iter().map(|s| format!("- embeds/{s}\n")).collect();
+    write(
+        bank,
+        "configs/dsconfig.yaml",
+        &format!(
+            "acoustic: ../files/acoustic.onnx\nphonemes: ../files/phonemes.json\n\
+             languages: ../files/languages.json\nvocoder: dsvocoder\nhidden_size: 384\n\
+             use_lang_id: true\nuse_energy_embed: false\nuse_breathiness_embed: false\n\
+             use_tension_embed: true\nspeakers:\n{speaker_list}"
+        ),
+    );
+    for (folder, model) in [("dsdur", "dur"), ("dspitch", "pitch"), ("dsvariance", "variance")] {
+        let model_speakers = if folder == "dsdur" {
+            "- embeds/standard\n".to_owned()
+        } else {
+            speaker_list.clone()
+        };
+        write(
+            bank,
+            &format!("configs/{folder}/dsconfig.yaml"),
+            &format!(
+                "{model}: ../../files/{model}.onnx\nlinguistic: ../../files/linguistic-{model}.onnx\n\
+                 phonemes: ../../files/phonemes-variance.json\n\
+                 languages: ../../files/languages.json\nhidden_size: 384\nuse_lang_id: true\n\
+                 speakers:\n{model_speakers}"
+            ),
+        );
+        write(bank, &format!("files/{model}.onnx"), "");
+        write(bank, &format!("files/linguistic-{model}.onnx"), "");
+    }
+    let mut phonemes = vec![r#""AP": 1"#.to_string(), r#""SP": 2"#.into(), r#""hh": 3"#.into()];
+    let mut id = 4;
+    for ph in resonance_music_theory::g2p::ARPABET_PHONEMES {
+        if *ph != "hh" {
+            phonemes.push(format!(r#""en/{ph}": {id}"#));
+            phonemes.push(format!(r#""ru/{ph}": {}"#, id + 1));
+            id += 2;
+        }
+    }
+    let phonemes = format!("{{{}}}", phonemes.join(", "));
+    write(bank, "files/phonemes.json", &phonemes);
+    write(bank, "files/phonemes-variance.json", &phonemes);
+    write(
+        bank,
+        "files/languages.json",
+        r#"{"ar": 1, "de": 2, "en": 3, "ja": 7, "ru": 11, "zh": 14}"#,
+    );
+    write(bank, "files/acoustic.onnx", "");
+    write(
+        bank,
+        "configs/dsdur/dsdict-en.yaml",
+        "symbols:\n- {symbol: en/ah, type: vowel}\nentries:\n- {grapheme: walk, phonemes: [w, ao, k]}\n\
+         replacements:\n- {from: ah, to: en/ah}\n- {from: hh, to: hh}\n- {from: q, to: en/cl}\n",
+    );
+    write(
+        bank,
+        "configs/dsvocoder/vocoder.yaml",
+        "name: tgm_hifigan_v110\nmodel: ../../tgm_hifigan/tgm_hifigan_v110.onnx\n",
+    );
+    write(bank, "tgm_hifigan/tgm_hifigan_v110.onnx", "");
+    write(bank, "configs/character.yaml", "name: Some Singer v170\n");
+    for s in speakers {
+        write(bank, &format!("configs/embeds/{s}.emb"), "");
+    }
+}
+
+/// The four LUNAI English singers register under their folder names —
+/// the ids their plok.org entries install into (`keiro_revenant`, not the
+/// slug `keiro-revenant`) — with the built-in table's names, mode names,
+/// ranges and terms over what their files say.
+#[test]
+fn lunai_v170_banks_register_under_their_folder_ids_with_the_builtin_facts() {
+    let root = fresh_dir("lunai-v170");
+    write_lunai_v170_bank(&root.join("katyusha"), &["standard", "strong", "delicate", "lullaby"]);
+    write_lunai_v170_bank(
+        &root.join("keiro_revenant"),
+        &[
+            "standard", "native", "cold", "fragile", "mellow", "aggressive", "solid", "vf",
+            "whisper", "growl",
+        ],
+    );
+    write_lunai_v170_bank(
+        &root.join("liam_thorne"),
+        &[
+            "standard", "gentle", "tired", "deep", "powerful", "aggressive", "rock", "crispy", "vf",
+            "growl",
+        ],
+    );
+    write_lunai_v170_bank(
+        &root.join("allen_crow"),
+        &["standard", "heavy", "open", "gentle", "whisper"],
+    );
+
+    let reg = registry(&root, None);
+    let ids: Vec<&str> = reg.installed().map(|b| b.id.as_str()).collect();
+    assert_eq!(ids, ["allen_crow", "katyusha", "keiro_revenant", "liam_thorne"]);
+    for (id, name, speakers) in [
+        ("katyusha", "Katyusha", 4),
+        ("keiro_revenant", "Keiro Revenant", 10),
+        ("liam_thorne", "Liam Thorne", 10),
+        ("allen_crow", "Allen Crow", 5),
+    ] {
+        let profile = reg.profile(&VoicebankId::new(id));
+        let bank = profile.installed().expect(id);
+        assert_eq!(profile.name(), name);
+        assert!(profile.english(), "{id} sings English");
+        assert!(profile.missing_phonemes().is_empty(), "{id}");
+        assert_eq!(profile.phoneme_name("ah"), "en/ah", "{id}");
+        assert_eq!(profile.phoneme_name("hh"), "hh", "{id}: the universal bucket");
+        assert_eq!(profile.language_id("ah"), Some(3), "{id}: en is 3 in languages.json");
+        assert_eq!(profile.language_id("AP"), Some(0), "{id}");
+        assert!(profile.dictionary().is_some(), "{id}: dsdur/dsdict-en.yaml");
+        let curves = profile.curve_support();
+        assert!(curves.tension && !curves.energy && !curves.breathiness, "{id}");
+        let models = profile.bank_models();
+        assert!(
+            models.duration.is_some() && models.pitch.is_some() && models.variance.is_some(),
+            "{id}: all three of the bank's own models"
+        );
+        assert_eq!(bank.vocoder_name.as_deref(), Some("tgm_hifigan_v110"), "{id}");
+        assert!(bank.vocoder_config.is_some(), "{id}: its bundled vocoder");
+        assert_eq!(profile.speakers().len(), speakers, "{id}");
+        assert_eq!(profile.default_speaker(VoiceType::Alto).as_deref(), Some("standard"));
+
+        let builtin = profile.builtin().expect("a built-in row");
+        let range = profile.comfortable_range(None);
+        assert_eq!(range.source.as_str(), "builtin", "{id}");
+        assert_eq!((range.low, range.high), builtin.range, "{id}");
+        for (speaker, own) in builtin.speaker_ranges {
+            let r = profile.comfortable_range(Some(speaker));
+            assert_eq!((r.low, r.high), *own, "{id}/{speaker}");
+        }
+
+        let terms = reg.terms(id);
+        assert_eq!(terms.credit, Some(format!("{name} from LUNAI Project")));
+        assert_eq!(
+            terms.terms_url.as_deref(),
+            Some("https://lunaiproject.github.io/termsofuse/")
+        );
+        assert_eq!(terms.commercial.as_deref(), Some("permission"));
+    }
+    let keiro = reg.profile(&VoicebankId::new("keiro_revenant"));
+    let fry = keiro.speakers().into_iter().find(|s| s.id == "vf").unwrap();
+    assert_eq!(fry.name, "Vocal fry");
+    let target = keiro
+        .render_target(Some("growl"), VoiceType::Tenor, None)
+        .unwrap();
+    assert_eq!(target.speaker.as_deref(), Some("embeds/growl"));
+
+    // Not installed, a LUNAI id still validates like the bank it will be.
+    let missing = BankProfile::not_installed("liam_thorne");
+    assert_eq!(missing.name(), "Liam Thorne");
+    assert_eq!(missing.phoneme_name("ah"), "en/ah");
+    assert_eq!(missing.language_id("ah"), Some(3));
+    assert!(missing.curve_support().tension);
+}

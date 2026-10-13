@@ -163,3 +163,50 @@ fn curve_kind_all_is_exhaustive_and_distinct() {
     assert!(CurveKind::ALL.contains(&CurveKind::Breathiness));
     assert!(CurveKind::ALL.contains(&CurveKind::PitchBend));
 }
+
+/// The LUNAI English singers as they unpack from their v170 zips, when a
+/// developer points `RESONANCE_VOICEBANK_DIR` at a folder holding them
+/// (opt-in, like `RESONANCE_SVS_MODELS_DIR` above; the hermetic fixture
+/// version is `voicebank_registry::lunai_v170_banks_register_…`): each
+/// registers under its folder id with its modes, sings English through
+/// `en/` and language id 3, has all three of its own models and its
+/// bundled vocoder, and loads its 384-wide speaker embeddings.
+#[test]
+fn real_lunai_banks_register() {
+    let Some(dir) = std::env::var_os("RESONANCE_VOICEBANK_DIR").filter(|v| !v.is_empty()) else {
+        eprintln!("RESONANCE_VOICEBANK_DIR unset; skipping");
+        return;
+    };
+    let registry = VoicebankRegistry::scan(VoicebankRoots {
+        banks: Some(dir.into()),
+        ..VoicebankRoots::default()
+    });
+    for (id, modes) in [
+        ("katyusha", 4),
+        ("keiro_revenant", 10),
+        ("liam_thorne", 10),
+        ("allen_crow", 5),
+    ] {
+        let Some(bank) = registry.get(id) else {
+            eprintln!("{id} not installed there; skipped");
+            continue;
+        };
+        let profile = registry.profile(&VoicebankId::new(id));
+        assert!(profile.english(), "{id}");
+        assert!(profile.missing_phonemes().is_empty(), "{id}");
+        assert_eq!(profile.speakers().len(), modes, "{id}");
+        assert_eq!(profile.phoneme_name("ah"), "en/ah", "{id}");
+        assert_eq!(profile.language_id("ah"), Some(3), "{id}");
+        assert!(profile.dictionary().is_some(), "{id}");
+        let models = profile.bank_models();
+        assert!(
+            models.duration.is_some() && models.pitch.is_some() && models.variance.is_some(),
+            "{id}"
+        );
+        assert!(bank.vocoder_config.is_some(), "{id} has its vocoder");
+        let embeds = resonance_svs::pipeline::speaker_embeddings(&bank.acoustic_config)
+            .unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        assert_eq!(embeds.len(), modes, "{id}");
+        assert!(embeds.values().all(|e| e.len() == 384), "{id}");
+    }
+}
