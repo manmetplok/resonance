@@ -63,6 +63,16 @@ writing a note of melody.
 voice in the house listening tests; keep it unless the song asks for
 something else.
 
+**Start from a voice preset.** `mcp__resonance__vocal_voice_presets` lists
+the built-ins (every voice the blind listen scored 3 or more, best first,
+each with its `score`) and the user's own. Each one sets the bank, speaker,
+voice type, range and delivery in one undoable step through
+`mcp__resonance__vocal_apply_voice_preset`, and leaves lyrics, melody
+settings and curves alone, so a finished part can change singer. Pick by
+register and character from its `tags`, then fine-tune with
+`vocal_set_params`. A setup the user likes can be kept with
+`mcp__resonance__vocal_save_voice_preset`.
+
 - **Range decides more than timbre.** Each bank and speaker has a
   `comfortable_range`. Pick the voice whose range holds the melody's centre,
   or move the melody into the range (step 3). A voice pushed past its range

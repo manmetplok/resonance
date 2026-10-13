@@ -86,7 +86,7 @@ Load the plugin with `claude --plugin-dir <repo>/resonance-agent-plugin`.
 ### Versioning
 
 Three things version separately: the skills (`version` in
-`.claude-plugin/plugin.json`, 0.6.0 today), `resonance-mcp` (this
+`.claude-plugin/plugin.json`, 0.6.1 today), `resonance-mcp` (this
 checkout), and the running app (whatever the user has open). Living in one
 repo pins the first two; `control_hello` covers the third at run time.
 Bump the plugin `version` whenever the skills change, or installed copies
