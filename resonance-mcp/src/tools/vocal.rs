@@ -137,8 +137,8 @@ impl ResonanceMcp {
                        over three notes, its final consonant sung at the end of the hold (+ \
                        is an alias; a spaced - is just a dash and is ignored). Inside a broken \
                        word a _ piece holds the piece before it: \"a·_·ma·zing\". AP (uppercase) \
-                       marks a breath before the next word and takes no note; it is not yet \
-                       rendered as a breath sound. \
+                       marks a breath before the next word and takes no note; it is sung as an \
+                       audible breath at the end of the gap before that word. \
                        \
                        ALWAYS re-read song_vocal after writing. It is the cheapest verification \
                        available: syllable_count vs note_count with counts_mismatch, plus the \
@@ -167,8 +167,8 @@ impl ResonanceMcp {
                        vocal_set_lyrics. Same syllable rules: each syllable starts its own \
                        note, breaks inside a word may be written as - or · and are exact, a \
                        standalone _ (or +) holds the previous syllable onto one more note, a \
-                       standalone AP marks a breath and takes no note (not yet rendered as a \
-                       breath sound), and syllabify (default true) splits the words you did \
+                       standalone AP marks an audible breath and takes no note, and \
+                       syllabify (default true) splits the words you did \
                        not break. Like vocal_set_lyrics, section_id picks which \
                        vocal lane (lyrics live per (section, track) lane); omitted it writes the \
                        track's FIRST lane. Re-read song_vocal afterwards to confirm the lane's \
