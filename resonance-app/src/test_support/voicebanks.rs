@@ -309,6 +309,21 @@ impl Resonance {
             .rebuild_voicebank_choices(&self.voicebanks);
     }
 
+    /// Test-only: the Speaker picker's cached options for bank `id` —
+    /// installed, or a built-in bank shown as not installed — as
+    /// `(id, label)` in picker order; `None` when the picker has no entry
+    /// for the bank.
+    #[doc(hidden)]
+    pub fn test_speaker_choices(&self, id: &str) -> Option<Vec<(String, String)>> {
+        let caches = &self.ui.view_caches;
+        caches
+            .voicebank_choices
+            .iter()
+            .chain(caches.missing_voicebank_choices.iter())
+            .find(|c| &*c.id == id)
+            .map(|c| c.speakers.iter().map(|s| (s.id.clone(), s.label.clone())).collect())
+    }
+
     /// Test-only: the profile of bank `id` as this app sees it.
     #[doc(hidden)]
     pub fn test_voicebank_profile(&self, id: &str) -> BankProfile {

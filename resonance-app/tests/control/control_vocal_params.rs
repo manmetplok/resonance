@@ -123,11 +123,15 @@ fn one_lane_app() -> (Resonance, u64) {
 }
 
 #[test]
-fn a_new_lane_starts_on_lilia() {
+fn a_new_lane_starts_on_tiger_mystic() {
     let (mut app, def) = one_lane_app();
     let got = get_params(&mut app, def);
-    assert_eq!(got.params.voicebank, "lilia");
-    assert_eq!(got.params.speaker, None, "lilia has a single voice");
+    assert_eq!(got.params.voicebank, "tiger");
+    assert_eq!(
+        got.params.speaker.as_deref(),
+        Some("mystic"),
+        "mystic whatever the voice type (an alto here)"
+    );
     assert_eq!(u64::from(got.section_id), def);
 }
 
@@ -153,7 +157,7 @@ fn set_params_with_one_field_keeps_the_rest_and_song_vocal_echoes_it() {
     let view = vocal_view(&mut app);
     assert_eq!(view.lanes.len(), 1);
     assert_eq!(view.lanes[0].params, expected);
-    assert_eq!(view.lanes[0].voicebank.as_deref(), Some("lilia"));
+    assert_eq!(view.lanes[0].voicebank.as_deref(), Some("tiger"));
 
     // One call is one undo entry.
     call(&mut app, "edit.undo", json!({}))
@@ -184,8 +188,15 @@ fn set_params_rejects_invalid_values_at_set_time() {
     let message = expect_invalid(set_params(&mut app, def, json!({ "voicebank": "nightingale" })));
     assert!(message.contains("unknown voicebank"), "{message}");
 
-    let message = expect_invalid(set_params(&mut app, def, json!({ "speaker": "glam" })));
-    assert!(message.contains("speaker"), "lilia refuses a speaker: {message}");
+    let message = expect_invalid(set_params(&mut app, def, json!({ "speaker": "phantom" })));
+    assert!(message.contains("phantom") && message.contains("mystic"), "not tiger's: {message}");
+
+    let message = expect_invalid(set_params(
+        &mut app,
+        def,
+        json!({ "voicebank": "lilia", "speaker": "glam" }),
+    ));
+    assert!(message.contains("single voice"), "lilia refuses a speaker: {message}");
 
     // Wire-level refusals: unknown fields, lyrics, the old enum spelling.
     expect_invalid(set_params(&mut app, def, json!({ "draft": [] })));
@@ -306,7 +317,7 @@ fn set_lane_generator_re_issue_merges_and_keeps_lyrics_and_seed() {
         .expect("partial vocal options are accepted");
     let first = get_params(&mut app, def);
     assert_eq!(first.params.style, proto::VocalStyle::Folk);
-    assert_eq!(first.params.voicebank, "lilia");
+    assert_eq!(first.params.voicebank, "tiger");
     assert_eq!(first.seed, 77);
 
     call(
@@ -461,6 +472,11 @@ fn get_params_on_a_track_without_a_vocal_lane_is_refused() {
 #[test]
 fn a_held_syllable_fills_its_notes_without_a_counts_mismatch() {
     let (mut app, def) = one_lane_app();
+    // On Lilia, whose dictionary respells English: the report still shows
+    // the ARPAbet.
+    set_params(&mut app, def, json!({ "voicebank": "lilia" }))
+        .result::<proto::ParamsResult>()
+        .expect("choose lilia");
     call(
         &mut app,
         "vocal.set_lyrics",
@@ -483,8 +499,8 @@ fn a_held_syllable_fills_its_notes_without_a_counts_mismatch() {
     assert_eq!(lane.syllable_count, 3, "one syllable plus two holds");
     assert_eq!(lane.note_count, 3, "the melody fills one note per unit");
     assert!(!lane.counts_mismatch, "{lane:?}");
-    // The held word closes on the hold's last note (Lilia, the default
-    // bank, spells `v` as her own `w`; the report shows the ARPAbet).
+    // The held word closes on the hold's last note (Lilia spells `v` as
+    // her own `w`; the report shows the ARPAbet).
     let phonemes: Vec<Vec<&str>> = lane
         .notes
         .iter()
@@ -506,7 +522,7 @@ fn get_params_answers_during_a_gui_drag() {
         LoopDragTarget::Out,
     )));
     let got = get_params(&mut app, def);
-    assert_eq!(got.params.voicebank, "lilia");
+    assert_eq!(got.params.voicebank, "tiger");
 
     let refused = set_params(&mut app, def, json!({ "vibrato": 0.2 }));
     let error = refused.error.expect("an edit mid-drag is refused");

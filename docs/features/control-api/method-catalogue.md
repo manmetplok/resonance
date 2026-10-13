@@ -1,6 +1,6 @@
 # Control method catalogue
 
-> Verified against master @ `e3d187e9` + bank models on 2026-10-08.
+> Verified against master @ `f82be9b0` + speaker `effect` flags on 2026-10-13.
 > Source of truth: `resonance_control::methods::capabilities()` and each
 > method constant's doc comment in `resonance-control/src/methods/*.rs`.
 
@@ -188,8 +188,8 @@ area; the sibling areas may refine it.
 | `vocal.render` | `vocal_render` | job | [compose](../compose/vocal-rendering.md) | kick off an SVS render |
 | `vocal.generate` | `vocal_generate` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | generate a vocal lane's melody (and lyrics) into its derived clip |
 | `vocal.get_params` | `vocal_get_params` | read | [compose](../compose/vocal-lyrics-and-melody.md) | read a vocal lane's full settings and seed |
-| `vocal.set_params` | `vocal_set_params` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | merge a partial patch into a vocal lane's settings (incl. `rest_threshold_beats`, `velocity_dynamics`, `bank_timing`, `bank_pitch`) |
-| `vocal.voicebanks` | `vocal_voicebanks` | read | [compose](../compose/voicebank-library.md) | list the installed voicebanks and what each can do (incl. `models`: its own duration / pitch / variance models), and the plok.org index's others (`available`) (no project needed) |
+| `vocal.set_params` | `vocal_set_params` | edit | [compose](../compose/vocal-lyrics-and-melody.md) | merge a partial patch into a vocal lane's settings (incl. `rest_threshold_beats`, `velocity_dynamics`, `bank_timing`, `bank_pitch`; a new lane starts on `tiger` / `mystic`) |
+| `vocal.voicebanks` | `vocal_voicebanks` | read | [compose](../compose/voicebank-library.md) | list the installed voicebanks and what each can do (incl. `models`: its own duration / pitch / variance models; `effect: true` on a speaker that is an effect mode — growl, vocal fry, whisper — not a lead voice), and the plok.org index's others (`available`) (no project needed) |
 | `vocal.voicebank_install` | `vocal_voicebank_install` | job | [compose](../compose/voicebank-library.md) | install a voicebank from the plok.org index, and the vocoder it needs; result carries its terms (no project needed, no undo) |
 | `render.mixdown` | `render_mixdown` | job | [audio-engine](../audio-engine/offline-render-and-export.md) | bounce the master mix to a WAV file |
 | `meter.measure` | `meter_measure` | job | [mixer](../mixer/meter-control-api.md) | measure one slice of the mix |

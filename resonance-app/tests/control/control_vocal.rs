@@ -349,10 +349,10 @@ fn render_returns_a_job_and_keeps_the_default_voicebank() {
     let mut app = app_with_project();
     let (def, track) = vocal_section(&mut app, 33);
     generate_lane(&mut app, track);
-    // A new lane starts on the code default, Lilia (spec D9).
+    // A new lane starts on the code default, TIGER.
     assert_eq!(
         app.test_vocal_voicebank(def, 33),
-        Some(resonance_music_theory::VoicebankId::new("lilia"))
+        Some(resonance_music_theory::VoicebankId::new("tiger"))
     );
 
     let response = call(
@@ -366,10 +366,10 @@ fn render_returns_a_job_and_keeps_the_default_voicebank() {
     );
     let started: JobStarted = response.result().expect("render returns a job");
 
-    // The lane's voicebank is still Lilia.
+    // The lane's voicebank is still TIGER.
     assert_eq!(
         app.test_vocal_voicebank(def, 33),
-        Some(resonance_music_theory::VoicebankId::new("lilia"))
+        Some(resonance_music_theory::VoicebankId::new("tiger"))
     );
 
     // The job exists and is live (the SVS model dir is absent under test,

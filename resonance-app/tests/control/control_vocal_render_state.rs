@@ -356,7 +356,7 @@ fn a_missing_bank_reports_error_with_its_kind() {
     let mut app = app_with_project();
     let verse = rendered_lane(&mut app, "Verse", 1);
     // The lane's bank goes away: the render refuses up front.
-    std::fs::remove_dir_all(app.test_user_voicebank_dir("lilia")).expect("remove the bank");
+    std::fs::remove_dir_all(app.test_user_voicebank_dir("tiger")).expect("remove the bank");
     app.test_rescan_voicebanks();
     gui(&mut app, verse, LaneInspectorMsg::RerenderVocalAudio);
 

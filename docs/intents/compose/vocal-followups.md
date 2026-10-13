@@ -43,12 +43,18 @@ default bank's licence holds — plus a few small gaps the builders left.
        meiji/standard.
      - 1 (effect modes, not lead voices on a plain line): allen_crow/whisper,
        keiro_revenant/growl, vf and whisper, liam_thorne/growl and vf.
-   - Open from this: whether the default bank moves from Lilia (3) to
-     TIGER (4.00 mean, mystic 5), and whether effect modes (growl, vocal
-     fry, whisper) should be marked as such in the speaker picker so they
-     are not picked as a lead by accident. Every bank has at least one
-     voice scored 4 or more except Lilia and Meiji, so all seven can stay
-     in the index.
+   - **Decided and built (2026-10-13):** the default bank moved from
+     Lilia (3) to TIGER (4.00 mean): a new lane sings TIGER `mystic` (5)
+     whatever its voice type, while stored lanes keep their bank and a
+     file without `voicebank` still reads as Lilia. Effect modes (growl,
+     vocal fry, whisper) are marked `effect` in the built-in table,
+     listed last in the speaker picker as `Effects ‹ …`, flagged in
+     `vocal.voicebanks`, and never a bank's default; Meiji's `phantom`
+     stays a lead mode. See
+     [voicebank library](../../features/compose/voicebank-library.md) and
+     [lyrics and melody](../../features/compose/vocal-lyrics-and-melody.md).
+   - Every bank has at least one voice scored 4 or more except Lilia and
+     Meiji, so all seven can stay in the index.
    - Peiton is not installed: it needs a manual download from Gumroad
      (https://nebm.gumroad.com/l/vvhyg), so it has no index entry and was
      in neither blind set.
@@ -71,9 +77,12 @@ default bank's licence holds — plus a few small gaps the builders left.
 4. **Licences before any commercial release.**
    - Lilia's ToU forbids "AI-generated music and other generative AI
      contexts" and asks porters to contact the creator. D9 accepted this
-     while Resonance is not commercial. Contact julieraptor
-     (liee.immortal.idol@gmail.com) for written permission, or move the
-     default bank off Lilia.
+     while Resonance is not commercial. She is no longer the default bank
+     (TIGER is, since 2026-10-13), but she stays a built-in choice:
+     contact julieraptor (liee.immortal.idol@gmail.com) for written
+     permission, or drop her before a commercial release. TIGER's terms
+     are `paid`: check what a commercial release owes for its default
+     voice.
    - The openvpi vocoders (PC-NSF-HiFiGAN 2025.02, NSF-HiFiGAN 2024.02)
      are CC BY-NC-SA 4.0, and Lilia ships a fine-tune of one: commercial
      use needs permission or another vocoder.

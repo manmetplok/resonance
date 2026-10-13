@@ -105,8 +105,9 @@ fn serve() -> (PlokServer, Vec<u8>) {
 }
 
 /// The demo on the Compose tab with the Lead Vocal lane selected (its
-/// draft and melody cards folded), on private voicebank folders holding a
-/// Lilia stand-in, with the library pointed at `server`. Returns the lane.
+/// draft and melody cards folded) and switched to Lilia, on private
+/// voicebank folders holding a Lilia stand-in, with the library pointed at
+/// `server`. Returns the lane.
 fn demo_with_library(root: &std::path::Path, server: &PlokServer) -> (Resonance, u64) {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Compose);
     demo::seed_demo_content(&mut app);
@@ -133,6 +134,15 @@ fn demo_with_library(root: &std::path::Path, server: &PlokServer) -> (Resonance,
         .selected_placement()
         .expect("demo selects a placement")
         .definition_id;
+    // A new lane sings TIGER, which is not installed here: put the lane on
+    // the installed Lilia.
+    let _ = app.update(Message::Compose(ComposeMessage::LaneInspector {
+        definition_id: def,
+        track_id: LEAD_VOCAL,
+        msg: resonance_app::compose::messages::LaneInspectorMsg::SetVocalVoicebank(
+            resonance_music_theory::VoicebankId::new("lilia"),
+        ),
+    }));
     (app, def)
 }
 

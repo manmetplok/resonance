@@ -165,8 +165,8 @@ fn out_of_range_notes_are_flagged_against_the_voicebank() {
 fn two_speaker_bank() -> BankProfile {
     use resonance_app::compose::vocal_svs::registry::{BuiltinBank, BuiltinSpeaker};
     static SPEAKERS: &[BuiltinSpeaker] = &[
-        BuiltinSpeaker { id: "high", name: "High", model_key: "fixture_high" },
-        BuiltinSpeaker { id: "low", name: "Low", model_key: "fixture_low" },
+        BuiltinSpeaker { id: "high", name: "High", model_key: "fixture_high", effect: false },
+        BuiltinSpeaker { id: "low", name: "Low", model_key: "fixture_low", effect: false },
     ];
     fn default_speaker(voice: VoiceType) -> Option<&'static str> {
         match voice {

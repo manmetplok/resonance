@@ -227,10 +227,10 @@ fn vocal_rail_lyrics_and_draft_folded() {
 ///    (a config-only TIGER stand-in, shipping its own duration and pitch
 ///    models as TIGER does) and picked, the Voice & delivery card shows
 ///    the Voicebank picker on its name, a Speaker picker on the lane's
-///    default mode (Disco for an alto lane), both "from the voicebank"
+///    mode (Mystic, a new lane's), both "from the voicebank"
 ///    toggles, and — the bank's pitch model singing — the vibrato, rate and
 ///    portamento sliders muted under a hint. The not-installed state is the
-///    folded-draft golden above (`lilia (not installed)`).
+///    folded-draft golden above (`tiger (not installed)`).
 #[test]
 fn vocal_rail_installed_bank_with_speakers() {
     let (app, definition_id, vocal_track_id) = vocal_rail_on_installed_tiger(true);

@@ -8,7 +8,8 @@
 //! both always present whatever the bank. [`VoicebankId`] lowercases the
 //! enum names into the ids they became, and the speaker comes from the
 //! field that belonged to the lane's bank, lowercased (`Disco` → `disco`).
-//! A file that already has `speaker` keeps it.
+//! A file that already has `speaker` keeps it. A file without `voicebank`
+//! reads as Lilia, not the current TIGER default (`LEGACY_VOICEBANK`).
 //!
 //! Every field's `#[serde(default …)]` lives here: `VocalParams` reads
 //! through this type (`#[serde(from)]`), so its own attributes would only
@@ -77,7 +78,7 @@ pub(super) struct VocalParamsRepr {
     bank_pitch: bool,
     #[serde(default)]
     speaker: Option<String>,
-    #[serde(default)]
+    #[serde(default = "legacy_voicebank")]
     voicebank: VoicebankId,
     #[serde(default)]
     curves: VocalCurves,
@@ -87,6 +88,18 @@ pub(super) struct VocalParamsRepr {
     /// Pre-registry Meiji mode (`"Standard"` …). Read, never written.
     #[serde(default)]
     singer_meiji: Option<String>,
+}
+
+/// The bank of a file without `voicebank`: Lilia, the code default from
+/// spec phase 1 until 2026-10-13. Every file written since phase 2 stores
+/// the field, so only files older than that miss it; Lilia keeps the ones
+/// that were last opened (and heard) under the Lilia default sounding as
+/// they did, rather than following the newer TIGER default
+/// ([`VoicebankId::DEFAULT`]).
+const LEGACY_VOICEBANK: &str = "lilia";
+
+fn legacy_voicebank() -> VoicebankId {
+    VoicebankId::new(LEGACY_VOICEBANK)
 }
 
 /// TIGER's speaker when an old file had no `singer` either: the

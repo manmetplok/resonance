@@ -432,7 +432,39 @@ impl std::fmt::Display for VoicebankChoice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpeakerChoice {
     pub id: String,
+    /// What the picker shows: the speaker's name, under an `Effects ‹`
+    /// group prefix for an effect mode.
     pub label: String,
+    /// An effect mode (growl, vocal fry, whisper), not a lead voice.
+    pub effect: bool,
+}
+
+/// The group prefix effect modes carry in the Speaker picker, the way the
+/// MIDI patch picker prefixes a patch's category ([`PatchChoice`]).
+pub(crate) const EFFECTS_GROUP: &str = "Effects";
+
+/// The Speaker picker's options for a bank's speakers: the lead modes in
+/// the bank's order, then the effect modes, each labelled
+/// `Effects ‹ <name>` so the flat `pick_list` reads as two groups. Every
+/// entry stays selectable (iced's `pick_list` has no disabled rows, so a
+/// separate heading row would be one more thing to pick that does
+/// nothing).
+pub(crate) fn speaker_choices(
+    speakers: Vec<crate::compose::vocal_svs::registry::SpeakerInfo>,
+) -> Vec<SpeakerChoice> {
+    let (lead, effects): (Vec<_>, Vec<_>) = speakers.into_iter().partition(|s| !s.effect);
+    lead.into_iter()
+        .chain(effects)
+        .map(|s| SpeakerChoice {
+            label: if s.effect {
+                format!("{EFFECTS_GROUP} \u{2039} {}", s.name)
+            } else {
+                s.name
+            },
+            id: s.id,
+            effect: s.effect,
+        })
+        .collect()
 }
 
 impl std::fmt::Display for SpeakerChoice {
@@ -444,14 +476,7 @@ impl std::fmt::Display for SpeakerChoice {
 impl VoicebankChoice {
     /// The choice for a bank as `profile` describes it, labelled `label`.
     pub fn from_profile(profile: &crate::compose::vocal_svs::BankProfile, label: String) -> Self {
-        let speakers: Vec<SpeakerChoice> = profile
-            .speakers()
-            .into_iter()
-            .map(|s| SpeakerChoice {
-                id: s.id,
-                label: s.name,
-            })
-            .collect();
+        let speakers = speaker_choices(profile.speakers());
         let models = profile.bank_models();
         Self {
             id: profile.id().as_str().into(),

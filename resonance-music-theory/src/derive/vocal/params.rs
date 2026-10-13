@@ -218,8 +218,11 @@ impl VocalStyle {
 pub struct VoicebankId(String);
 
 impl VoicebankId {
-    /// Lilia, the default bank (spec D9).
-    pub const DEFAULT: &'static str = "lilia";
+    /// TIGER, the bank a new vocal lane sings with (it scored best in the
+    /// 41-voice blind listen of 2026-10-13; Lilia was the default before).
+    /// A project lane keeps the bank it stored; a file from before lanes
+    /// stored one reads as Lilia (`legacy`).
+    pub const DEFAULT: &'static str = "tiger";
 
     /// An id from any spelling of it: trimmed and lowercased.
     pub fn new(id: impl AsRef<str>) -> Self {
@@ -392,10 +395,13 @@ pub struct VocalParams {
     /// bank's default speaker, and is all a single-voice bank (Lilia)
     /// ever holds. Replaces the old per-bank `singer` (TIGER) and
     /// `singer_meiji` (Meiji) fields, which loading maps onto it
-    /// (`legacy`).
+    /// (`legacy`). A new lane holds [`VocalParams::DEFAULT_SPEAKER`]
+    /// whatever its voice type.
     pub speaker: Option<String>,
-    /// Trained DiffSinger model used for the SVS render, by id. Defaults
-    /// to `lilia`, also for older JSON without the field.
+    /// Trained DiffSinger model used for the SVS render, by id. A new
+    /// lane gets [`VoicebankId::DEFAULT`] (`tiger`); older JSON without
+    /// the field reads as `lilia`, the default those files were written
+    /// under (`legacy`).
     pub voicebank: VoicebankId,
     /// The lane's expression curves (Dynamics, Tension, Breathiness, Pitch
     /// bend), section-relative — edited as `Vocal:` automation sub-rows on
@@ -457,7 +463,7 @@ impl Default for VocalParams {
             velocity_dynamics: default_velocity_dynamics(),
             bank_timing: true,
             bank_pitch: true,
-            speaker: None,
+            speaker: Some(Self::DEFAULT_SPEAKER.to_owned()),
             voicebank: VoicebankId::default(),
             curves: VocalCurves::default(),
         }
@@ -497,6 +503,12 @@ impl VocalParams {
 
     /// Default [`Self::rest_threshold_beats`]: half a beat.
     pub const DEFAULT_REST_THRESHOLD_BEATS: f32 = 0.5;
+
+    /// The speaker a new lane sings with on [`VoicebankId::DEFAULT`]:
+    /// TIGER's `mystic`, the one voice the 2026-10-13 blind listen scored
+    /// 5, for every voice type. Only a bank *switch* picks the speaker by
+    /// voice type (the bank's own default).
+    pub const DEFAULT_SPEAKER: &'static str = "mystic";
 
     /// Switch to `voicebank`, resetting the speaker to `default_speaker`
     /// (the new bank's default, which the caller looks up: the app's

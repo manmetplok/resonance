@@ -1,6 +1,6 @@
 # Voicebank library (registry, plok.org install, library overlay)
 
-> Verified against master @ `a0c05be8` + the LUNAI English singers on 2026-10-13.
+> Verified against master @ `f82be9b0` + the TIGER Mystic default and effect modes on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4–§5 (slices 4 and 7); research [`singing-voicebank-options-2026`](../../history/research/singing-voicebank-options-2026.md).
 
 Voicebanks are content a user installs, not three banks fixed in the code.
@@ -20,8 +20,13 @@ in [pronunciation](pronunciation.md).
 ### The registry
 
 - **Ids.** A lane names its bank by string id (`VocalParams::voicebank:
-  VoicebankId`, Lilia by default) and its voice mode by `speaker:
-  Option<String>`. `VoicebankRegistry` (`compose/vocal_svs/registry/`)
+  VoicebankId`) and its voice mode by `speaker: Option<String>`. A new
+  lane sings TIGER `mystic` (`VoicebankId::DEFAULT`,
+  `VocalParams::DEFAULT_SPEAKER`), whatever its voice type; a project
+  file without the field reads as Lilia, the default it was written under
+  ([lyrics and melody](vocal-lyrics-and-melody.md)). A lane on TIGER where
+  TIGER is not installed shows `tiger (not installed)` and its render
+  fails `voicebank_missing`, with a message that says how to install it. `VoicebankRegistry` (`compose/vocal_svs/registry/`)
   scans at startup, on every `vocal.voicebanks`, when the overlay opens or
   refreshes, and after an install or a Delete (`rescan`):
   - **user banks**: each folder of `$XDG_DATA_HOME/resonance/voicebanks/`
@@ -102,6 +107,16 @@ in [pronunciation](pronunciation.md).
     of its last path segment. A bank switch resets the speaker to the
     bank's default (TIGER: by voice type; Meiji and the LUNAI singers:
     `standard`; others: the first; none for ≤1 speaker).
+  - *Effect modes* (`BuiltinSpeaker::effect` → `SpeakerInfo::effect`):
+    growl, vocal fry and whisper — Keiro Revenant's `vf whisper growl`,
+    Liam Thorne's `vf growl`, Allen Crow's `whisper`. Every one scored 1
+    as a lead in the 41-voice blind listen: they colour a line or a word,
+    they do not carry one. They stay selectable everywhere; the Speaker
+    picker lists them last, and no bank's default speaker is one (a test
+    over the table holds that). Meiji's `phantom` ("whispery and husky")
+    is a lead mode: it sings a whole line clearly (Whisper 100 %) and
+    scored 3, above Meiji's `standard`. Only the table marks effect modes;
+    a bank it does not list has none.
   - *Phoneme inventory*: the acoustic phoneme dictionary; an ARPAbet phone
     counts as present bare or `en/`-prefixed. `missing_phonemes` is ARPAbet
     minus that. A bank missing more than 8 phones is `english: false`
@@ -286,7 +301,12 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
   installed English banks (options cached in
   `UiViewCaches::voicebank_choices`, rebuilt on every rescan; a lane on a
   built-in bank that is not installed shows `<id> (not installed)`) and a
-  **Speaker** list (hidden for a bank with at most one). **Library…** opens
+  **Speaker** list (hidden for a bank with at most one): the lead modes in
+  the bank's order, then the effect modes labelled `Effects ‹ Growl`, …
+  (`state::picks::speaker_choices`, built with the cached bank choices).
+  iced's `pick_list` has no groups or disabled rows, so a separate
+  "Effects" heading row would be one more selectable entry that does
+  nothing; the prefix is the MIDI patch picker's existing group style. **Library…** opens
   the overlay: search with the shared syntax (`is:fav`, `lang:en`,
   `is:user` / `is:dev` / `is:plok`) and ★, a list with INSTALLED / UPDATE /
   % chips, and a detail pane with credit, terms URL, commercial use and
@@ -299,14 +319,17 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
   - `vocal.voicebanks` → `mcp__resonance__vocal_voicebanks` (read-only,
     above the mutation gate, no revision, no project needed):
     `{installed: [{id, name, version, english, speakers [{id, name,
-    comfortable_range}], default_speaker, comfortable_range {low, high,
+    comfortable_range, effect?}], default_speaker, comfortable_range {low, high,
     range_source}, missing_phonemes, substitutions [{phoneme, sung_as}],
     curves {dynamics, tension, breathiness, pitch_bend}, models
     {duration, pitch, variance}, credit,
     terms_url, commercial, vocoder, vocoder_installed}], available: [{id,
     name, version, terms_url, credit, commercial, languages, speakers,
     size, vocoder, url}], index_status: fresh | cached | fetching |
-    unavailable, index_error?}`. It rescans first, reads the index from
+    unavailable, index_error?}`. `effect: true` marks an effect mode (left
+    out on a lead mode; an additive field, no protocol bump); the MCP
+    description tells agents not to pick one for a plain lead line. It
+    rescans first, reads the index from
     memory or its disk cache and starts a background fetch when it is
     stale.
   - `vocal.voicebank_install {id}` → `vocal_voicebank_install`, a job
@@ -340,7 +363,8 @@ Opened by **Library…** beside a vocal lane's Voicebank picker; tabs
 | Part-file protocol and the record-less-part age rule (shared with the drums) | `plugins/resonance-drums/tests/download.rs` (`a_starting_worker_sweeps_stale_download_leftovers`, resume and lock tests) | `./scripts/run-tests.py -p resonance-drums` |
 | Overlay: Library… opens it on the lane's bank, a download waits for Accept (Decline fetches nothing), Use sets the lane, Delete asks first, Cancel; progress patches one row and typing rebuilds none; goldens of the Installed tab, plok.org tab, accept-terms, downloading and confirm-delete states | `tests/compose/compose_voicebank_library.rs` → `compose_voicebank_library_{installed,plok,accept_terms,downloading,confirm_delete}-wgpu.png` | `RESONANCE_BLESS=1` to re-bless |
 | The bank's own models found beside the acoustic config (a missing model file does not count; speakers map by last path segment, else the model's first); `vocal.voicebanks` `models`; a lane's flags pick them | `resonance-svs/tests/voicebank_manifest.rs` (`the_banks_own_models_are_found_next_to_the_acoustic_config`), `tests/control/control_voicebanks.rs` (`voicebanks_reports_the_banks_own_models`), `tests/vocal/vocal_bank_models.rs` (`a_lane_uses_the_bank_models_its_flags_ask_for`) | `./scripts/run-tests.py` |
-| Inspector pickers (installed bank + speaker; `lilia (not installed)`) | `tests/compose/compose_rail_collapse.rs` → `compose_vocal_rail_installed_bank-wgpu.png` | same |
+| Inspector pickers (installed bank + speaker; `tiger (not installed)` with its speakers) | `tests/compose/compose_rail_collapse.rs` → `compose_vocal_rail_installed_bank-wgpu.png`, `compose_vocal_rail_lyrics_draft_folded-wgpu.png` | same |
+| Effect modes: exactly the growl / vocal fry / whisper modes marked, never a bank's default; the Speaker picker lists them last under `Effects ‹` (not installed and installed); `vocal.voicebanks` `effect` (omitted on lead modes), `vocal.set_params` accepts one; the missing-bank message names both install routes | `tests/vocal/voicebank_registry.rs` (`effect_modes_are_marked_and_never_a_banks_default`, `the_speaker_picker_lists_effect_modes_last_under_effects`), `tests/control/control_voicebanks.rs` (`voicebanks_marks_effect_modes_and_set_params_accepts_them`, `render_with_a_missing_bank_fails_naming_it`) | `./scripts/run-tests.py -p resonance-app` |
 
 Not covered: a real install from GitHub (hundreds of MB) has not been run;
 the tests use a loopback server and fixture banks. The LUNAI four were
@@ -386,7 +410,8 @@ one level down).
   [vocal follow-ups](../../intents/compose/vocal-followups.md).
 - Lilia's ToU forbids "AI-generated music and other generative AI
   contexts" and its vocoder is CC BY-NC-SA; D9 accepts both while
-  Resonance is not commercial — see
+  Resonance is not commercial. She is no longer the default bank (TIGER
+  is, since 2026-10-13), but projects still use her — see
   [vocal follow-ups](../../intents/compose/vocal-followups.md).
 - Per-speaker ranges exist for Allen Crow's `open` and `gentle` only.
   Vocal fry modes (Keiro's, Liam's `vf`) hit their notes loosely

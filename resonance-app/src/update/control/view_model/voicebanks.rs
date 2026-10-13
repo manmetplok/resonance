@@ -86,6 +86,7 @@ fn voicebank_entry(profile: &BankProfile, terms: BankTerms) -> wire::VoicebankEn
             comfortable_range: range_view(profile.comfortable_range(Some(&s.id))),
             id: s.id,
             name: s.name,
+            effect: s.effect,
         })
         .collect();
     wire::VoicebankEntry {

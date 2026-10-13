@@ -598,7 +598,7 @@ impl BuiltinTemplateId {
     pub fn description(self) -> &'static str {
         match self {
             BuiltinTemplateId::VocalSongwriting => {
-                "Chord progression, a Compose vocal line on the Lilia voicebank, and a pad/bass bed."
+                "Chord progression, a Compose vocal line on the TIGER voicebank (Mystic), and a pad/bass bed."
             }
             BuiltinTemplateId::BandRecording => {
                 "Six mic/DI audio tracks routed to drum and instrument busses, with a master chain."
@@ -802,12 +802,14 @@ fn build_beatmaking() -> BuiltinProject {
 }
 
 /// Vocal songwriting — a chord progression (Compose section), a generated
-/// vocal line on the Lilia voicebank, and a pad/bass instrument bed. The
+/// vocal line on the TIGER voicebank (`mystic`, the new-lane default), in
+/// a tenor range TIGER sings clearly, and a pad/bass instrument bed. The
 /// vocal melody is pre-baked from the progression so the project opens with
 /// a real Compose vocal line instead of an empty staff.
 fn build_vocal_songwriting() -> BuiltinProject {
     use resonance_music_theory::{
-        Chord, ChordQuality, Mode, PitchClass, Scale, TimedChord, VocalParams, VoicebankId,
+        Chord, ChordQuality, Mode, PitchClass, Scale, TimedChord, VocalParams, VoiceType,
+        VoicebankId,
     };
 
     const VOCAL_TRACK: u64 = 1;
@@ -848,9 +850,14 @@ fn build_vocal_songwriting() -> BuiltinProject {
         })
         .collect();
 
-    // ---- Vocal lane generator on the Lilia voicebank ----
+    // ---- Vocal lane generator on TIGER (Mystic) ----
+    // TIGER is a male voice: a tenor line inside its comfortable range
+    // (C3..A4, the built-in table's), not the new-lane Alto default.
     let vocal_params = VocalParams {
-        voicebank: VoicebankId::new("lilia"),
+        voicebank: VoicebankId::new(VoicebankId::DEFAULT),
+        speaker: Some(VocalParams::DEFAULT_SPEAKER.to_owned()),
+        voice: VoiceType::Tenor,
+        range: (48, 69),
         ..VocalParams::default()
     };
     let mut lane_generators = HashMap::new();

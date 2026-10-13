@@ -1,6 +1,6 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `a0c05be8` + the LUNAI English singers (384-wide speaker embeddings, ranges, all-voice measurements) on 2026-10-13.
+> Verified against master @ `f82be9b0` + the TIGER Mystic default and effect modes on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -18,17 +18,21 @@ only marks the lane stale.
 ## Behaviour
 
 - **Voicebanks** are installable content: a lane names its bank by id
-  (`VocalParams::voicebank`, Lilia by default) and its voice mode by
-  `speaker`. Which banks exist, what each can do (speakers, phoneme
-  inventory, language ids, curve support, comfortable range, terms) and
+  (`VocalParams::voicebank`; a new lane sings TIGER `mystic`) and its
+  voice mode by `speaker` (growl, vocal fry and whisper modes are marked
+  as effect modes, not lead voices). Which banks exist, what each can do
+  (speakers, phoneme inventory, language ids, curve support, comfortable
+  range, terms) and
   how they are installed from plok.org is the
   [voicebank library](voicebank-library.md). The render asks
   `BankProfile` (`VoicebankRegistry::profile`) for the bank's model files
   (`render_target`), phoneme keys, language ids and curve support.
 - **Missing bank.** `vocal.render` checks every lane it covers before
   anything starts and fails with `voicebank_missing`, naming the bank (or
-  the bank's missing vocoder), where a user bank goes, and
-  `vocal_voicebanks`. Every render path checks the bank right after
+  the bank's missing vocoder), how to install it (`vocal_voicebank_install`,
+  or **Library…** beside the lane's Voicebank picker), where a user bank
+  goes, and `vocal_voicebanks`. A test app has no banks, so a new lane's
+  TIGER reads `tiger (not installed)` there. Every render path checks the bank right after
   planning and **before** queuing anything
   (`enqueue_vocal_render` → `render_target_or_missing`): a GUI render
   keeps the old audio, raises the banner and fails any job waiting on the

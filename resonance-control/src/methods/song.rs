@@ -386,7 +386,7 @@ pub struct VocalLaneView {
     /// reported as `false`. Distinguish "not generated yet" by
     /// `note_count == 0` rather than by this flag.
     pub counts_mismatch: bool,
-    /// Voicebank id this lane will render with, e.g. `"lilia"` (the
+    /// Voicebank id this lane will render with, e.g. `"tiger"` (the
     /// same id as `params.voicebank`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voicebank: Option<String>,

@@ -142,7 +142,8 @@ impl ResonanceMcp {
                        generator defaults. For kind \"vocal\", options is the vocal_set_params \
                        patch (snake_case, partial): on a section that already has a vocal lane \
                        on this track it MERGES into that lane and keeps its lyrics and seed; on \
-                       a new lane, omitted fields take their defaults (voicebank lilia). Later \
+                       a new lane, omitted fields take their defaults (voicebank tiger, speaker \
+                       mystic). Later \
                        changes are easier with vocal_set_params.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<section::SetLaneGeneratorResult>()

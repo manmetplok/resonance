@@ -18,7 +18,7 @@
 //! from the existing `VocalAudioReady` / `VocalAudioFailed` completion
 //! messages via a [`JobToken::VocalRender`], once **all** of its lanes
 //! have landed. A render without `voicebank` uses each lane's own bank;
-//! a new lane starts on Lilia, the `VocalParams` code default. A lane
+//! a new lane starts on TIGER (`mystic`), the `VocalParams` code default. A lane
 //! whose bank (or its vocoder) is not installed fails the call with
 //! `voicebank_missing` before anything starts (spec §4.6).
 //!
@@ -853,8 +853,8 @@ fn render(
         // differently. Blanket-defaulting reset every lane on a plain
         // render (ba doc #271), and remapping "the code default" to Lilia
         // overrode a lane that had explicitly chosen that default
-        // (BUG-52); Lilia is now the code default itself, so the lane's
-        // value is always the answer.
+        // (BUG-52); a new lane stores the code default itself, so the
+        // lane's value is always the answer.
         let voicebank = requested
             .clone()
             .unwrap_or_else(|| lane_voice(app, definition_id, track_id).0);
