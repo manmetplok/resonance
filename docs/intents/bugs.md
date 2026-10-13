@@ -71,6 +71,8 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
+| BUG-71 | compose | The vocal melody generator writes out-of-scale notes with `stay_in_scale` on: a D-minor chorus (Bbmaj7, F/A, Gm7, A7; style pop_ballad, syllable_mode mixed, seed 7) sang D#4/E♭ on 9 of 29 notes. `vocal_refit_melody` cleans it up. | `resonance-music-theory/src/derive/vocal/` (melody walk / melisma pass) | live MCP session 2026-10-13 (triphop.rproj) |
+| BUG-72 | compose | Chord symbols are spelled with sharps regardless of key: `harmony_apply_progression` with "Bbmaj7" in D minor reads back as "A#maj7" in `song_sections` (and the chord track). | chord symbol formatting in `resonance-music-theory` | live MCP session 2026-10-13 |
 | BUG-51 | compose | Drum group Swing, Humanize and "Fills (last bar)" sliders change nothing in the generated drums. | sliders `app/view/compose/lane_inspector/drums/rhythm.rs:44-97`; stored at `app/update/compose/drum_groups.rs:315-324`; never read | intent [compose/drum-groove-feel.md](compose/drum-groove-feel.md) |
 
 ## Project, save and export
