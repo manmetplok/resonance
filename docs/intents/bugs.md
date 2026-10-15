@@ -22,7 +22,6 @@ fix the ones below. The engine-path defects it judged to be design work
 | ID | Decided fix |
 |---|---|
 | BUG-02 | Build it the way [mixer/sub-track-solo.md](mixer/sub-track-solo.md) describes: sub-track solo counts in the total, and the parent becomes a fan-out driver. |
-| BUG-03 | Offset = live mix integrated LUFS − reference integrated LUFS, handed to the engine thread without a lock; −inf falls back to 0. |
 | BUG-04 | Bus levels are longest-path levels over the send graph, and sends are pulled by level instead of index. Keep the source-index summing order. |
 | BUG-20 | On a seek or loop-range change during cycle-record, roll the current audio and MIDI pass, re-arm the start latch with the new loop, and update the session slot. |
 | BUG-22 | The seam bumps a wrap-count atomic, and live MIDI events are filed into passes by the wrap count they arrived under (this also stops a backward seek from rolling a MIDI pass). |
@@ -41,7 +40,6 @@ fix the ones below. The engine-path defects it judged to be design work
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
 | BUG-02 | mixer | The S button on a sub-track strip lights up, saves and undoes, but changes nothing audible. | `app/view/mixer/track_strip.rs:662-666`; `audio/mixer/render/strategy.rs:56` (`sub_track_silenced` ignores solo); `audio/types/track.rs:611` (`any_top_level_solo` skips sub-tracks) | intent [mixer/sub-track-solo.md](mixer/sub-track-solo.md) |
-| BUG-03 | mixer | The reference loudness-match toggle has no audible effect; its readout is always +0.0 dB. | `audio/engine/reference.rs:73` (`offset_db`), only ever set to 0.0 at `:88` | intent [mixer/reference-loudness-match.md](mixer/reference-loudness-match.md) |
 | BUG-04 | mixer | A bus→bus send into a lower-indexed (older) bus passes validation and is saved, but is silent. | `audio/mixer/render/bus_pass.rs:152` (`dst_idx > src_idx`); `audio/mixer/render/routing.rs:123-133` | intent [mixer/bus-to-bus-routing.md](mixer/bus-to-bus-routing.md) |
 
 ## Timeline and clips
