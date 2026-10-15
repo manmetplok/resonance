@@ -153,7 +153,18 @@ mod live {
                 .unwrap_or(false)
         };
         let selector = format!("class:^({APP_ID})$");
-        // Tiled windows ignore an explicit pixel size, so float it first.
+        // Hyprland 0.56 made dispatchers Lua (`hl.dsp.*`, BUG-77); older
+        // releases take the classic dispatcher syntax. Try the new one
+        // first. Tiled windows ignore an explicit pixel size, so float
+        // the window before resizing it.
+        let float = format!("hl.dsp.window.float({{ action = \"enable\", window = \"{selector}\" }})");
+        let resize = format!(
+            "hl.dsp.window.resize({{ x = {}, y = {}, relative = false, window = \"{selector}\" }})",
+            target.0, target.1
+        );
+        if run(&["dispatch", &float]) && run(&["dispatch", &resize]) {
+            return true;
+        }
         run(&["dispatch", "setfloating", &selector]);
         run(&[
             "dispatch",
