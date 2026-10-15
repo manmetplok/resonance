@@ -313,6 +313,24 @@ fn freeze_selected_uses_the_selected_track() {
     assert!(app.test_freeze_status(2).is_freezing());
 }
 
+/// "Freeze selected tracks" freezes the whole multi-selection, in display
+/// order, skipping what cannot freeze — not just the primary (BUG-11).
+#[test]
+fn freeze_selected_freezes_the_whole_multi_selection() {
+    let (mut app, rx, _dir) = capturing_app();
+    app.test_add_track(1, TrackType::Instrument);
+    app.test_add_track(2, TrackType::Audio);
+    app.test_add_track(3, TrackType::Instrument);
+    app.test_set_selected_tracks(vec![3, 2, 1]);
+
+    app.test_dispatch(Message::Freeze(FreezeMessage::FreezeSelectedTracks));
+    let _ = drain(&rx);
+
+    let queue = app.test_freeze_queue().expect("batch queue");
+    assert_eq!(queue.total, 2, "both selected instrument tracks, not the audio one");
+    assert_eq!(queue.current, Some(1), "display order, not click order");
+}
+
 // ---------------------------------------------------------------------
 // Undo classification
 // ---------------------------------------------------------------------

@@ -25,7 +25,6 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-11 | timeline | "Freeze selected tracks" freezes only the primary track, not the multi-selection. | `app/update/freeze.rs:398-405` reads only `selected_track` (doc comment at 395-397 is stale) | area docs 2026-10-07 |
 | BUG-14 | timeline | A clip's fade handle can only be grabbed at the clip corner, not at the fade's real end, once a fade is set; frozen clips are treated as fadeable. | `app/view/timeline/input/hit_test.rs` (`clip_handles` passes fade length 0) | review 2026-10-02 FU-W2d |
 | BUG-15 | timeline | The warp-marker strip shadows the clip's trim handle. | `app/view/clip_inspector/warp.rs` / timeline hit-test | review 2026-10-02 FU-W2e · intent [audio-engine/clip-warp-render.md](audio-engine/clip-warp-render.md) |
 | BUG-16 | timeline | Undoing a clip relink restores the old link but not the silence of the missing file (the clip keeps playing the relinked audio). | `app/update/relink.rs` (undo of a relink) | review 2026-10-02 FU-W4e |
