@@ -43,15 +43,11 @@ fix the ones below. The engine-path defects it judged to be design work
 | BUG-02 | mixer | The S button on a sub-track strip lights up, saves and undoes, but changes nothing audible. | `app/view/mixer/track_strip.rs:662-666`; `audio/mixer/render/strategy.rs:56` (`sub_track_silenced` ignores solo); `audio/types/track.rs:611` (`any_top_level_solo` skips sub-tracks) | intent [mixer/sub-track-solo.md](mixer/sub-track-solo.md) |
 | BUG-03 | mixer | The reference loudness-match toggle has no audible effect; its readout is always +0.0 dB. | `audio/engine/reference.rs:73` (`offset_db`), only ever set to 0.0 at `:88` | intent [mixer/reference-loudness-match.md](mixer/reference-loudness-match.md) |
 | BUG-04 | mixer | A bus→bus send into a lower-indexed (older) bus passes validation and is saved, but is silent. | `audio/mixer/render/bus_pass.rs:152` (`dst_idx > src_idx`); `audio/mixer/render/routing.rs:123-133` | intent [mixer/bus-to-bus-routing.md](mixer/bus-to-bus-routing.md) |
-| BUG-05 | mixer | A bus plugin's `FxBypassChanged` echo has no owed-removal guard (tracks have one), so a stale echo can re-apply to a removed/replaced slot. | `app/engine_events/plugins.rs:1148-1152` | review 2026-10-02 FU-A1b2 |
 
 ## Timeline and clips
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-14 | timeline | A clip's fade handle can only be grabbed at the clip corner, not at the fade's real end, once a fade is set; frozen clips are treated as fadeable. | `app/view/timeline/input/hit_test.rs` (`clip_handles` passes fade length 0) | review 2026-10-02 FU-W2d |
-| BUG-15 | timeline | The warp-marker strip shadows the clip's trim handle. | `app/view/clip_inspector/warp.rs` / timeline hit-test | review 2026-10-02 FU-W2e · intent [audio-engine/clip-warp-render.md](audio-engine/clip-warp-render.md) |
-| BUG-16 | timeline | Undoing a clip relink restores the old link but not the silence of the missing file (the clip keeps playing the relinked audio). | `app/update/relink.rs` (undo of a relink) | review 2026-10-02 FU-W4e |
 
 ## Recording and hardware
 
@@ -84,5 +80,4 @@ fix the ones below. The engine-path defects it judged to be design work
 | BUG-60 | project-core | Save As does not copy clip WAVs that only the undo history references; undoing back to them in the new project plays silence. | `app/update/project_io/mod.rs:660-672` (engine saves live clips only) | review 2026-10-02 FU-U1a |
 | BUG-61 | project-core | Save replies are untagged (`SaveCollector` has no round-trip id), so a late reply from an earlier save can complete a newer one. | `app/update/project_io/mod.rs:661-672` | review 2026-10-02 FU-S2c |
 | BUG-62 | project-core | *(likely)* Save As over another existing `.rproj` leaves that project's `backups/` behind, and clip GC keeps their clips alive. | `app/project/clip_gc.rs:102` seeds the keep-set from `backups/`; nothing clears it on Save As | review 2026-10-02 STATE2-10 |
-| BUG-64 | ui-shell | Stem export's overwrite mode "Ask each" behaves like "Add suffix"; there is no prompt. | `app/update/export.rs:205,234` | review 2026-10-02 FU-A1a7 · intent [audio-engine/stem-export-options.md](audio-engine/stem-export-options.md) |
 | BUG-75 | audio-engine | A frozen drum kit's tap sends are silent: the cache is the summed taps, so there is no per-tap signal left to send, and a kit with taps on a room bus loses the room while frozen. A send on the kit's parent track also taps the whole cache when frozen, but only port 0 when unfrozen. | freeze cache (`audio/engine/bounce/freeze.rs`); documented in [track-freeze](../features/audio-engine/track-freeze.md) | BUG-67 fix 2026-10-15 |
