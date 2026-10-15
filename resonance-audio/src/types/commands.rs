@@ -610,8 +610,12 @@ pub enum AudioCommand {
         path: PathBuf,
         name: String,
     },
+    /// Report the plugin's full state as `AudioEvent::PluginStateSaved`,
+    /// which echoes `request` so the app can tell which refresh a reply
+    /// answers (BUG-39).
     SavePluginState {
         instance_id: PluginInstanceId,
+        request: u64,
     },
     LoadPluginState {
         instance_id: PluginInstanceId,

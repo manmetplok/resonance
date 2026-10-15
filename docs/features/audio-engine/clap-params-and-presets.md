@@ -1,6 +1,6 @@
 # Plugin parameters, state and presets (engine side)
 
-> Verified against master @ `ef215b08` on 2026-10-15.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/specs/plugin-preset-library.md` (§6–§8,
 > slices P5, P7, P8), `docs/history/reviews/plugin-audit.md` (findings X8,
 > F1, HOST-01), `docs/history/specs/nam-model-library.md` §9.2.
@@ -50,12 +50,15 @@ its state, and loads presets through the plugin. The preset *library*
 
 ### State
 
-- `SavePluginState` → `PluginStateSaved { data }` (`clap.state.save`).
+- `SavePluginState { request }` → `PluginStateSaved { request, data }`
+  (`clap.state.save`). The request id is the app's, echoed so it can tell
+  which refresh a blob answers (BUG-39); a busy lock retries with the same id.
 - `LoadPluginState` reloads with a deactivate / activate cycle around
   `load` so a plugin re-runs its own initialisation
   (`ClapInstance::reload_with_state`); a failure is an `Error` of kind
   `Plugin`.
-- `SaveAllPluginStates` (project save): flush each instance first, report
+- `SaveAllPluginStates { request }` (project save, track-preset capture),
+  answered by `AllPluginStatesSaved { request, states }` (BUG-61): flush each instance first, report
   the values that moved since the host last read them, then save every
   state, so the saved file holds what the plugin plays. Instances whose
   lock is busy are retried.

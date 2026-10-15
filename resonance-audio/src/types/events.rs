@@ -547,6 +547,8 @@ pub enum AudioEvent {
     },
     PluginStateSaved {
         instance_id: PluginInstanceId,
+        /// The `request` of the `SavePluginState` this answers.
+        request: u64,
         data: Vec<u8>,
     },
     /// The answer to `AudioCommand::SavePluginPresetState`. `preset_form`

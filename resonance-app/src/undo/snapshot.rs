@@ -254,12 +254,15 @@ impl crate::Resonance {
         // blob this snapshot holds predates the change, so the refresh's
         // echo fills it in (STATE2-07).
         for (&instance_id, owed) in self.plugin_mirror.owed_blobs.iter() {
-            if owed.superseded || !self.plugin_mirror.index.contains_key(&instance_id) {
+            if !self.plugin_mirror.index.contains_key(&instance_id) {
                 continue;
             }
+            let Some(request) = owed.owed_now() else {
+                continue;
+            };
             let late = LateBlob::default();
             if let Ok(mut s) = owed.slots.lock() {
-                s.push((owed.marks, late.clone()));
+                s.push((request, late.clone()));
             }
             late_plugin_states.push((instance_id, late));
         }
@@ -404,7 +407,9 @@ impl crate::Resonance {
             owed.superseded = true;
         }
         for owed in self.plugin_mirror.owed_blobs.values_mut() {
-            owed.superseded = true;
+            for refresh in &mut owed.refreshes {
+                refresh.superseded = true;
+            }
         }
 
         // Pause playback and stop recording. Recording should already be

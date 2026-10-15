@@ -55,8 +55,11 @@ pub(super) fn dispatch_plugins(
         AudioCommand::ClosePluginEditor { instance_id } => {
             plugins::handle_close_plugin_editor(ctx, instance_id)
         }
-        AudioCommand::SavePluginState { instance_id } => {
-            plugins::handle_save_plugin_state(ctx, instance_id)
+        AudioCommand::SavePluginState {
+            instance_id,
+            request,
+        } => {
+            plugins::handle_save_plugin_state(ctx, instance_id, request)
         }
         AudioCommand::LoadPluginState { instance_id, data } => {
             plugins::handle_load_plugin_state(ctx, instance_id, data)

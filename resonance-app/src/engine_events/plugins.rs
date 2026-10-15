@@ -109,8 +109,7 @@ pub(super) fn added(
     // state. Snapshots taken before the user interacts with the plugin
     // will have the default blob to restore to, avoiding "undo resets
     // the plugin to uninitialised garbage" UX.
-    let _ = r.engine
-        .send(AudioCommand::SavePluginState { instance_id });
+    crate::update::plugin::request_plugin_state(r, instance_id);
 
     // The port layout, for the sub-track policy. Only a track chain has
     // sub-tracks ([`ensure_instance_subtracks`] returns at once for any
@@ -701,6 +700,7 @@ pub(super) fn param_text(
 pub(super) fn state_saved(
     r: &mut Resonance,
     instance_id: PluginInstanceId,
+    request: u64,
     data: Vec<u8>,
 ) {
     // Feeds the undo system's plugin-state cache so snapshots can replay
@@ -711,30 +711,36 @@ pub(super) fn state_saved(
     // is the state after the change it was asked for, and fills the
     // snapshots taken while waiting for it — the same `Arc` the cache
     // takes, so restoring one of them finds the blob live and pushes
-    // nothing.
-    let mut superseded = false;
+    // nothing. Matched by request id, never by position: another refresh
+    // of the same plugin asked for earlier (its add's seed, an editor
+    // close) answers with the state from before the change (BUG-39).
+    let mut live = true;
     if let Some(owed) = r.plugin_mirror.owed_blobs.get_mut(&instance_id) {
-        owed.echoes += 1;
-        let echo = owed.echoes;
-        if let Ok(mut slots) = owed.slots.lock() {
-            slots.retain(|(mark, late)| {
-                if *mark != echo {
-                    return true;
-                }
-                if let Ok(mut slot) = late.lock() {
-                    *slot = Some(blob.clone());
-                }
-                false
-            });
-        }
-        superseded = owed.superseded;
-        if owed.echoes >= owed.marks {
-            r.plugin_mirror.owed_blobs.remove(&instance_id);
+        if let Some(at) = owed.refreshes.iter().position(|f| f.request == request) {
+            live = !owed.refreshes[at].superseded;
+            // FIFO: every refresh asked before this one has answered or
+            // never will (the plugin saved nothing); its slots keep the
+            // blob their snapshot holds.
+            let settled: Vec<u64> = owed.refreshes.drain(..=at).map(|f| f.request).collect();
+            if let Ok(mut slots) = owed.slots.lock() {
+                slots.retain(|(owed_request, late)| {
+                    if *owed_request == request {
+                        if let Ok(mut slot) = late.lock() {
+                            *slot = Some(blob.clone());
+                        }
+                        return false;
+                    }
+                    !settled.contains(owed_request)
+                });
+            }
+            if owed.refreshes.is_empty() {
+                r.plugin_mirror.owed_blobs.remove(&instance_id);
+            }
         }
     }
     // An undo / redo restored a state since the refresh was asked for:
     // this blob describes the state it replaced.
-    if !superseded {
+    if live {
         r.plugin_mirror.state_cache.insert(instance_id, blob);
     }
 }

@@ -260,11 +260,19 @@ fn a_single_state_save_flushes_first() {
     let (mut harness, plugin) = harness_with_fake(0.25);
     plugin.live = 0.5;
 
-    harness.dispatch(AudioCommand::SavePluginState { instance_id: INSTANCE });
+    harness.dispatch(AudioCommand::SavePluginState {
+        instance_id: INSTANCE,
+        request: 12,
+    });
     let events = harness.drain_events();
 
     let saved = events.iter().find_map(|e| match e {
-        AudioEvent::PluginStateSaved { instance_id, data } if *instance_id == INSTANCE => {
+        // The echo carries the request it answers (BUG-39).
+        AudioEvent::PluginStateSaved {
+            instance_id,
+            request: 12,
+            data,
+        } if *instance_id == INSTANCE => {
             Some(f64::from_le_bytes(data.as_slice().try_into().expect("8 bytes")))
         }
         _ => None,

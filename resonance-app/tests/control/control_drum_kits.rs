@@ -537,6 +537,7 @@ fn edit_undo_of_a_kit_select_set_puts_the_old_kit_back() {
     });
     app.test_apply_engine_event(AudioEvent::PluginStateSaved {
         instance_id: DRUMS,
+        request: 0,
         data: vec![0x01],
     });
 

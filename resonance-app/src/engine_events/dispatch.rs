@@ -790,9 +790,11 @@ fn route_plugins(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             identity,
         } => plugins::preset_identity(r, instance_id, identity),
         E::PluginKitInfo { instance_id, info } => plugins::kit_info(r, instance_id, info),
-        E::PluginStateSaved { instance_id, data } => {
-            plugins::state_saved(r, instance_id, data)
-        }
+        E::PluginStateSaved {
+            instance_id,
+            request,
+            data,
+        } => plugins::state_saved(r, instance_id, request, data),
         // The engine's real editor open/failed/closed report (ba doc
         // #283, ba todo #1347). This is the ONLY thing that moves
         // `PluginSlotState.editor_open`; `update/plugin.rs` no longer

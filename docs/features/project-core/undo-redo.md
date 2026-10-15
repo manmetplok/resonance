@@ -1,6 +1,6 @@
 # Undo and redo
 
-> Verified against master @ `f9438e38` + the chord-change vocal melody flow (BUG-70) on 2026-10-13.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/refactor/refactor-intent.md` (Epic A),
 > `docs/history/refactor/arch-migration-plan.md` (ARCH-01, ARCH-06 A6-4,
 > ARCH-09), `docs/history/refactor/A-13-reconcile.md`;
@@ -55,8 +55,15 @@ plugin blobs a disk load uses — built by `snapshot_for_undo`. MIDI notes and
 plugin blobs are `Arc`-shared, so an unchanged clip costs a refcount. Taking
 a snapshot also sends `PersistClipWavs` so every clip it names has a WAV. A
 preset load reserves a "late" blob slot so undoing it restores the plugin's
-full prior state, not a stale cached blob. The reference A/B monitor state is
-stripped (not undo state).
+full prior state, not a stale cached blob. So does a snapshot taken while a
+plugin's own state change is waiting for its fresh blob (an editor kit pick,
+STATE2-07): the change sends a `SavePluginState` with a request id
+(`plugin_mirror::OwedBlob`), and only the `PluginStateSaved` echoing that id
+fills the slot — never an earlier refresh still in flight, such as a plugin
+add's seed or an editor close (BUG-39). An undo / redo marks the refreshes in
+flight superseded: their echoes fill their slots but leave the cache, which
+holds the restored blob. A change made after the restore owes a live echo
+again. The reference A/B monitor state is stripped (not undo state).
 
 ### Undo / redo
 
@@ -122,6 +129,7 @@ Invariants:
 | Fixed point, diff shape | `resonance-app/tests/io/undo_snapshot_fixed_point.rs`, `undo_diff_shape.rs`, `undo_restore_flag.rs` | same |
 | Control contract | `resonance-app/tests/control/control_edit_undo.rs`, `control_undo_contract.rs` | same |
 | Per-domain undo | e.g. `tests/plugins/plugin_param_undo.rs`, `tests/performance/reference_undo.rs`, `tests/mixer/delete_track_confirm_undo.rs` | same |
+| Owed plugin blobs (kit pick echoes, by request id) | `resonance-app/tests/plugins/plugin_live_values.rs` | same |
 | Catch-all guard | `tools/arch-invariants/tests/architecture.rs` | `cargo test -p arch-invariants` |
 
 Not covered: undo against a real engine (all app tests use the
