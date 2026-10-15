@@ -30,31 +30,76 @@ fn bounce_gain_endpoints(static_gains: (f32, f32), auto: AutoGain) -> ((f32, f32
     }
 }
 
-/// Whether a top-level track is silenced by mute / solo this block. The
-/// one mute/solo resolution shared by the live mixer and the bounce (code
-/// review MIX-07), so an export can never disagree with playback about
-/// who is heard. `muted` already folds in any mute automation.
+/// Where a top-level track stands in this block's solo, before mute.
+/// Decided by [`solo_role`]; shared by the live mixer and the bounce
+/// (code review MIX-07), so an export can never disagree with playback
+/// about who is heard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SoloRole {
+    /// Nothing is soloed, or this track is: heard in full, taps and all.
+    Heard,
+    /// Something else is soloed: silenced, its taps with it.
+    Suppressed,
+    /// Only some of its sub-tracks are soloed (BUG-02): it must still run,
+    /// since a tap's audio exists only as one of its instrument's ports,
+    /// but as a fan-out driver — its own main output (port 0) is silent,
+    /// and so is every tap that is not soloed itself.
+    FanOutDriver,
+}
+
+/// Resolve `track`'s [`SoloRole`] for this block. `any_solo` counts
+/// sub-tracks too (`snapshot_solo`).
 ///
-/// Reads `track.block_soloed()` — the snapshot `snapshot_top_level_solo`
-/// latched at the top of this block — rather than `track.soloed()`
-/// directly (FU-B3a). `any_solo` and every track's own flag must come
-/// from the same instant: a live re-read here could straddle a solo
-/// toggle against the moment `any_solo` was computed and silence the
+/// Reads `block_soloed()` — the snapshot `snapshot_solo` latched at the
+/// top of this block, for the track and for its sub-tracks — rather than
+/// `soloed()` directly (FU-B3a). `any_solo` and every track's own flag
+/// must come from the same instant: a live re-read here could straddle a
+/// solo toggle against the moment `any_solo` was computed and silence the
 /// whole block (the aggregate says "someone is soloed" while this track's
 /// fresh read says "not me", and every other track was decided the same
 /// stale way).
-#[inline]
-pub(crate) fn track_silenced(track: &Track, muted: bool, any_solo: bool) -> bool {
-    muted || (any_solo && !track.block_soloed())
+///
+/// A frozen parent's taps are baked into its one cache file and cannot be
+/// separated, so a soloed tap of a frozen kit plays the whole frozen kit
+/// rather than nothing. The sub-track scan runs only for a track that is
+/// not soloed in a block where something is; allocation-free.
+pub(crate) fn solo_role(track: &Track, any_solo: bool, tracks: &TrackMap) -> SoloRole {
+    if !any_solo || track.block_soloed() {
+        return SoloRole::Heard;
+    }
+    let tap_soloed = tracks.values().any(|t| {
+        matches!(t.sub_track_of, Some((parent, _)) if parent == track.id) && t.block_soloed()
+    });
+    if !tap_soloed {
+        SoloRole::Suppressed
+    } else if track.frozen_source.load().is_some() {
+        SoloRole::Heard
+    } else {
+        SoloRole::FanOutDriver
+    }
 }
 
-/// Whether a sub-track is silenced this block. Sub-tracks follow their
-/// parent's solo (their own solo flag is ignored, exactly as
-/// `any_top_level_solo` ignores it), so only their own mute and a
-/// silenced parent count. Shared by live and bounce (code review MIX-07).
+/// Whether a top-level track is silenced by mute / solo this block.
+/// `muted` already folds in any mute automation. A fan-out driver is not
+/// silenced: its taps decide for themselves (see [`sub_track_silenced`]).
 #[inline]
-pub(crate) fn sub_track_silenced(muted: bool, parent_silenced: bool) -> bool {
-    muted || parent_silenced
+pub(crate) fn track_silenced(muted: bool, solo: SoloRole) -> bool {
+    muted || solo == SoloRole::Suppressed
+}
+
+/// Whether a sub-track is silenced this block: by its own mute, by a
+/// silenced parent (mute or solo — a muted kit silences even a soloed
+/// tap), or, under a fan-out-driver parent, by not being soloed itself
+/// (BUG-02). Under a soloed parent every tap follows the parent. Shared by
+/// live and bounce (code review MIX-07).
+#[inline]
+pub(crate) fn sub_track_silenced(
+    sub_track: &Track,
+    muted: bool,
+    parent_silenced: bool,
+    parent_solo_taps_only: bool,
+) -> bool {
+    muted || parent_silenced || (parent_solo_taps_only && !sub_track.block_soloed())
 }
 
 /// Per-call policy for the bits of the render block that differ between
@@ -135,8 +180,14 @@ pub(crate) struct TrackDisposition {
     /// to sub-tracks, but this track's OWN main output (port 0) is
     /// discarded — it is only here to drive somebody else's fan-out (ba
     /// todo #1242). Unlike `discard_after_instrument` this must NOT skip
-    /// the rest of the iteration, or the fan-out never happens.
+    /// the rest of the iteration, or the fan-out never happens. Also set
+    /// for a solo fan-out driver once its own output is silent
+    /// ([`SoloRole::FanOutDriver`]).
     pub(crate) discard_own_output: bool,
+    /// The track is a solo fan-out driver ([`SoloRole::FanOutDriver`]):
+    /// only its soloed sub-tracks are heard, the rest of its taps are
+    /// silenced. Never set together with `silenced`.
+    pub(crate) solo_taps_only: bool,
     /// Silenced by mute / solo, but a sidechain key is tapped from it (or
     /// from one of its sub-tracks): render the source and FX chain so the
     /// key is captured — taps are post-FX, pre-fader, and must not depend
@@ -156,7 +207,20 @@ impl TrackDisposition {
             silenced: true,
             discard_after_instrument: false,
             discard_own_output: false,
+            solo_taps_only: false,
             key_only: true,
+        }
+    }
+
+    /// A solo fan-out driver that a sidechain key is tapped from: its
+    /// chain runs for the capture (keys do not depend on mute / solo,
+    /// code review MIX-05), nothing of its own output is heard, and its
+    /// soloed taps still fan out and play.
+    pub(crate) fn key_only_driving_soloed_taps() -> Self {
+        Self {
+            silenced: false,
+            solo_taps_only: true,
+            ..Self::key_only()
         }
     }
 }
@@ -271,14 +335,14 @@ impl RenderStrategy<'_> {
     }
 
     /// Decide whether and how a top-level track renders this block.
-    /// `auto_gain` / `auto_mute` carry this block's automation overrides
-    /// (already resolved against the lane snapshot); both are `None` when
-    /// nothing automates the track, in which case the static fader / pan
-    /// / mute apply exactly as before.
+    /// `solo` is its [`solo_role`]. `auto_gain` / `auto_mute` carry this
+    /// block's automation overrides (already resolved against the lane
+    /// snapshot); both are `None` when nothing automates the track, in
+    /// which case the static fader / pan / mute apply exactly as before.
     pub(crate) fn track_disposition(
         &self,
         track: &Track,
-        any_solo: bool,
+        solo: SoloRole,
         auto_gain: AutoGain,
         auto_mute: Option<bool>,
     ) -> Option<TrackDisposition> {
@@ -294,7 +358,10 @@ impl RenderStrategy<'_> {
                 // except for one extra block after silencing, which
                 // renders normally with a target gain of 0.0 so the
                 // mute ramps out instead of hard-cutting.
-                let silenced = track_silenced(track, muted, any_solo);
+                let silenced = track_silenced(muted, solo);
+                // A solo fan-out driver fades its own output like a
+                // silenced track, but keeps running for its soloed taps.
+                let driver = !silenced && solo == SoloRole::FanOutDriver;
                 let (last_gain_l, last_gain_r) = track.last_gains();
                 let faded_out = last_gain_l == 0.0 && last_gain_r == 0.0;
                 if silenced && faded_out && track.track_type != TrackType::Instrument {
@@ -304,7 +371,7 @@ impl RenderStrategy<'_> {
                 // block's target; the automated end value becomes the
                 // target, so consecutive blocks chain into one smooth
                 // sweep (last block's end == this block's start).
-                let (target_gain_l, target_gain_r) = if silenced {
+                let (target_gain_l, target_gain_r) = if silenced || driver {
                     (0.0, 0.0)
                 } else if let Some(((_, gl_end), (_, gr_end))) = auto_gain {
                     (gl_end, gr_end)
@@ -316,7 +383,8 @@ impl RenderStrategy<'_> {
                     gain_r: (last_gain_r, target_gain_r),
                     silenced,
                     discard_after_instrument: silenced && faded_out,
-                    discard_own_output: false,
+                    discard_own_output: driver && faded_out,
+                    solo_taps_only: driver,
                     key_only: false,
                 })
             }
@@ -333,9 +401,12 @@ impl RenderStrategy<'_> {
                 // — and the source is explicitly muted by
                 // `finalize_bounce` after every successful bounce, so
                 // respecting `muted` would silence every re-bounce.
-                if *respect_mute_solo && track_silenced(track, muted, any_solo) {
+                if *respect_mute_solo && track_silenced(muted, solo) {
                     return None;
                 }
+                // Solo only counts where mute does: a stem or a
+                // bounce-in-place ignores both.
+                let driver = *respect_mute_solo && solo == SoloRole::FanOutDriver;
                 if !in_filter(track.id) {
                     return None;
                 }
@@ -356,7 +427,8 @@ impl RenderStrategy<'_> {
                     gain_r,
                     silenced: false,
                     discard_after_instrument: false,
-                    discard_own_output: fan_out_only(track.id),
+                    discard_own_output: driver || fan_out_only(track.id),
+                    solo_taps_only: driver,
                     key_only: false,
                 })
             }
@@ -371,10 +443,14 @@ impl RenderStrategy<'_> {
     /// instrument leaves through its taps, so without this the parent's
     /// fader moved a value nobody read and the kit stayed put (ba doc
     /// #275 P1.1). It is volume only, never pan; see `auto_volume_ramp`.
+    ///
+    /// `parent_silenced` / `parent_solo_taps_only` are the parent's
+    /// [`TrackDisposition::silenced`] / [`TrackDisposition::solo_taps_only`].
     pub(crate) fn sub_track_disposition(
         &self,
         sub_track: &Track,
         parent_silenced: bool,
+        parent_solo_taps_only: bool,
         auto_gain: AutoGain,
         auto_mute: Option<bool>,
         parent_volume: (f32, f32),
@@ -385,7 +461,8 @@ impl RenderStrategy<'_> {
                 // A silenced parent fades its sub-tracks out in the same
                 // block; once fully faded the fan-out stops running and
                 // the subs stay at zero.
-                let sub_silenced = sub_track_silenced(muted, parent_silenced);
+                let sub_silenced =
+                    sub_track_silenced(sub_track, muted, parent_silenced, parent_solo_taps_only);
                 let (sub_last_l, sub_last_r) = sub_track.last_gains();
                 if sub_silenced && sub_last_l == 0.0 && sub_last_r == 0.0 {
                     return None;
@@ -411,12 +488,15 @@ impl RenderStrategy<'_> {
                 freeze_raw,
                 ..
             } => {
-                // Same resolution as live: a sub-track follows its
-                // parent's solo, never its own flag (code review MIX-07).
-                // A solo-suppressed parent only reaches its fan-out here
+                // Same resolution as live (code review MIX-07): a tap
+                // follows a soloed or silenced parent, and under a
+                // fan-out-driver parent only a soloed tap is heard. A
+                // solo-suppressed parent only reaches its fan-out here
                 // when it renders key-only (code review MIX-05), and then
                 // its taps follow it out.
-                if *respect_mute_solo && sub_track_silenced(muted, parent_silenced) {
+                if *respect_mute_solo
+                    && sub_track_silenced(sub_track, muted, parent_silenced, parent_solo_taps_only)
+                {
                     return None;
                 }
                 if !in_filter(sub_track.id) {

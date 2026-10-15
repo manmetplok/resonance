@@ -11,4 +11,3 @@ Each intent follows [`../_template.md`](../_template.md).
 | ["Show in Arrange" from the inspector's AUTOMATION rows](inspector-automation-jump.md) | idea | Mixer automation rows cannot jump to the lane on the Arrange view. |
 | [Reference loudness match that actually matches](reference-loudness-match.md) | partly built | The loudness-match offset is never computed, so the toggle is a silent no-op. |
 | [Sidechain routing in the GUI](sidechain-gui.md) | partly built | Sidechain routing works end to end over the control API but has no GUI. |
-| [Sub-track solo that does something](sub-track-solo.md) | idea | Solo on a multi-output sub-track strip does nothing. |

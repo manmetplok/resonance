@@ -269,8 +269,9 @@ fn consumer_chain_runs(
             AutomationTarget::TrackMute(track.id),
             ctx.evals.gain_start,
         );
+        let solo = super::strategy::solo_role(track, ctx.inputs.any_solo, tracks);
         return strategy
-            .track_disposition(track, ctx.inputs.any_solo, None, auto_mute)
+            .track_disposition(track, solo, None, auto_mute)
             .is_some_and(|d| is_instrument || !d.discard_after_instrument);
     }
     if let Some(bus) = ctx.inputs.busses.values().find(|b| b.plugin_ids.contains(&plugin)) {

@@ -53,7 +53,7 @@ pub struct AuxSend {
 /// — re-enabling one must not be able to retroactively form a cycle.
 ///
 /// Shared by the engine's `SetAuxSend` handler and the unit tests, the
-/// same way [`any_top_level_solo`](super::any_top_level_solo) is the one
+/// same way [`any_track_soloed`](super::any_track_soloed) is the one
 /// solo predicate used by both the mixer and its tests.
 pub fn aux_send_would_cycle<'a, I>(
     existing: I,

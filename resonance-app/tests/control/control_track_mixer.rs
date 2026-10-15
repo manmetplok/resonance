@@ -872,6 +872,56 @@ fn mixer_volume_pan_mute_solo_and_undo() {
     assert!(tracks_view(&mut app).tracks[0].summary.soloed);
 }
 
+/// `mixer.set_solo` takes a sub-track (a kit tap) like any track: the
+/// engine plays a soloed tap alone (BUG-02), so the wire accepts it, sends
+/// the tap's own flag, and one undo takes it back.
+#[test]
+fn mixer_set_solo_accepts_a_sub_track() {
+    use resonance_app::state::{SubTrackLink, TrackState};
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    app.test_set_view_mode(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_set_project_path(std::path::PathBuf::from("/tmp/control-sub-solo.rprj"));
+    let parent = add_track(&mut app, "instrument", Some("Kit"));
+    let mut sub = TrackState::new_instrument(900, 1);
+    sub.sub_track = Some(SubTrackLink {
+        parent_track_id: parent,
+        output_port_index: 1,
+    });
+    app.test_push_track(sub);
+    let _ = drain(&rx);
+    let soloed = |app: &Resonance, id: u64| {
+        app.test_registry().tracks.iter().find(|t| t.id == id).unwrap().soloed
+    };
+
+    let _: MutationAck = call(
+        &mut app,
+        "mixer.set_solo",
+        serde_json::json!({ "track_id": 900, "soloed": true }),
+    )
+    .result()
+    .expect("set_solo on a sub-track succeeds");
+    assert!(soloed(&app, 900));
+    assert!(!soloed(&app, parent));
+    assert!(
+        drain(&rx).iter().any(|cmd| matches!(
+            cmd,
+            AudioCommand::SetTrackSolo { track_id: 900, soloed: true }
+        )),
+        "the engine gets the tap's solo"
+    );
+
+    let _ = roundtrip(&mut app, Request::without_params(97, "edit.undo"));
+    assert!(!soloed(&app, 900), "one undo clears it");
+    assert!(
+        drain(&rx).iter().any(|cmd| matches!(
+            cmd,
+            AudioCommand::SetTrackSolo { track_id: 900, soloed: false }
+        )),
+        "and the engine hears the undo"
+    );
+}
+
 #[test]
 fn mixer_set_mute_is_idempotent() {
     let mut app = app();

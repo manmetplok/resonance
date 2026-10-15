@@ -105,7 +105,7 @@ pub(super) fn finish(
             plugins: &graph.plugins,
             tempo_map: timing.map,
             sample_rate,
-            any_solo: snapshot_top_level_solo(graph.tracks.values().map(|t| &**t)),
+            any_solo: snapshot_solo(graph.tracks.values().map(|t| &**t)),
             active_busses: active,
             aux_sends: stage.aux_sends,
             sidechain_routes: stage.sidechain_routes,

@@ -1,6 +1,6 @@
 # Channel strips and the mixer inspector
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/specs/mixer-cleanup.md` (§10 lists the as-built deviations).
 
 The Mix tab shows one strip per track, bus and the master, plus an
@@ -153,7 +153,5 @@ master lanes together, and none of a bus or master strip on its own.
 
 - AUTOMATION rows have no jump to the lane in Arrange —
   [`../../intents/mixer/inspector-automation-jump.md`](../../intents/mixer/inspector-automation-jump.md).
-- The sub-track strip's solo button changes nothing audible —
-  [`../../intents/mixer/sub-track-solo.md`](../../intents/mixer/sub-track-solo.md).
 - No sidechain controls anywhere in the inspector —
   [`../../intents/mixer/sidechain-gui.md`](../../intents/mixer/sidechain-gui.md).

@@ -129,6 +129,8 @@ mod stopped_request_process;
 mod sub_track_aux_sends;
 #[path = "mixer/sub_track_parent_fader.rs"]
 mod sub_track_parent_fader;
+#[path = "mixer/sub_track_solo.rs"]
+mod sub_track_solo;
 #[path = "mixer/take_comp_render.rs"]
 mod take_comp_render;
 #[path = "mixer/underrun_rate_limiter.rs"]
