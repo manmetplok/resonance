@@ -1,4 +1,5 @@
 //! Save As: pointing the open project at a new bundle and saving it there.
+//! Replacing another project that lives there first is `replace.rs`.
 
 use iced::Task;
 
@@ -35,7 +36,7 @@ pub(super) fn save_as_to(r: &mut Resonance, path: std::path::PathBuf) -> Task<Me
     // new one: the save carries the rest over from the old bundle (BUG-60).
     // A source a failed save left pending is older and is kept.
     if let Some(old) = r.io.project_path.take() {
-        if !crate::project::clip_gc::same_dir(&old, &path) {
+        if !crate::project::same_dir(&old, &path) {
             r.io.carry_clip_wavs_from.get_or_insert(old);
         }
     }

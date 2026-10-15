@@ -31,6 +31,8 @@ mod save_failure_recovery;
 mod save_reply_tagging;
 #[path = "io/save_as_history_clips.rs"]
 mod save_as_history_clips;
+#[path = "io/save_as_existing_project.rs"]
+mod save_as_existing_project;
 #[path = "io/browser_handlers.rs"]
 mod browser_handlers;
 #[path = "io/chord_sheet_header.rs"]

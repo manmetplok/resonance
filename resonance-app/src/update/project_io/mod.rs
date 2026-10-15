@@ -9,6 +9,7 @@ mod dialogs;
 mod instantiate;
 pub mod reconcile;
 pub(crate) mod recovery;
+mod replace;
 mod save_as;
 pub(crate) mod replay;
 pub mod replay_diff;
@@ -66,7 +67,12 @@ pub enum ProjectIoMessage {
     OpenProject,
     /// User clicked a recent entry in the startup modal.
     OpenRecent(std::path::PathBuf),
+    /// The Save As dialog's answer; over another project it asks first.
     SavePathSelected(Option<String>),
+    /// "Replace project X?" answered: replace and save, or save nothing.
+    ReplaceProjectChoice(bool),
+    /// Save As with any replace already confirmed (control `confirm`).
+    SaveAsConfirmed(String),
     OpenPathSelected(Option<String>),
     /// Async save completion. The `bool` is `true` when the completed
     /// save was an autosave (routes to `last_autosave_at`, keeps `dirty`
@@ -138,6 +144,8 @@ impl ProjectIoMessage {
             | Self::OpenProject
             | Self::OpenRecent(..)
             | Self::SavePathSelected(..)
+            | Self::ReplaceProjectChoice(..)
+            | Self::SaveAsConfirmed(..)
             | Self::OpenPathSelected(..)
             | Self::ProjectSaved(..)
             | Self::ProjectLoaded(..)
@@ -268,9 +276,10 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 r.banners.error_message = Some(format!("Save template failed: {e}"));
             }
         }
-        ProjectIoMessage::SavePathSelected(Some(path)) => {
-            return save_as::save_as_to(r, save_as::with_rproj_extension(path));
-        }
+        // Over another project these ask first, then replace (BUG-62).
+        ProjectIoMessage::SavePathSelected(Some(path)) => return replace::selected(r, path),
+        ProjectIoMessage::ReplaceProjectChoice(replace) => return replace::answer(r, replace),
+        ProjectIoMessage::SaveAsConfirmed(path) => return replace::confirmed(r, path),
         ProjectIoMessage::SavePathSelected(None) => {
             // "Save" on the unsaved-changes dialog of an untitled project
             // went through Save As; cancelling that dialog cancels the
@@ -788,7 +797,8 @@ pub(crate) fn autosave_scratch_dir(r: &Resonance) -> Option<std::path::PathBuf> 
 ///
 /// The dir is the one the autosave already writes to, so the two share a
 /// clip id space and files; it is removed on a clean quit, and its WAVs
-/// carry over into the bundle on the first Save As ([`recovery::after_save`]).
+/// carry over into the bundle on the first Save As (the save's write task,
+/// `engine_events::project_io::try_finish_save`).
 pub(crate) fn anchor_untitled_project(r: &mut Resonance) {
     r.io.untitled_anchor = None;
     let Some(dir) = autosave_scratch_dir(r) else {

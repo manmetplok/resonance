@@ -6,7 +6,9 @@
 //! Destructive cases require `"confirm": true`: `new`/`open` while the
 //! current project has unsaved changes, and saving over an existing
 //! file at a *different* path. Without it the server answers with a
-//! `needs_confirmation` error summarizing what would be lost.
+//! `needs_confirmation` error summarizing what would be lost. Saving over
+//! another project with it replaces that project: its history (backups,
+//! autosave) and media are deleted first.
 
 use serde::{Deserialize, Serialize};
 
@@ -69,7 +71,8 @@ pub struct SaveParams {
     /// Target path; required only when the project has never been saved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// Required (`true`) to overwrite an existing file at a new path.
+    /// Required (`true`) to overwrite an existing file at a new path. Over
+    /// another project, this replaces it: its history and media are deleted.
     #[serde(default)]
     pub confirm: bool,
 }
@@ -81,7 +84,8 @@ pub struct SaveParams {
 pub struct SaveAsParams {
     /// Absolute target path.
     pub path: String,
-    /// Required (`true`) to overwrite an existing file at `path`.
+    /// Required (`true`) to overwrite an existing file at `path`. Over
+    /// another project, this replaces it: its history and media are deleted.
     #[serde(default)]
     pub confirm: bool,
 }

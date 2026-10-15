@@ -31,6 +31,9 @@ pub enum Overlay {
     /// Save / Don't save / Cancel before a GUI Open or New replaces a
     /// project with unsaved changes (code review UX-01).
     ConfirmProjectSwitch,
+    /// "Replace project X?" before a Save As writes over another project,
+    /// deleting its history and media (BUG-62).
+    ConfirmReplaceProject,
     /// "What about the vocal melodies?" after a chord or section-length
     /// edit (vocal-melody-on-chord-change).
     VocalMelodyPrompt,
@@ -110,6 +113,9 @@ impl Overlay {
             Overlay::ConfirmProjectSwitch => {
                 Message::ProjectIo(ProjectIoMessage::SwitchChoice(SwitchChoice::Cancel))
             }
+            Overlay::ConfirmReplaceProject => {
+                Message::ProjectIo(ProjectIoMessage::ReplaceProjectChoice(false))
+            }
             // Esc undoes the chord edit, like the dialog's Cancel.
             Overlay::VocalMelodyPrompt => Message::Compose(
                 crate::compose::ComposeMessage::VocalMelody(
@@ -174,6 +180,8 @@ impl Resonance {
             Overlay::ConfirmQuit
         } else if self.modals.confirm_switch.is_some() {
             Overlay::ConfirmProjectSwitch
+        } else if self.modals.confirm_replace_project.is_some() {
+            Overlay::ConfirmReplaceProject
         } else if self.compose.vocal_melody.prompt.is_some() {
             Overlay::VocalMelodyPrompt
         } else if self.modals.confirm_delete_track.is_some() {

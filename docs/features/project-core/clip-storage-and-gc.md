@@ -36,7 +36,7 @@ dialogs) is in the timeline area ([audio-pool-and-import.md](../timeline/audio-p
   that the new one lacks (BUG-60). Both carries run in the save's write
   task, off the update loop, before the GC; an existing file is never
   overwritten, and a source that is the target (also through a symlink,
-  `same_dir`) copies nothing. A save that fails before its write keeps the
+  `project::same_dir`) copies nothing. A save that fails before its write keeps the
   source for the retry; opening or creating another project drops it.
 - **Take waveforms are read from disk.** A cycle-record take is never a
   mirrored clip, so `load_take_peaks` reads its WAV to build the lane's
@@ -66,7 +66,7 @@ recording. Rendered vocal takes have their own reaper
 
 | Concern | Location | Key items |
 |---|---|---|
-| GC + carry | `resonance-app/src/project/clip_gc.rs` | `reap_unreferenced_clip_wavs`, `carry_clip_wavs`, `same_dir`, `collect_clip_ids`, `clip_wav_id` |
+| GC + carry | `resonance-app/src/project/clip_gc.rs` | `reap_unreferenced_clip_wavs`, `carry_clip_wavs`, `collect_clip_ids`, `clip_wav_id` |
 | Keep set, carries + call site | `resonance-app/src/engine_events/project_io.rs` | `Resonance::clip_gc_keep`, `Resonance::history_clip_ids`, `clip_wav_carries`, `try_finish_save` |
 | Take reader | `resonance-app/src/project/take_audio.rs` | `load_take_peaks` |
 | Persist before snapshot | `resonance-app/src/undo/snapshot.rs` | `snapshot_for_undo` (`AudioCommand::PersistClipWavs`) |

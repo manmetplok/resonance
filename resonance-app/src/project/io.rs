@@ -139,6 +139,19 @@ fn write_project_metadata(
     Ok(())
 }
 
+/// `a` and `b` name one directory: equal paths, or equal once symlinks are
+/// resolved. A path that cannot be resolved (it does not exist yet) is
+/// compared as written.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Crash-safe file write, shared with every other user-state store: a
 /// unique temp name per write, and a failed write never strands its temp
 /// file. The project writer used to carry its own copy with a fixed

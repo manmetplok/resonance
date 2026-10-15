@@ -50,7 +50,9 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Save the project in place; pass path (absolute) only on first save. \
-                       Overwriting an existing file at a NEW path needs confirm: true.",
+                       Overwriting an existing file at a NEW path needs confirm: true; if \
+                       another project lives there, that replaces it and deletes its history \
+                       (backups, autosave) and media.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]
@@ -63,7 +65,9 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Save the project to a new absolute path. Overwriting an existing file \
-                       there needs confirm: true.",
+                       there needs confirm: true; if another project lives there, that replaces \
+                       it and deletes its history (backups, autosave) and media. The new folder \
+                       gets the audio the undo history still needs.",
         annotations(destructive_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]

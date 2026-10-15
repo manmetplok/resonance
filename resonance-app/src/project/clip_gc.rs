@@ -56,7 +56,7 @@ pub fn carry_clip_wavs(
     to: &Path,
     only: Option<&BTreeSet<ClipId>>,
 ) -> Vec<PathBuf> {
-    if same_dir(from, to) {
+    if super::io::same_dir(from, to) {
         return Vec::new();
     }
     let Ok(entries) = std::fs::read_dir(from.join("audio")) else {
@@ -88,19 +88,6 @@ pub fn carry_clip_wavs(
         }
     }
     copied
-}
-
-/// `a` and `b` name one directory: equal paths, or equal once symlinks are
-/// resolved. A path that cannot be resolved (it does not exist yet) is
-/// compared as written.
-pub fn same_dir(a: &Path, b: &Path) -> bool {
-    if a == b {
-        return true;
-    }
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
-    }
 }
 
 /// The id in a `clip_<id>.wav` file name (or a path ending in one).

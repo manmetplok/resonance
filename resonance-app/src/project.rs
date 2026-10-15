@@ -69,6 +69,6 @@ pub use take_audio::load_take_peaks;
 
 // Re-export I/O: save, load, autosave, atomic-write, and backup helpers.
 pub use io::{
-    BackupEntry, atomic_write, backup_timestamp_now, list_backups, load_project, save_autosave,
-    save_project, write_backup,
+    BackupEntry, atomic_write, backup_timestamp_now, list_backups, load_project, same_dir,
+    save_autosave, save_project, write_backup,
 };
