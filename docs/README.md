@@ -23,7 +23,7 @@ Templates: [feature doc](features/_template.md) · [intent](intents/_template.md
 
 | Area | Covers | Built | Wanted |
 |---|---|---|---|
-| **Audio engine** | `resonance-audio`: command loop, render graph, render pool, PipeWire I/O, CLAP hosting, latency, offline render/export, freeze, diagnostics | [17 docs](features/audio-engine/README.md) | [9 intents](intents/audio-engine/README.md) (4 partly built) |
+| **Audio engine** | `resonance-audio`: command loop, render graph, render pool, PipeWire I/O, CLAP hosting, latency, offline render/export, freeze, diagnostics | [17 docs](features/audio-engine/README.md) | [10 intents](intents/audio-engine/README.md) (4 partly built) |
 | **Timeline** | Arrange view: clips, fades, warp, tempo map, markers, takes, automation lanes, MIDI editor, pool/import/relink, track groups | [17 docs](features/timeline/README.md) | [18 intents](intents/timeline/README.md) (5 partly built) |
 | **Mixer** | Mix tab: strips, inspector, busses, sends, sidechain, master, plugin chains, reference A/B, meters, `meter.*`, `master.assist` | [12 docs](features/mixer/README.md) | [4 intents](intents/mixer/README.md) (2 partly built) |
 | **Compose** | Sections, lane generators, chords, drum arrangement, vocals (lyrics, melody, DiffSinger render, voicebank library, voice presets, pronunciation), music theory | [13 docs](features/compose/README.md) | [15 intents](intents/compose/README.md) (8 partly built) |
@@ -34,7 +34,7 @@ Templates: [feature doc](features/_template.md) · [intent](intents/_template.md
 | **Plugins — effects** | EQ, compressor, gate, delay, granular delay, reverb, stereo, color, IR, mastering, mastering-assist engine, de-harsh | [12 docs](features/plugins-effects/README.md) | [6 intents](intents/plugins-effects/README.md) (1 partly built) |
 | **Plugins — instruments & platform** | Wavetable, drums + kit library, amp + NAM library, preset library, plugin SDK, editor runtimes, DSP/metering crates, 3rd-party hosting, bundling | [13 docs](features/plugins-instruments/README.md) | [10 intents](intents/plugins-instruments/README.md) (6 partly built) |
 
-Totals: **125 feature docs**, **87 intents**, **3 known bugs**, 12 unbuilt prototypes.
+Totals: **125 feature docs**, **88 intents**, **3 known bugs**, 12 unbuilt prototypes.
 
 ## Guides
 

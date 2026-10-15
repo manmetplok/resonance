@@ -7,6 +7,7 @@ Each intent follows [`../_template.md`](../_template.md).
 | Intent | Status | Why |
 |---|---|---|
 | [Render clip warp (time-stretch) in playback and bounce](clip-warp-render.md) | partly built | Warp settings are saved, shown and scriptable, but no render path reads them — nothing stretches. |
+| [Export resampling: one resampler, no rubato 0.16](export-resampler.md) | idea | Export alone uses rubato (pinned at 0.16; 5.0 is a full API rewrite) while everything else uses our own tested band-limited resampler; swap and drop the dependency. |
 | [Expose export formats, sample rate, normalisation and metadata](export-formats-and-metadata.md) | partly built | The engine writes FLAC/MP3/Opus, resamples and normalises, but no GUI or control path can choose any of it. |
 | [Wire up MIDI project export](midi-project-export.md) | partly built | The export dialog's MIDI tab is disabled although a tested SMF writer exists. |
 | [Engine and CLAP host: review leftovers](review-leftovers-engine.md) | idea | Code-quality, robustness and test items in `resonance-audio` and the plugin bridge that the review campaigns left open. |
