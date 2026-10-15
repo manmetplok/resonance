@@ -46,8 +46,7 @@ fix the ones below. The engine-path defects it judged to be design work
 
 ## Recording and hardware
 
-| ID | Area | Symptom | Where (file:line) | Source |
-|---|---|---|---|---|
+None known.
 
 ## Plugins and the CLAP host
 
