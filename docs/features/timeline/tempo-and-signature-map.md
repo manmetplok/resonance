@@ -1,6 +1,6 @@
 # Tempo and time-signature map
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: none in `docs/history/specs/`; the control surface came from ba doc #286 (epic #205), the re-anchoring from ba doc #275 P1.4. Both are only cited in code comments.
 
 The song's tempo and meter live on two bar-addressed lists, drawn as the
@@ -56,9 +56,10 @@ is the bar-0 events (code review ARCH2-10).
 - The timeline delete key (`CommandId::TimelineDeleteSelection`) removes the
   selected event (`DeleteSelectedEvent`) when no automation breakpoint is
   selected.
-- The transport BPM field (`SetBpmText` + `CommitBpm`) and the
-  time-signature control (`SetTimeSignature`, `CycleTimeSignature`) rewrite the
-  **bar-0** event only.
+- The transport BPM field (`SetBpmText` + `CommitBpm`) shows the tempo under
+  the playhead and rewrites the event governing it (the last one at or before
+  the playhead's bar). The time-signature control (`SetTimeSignature`,
+  `CycleTimeSignature`) rewrites the **bar-0** event only.
 
 **What moves when the map changes.**
 - `CommitBpm` (the transport field and `transport.set_tempo`) re-anchors

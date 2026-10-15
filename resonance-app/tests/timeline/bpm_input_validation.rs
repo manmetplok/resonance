@@ -95,3 +95,30 @@ fn project_with_null_bpm_loads_with_fallback() {
     assert_eq!(app.test_transport_bpm(), 120.0);
     assert!(app.test_tempo_map().bar_to_sample(1) > 0);
 }
+
+/// The BPM field shows the tempo under the playhead, so typing into it
+/// edits THAT tempo — the event governing the playhead — not the
+/// song-start tempo at bar 0 (BUG-17).
+#[test]
+fn typed_bpm_past_a_tempo_change_edits_the_tempo_under_the_playhead() {
+    let (mut app, _task, _rx) = Resonance::new_for_test_with_capture();
+    app.test_set_sample_rate(48_000);
+    commit(&mut app, "120");
+    app.test_dispatch(Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent {
+        bar: 8,
+        bpm: 90.0,
+    }));
+    let bar10 = app.test_tempo_map().bar_to_sample(10);
+    app.test_dispatch(Message::Transport(TransportMessage::SeekToSample(bar10)));
+
+    commit(&mut app, "100");
+    let events: Vec<(u32, f32)> = app.test_tempo_events().iter().map(|e| (e.bar, e.bpm)).collect();
+    assert_eq!(events, vec![(0, 120.0), (8, 100.0)], "the bar-8 tempo is the one edited");
+    assert_eq!(app.test_transport_bpm(), 100.0);
+
+    // Before the change, the bar-0 tempo is the one under the playhead.
+    app.test_dispatch(Message::Transport(TransportMessage::SeekToSample(0)));
+    commit(&mut app, "110");
+    let events: Vec<(u32, f32)> = app.test_tempo_events().iter().map(|e| (e.bar, e.bpm)).collect();
+    assert_eq!(events, vec![(0, 110.0), (8, 100.0)]);
+}
