@@ -362,7 +362,7 @@ pub(super) fn mix_monitor_passthrough(
     // Snapshot solo once (FU-B3a): `any_solo` and each track's own flag
     // below must come from the same instant, or a solo toggle mid-scan can
     // make every track look silenced.
-    let any_solo = snapshot_top_level_solo(tracks_guard.values().map(|t| &**t));
+    let any_solo = snapshot_solo(tracks_guard.values().map(|t| &**t));
     let is_audible = |t: &&Track| -> bool {
         t.monitor_enabled() && !t.muted() && (!any_solo || t.block_soloed())
     };
@@ -492,7 +492,7 @@ pub(super) fn mix_idle_instruments(
     // Snapshot solo once (FU-B3a): see `mix_monitor_passthrough` above —
     // `any_solo` and `block_soloed()` must agree, which two independent
     // `soloed()` reads can't guarantee across a mid-block toggle.
-    let any_solo = snapshot_top_level_solo(tracks_guard.values().map(|t| &**t));
+    let any_solo = snapshot_solo(tracks_guard.values().map(|t| &**t));
     let frames = frames.min(track_buf_l.len()).min(track_buf_r.len());
     let mut mixed_any = false;
     for track in tracks_guard.values() {

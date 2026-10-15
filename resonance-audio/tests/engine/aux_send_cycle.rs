@@ -1,7 +1,7 @@
 //! Cyclic-route validation for aux sends. `aux_send_would_cycle` is the
 //! shared predicate the engine's `SetAuxSend` handler consults before
 //! registering a send; these tests pin its behaviour the way
-//! `solo_predicate.rs` pins `any_top_level_solo`.
+//! `solo_predicate.rs` pins `any_track_soloed`.
 
 use resonance_audio::{aux_send_would_cycle, AuxSend, SendSource};
 

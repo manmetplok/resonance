@@ -1,6 +1,6 @@
 # Parallel render pool
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/specs/realtime-multithreading.md` (its status
 > line names branch `rt-multithreading`; the work is on master).
 
@@ -39,7 +39,11 @@ A panicking job still counts as done.
   plugin run first, on the caller.
 - **Reduction.** Jobs never write shared sums; a serial reduction replays the
   additions in track/bus index order ([mixer-render-core.md](mixer-render-core.md)).
-- **Busses** run level by level: level 0 is every bus no bus sends into.
+- **Busses** run level by level: level 0 is every bus no bus sends into,
+  and a bus's level is the longest chain of enabled bus → bus sends ending
+  at it — independent of creation order, so a send into an older bus
+  still runs its source first (BUG-04). A bus reads another bus's buffer
+  only when that bus is at a lower level, i.e. already finished.
 
 ### Scheduling
 

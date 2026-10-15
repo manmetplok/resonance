@@ -399,7 +399,7 @@ pub(super) fn render_chunk(
     // `any_solo` and each track's own flag read later in `track_silenced`
     // must come from this one scan, or the export can render an all-silent
     // chunk the same way the live callback could.
-    let any_solo = snapshot_top_level_solo(tracks_guard.values().map(|t| &**t));
+    let any_solo = snapshot_solo(tracks_guard.values().map(|t| &**t));
 
     // Aux-send snapshot: the offline bounce taps + sums sends identically
     // to the live path so a bounced/exported WAV matches playback.

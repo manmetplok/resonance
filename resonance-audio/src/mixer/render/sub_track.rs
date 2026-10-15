@@ -27,6 +27,9 @@ struct SubTrackTap<'a> {
     /// Live: the parent is muted / solo-suppressed, so its taps fade out
     /// in the same block.
     parent_silenced: bool,
+    /// The parent is a solo fan-out driver: only a soloed tap is heard
+    /// (BUG-02).
+    parent_solo_taps_only: bool,
 }
 
 /// Sub-track fan-out: for every non-main plugin output port the
@@ -68,6 +71,7 @@ pub(super) fn fan_out_to_sub_tracks(
                 port_idx,
                 parent_volume,
                 parent_silenced: disp.silenced,
+                parent_solo_taps_only: disp.solo_taps_only,
             },
             ctx,
             // SAFETY: `sub_track` is one of this job's parent's
@@ -92,6 +96,7 @@ fn render_sub_track_tap(
         port_idx,
         parent_volume,
         parent_silenced,
+        parent_solo_taps_only,
     } = tap;
 
     let sub_auto_gain = auto_gain_ramp(
@@ -114,6 +119,7 @@ fn render_sub_track_tap(
     let ((sub_gain_l, sub_gain_r), key_only) = match strategy.sub_track_disposition(
         sub_track,
         parent_silenced,
+        parent_solo_taps_only,
         sub_auto_gain,
         sub_auto_mute,
         parent_volume,

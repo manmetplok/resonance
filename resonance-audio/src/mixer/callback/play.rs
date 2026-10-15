@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::mixer::common::{commit_playhead, panic_instrument_tracks};
 use crate::mixer::render_core::BlockInputs;
-use crate::types::{snapshot_top_level_solo, AudioClip, MidiClip};
+use crate::types::{snapshot_solo, AudioClip, MidiClip};
 
 use super::context::{BlockTiming, CallbackInputs, CallbackScratch, MonitorRead};
 use super::master_pass::{run_master_passes, MasterTail};
@@ -105,7 +105,7 @@ pub(super) fn render_playing_block(
         // Snapshot solo once for the whole block (FU-B3a): every later
         // per-track check reads `block_soloed()`, latched by this same
         // scan, instead of re-reading `soloed()` against a stale `any_solo`.
-        any_solo: snapshot_top_level_solo(tracks.values().map(|t| &**t)),
+        any_solo: snapshot_solo(tracks.values().map(|t| &**t)),
         active_busses,
         aux_sends: &aux_guard,
         sidechain_routes: &sidechain_guard,

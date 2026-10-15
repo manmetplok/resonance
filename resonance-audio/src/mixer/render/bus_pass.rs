@@ -4,10 +4,12 @@
 //!
 //! Busses run **level by level** (realtime-multithreading.md §4.5). A bus's
 //! inputs are the track routes (all summed by the track pass) plus aux
-//! sends from lower-indexed busses, so level 0 is every bus no bus sends
-//! into, and level `k` is fed only by levels below `k`. The busses of one
-//! level are independent jobs and run on the render pool; each writes only
-//! its own buffer and record.
+//! sends from other busses. A bus's level is the longest chain of enabled
+//! bus → bus sends that ends at it, so level 0 is every bus no bus sends
+//! into, and level `k` is fed only by levels below `k` — whatever order the
+//! busses were created in (BUG-04). The busses of one level are
+//! independent jobs and run on the render pool; each writes only its own
+//! buffer and record.
 //!
 //! Bit-identity with the old single index-order loop rests on two orders:
 //!
@@ -92,6 +94,7 @@ pub(crate) fn render_bus_pass(
                     BusJob {
                         bus,
                         idx,
+                        levels: &levels[..n],
                         keyed: keyed[idx],
                         bufs: &bufs,
                         routes: &route_cells,
@@ -132,30 +135,51 @@ pub(crate) fn render_bus_pass(
     }
 }
 
-/// Give each of the first `levels.len()` busses its level: one more than
-/// the highest level of any lower-indexed bus with an enabled aux send
-/// into it. Every enabled send counts, whether or not its source reaches
-/// the mix this block — a conservative order is still a correct one.
-/// Returns the highest level.
+/// Give each of the first `levels.len()` busses its level: the length of
+/// the longest chain of enabled bus → bus aux sends that ends at it, in
+/// either index direction (a send into an older bus counts — BUG-04).
+/// Every enabled send counts, whether or not its source reaches the mix
+/// this block — a conservative order is still a correct one. Returns the
+/// highest level.
+///
+/// Relaxes every edge until nothing changes. The send graph is acyclic
+/// (`types::aux_send_would_cycle` refuses a feedback send), so `n - 1`
+/// rounds settle it and the round after that sees no change; the cap of
+/// `n` rounds only bounds the work should a cycle ever reach the engine,
+/// and then a cyclic edge simply finds no lower-level source to pull.
+/// Fixed-size, allocation-free.
 fn assign_levels(ctx: &BlockCtx<'_>, levels: &mut [u8]) -> u8 {
     let n = levels.len();
     let busses = ctx.inputs.busses;
-    let mut max_level = 0;
-    for (src_idx, src) in busses.values().enumerate().take(n) {
-        let level = levels[src_idx];
-        max_level = max_level.max(level);
+    for _ in 0..n {
+        let mut changed = false;
         for send in ctx.inputs.aux_sends {
-            if !send.enabled || send.source != SendSource::Bus(src.id) {
+            let SendSource::Bus(src_id) = send.source else {
+                continue;
+            };
+            if !send.enabled {
                 continue;
             }
-            if let Some(dst_idx) = busses.get_index_of(&send.dest) {
-                if dst_idx > src_idx && dst_idx < n {
-                    levels[dst_idx] = levels[dst_idx].max(level + 1);
-                }
+            let (Some(src_idx), Some(dst_idx)) = (
+                busses.get_index_of(&src_id),
+                busses.get_index_of(&send.dest),
+            ) else {
+                continue;
+            };
+            if src_idx >= n || dst_idx >= n || src_idx == dst_idx {
+                continue;
+            }
+            let level = levels[src_idx].saturating_add(1);
+            if levels[dst_idx] < level {
+                levels[dst_idx] = level;
+                changed = true;
             }
         }
+        if !changed {
+            break;
+        }
     }
-    max_level
+    levels.iter().copied().max().unwrap_or(0)
 }
 
 /// Whether `bus`'s chain holds a serial-only plugin (realtime-
@@ -173,6 +197,8 @@ fn holds_serial_only_plugin(ctx: &BlockCtx<'_>, bus: &Bus) -> bool {
 struct BusJob<'j, 'b> {
     bus: &'j Bus,
     idx: usize,
+    /// Every active bus's level, from [`assign_levels`].
+    levels: &'j [u8],
     /// A sidechain key is tapped from this bus by a consumer that reads
     /// it — decided before the level ran.
     keyed: bool,
@@ -190,6 +216,7 @@ fn render_one_bus(
     let BusJob {
         bus,
         idx: bus_idx,
+        levels,
         keyed,
         bufs,
         routes,
@@ -198,11 +225,13 @@ fn render_one_bus(
     let frames = ctx.inputs.frames;
 
     // SAFETY: bus `bus_idx` is this job's own; the sources it pulls from
-    // are lower-indexed busses of earlier levels, finished before this
-    // level started and written by nobody while it runs.
+    // are busses of earlier levels (`pull_bus_aux_sends` reads no other),
+    // finished before this level started and written by nobody while it
+    // runs.
     let buf = unsafe { bufs.get(bus_idx) };
     pull_bus_aux_sends(
         bus_idx,
+        levels,
         buf,
         |src| unsafe { routes.get_ref(src) }.map(|gains| (unsafe { bufs.get_ref(src) }, gains)),
         ctx,

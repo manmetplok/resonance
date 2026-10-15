@@ -1,6 +1,6 @@
 # Mixer render core
 
-> Verified against master @ `ef215b08` on 2026-10-15.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/specs/realtime-multithreading.md` §4, §11;
 > `docs/history/reviews/field-report-2026-10-06.md` §3.
 
@@ -65,8 +65,10 @@ master volume with hard clip and peaks, and the mix meter.
 3. **Dry-path delay:** `LatencyComp::apply_dry` delays everything that went
    straight to master by the bus-stage latency.
 4. **Bus pass** (`render_bus_pass`): busses grouped into levels by their
-   send graph; a bus pulls aux sends from lower-indexed busses when its job
-   starts, runs its chain, captures keys, applies bus-stage PDC and meters;
+   send graph (`assign_levels`: a bus's level is the longest chain of
+   enabled bus → bus sends ending at it, whatever the creation order); a
+   bus pulls aux sends from every lower-*level* bus, in source-index
+   order, when its job starts, runs its chain, captures keys, applies bus-stage PDC and meters;
    then a serial reduction sums busses into master in index order.
 
 The caller then runs master FX and volume (live) or the offline master pass
@@ -90,8 +92,11 @@ The caller then runs master FX and volume (live) or the offline master pass
 - **Sub-track aux sends** are applied in the reduction, after the parent's
   group trim (fixed in `8cc428b5`, field report 2026-10-06 §3). Before that,
   a kit tap's sends were silently never rendered.
-- **Sends to a lower-indexed bus** are dropped; they had no effect in the
-  serial loop either.
+- **Sends into an older bus are audible.** Levels come from the send
+  graph, not bus index, so a send from a newer bus into an older one runs
+  the older bus after it (BUG-04; before, such a send was silently
+  dropped). Sources are still summed in index order, so a send graph that
+  only ever pointed forward renders bit-identically to before.
 - **Silenced tracks** still render key-only when a consumer needs their key
   (the muted ghost kick that ducks the bass).
 - **Live MIDI and contention.** A note for an instrument whose lock is busy

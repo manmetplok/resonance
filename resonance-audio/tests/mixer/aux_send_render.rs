@@ -14,7 +14,7 @@
 //! accumulated aux-send contribution — so the tap can be asserted in
 //! isolation from the return bus's own fader/pan.
 
-use resonance_audio::test_support::{render_aux_for_test, CLIP_DECLICK_FRAMES};
+use resonance_audio::test_support::{render_aux_for_test, RenderBenchHarness, CLIP_DECLICK_FRAMES};
 use resonance_audio::types::*;
 
 const FRAMES: usize = 512;
@@ -271,4 +271,78 @@ fn sends_into_a_return_add_in_source_index_order_across_levels() {
         (1.0, 1.0),
         "bus 3 = (track + bus 1's send) + bus 2's send, in that order"
     );
+}
+
+/// BUG-04: a bus → bus send into an OLDER (lower-indexed) bus is audible.
+/// Bus B is created after bus A, a track feeds B, and B sends into A: A's
+/// buffer carries B's post-fader send. Busses run by send-graph level, not
+/// by creation order, so A (fed by B) runs after B.
+#[test]
+fn bus_to_bus_send_into_an_older_bus_is_audible() {
+    const BUS_A: BusId = 5;
+    const BUS_B: BusId = 10;
+    let g = center_gain();
+
+    let (t, c) = dc_track(1, TrackOutput::Bus(BUS_B));
+    let (master, bufs) = render_aux_for_test(
+        vec![t],
+        vec![Bus::new(BUS_A, "A".into()), Bus::new(BUS_B, "B".into())],
+        vec![c],
+        vec![aux(1, SendSource::Bus(BUS_B), BUS_A, 0.0, false)],
+        FRAMES,
+        SR,
+    );
+
+    assert!((bufs[1].0[STEADY] - g).abs() < 1e-5, "bus B holds the routed track");
+    let expected_a = g * g;
+    assert!(
+        (bufs[0].0[STEADY] - expected_a).abs() < 1e-5,
+        "bus A must hold B's post-fader send: {} != {expected_a}",
+        bufs[0].0[STEADY]
+    );
+    assert!((bufs[0].1[STEADY] - expected_a).abs() < 1e-5);
+    // Master = B through its fader + A (B's send) through A's fader.
+    let expected_master = g + expected_a * g;
+    assert!(
+        (master[STEADY * 2] - expected_master).abs() < 1e-5,
+        "master {} != {expected_master}",
+        master[STEADY * 2]
+    );
+}
+
+/// BUG-04 on the live strategy: the same backwards send reaches master.
+#[test]
+fn bus_to_bus_send_into_an_older_bus_is_audible_live() {
+    const BUS_A: BusId = 5;
+    const BUS_B: BusId = 10;
+    let render = |enabled: bool| {
+        let (t, c) = dc_track(1, TrackOutput::Bus(BUS_B));
+        let mut send = aux(1, SendSource::Bus(BUS_B), BUS_A, 0.0, false);
+        send.enabled = enabled;
+        let mut harness = RenderBenchHarness::new(
+            vec![t],
+            vec![Bus::new(BUS_A, "A".into()), Bus::new(BUS_B, "B".into())],
+            vec![c],
+            Vec::new(),
+            vec![send],
+            TempoMap::default(),
+            FRAMES,
+            SR,
+        );
+        // Second block: the clip's head declick and every gain ramp are
+        // behind it.
+        harness.render(0);
+        harness.render(FRAMES as u64).to_vec()
+    };
+    let dry = render(false);
+    let wet = render(true);
+    let g = center_gain();
+    let want = g * g * g;
+    for f in 0..FRAMES {
+        let delta = wet[f * 2] - dry[f * 2];
+        assert!(
+            (delta - want).abs() < 1e-5,
+            "live frame {f}: the send into the older bus adds {delta}, want {want}"
+        );
+    }
 }

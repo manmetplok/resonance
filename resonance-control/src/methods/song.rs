@@ -145,9 +145,11 @@ pub struct TrackSummary {
     /// ordinary tracks — the field is elided rather than reported as
     /// `null`, so its presence alone identifies a sub-track.
     ///
-    /// A parent and its sub-tracks are ONE instrument: mute, solo and
-    /// loudness measurement only mean anything applied to the whole
-    /// group.
+    /// A parent and its sub-tracks are ONE instrument: loudness
+    /// measurement only means anything applied to the whole group, and
+    /// muting or soloing the parent covers every tap. A sub-track's own
+    /// mute drops that one tap; its own solo plays it alone (with anything
+    /// else soloed), the rest of the kit silent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<TrackId>,
     pub muted: bool,

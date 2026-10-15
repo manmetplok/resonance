@@ -35,7 +35,7 @@ use super::frozen::fill_from_frozen_source;
 use super::ports::process_multi_port;
 use super::routing::{apply_track_aux_sends, route_post_fader};
 use super::slots::{PassStats, SlotCells, SlotRoute, TrackSlot};
-use super::strategy::{RenderStrategy, SendFilter, TrackDisposition};
+use super::strategy::{solo_role, RenderStrategy, SendFilter, TrackDisposition};
 use super::sub_track::fan_out_to_sub_tracks;
 
 /// What a track's source stage produced, for the stages that follow it.
@@ -387,10 +387,21 @@ fn render_one_track(
     );
     // A silenced track still renders when a key is tapped from it (code
     // review MIX-05): the ghost kick keys the bass compressor while muted.
-    let disp = match strategy.track_disposition(track, ctx.inputs.any_solo, auto_gain, auto_mute)
-    {
+    let solo = solo_role(track, ctx.inputs.any_solo, ctx.inputs.tracks);
+    let disp = match strategy.track_disposition(track, solo, auto_gain, auto_mute) {
         Some(d) if d.discard_after_instrument && keys_from(idx, track, ctx, cells) => {
             TrackDisposition::key_only()
+        }
+        // A solo fan-out driver whose own output is discarded skips its
+        // chain, so one keyed itself renders key-only instead, its soloed
+        // taps still playing. (Its taps' keys need nothing: they run.)
+        // SAFETY: slot `idx` is this job's own; the borrow ends at once.
+        Some(d)
+            if d.solo_taps_only
+                && d.discard_own_output
+                && unsafe { cells.get(idx) }.key_consumed =>
+        {
+            TrackDisposition::key_only_driving_soloed_taps()
         }
         Some(d) => d,
         None if strategy.renders(track.id) && keys_from(idx, track, ctx, cells) => {

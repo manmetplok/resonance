@@ -286,7 +286,7 @@ fn unfreezing_the_parent_makes_the_tap_renderable_again() {
 // ---------------------------------------------------------------------------
 
 /// Soloing a multi-output kit and exporting the mix. Sub-tracks follow
-/// their parent's solo (`any_top_level_solo` ignores their own flag), and
+/// their parent's solo (a soloed parent carries every tap), and
 /// the live mixer honours that — but the bounce arm used to demand each
 /// sub-track's OWN solo flag, so the export dropped every tap and carried
 /// only the parent's (silent) port 0 while playback had the whole kit.

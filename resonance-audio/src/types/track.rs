@@ -296,7 +296,7 @@ impl Track {
         self.runtime.soloed.store(v, Ordering::Relaxed);
     }
 
-    /// This track's solo flag as latched by [`snapshot_top_level_solo`] at
+    /// This track's solo flag as latched by [`snapshot_solo`] at
     /// the top of the current render block (FU-B3a). Audio thread only;
     /// use this instead of [`Track::soloed`] anywhere a disposition must
     /// agree with the block's `any_solo` aggregate — the two are read from
@@ -307,7 +307,7 @@ impl Track {
     }
 
     /// Latch this block's solo snapshot. Audio thread only; see
-    /// [`snapshot_top_level_solo`].
+    /// [`snapshot_solo`].
     fn set_block_soloed(&self, v: bool) {
         self.runtime.block_soloed.store(v, Ordering::Relaxed);
     }
@@ -602,26 +602,25 @@ impl Track {
     }
 }
 
-/// Whether any top-level track is soloed. Sub-tracks follow their
-/// parent's solo state, so they're excluded from the scan. Shared by
-/// the live mixer and the bounce renderer so solo semantics match. A
-/// pure query with no side effect — used outside a render block (tests,
-/// UI-adjacent code) where there is no later per-track re-read to race
-/// against. Render blocks use [`snapshot_top_level_solo`] instead.
-pub fn any_top_level_solo<'a>(tracks: impl IntoIterator<Item = &'a Track>) -> bool {
-    tracks
-        .into_iter()
-        .filter(|t| t.sub_track_of.is_none())
-        .any(|t| t.soloed())
+/// Whether any track is soloed — a sub-track (one tap of a multi-output
+/// instrument) included: soloing the snare tap is "something is soloed"
+/// as much as soloing a whole track is (BUG-02). Shared by the live mixer
+/// and the bounce renderer so solo semantics match. A pure query with no
+/// side effect — used outside a render block (tests, UI-adjacent code)
+/// where there is no later per-track re-read to race against. Render
+/// blocks use [`snapshot_solo`] instead.
+pub fn any_track_soloed<'a>(tracks: impl IntoIterator<Item = &'a Track>) -> bool {
+    tracks.into_iter().any(|t| t.soloed())
 }
 
-/// The block-scoped counterpart of [`any_top_level_solo`] (FU-B3a): reads
-/// each top-level track's `soloed()` exactly once, latches it onto the
-/// track via `set_block_soloed` for [`Track::block_soloed`] to read back
-/// later in the same block, and returns the aggregate computed from that
-/// same pass. Every render path that later asks "is *this* track soloed"
-/// mid-block (`track_silenced`, the monitor / idle-instrument passes) must
-/// read `block_soloed()`, never `soloed()` directly — two independent
+/// The block-scoped counterpart of [`any_track_soloed`] (FU-B3a): reads
+/// each track's — top-level and sub-track — `soloed()` exactly once,
+/// latches it onto the track via `set_block_soloed` for
+/// [`Track::block_soloed`] to read back later in the same block, and
+/// returns the aggregate computed from that same pass. Every render path
+/// that later asks "is *this* track soloed" mid-block (`solo_role`, the
+/// sub-track tap, the monitor / idle-instrument passes) must read
+/// `block_soloed()`, never `soloed()` directly — two independent
 /// `soloed()` reads (one folded into `any_solo` here, one taken later for
 /// a single track) can straddle a solo toggle from the control thread and
 /// disagree about whether that track is the one keeping the aggregate
@@ -630,9 +629,9 @@ pub fn any_top_level_solo<'a>(tracks: impl IntoIterator<Item = &'a Track>) -> bo
 /// not `&Arc<Track>` sharing-safe across concurrent blocks, but a track
 /// only ever renders on the one callback / bounce-worker thread that owns
 /// its graph snapshot for that block.
-pub fn snapshot_top_level_solo<'a>(tracks: impl IntoIterator<Item = &'a Track>) -> bool {
+pub fn snapshot_solo<'a>(tracks: impl IntoIterator<Item = &'a Track>) -> bool {
     let mut any_solo = false;
-    for t in tracks.into_iter().filter(|t| t.sub_track_of.is_none()) {
+    for t in tracks {
         let soloed = t.soloed();
         t.set_block_soloed(soloed);
         any_solo |= soloed;
