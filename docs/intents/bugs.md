@@ -64,7 +64,6 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 | BUG-40 | plugins-effects | The EQ draws a Q slider on LowCut/HighCut bands, but the DSP ignores it (stage Qs come from the slope). | `plugins/resonance-eq/src/band.rs:117` (`uses_q` true for cuts) vs `:326-350` | plugin-audit "smaller items" |
 | BUG-41 | plugins-effects | *(likely)* EQ dynamics rows overflow the 350 px strip and the header runs off-window at ≤960 px. | `plugins/resonance-eq/src/editor/app.rs:174`; `factory.rs:70` | review 2026-10-02 FU-P2c |
 | BUG-42 | plugins-effects | Mastering's Transformer saturation at partial `sat_mix` dips the sub band (−2.3 dB at 20 Hz); documented, not fixed. | `plugins/resonance-mastering/src/stages/sat_modes.rs:80-92` | review 2026-10-02 FU-D1a2 (DSP2-16 remainder) |
-| BUG-43 | plugins-instruments | **Security.** Signing in to Tone3000 appends the PKCE verifier, the auth code, the full token response (access/refresh tokens) and errors to the world-readable fixed path `/tmp/tone3000-auth.log`. | `plugins/resonance-amp/src/tone3000/auth.rs:122-131` (`debug_log`, marked "Temporary"); calls at `:85-92`, `:106-108`, `:306`, `:316` | area docs 2026-10-07 |
 | BUG-44 | plugins-instruments | Test gap: the fleet editor checks pin `FLEET.len() == 11` and omit Color and Stereo, so a regression in those two editors' preset bar or palette passes the suite. | `resonance-plugin/tests/fleet_preset_adoption.rs:22,84-90`; `resonance-plugin/tests/fleet_palette.rs:53,139-141` | area docs 2026-10-07 |
 
 ## Compose and vocals
