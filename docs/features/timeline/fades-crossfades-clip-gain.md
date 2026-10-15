@@ -1,6 +1,6 @@
 # Fades, crossfades and clip gain
 
-> Verified against master @ `6137b6fb` on 2026-10-15.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: epic #18, design doc #153, arch doc #156 (todos #316–#320);
 > prototype `docs/history/prototypes/clip-editing-fades-crossfades/index.html`.
 
@@ -130,9 +130,8 @@ Invariants:
 | `clip.set_fade` / `clip.set_gain` | `resonance-app/tests/control/control_clip_place.rs` (`sets_fade_lengths_and_shapes`, `set_fade_..._one_atomic_undo_transaction`, `a_fade_is_clamped_to_the_clip_length`, `clip_gain_is_clamped_and_rejects_nonsense`, …) | same |
 | Golden: fades, beads, gain tint, crossfade, frozen hatch | `resonance-app/tests/timeline/clip_fade_gain_snapshot.rs` → `tests/snapshots/clip_fades_gain_crossfade_render-wgpu.png` | `RESONANCE_BLESS=1 cargo test -p resonance-app --test timeline` |
 
-Not covered: grabbing a fade bead on a clip that already has a fade (the
-hit-test cannot, see Known gaps); bounce output with fades compared to live
-playback beyond the shared-function argument.
+Not covered: bounce output with fades compared to live playback beyond the
+shared-function argument.
 
 ## Decisions and deviations
 
@@ -147,11 +146,6 @@ playback beyond the shared-function argument.
 
 ## Known gaps
 
-- Fade-bead hit-testing ignores the clip's real fade lengths
-  (`input/hit_test.rs::clip_handles` passes 0), so once a clip has a fade the
-  drawn bead sits inward but can only be grabbed at the clip's corner. It also
-  treats frozen clips as fadeable, while the draw pass does not (review
-  FU-W2d).
 - `song.tracks` does not report a clip's fades or gain.
   → [clip-state-readback.md](../../intents/timeline/clip-state-readback.md)
 - No fade or gain on MIDI clips.
