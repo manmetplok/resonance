@@ -79,9 +79,8 @@ fix the ones below. The engine-path defects it judged to be design work
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-71 | compose | The vocal melody generator writes out-of-scale notes with `stay_in_scale` on: a D-minor chorus (Bbmaj7, F/A, Gm7, A7; style pop_ballad, syllable_mode mixed, seed 7) sang D#4/E♭ on 9 of 29 notes. `vocal_refit_melody` cleans it up. | `resonance-music-theory/src/derive/vocal/` (melody walk / melisma pass) | live MCP session 2026-10-13 (triphop.rproj) |
 | BUG-72 | compose | Chord symbols are spelled with sharps regardless of key: `harmony_apply_progression` with "Bbmaj7" in D minor reads back as "A#maj7" in `song_sections` (and the chord track). | chord symbol formatting in `resonance-music-theory` | live MCP session 2026-10-13 |
-| BUG-73 | compose | Placing a section that already has a rendered vocal lane gives the new placement no vocal take, yet `song.vocal` keeps reporting the lane `rendered` (the state reads any one take of the lane and ignores placements without one); a `vocal.render` of the lane fixes it. Same root as the empty generated parts on a new placement ([section-placement-editing](compose/section-placement-editing.md)). | `update/compose/vocal_render_state.rs` (`installed_keys`), placement install path | live MCP session 2026-10-13 (triphop.rproj) |
+| BUG-73 | compose | Placing a section that already has a rendered vocal lane gives the new placement no vocal take (the lane now reads `stale` until a `vocal.render`). Same root as the empty generated parts on a new placement ([section-placement-editing](compose/section-placement-editing.md)). | `app/update/compose/section.rs` `handle_place` (installs nothing) | live MCP session 2026-10-13 (triphop.rproj) |
 | BUG-51 | compose | Drum group Swing, Humanize and "Fills (last bar)" sliders change nothing in the generated drums. | sliders `app/view/compose/lane_inspector/drums/rhythm.rs:44-97`; stored at `app/update/compose/drum_groups.rs:315-324`; never read | intent [compose/drum-groove-feel.md](compose/drum-groove-feel.md) |
 
 ## Project, save and export
