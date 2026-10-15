@@ -46,7 +46,6 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
 | BUG-30 | audio-engine | When the engine thread holds a plugin's instance lock, the audio thread skips that plugin for the block: dry audio leaks through an effect, an instrument drops out. Only counted, not concealed. | `audio/clap_host/slot_locking.rs:15-21` | review 2026-10-02 FU-R2a (RT-07 remainder) |
-| BUG-31 | audio-engine | A Mastering instance saved bypassed from its own header loads un-bypassed: `own_bypass_sent` starts at −1 and the app ignores `own_bypass_param`. | `audio/clap_host/mod.rs:633,701-711`; `app/engine_events/plugins.rs:1173` | review 2026-10-02 FU-R3c |
 | BUG-32 | audio-engine | *(likely)* When a latent plugin first appears on a track that had no delay line, the compensated track restarts from silence (audible gap). | PDC line build, `audio/engine/` latency handling | review 2026-10-02 FU-R3a |
 | BUG-33 | audio-engine | *(likely)* Whole-chain bypass on a latent chain crossfades latent wet against undelayed dry for 5 ms (comb/flam on toggle). | `audio/bypass.rs` / chain bypass | review 2026-10-02 FU-R3b |
 | BUG-34 | audio-engine | Plugin tails are cut by a fixed 3 s hold after stop; the CLAP tail extension is not asked. | no `CLAP_EXT_TAIL` in `audio/` | review 2026-10-02 FU-R4b |
