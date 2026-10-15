@@ -22,8 +22,6 @@ fix the ones below. The engine-path defects it judged to be design work
 | ID | Decided fix |
 |---|---|
 | BUG-39, BUG-61 | Request ids on `SavePluginState` / `SaveAllPluginStates` / `SaveClipsToProjectDir` and their replies; collectors ignore replies whose id doesn't match. |
-| BUG-41 | Taller strip (about 440 px) and window, a horizontal scroll over the bands, and a header that wraps. |
-| BUG-42 | A phase-matched dry path (complementary split) for Transformer saturation; re-bless the mastering goldens. |
 | BUG-51 | Wire swing and humanize at render time, with jitter seeded from the group seed; the default humanize becomes 0. Fills stay in the intent. |
 | BUG-60 | Save As copies the WAVs that only the undo history names from the old `audio/` into the new one. |
 | BUG-62 | When Save As targets a different existing project, confirm first, then clear its `backups/`, autosave and old media. |
@@ -49,8 +47,8 @@ None known.
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
 | BUG-39 | plugins-instruments | *(likely)* Edge cases: a drums `kit_select` undo races a cache refresh; an in-flight `SavePluginState` is counted as an owed echo. | plugin-state echo bookkeeping | review 2026-10-02 FU-P1c |
-| BUG-41 | plugins-effects | *(likely)* EQ dynamics rows overflow the 350 px strip and the header runs off-window at ≤960 px. | `plugins/resonance-eq/src/editor/app.rs:174`; `factory.rs:70` | review 2026-10-02 FU-P2c |
-| BUG-42 | plugins-effects | Mastering's Transformer saturation at partial `sat_mix` dips the sub band (−2.3 dB at 20 Hz); documented, not fixed. | `plugins/resonance-mastering/src/stages/sat_modes.rs:80-92` | review 2026-10-02 FU-D1a2 (DSP2-16 remainder) |
+| BUG-76 | plugins-instruments | The shared slider widget clips its thumb to its own rect (`painter_at(rect)`), so the thumb is half cut off at either end of its travel in every plugin editor. | `plugin-gui-core/src/widgets/slider.rs` | BUG-41 fix 2026-10-15 |
+| BUG-77 | plugins-instruments | Test infra: `wayland-plugin-gui --test editor_size` `a_compositor_resize_is_reported_by_the_handle` fails with "could not drive the compositor": Hyprland 0.56 replaced `hyprctl dispatch resizewindowpixel` with Lua dispatch (`hl.dsp.window.resize({...})`). | `wayland-plugin-gui/tests/editor_size.rs` | BUG-41 fix 2026-10-15 |
 
 ## Compose and vocals
 
