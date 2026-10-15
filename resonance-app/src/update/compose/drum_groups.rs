@@ -82,7 +82,7 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
                     density: 0.35,
                     swing: 0.0,
                     accent: 0.45,
-                    humanize: 0.2,
+                    humanize: 0.0,
                     fills: 0.0,
                     style: "Custom".to_string(),
                     seed: seed_from_id(id),
@@ -311,14 +311,20 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
         DrumGroupsMessage::SetGroupDensity { group_id, density } => {
             mutate_group(r, group_id, |g| g.density = density.clamp(0.0, 1.0));
         }
+        // Swing, accent and humanize shape the rendered notes
+        // (`emit_span_notes`), so a change re-renders the drum clips —
+        // the sliders used to store a value nothing read (BUG-51).
         DrumGroupsMessage::SetGroupSwing { group_id, swing } => {
             mutate_group(r, group_id, |g| g.swing = swing.clamp(0.0, 1.0));
+            materialize_drum_clips(r);
         }
         DrumGroupsMessage::SetGroupAccent { group_id, accent } => {
             mutate_group(r, group_id, |g| g.accent = accent.clamp(0.0, 1.0));
+            materialize_drum_clips(r);
         }
         DrumGroupsMessage::SetGroupHumanize { group_id, humanize } => {
             mutate_group(r, group_id, |g| g.humanize = humanize.clamp(0.0, 1.0));
+            materialize_drum_clips(r);
         }
         DrumGroupsMessage::SetGroupFills { group_id, fills } => {
             mutate_group(r, group_id, |g| g.fills = fills.clamp(0.0, 1.0));
@@ -730,9 +736,10 @@ pub(crate) fn refresh_kit_pads(r: &mut crate::Resonance) {
 
 /// Lightweight pattern generator: fills every pad's `pattern` with a
 /// hit density derived from the group's `density` knob, biased by the
-/// pad's own articulation weight. Swing, accent, humanize, and fills are
-/// surfaced as group-level parameters and stored on the group; they apply
-/// at MIDI rendering time inside `regenerate.rs`.
+/// pad's own articulation weight. Swing, accent and humanize are not
+/// read here: they apply when the group's notes are rendered
+/// (`emit_span_notes`). Fills is stored but not built (see
+/// `docs/intents/compose/drum-groove-feel.md`).
 ///
 /// The algorithm is a deterministic xorshift walk seeded by `seed * pad_index`
 /// so repeated presses with the same seed produce identical results, which
@@ -1041,11 +1048,21 @@ fn emit_span_notes(
         // absolute bar keeps each group's cycle continuous across spans.
         let start_step = span.bar_start as u64 * steps_per_bar;
         let end_step = span.bar_end as u64 * steps_per_bar;
+        let span_start_tick = onset(start_step);
+        let swing = g.swing.clamp(0.0, 1.0);
+        let humanize = g.humanize.clamp(0.0, 1.0);
         for step in start_step..end_step {
             let pattern_idx = ((step + phase) % cycle) as usize;
-            let start_tick = onset(step);
-            let step_ticks = (onset(step + 1) - start_tick).max(1);
-            for pad in &g.pads {
+            let straight_tick = onset(step);
+            let step_ticks = (onset(step + 1) - straight_tick).max(1);
+            // Swing: every odd step of the beat lands late by up to half a
+            // step (`swing` 1.0 = the "and" at three quarters of its pair).
+            let swing_ticks = if (step % grid) % 2 == 1 {
+                (swing * step_ticks as f32 / 2.0).round() as u64
+            } else {
+                0
+            };
+            for (pad_index, pad) in g.pads.iter().enumerate() {
                 let cell = pad.pattern.get(pattern_idx).copied().unwrap_or(0);
                 if cell == 0 {
                     continue;
@@ -1054,20 +1071,58 @@ fn emit_span_notes(
                 // group's accent knob.
                 let is_beat_start = step % g.grid as u64 == 0;
                 let base = 0.70 + (pad.weight as f32 / 200.0).min(0.25);
-                let velocity = if is_beat_start {
+                let mut velocity = if is_beat_start {
                     (base + g.accent * 0.25).clamp(0.0, 1.0)
                 } else {
                     base.clamp(0.0, 1.0)
                 };
+                let mut start_tick = straight_tick + swing_ticks;
+                if humanize > 0.0 {
+                    let (dt, dv) = humanize_offsets(g.seed, step, pad_index, humanize);
+                    // Never before the span: a fill or section boundary
+                    // keeps its first hit.
+                    start_tick = start_tick.saturating_add_signed(dt).max(span_start_tick);
+                    velocity = (velocity + dv).clamp(1.0 / 127.0, 1.0);
+                }
+                // A swung (or pushed-late) hit still ends where the next
+                // step begins.
+                let end_tick = (straight_tick + step_ticks).max(start_tick + 1);
                 notes.push(MidiNote {
                     note: pad.note,
                     velocity,
                     start_tick,
-                    duration_ticks: step_ticks,
+                    duration_ticks: end_tick - start_tick,
                 });
             }
         }
     }
+}
+
+/// Largest humanize timing offset, in ticks, at `humanize` 1.0 — about
+/// 10 ms at 120 BPM.
+const HUMANIZE_MAX_TICKS: f32 = 10.0;
+/// Largest humanize velocity offset, in MIDI velocity steps, at 1.0.
+const HUMANIZE_MAX_VELOCITY: f32 = 15.0;
+
+/// Deterministic humanize offsets for one hit: `(ticks, velocity)` in
+/// `±humanize * HUMANIZE_MAX_TICKS` and `±humanize * HUMANIZE_MAX_VELOCITY
+/// / 127`. A pure hash of the group's seed, the absolute step (which
+/// carries the bar) and the pad, so the same group renders the same feel
+/// every time and a re-roll of the seed rolls a new one.
+fn humanize_offsets(seed: u64, step: u64, pad_index: usize, humanize: f32) -> (i64, f32) {
+    let h = splitmix64(seed ^ splitmix64(step ^ ((pad_index as u64) << 48)));
+    // Two independent uniforms in [-1, 1).
+    let unit = |bits: u64| (bits & 0xFFFF_FFFF) as f32 / 2_147_483_648.0 - 1.0;
+    let dt = (unit(h) * humanize * HUMANIZE_MAX_TICKS).round() as i64;
+    let dv = unit(h >> 32) * humanize * HUMANIZE_MAX_VELOCITY / 127.0;
+    (dt, dv)
+}
+
+fn splitmix64(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 // ---------------------------------------------------------------------------

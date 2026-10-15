@@ -8,7 +8,7 @@ Each intent follows [`../_template.md`](../_template.md).
 |---|---|---|
 | [Chord track editing surface](chord-track-editing.md) | partly built | Only tonic add/delete/pin is reachable; pinned harmony is mostly unusable and agents have no access. |
 | [Separate climaxes across simultaneous melodies](cross-lane-climax-separation.md) | idea | Simultaneous lanes place their climaxes independently, so they pile up on the same beat. |
-| [Drum groove feel: swing, humanize, fills, step velocity](drum-groove-feel.md) | partly built | Swing, Humanize and Fills sliders change nothing, and step velocities are read as on/off. |
+| [Drum groove feel: fills, step velocity, control params](drum-groove-feel.md) | partly built | Fills is not built, step velocities are read as on/off, and `generate.drums` takes no swing/humanize. |
 | [Drum material per drum track](drum-material-per-track.md) | idea | Two drum tracks in one project get the same derived drum clip. |
 | [EmbellishmentStyle control in the melody inspector](embellishment-style-ui.md) | partly built | `MelodyParams::embellishment` changes the melody style but has no control in the melody inspector. |
 | [Share the phrase plan between harmony and melody](harmony-melody-phrase-plan.md) | idea | Melody and harmony each plan phrases on their own instead of sharing one plan. |

@@ -1,4 +1,5 @@
-//! Rhythm settings panel — density, swing, accent, humanize, fills.
+//! Rhythm settings panel — density, swing, accent, humanize; fills is
+//! listed as not built yet.
 
 use iced::widget::{column, row, slider, text, Space};
 use iced::{alignment, Element, Length};
@@ -71,16 +72,15 @@ pub(super) fn rhythm_panel<'a>(group: &DrumGroup, collapsed: bool) -> Element<'a
     })
     .step(0.01)
     .width(Length::Fill);
-    let fills = slider(0.0..=1.0, group.fills, move |v| {
-        Message::Compose(ComposeMessage::DrumGroups(
-            DrumGroupsMessage::SetGroupFills {
-                group_id: id,
-                fills: v,
-            },
-        ))
-    })
-    .step(0.01)
-    .width(Length::Fill);
+    // Fills is not built: nothing renders a fill from it, so the rail
+    // says so instead of offering a slider that changes nothing (BUG-51;
+    // docs/intents/compose/drum-groove-feel.md).
+    let fills: Element<'a, Message> = row![
+        text("Fills (last bar)").size(10).color(theme::TEXT_4),
+        Space::new().width(Length::Fill),
+        text("not built yet").size(10).color(theme::TEXT_4),
+    ]
+    .into();
 
     rail_card(
         column![
@@ -94,7 +94,7 @@ pub(super) fn rhythm_panel<'a>(group: &DrumGroup, collapsed: bool) -> Element<'a
             Space::new().height(6),
             field("Humanize", group.humanize, humanize),
             Space::new().height(6),
-            field("Fills (last bar)", group.fills, fills),
+            fills,
             Space::new().height(6),
             text(group.style.clone()).size(10).color(theme::TEXT_4),
         ]

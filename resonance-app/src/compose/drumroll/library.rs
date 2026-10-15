@@ -546,13 +546,15 @@ pub fn instantiate_builtin(
                     pattern: p.steps.to_vec(),
                 })
                 .collect(),
-            // The authored steps are the groove; these knobs only matter
-            // if the user later hits Generate on the group in the GUI,
-            // at which point a Euclidean re-roll is what they asked for.
+            // The authored steps are the groove. Density and accent only
+            // matter if the user later hits Generate on the group in the
+            // GUI, at which point a Euclidean re-roll is what they asked
+            // for; swing and humanize apply at render time, so they start
+            // at zero and the groove plays as written.
             density: 0.5,
             swing: 0.0,
             accent: 0.5,
-            humanize: 0.15,
+            humanize: 0.0,
             fills: 0.0,
             style: format!("built-in \u{00b7} {}", template.name),
             seed: 0,
