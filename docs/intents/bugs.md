@@ -60,15 +60,11 @@ fix the ones below. The engine-path defects it judged to be design work
 | BUG-20 | hardware-io | Seeking or moving the loop range during cycle-record is ignored by the take session; later passes are cut at stale seams. | `audio/engine/transport.rs:672` (`handle_seek_to` ignores `loop_record_session`) | review 2026-10-02 FU-R1b |
 | BUG-22 | hardware-io | MIDI cycle-record passes roll on the engine-thread playhead wrap, so pass boundaries jitter by ~16 ms (audio passes are sample-exact). | `audio/engine/transport.rs:804-818` | review 2026-10-02 FU-R1f |
 | BUG-23 | hardware-io | Input-ring overflow drops are reported but not compensated, so every later cycle cut shifts by the dropped frames. | `audio/recording.rs:397-418` | review 2026-10-02 FU-R1a |
-| BUG-24 | hardware-io | Panic sends all-notes-off only: pitch bend and mod wheel are not reset on plugins or hardware. | `audio/engine/transport.rs:659-678` | review 2026-10-02 FU-H1f |
-| BUG-68 | hardware-io | With distinct takes off, a cycle-recorded run keeps only the first pass (one clip trimmed to `[loop_in, loop_out]`); later passes stay in the WAV outside the trim. The Settings hint says the run "is merged into one clip for the whole loop". | `audio/recording.rs` `finalize_recording` (~:630-645); `audio/engine/transport.rs` (~:472, `cycle_slot` is `None`); hint at `app/view/settings.rs:210` | docs consolidation 2026-10-07 · [timeline/takes-and-comping](../features/timeline/takes-and-comping.md) |
-| BUG-69 | hardware-io | *(likely)* Record pressed inside the loop (start after `loop_in`) saturates `trim_start` to 0 but still places the clip at `loop_in`, so the take sits early by `start − loop_in`. | `audio/recording.rs` `finalize_recording` (~:630-645) | docs consolidation 2026-10-07 |
 
 ## Plugins and the CLAP host
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-36 | audio-engine | *(likely)* The held-note release on stop/seek covers timeline notes only, not live-played notes or hardware MIDI out. | `audio/engine/` note release | review 2026-10-02 FU-R4d |
 | BUG-38 | plugins-instruments | *(likely)* A save-time state refresh moves an automated parameter's mirror to its value at the playhead. | `app/engine_events/plugins.rs:966-990` | review 2026-10-02 FU-P1b |
 | BUG-39 | plugins-instruments | *(likely)* Edge cases: a drums `kit_select` undo races a cache refresh; an in-flight `SavePluginState` is counted as an owed echo. | plugin-state echo bookkeeping | review 2026-10-02 FU-P1c |
 | BUG-41 | plugins-effects | *(likely)* EQ dynamics rows overflow the 350 px strip and the header runs off-window at ≤960 px. | `plugins/resonance-eq/src/editor/app.rs:174`; `factory.rs:70` | review 2026-10-02 FU-P2c |
@@ -91,5 +87,4 @@ fix the ones below. The engine-path defects it judged to be design work
 | BUG-61 | project-core | Save replies are untagged (`SaveCollector` has no round-trip id), so a late reply from an earlier save can complete a newer one. | `app/update/project_io/mod.rs:661-672` | review 2026-10-02 FU-S2c |
 | BUG-62 | project-core | *(likely)* Save As over another existing `.rproj` leaves that project's `backups/` behind, and clip GC keeps their clips alive. | `app/project/clip_gc.rs:102` seeds the keep-set from `backups/`; nothing clears it on Save As | review 2026-10-02 STATE2-10 |
 | BUG-64 | ui-shell | Stem export's overwrite mode "Ask each" behaves like "Add suffix"; there is no prompt. | `app/update/export.rs:205,234` | review 2026-10-02 FU-A1a7 · intent [audio-engine/stem-export-options.md](audio-engine/stem-export-options.md) |
-| BUG-66 | audio-engine | `ClearAll` (project load) does not clear `midi_recording`; a live MIDI capture across a load targets a clip that no longer exists. | `audio/engine/tracks.rs` `handle_clear_all` (~:497) | refactor FU-D7d · intent [project-core/finish-app-owned-ids.md](project-core/finish-app-owned-ids.md) |
 | BUG-67 | audio-engine | Frozen tracks may apply their aux sends twice (baked into the cache and sent again). | freeze playback substitution | field report 2026-10-06 §3 · intent [audio-engine/freeze-aux-send-double-apply.md](audio-engine/freeze-aux-send-double-apply.md) |
