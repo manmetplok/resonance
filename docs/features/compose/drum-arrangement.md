@@ -1,6 +1,6 @@
 # Drum patterns and section drum arrangement
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` + drum group swing and humanize (BUG-51) on 2026-10-15.
 > Spec history: prototype `docs/history/prototypes/drum-pattern-arrangement-within-section/index.html` (doc #170, epic #38); `docs/history/specs/drums-plugin-rework.md` §8 (kit picker).
 
 Drums in Compose come from a project-wide **pattern bank**. A pattern is a
@@ -40,10 +40,26 @@ The arrangement is rendered to derived MIDI clips on the drum tracks.
   the absolute section step so phase stays continuous across spans.
   Velocity is `0.70 + min(weight/200, 0.25)`, plus `accent × 0.25` on
   beat-start steps.
-- **Knobs that do nothing yet.** `swing`, `humanize` and `fills` are stored
-  and have sliders, but neither generation nor rendering reads them. The
-  per-step cell value (a 0..=100 velocity scale in built-in patterns) is
-  treated as on/off.
+- **Swing and humanize (BUG-51).** Applied at render time in
+  `emit_span_notes`, never baked into the cells, so editing a cell never
+  fights the feel. *Swing* (0..1) delays every odd step of the beat
+  (`step % grid` odd) by `swing × step / 2` ticks — on a 16th grid it
+  swings the 16ths, on an 8th grid the "and"s; the swung hit still ends
+  where the next step starts. *Humanize* (0..1) adds up to
+  `±humanize × 10` ticks (about 10 ms at 120 BPM) and `±humanize × 15`
+  MIDI velocity, clamped to 1..127, from a hash of the group's `seed`,
+  the absolute section step (which carries the bar) and the pad — the
+  same group renders the same feel every time, and Generate (which bumps
+  the seed) rolls a new one. A humanized hit never moves before its
+  span's first step. Moving the Swing, Accent or Humanize slider
+  re-renders the drum clips (`materialize_drum_clips`). New groups, the
+  default "Main" groups and the built-in grooves start at swing 0 and
+  humanize 0, so a groove plays as written until the user turns a knob;
+  a saved group keeps whatever value it had.
+- **Knobs that do nothing yet.** `fills` is stored but read by nothing;
+  the rail lists "Fills (last bar) · not built yet" instead of a slider.
+  The per-step cell value (a 0..=100 velocity scale in built-in patterns)
+  is treated as on/off.
 - **Built-in grooves.** `library.rs` holds ten authored templates:
   `silence`, `halftime`, `four-on-floor`, `industrial`, `breakbeat`,
   `blast`, `sparse`, `toms`, `build`, `fill` (16th grid, 4/4). They are not
@@ -98,14 +114,15 @@ Invariant: arrangement edits only re-materialize when a mutator returns
 | What | Where | Run |
 |---|---|---|
 | Resolver, edits, inspector, persistence | `resonance-app/tests/compose/compose_drum_arrangement{,_edit,_inspector,_persistence,_ribbon}.rs` | `./scripts/run-tests.py -p resonance-app` |
+| Swing / humanize (render + slider re-render) | `tests/compose/compose_drum_group_feel.rs` | same |
 | Materialization | `tests/compose/compose_drum_materialize_arrangement.rs`, `compose_drum_grid_bar_spans.rs`, `drum_grid_tuplet_drift.rs`, `drum_section_coverage.rs` | same |
 | Built-in library + density | `tests/compose/drum_pattern_library.rs` | same |
 | Kit pads / picker / cell click | `tests/compose/drum_kit_pads.rs`, `drum_kit_picker.rs`, `drum_cell_click_phase.rs` | same |
 | Control | `tests/control/control_generate.rs`, `control_generate_after_load.rs` | same |
 | Goldens | `tests/snapshots/arrangement_strip_*`, `compose_ribbon_*`, `drum_grid_chained_arrangement_tints_separator`, `compose_drum_rail_*` (all `-wgpu.png`) | `RESONANCE_BLESS=1 ./scripts/run-tests.py -p resonance-app` |
 
-Not covered: swing/humanize/fills (they have no effect to test);
-multiple drum tracks receiving identical material.
+Not covered: fills (no effect to test); multiple drum tracks receiving
+identical material.
 
 ## Decisions and deviations
 
@@ -118,15 +135,16 @@ multiple drum tracks receiving identical material.
   #272 V-2a).
 - `generate.drums` is section-scoped and clones shared patterns because
   re-rolling a shared pattern used to rewrite other sections.
-- `generate_group_pattern`'s doc comment says swing/accent/humanize/fills
-  "apply at MIDI rendering time inside `regenerate.rs`"; only accent does,
-  in `emit_span_notes`.
+- Swing, accent and humanize are not on the control API: `generate.drums`
+  takes `density` and `seed` only, so an agent's built-in groove always
+  renders straight (the `drumming` skill writes swing by hand).
 - The `DrumGroup` doc comment says grouping is project-scoped; groups are
   owned by a pattern.
 
 ## Known gaps
 
-- Swing, humanize, fills and per-step velocity are not applied —
+- Fills and per-step velocity are not applied, and `generate.drums`
+  takes no swing/humanize —
   [drum-groove-feel](../../intents/compose/drum-groove-feel.md).
 - Every drum track gets the same material; no per-track drum parts —
   [drum-material-per-track](../../intents/compose/drum-material-per-track.md).

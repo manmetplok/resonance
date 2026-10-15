@@ -140,7 +140,7 @@ impl VocalRollCanvas<'_> {
                     .with_width(1.0),
             );
             // Symbol — root + quality. Italic serif for the symbol.
-            let label = chord_label(&c.chord);
+            let label = chord_label(&c.chord, self.chord_spelling);
             frame.fill_text(canvas::Text {
                 content: label,
                 position: Point::new(x0 + 8.0, 6.0),

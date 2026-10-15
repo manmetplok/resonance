@@ -113,6 +113,27 @@ pub struct VocalAudioRegistry {
     /// the expected-keys memo and the debounced GUI re-render
     /// (vocal-mcp-control-and-quality.md §7).
     pub status: super::vocal_render_status::VocalRenderStatus,
+    /// How each lane's latest take was laid out — what laying the same
+    /// take at a new placement of the section needs (BUG-73). Only read
+    /// while its `wav_path` is still installed on the lane, so a stale
+    /// entry is inert; [`Self::clear`] keeps it for that reason, and an
+    /// undo of a placement can be placed again with its take.
+    pub takes: HashMap<(u64, TrackId), VocalTakeLayout>,
+}
+
+/// One rendered take as the install lays it at a placement: the WAV, its
+/// trims, the pre-roll it sings before the lane's first note, that note's
+/// tick and the unit keys it carries. See
+/// [`VocalAudioRegistry::takes`].
+#[derive(Debug, Clone)]
+pub struct VocalTakeLayout {
+    pub wav_path: std::path::PathBuf,
+    pub clip_name: String,
+    pub trim_start_frames: u64,
+    pub trim_end_frames: u64,
+    pub pre_roll_frames: u64,
+    pub lead_ticks: u64,
+    pub unit_keys: std::sync::Arc<[u64]>,
 }
 
 impl VocalAudioRegistry {

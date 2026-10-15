@@ -203,6 +203,65 @@ fn lane_content(
     Some((notes, lyrics))
 }
 
+/// The tick of the lane's first note (its lead-in), from its first clip.
+/// `None` when the lane has no clip.
+pub(super) fn lane_lead_ticks(
+    r: &crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+) -> Option<u64> {
+    let (notes, _) = lane_content(r, definition_id, track_id)?;
+    Some(super::vocal_render_plan::lead_ticks(&notes))
+}
+
+/// The section was placed again: give the new placement the line the
+/// lane sings everywhere else — its first clip's notes, lyric side table,
+/// length and name — rather than re-deriving it, which could re-fit or
+/// flag a melody no chord edit touched (BUG-73). Returns `false` when the
+/// lane has no line to copy.
+pub(super) fn copy_line_to_placement(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    placement_id: u64,
+) -> bool {
+    let Some(placement) = r.compose.find_placement(placement_id) else {
+        return false;
+    };
+    let start_sample = r.tempo_map.bar_to_sample(placement.start_bar);
+    let Some(&first) = lane_placement_clips(r, definition_id, track_id)
+        .iter()
+        .find(|(pid, _)| *pid != placement_id)
+        .map(|(_, clip)| clip)
+    else {
+        return false;
+    };
+    let Some(clip) = r.midi_clips.iter().find(|c| c.id == first) else {
+        return false;
+    };
+    let (duration_ticks, name) = (clip.duration_ticks, clip.name.clone());
+    let notes = clip.notes.as_ref().clone();
+    let mut lyrics = r
+        .compose
+        .vocal_audio
+        .clip_lyrics
+        .get(&first)
+        .cloned()
+        .unwrap_or_default();
+    lyrics.resize(notes.len(), String::new());
+    super::vocal_midi_install::VocalMidiInstall {
+        definition_id,
+        track_id,
+        placements: &[(placement_id, start_sample)],
+        duration_ticks,
+        midi_notes: &notes,
+        lyrics: &lyrics,
+        name: &name,
+    }
+    .install(r);
+    true
+}
+
 /// A chord or section-length edit reached this vocal lane (from
 /// `regenerate_lane_as_side_effect`). See the module docs.
 pub(super) fn on_chord_change(r: &mut crate::Resonance, definition_id: u64, track_id: TrackId) {

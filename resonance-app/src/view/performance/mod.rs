@@ -406,10 +406,10 @@ impl Resonance {
         // a cache slot.
         let content: Element<'static, Message> = match readout.current {
             Some(slot) => {
-                let chord = slot.chord;
-                let key = (1u8, center_stage::hero_fingerprint(chord, tuning, capo));
+                let (chord, spelling) = (slot.chord, slot.spelling);
+                let key = (1u8, center_stage::hero_fingerprint(chord, spelling, tuning, capo));
                 iced::widget::lazy(key, move |_: &(u8, u64)| -> Element<'static, Message> {
-                    center_stage::hero(chord, tuning, capo)
+                    center_stage::hero(chord, spelling, tuning, capo)
                 })
                 .into()
             }
@@ -545,7 +545,7 @@ impl Resonance {
             .iter()
             .enumerate()
             .map(|(i, slot)| next_lane::NextCard {
-                chord: slot.chord,
+                chord: slot.chord.spelled(slot.spelling),
                 tuning,
                 capo,
                 bars_until: next_lane::bars_until(current_bar, slot.start_bar),

@@ -7,7 +7,7 @@
 
 use resonance_app::chord_box::{self, Dims, Marker, Nut};
 use resonance_music_theory::{
-    fretboard_voicing, Chord, ChordQuality, PitchClass, BASS_4, GUITAR_6,
+    fretboard_voicing, Chord, ChordQuality, PitchClass, Spelling, BASS_4, GUITAR_6,
 };
 
 /// Round-number dims so expected coordinates are exact and obvious.
@@ -33,7 +33,7 @@ fn nut_anchored_c_major() {
     // Open C major on a 6-string guitar: x32010.
     let frets = [None, Some(3), Some(2), Some(0), Some(1), Some(0)];
     let chord = Chord::new(PitchClass::C, ChordQuality::Maj);
-    let lo = chord_box::layout(&dims, (0.0, 0.0), &GUITAR_6, &frets, 0, &chord);
+    let lo = chord_box::layout(&dims, (0.0, 0.0), &GUITAR_6, &frets, 0, &chord, Spelling::Sharps);
 
     assert_eq!(lo.name, "C");
     approx(lo.cell_center_x, 50.0);
@@ -105,7 +105,7 @@ fn boxed_start_fret_maps_into_window() {
     // A-form C major barre at the 3rd fret: x35553, start_fret = 3.
     let frets = [None, Some(3), Some(5), Some(5), Some(5), Some(3)];
     let chord = Chord::new(PitchClass::C, ChordQuality::Maj);
-    let lo = chord_box::layout(&dims, (0.0, 0.0), &GUITAR_6, &frets, 3, &chord);
+    let lo = chord_box::layout(&dims, (0.0, 0.0), &GUITAR_6, &frets, 3, &chord, Spelling::Sharps);
 
     // Boxed: start-fret label instead of a nut bar.
     assert_eq!(lo.nut, Nut::StartFret(3));
@@ -133,7 +133,7 @@ fn dots_outside_window_are_dropped() {
                             // start_fret 3 -> visible frets 3..=6; fret 9 maps to display 7 (dropped).
     let frets = [None, Some(3), Some(9), None, None, None];
     let chord = Chord::new(PitchClass::C, ChordQuality::Maj);
-    let lo = chord_box::layout(&dims, (0.0, 0.0), &GUITAR_6, &frets, 3, &chord);
+    let lo = chord_box::layout(&dims, (0.0, 0.0), &GUITAR_6, &frets, 3, &chord, Spelling::Sharps);
 
     // Only the in-window fret-3 dot survives; the fret-9 dot is clipped.
     assert_eq!(lo.dots.len(), 1);
@@ -145,8 +145,8 @@ fn origin_offsets_all_coordinates() {
     let dims = test_dims();
     let frets = [None, Some(3), Some(2), Some(0), Some(1), Some(0)];
     let chord = Chord::new(PitchClass::C, ChordQuality::Maj);
-    let base = chord_box::layout(&dims, (0.0, 0.0), &GUITAR_6, &frets, 0, &chord);
-    let moved = chord_box::layout(&dims, (10.0, 20.0), &GUITAR_6, &frets, 0, &chord);
+    let base = chord_box::layout(&dims, (0.0, 0.0), &GUITAR_6, &frets, 0, &chord, Spelling::Sharps);
+    let moved = chord_box::layout(&dims, (10.0, 20.0), &GUITAR_6, &frets, 0, &chord, Spelling::Sharps);
 
     approx(moved.board_x, base.board_x + 10.0);
     approx(moved.nut_y, base.nut_y + 20.0);
@@ -165,7 +165,7 @@ fn integrates_with_real_voicing() {
     // A real voicing from the music-theory engine drives the layout end to end.
     let chord = Chord::new(PitchClass::E, ChordQuality::Min7);
     let v = fretboard_voicing(&chord, &BASS_4);
-    let lo = chord_box::layout(&dims, (0.0, 0.0), &BASS_4, &v.frets, v.start_fret, &chord);
+    let lo = chord_box::layout(&dims, (0.0, 0.0), &BASS_4, &v.frets, v.start_fret, &chord, Spelling::Sharps);
 
     // Nut variant tracks the voicing's start fret.
     match lo.nut {
@@ -193,4 +193,16 @@ fn integrates_with_real_voicing() {
         .count();
     assert_eq!(lo.dots.len(), fretted_in_window);
     assert_eq!(lo.strings.len(), BASS_4.string_count());
+}
+
+/// BUG-72: in a flat key the diagram's name and dot labels read flat.
+#[test]
+fn flat_spelling_names_the_chord_and_its_dots_with_flats() {
+    let dims = test_dims();
+    let chord = Chord::new(PitchClass::As, ChordQuality::Maj).with_bass(PitchClass::D);
+    let v = fretboard_voicing(&chord, &GUITAR_6);
+    let lo = chord_box::layout(&dims, (0.0, 0.0), &GUITAR_6, &v.frets, v.start_fret, &chord, Spelling::Flats);
+    assert_eq!(lo.name, "Bb/D");
+    assert!(lo.dots.iter().all(|d| !d.note.contains('#')), "{:?}", lo.dots.iter().map(|d| d.note).collect::<Vec<_>>());
+    assert!(lo.dots.iter().any(|d| d.note == "Bb"));
 }

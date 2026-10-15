@@ -14,7 +14,7 @@ use resonance_app::view::performance::center_stage::{
     diagram_size, hero_fingerprint, lowest_sounding_pc, voicing_for,
 };
 use resonance_music_theory::{
-    Chord, ChordQuality, PitchClass, BASS_4, GUITAR_6, GUITAR_8,
+    Chord, ChordQuality, PitchClass, Spelling, BASS_4, GUITAR_6, GUITAR_8,
 };
 
 fn pc(semitone: u8) -> PitchClass {
@@ -89,6 +89,7 @@ fn slash_chord_layout_flags_the_bass_dot_as_the_accent_root() {
         &voicing.frets,
         voicing.start_fret,
         &f_over_a,
+        Spelling::Sharps,
     );
 
     assert_eq!(layout.name, "F/A", "the diagram labels the slash chord");
@@ -129,30 +130,36 @@ fn fingerprint_tracks_chord_tuning_and_capo() {
 
     // Stable for identical inputs.
     assert_eq!(
-        hero_fingerprint(c, &GUITAR_6, 0),
-        hero_fingerprint(c, &GUITAR_6, 0)
+        hero_fingerprint(c, Spelling::Sharps, &GUITAR_6, 0),
+        hero_fingerprint(c, Spelling::Sharps, &GUITAR_6, 0)
     );
     // Changes with the chord, the tuning, and the capo.
     assert_ne!(
-        hero_fingerprint(c, &GUITAR_6, 0),
-        hero_fingerprint(g, &GUITAR_6, 0),
+        hero_fingerprint(c, Spelling::Sharps, &GUITAR_6, 0),
+        hero_fingerprint(g, Spelling::Sharps, &GUITAR_6, 0),
         "a different chord must invalidate the cache"
     );
     assert_ne!(
-        hero_fingerprint(c, &GUITAR_6, 0),
-        hero_fingerprint(c, &BASS_4, 0),
+        hero_fingerprint(c, Spelling::Sharps, &GUITAR_6, 0),
+        hero_fingerprint(c, Spelling::Sharps, &BASS_4, 0),
         "a different tuning must invalidate the cache"
     );
     assert_ne!(
-        hero_fingerprint(c, &GUITAR_6, 0),
-        hero_fingerprint(c, &GUITAR_6, 2),
+        hero_fingerprint(c, Spelling::Sharps, &GUITAR_6, 0),
+        hero_fingerprint(c, Spelling::Sharps, &GUITAR_6, 2),
         "a different capo must invalidate the cache"
     );
     // Slash vs plain triad are distinct.
     assert_ne!(
-        hero_fingerprint(c, &GUITAR_6, 0),
-        hero_fingerprint(c.with_bass(pc(E)), &GUITAR_6, 0),
+        hero_fingerprint(c, Spelling::Sharps, &GUITAR_6, 0),
+        hero_fingerprint(c.with_bass(pc(E)), Spelling::Sharps, &GUITAR_6, 0),
         "a slash bass must invalidate the cache"
+    );
+    // A key change that respells the chord repaints it (BUG-72).
+    assert_ne!(
+        hero_fingerprint(c, Spelling::Sharps, &GUITAR_6, 0),
+        hero_fingerprint(c, Spelling::Flats, &GUITAR_6, 0),
+        "a different spelling must invalidate the cache"
     );
 }
 

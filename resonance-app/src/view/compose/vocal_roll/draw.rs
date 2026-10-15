@@ -36,7 +36,7 @@ impl VocalRollCanvas<'_> {
             c.duration_beats.hash(&mut ch);
             // The strip paints root + quality (VIEW-31); bass too, so a
             // slash-chord edit can never leave a stale label behind.
-            super::chord_label(&c.chord).hash(&mut ch);
+            super::chord_label(&c.chord, self.chord_spelling).hash(&mut ch);
             c.chord.bass.map(|b| b.to_semitone()).hash(&mut ch);
         }
         let mut dh = std::collections::hash_map::DefaultHasher::new();

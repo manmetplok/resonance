@@ -26,7 +26,7 @@ fn major(root: u8) -> Chord {
 
 fn card(chord: Chord, bars: u32, emphasis: Emphasis) -> NextCard {
     NextCard {
-        chord,
+        chord: chord.spelled(resonance_music_theory::Spelling::Sharps),
         tuning: &GUITAR_6,
         capo: 0,
         bars_until: bars,

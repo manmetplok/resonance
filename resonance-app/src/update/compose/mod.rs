@@ -424,7 +424,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::PlaceSection {
             definition_id,
             start_bar,
-        } => section::handle_place(r, definition_id, start_bar),
+        } => return section::handle_place(r, definition_id, start_bar),
         ComposeMessage::DeleteSectionPlacement { placement_id } => {
             section::handle_delete_placement(r, placement_id)
         }

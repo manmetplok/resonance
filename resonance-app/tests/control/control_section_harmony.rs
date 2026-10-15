@@ -477,6 +477,61 @@ fn set_scale_parses_wire_names() {
     expect_error(response, ErrorKind::InvalidParams);
 }
 
+/// BUG-72: chord symbols read back spelled in the section's key — a Bb
+/// in D minor is `Bb`, not `A#` — slash basses included, and a section
+/// with no scale spells in the key its chords imply.
+#[test]
+fn chord_symbols_are_spelled_in_the_section_key() {
+    let mut app = app_with_project();
+    let keyed = create_section(&mut app, "Verse", 4);
+    let response = call(
+        &mut app,
+        "section.set_scale",
+        &section_proto::SetScaleParams {
+            section_id: keyed.into(),
+            scale: key("D", "minor"),
+        },
+    );
+    let _: MutationAck = response.result().expect("set_scale succeeds");
+    let unkeyed = create_section(&mut app, "Chorus", 4);
+    for (id, symbols) in [
+        (keyed, ["Dm", "Bbmaj7", "Gm7", "A#/D"]),
+        (unkeyed, ["Fmaj7", "Bb", "Eb/G", "C7"]),
+    ] {
+        for (i, symbol) in symbols.iter().enumerate() {
+            let response = call(
+                &mut app,
+                "harmony.add_chord",
+                &harmony_proto::AddChordParams {
+                    section_id: id.into(),
+                    start_beat: i as f64 * 4.0,
+                    duration_beats: 4.0,
+                    symbol: (*symbol).to_owned(),
+                    vocal_melody: None,
+                },
+            );
+            let _: harmony_proto::AddChordResult = response.result().expect("chord added");
+        }
+    }
+    let view = sections_view(&mut app);
+    assert_eq!(chord_symbols(&view, keyed), ["Dm", "Bbmaj7", "Gm7", "Bb/D"]);
+    assert_eq!(chord_symbols(&view, unkeyed), ["Fmaj7", "Bb", "Eb/G", "C7"]);
+
+    // The tonic is spelled in its own key too.
+    let response = call(
+        &mut app,
+        "section.set_scale",
+        &section_proto::SetScaleParams {
+            section_id: keyed.into(),
+            scale: key("A#", "major"),
+        },
+    );
+    let _: MutationAck = response.result().expect("set_scale succeeds");
+    let view = sections_view(&mut app);
+    let def = view.definitions.iter().find(|d| u64::from(d.id) == keyed).unwrap();
+    assert_eq!(def.scale.as_ref().unwrap().tonic, "Bb");
+}
+
 // ---------------- harmony.* ----------------
 
 #[test]

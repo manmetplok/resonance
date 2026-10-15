@@ -78,7 +78,7 @@ pub(in crate::update::control) fn song_key(app: &Resonance) -> Option<KeyScale> 
 /// The app's `Scale` as its wire form.
 pub(in crate::update::control) fn key_scale(scale: &resonance_music_theory::Scale) -> KeyScale {
     KeyScale {
-        tonic: scale.root.to_string(),
+        tonic: scale.root_name().to_owned(),
         scale: scale.mode.as_str().to_owned(),
     }
 }

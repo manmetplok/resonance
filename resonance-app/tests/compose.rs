@@ -47,6 +47,8 @@ mod compose_drum_arrangement_inspector;
 mod compose_drum_arrangement_persistence;
 #[path = "compose/compose_drum_arrangement_ribbon.rs"]
 mod compose_drum_arrangement_ribbon;
+#[path = "compose/compose_drum_group_feel.rs"]
+mod compose_drum_group_feel;
 #[path = "compose/compose_drum_arrangement_ribbon_snapshot.rs"]
 mod compose_drum_arrangement_ribbon_snapshot;
 #[path = "compose/compose_drum_grid_bar_spans.rs"]

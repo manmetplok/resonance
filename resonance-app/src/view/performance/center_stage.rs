@@ -33,7 +33,8 @@ use iced::widget::{canvas, column, container, row, text, Space};
 use iced::{alignment, Element, Length, Point};
 
 use resonance_music_theory::{
-    fretboard_voicing, fretboard_voicing_from, Chord, FretboardVoicing, Tuning, WINDOW_FRETS,
+    fretboard_voicing, fretboard_voicing_from, Chord, FretboardVoicing, Spelling, Tuning,
+    WINDOW_FRETS,
 };
 
 use crate::chord_box::{self, Dims, Marker, Nut};
@@ -84,21 +85,27 @@ const RING_COL_W: f32 = 200.0;
 /// Gap between the three hero columns.
 const COLUMN_GAP: f32 = 56.0;
 
-/// Build the centre-stage hero for `chord` on the selected `tuning` + `capo`.
+/// Build the centre-stage hero for `chord` on the selected `tuning` + `capo`,
+/// its symbol, chips and dot labels spelled with `spelling`.
 ///
 /// Returns owned (`'static`) content so it can live behind the parent
 /// shell's `iced::widget::lazy` cache. The fingering diagram is a Canvas
 /// whose static layer is cached and repainted only when [`hero_fingerprint`]
 /// changes.
-pub fn hero(chord: Chord, tuning: &'static Tuning, capo: u8) -> Element<'static, Message> {
-    let fingerprint = hero_fingerprint(chord, tuning, capo);
+pub fn hero(
+    chord: Chord,
+    spelling: Spelling,
+    tuning: &'static Tuning,
+    capo: u8,
+) -> Element<'static, Message> {
+    let fingerprint = hero_fingerprint(chord, spelling, tuning, capo);
     let voicing = voicing_for(chord, tuning, capo);
 
     // (a) Huge chord symbol — root bright, quality + slash/bass muted. Built
     // from the same components `Chord::to_string` joins, so the readout reads
     // identically (root · quality suffix · "/bass") while each part takes its
     // own tint.
-    let mut symbol = row![text(chord.root.to_string())
+    let mut symbol = row![text(chord.root.name(spelling))
         .size(ROOT_SIZE)
         .font(theme::SERIF_ITALIC_FONT)
         .color(theme::TEXT_1)
@@ -117,7 +124,7 @@ pub fn hero(chord: Chord, tuning: &'static Tuning, capo: u8) -> Element<'static,
     }
     if let Some(bass) = chord.bass {
         symbol = symbol.push(
-            text(format!("/{bass}"))
+            text(format!("/{}", bass.name(spelling)))
                 .size(QUALITY_SIZE)
                 .font(theme::SERIF_ITALIC_FONT)
                 .color(theme::TEXT_3)
@@ -125,7 +132,7 @@ pub fn hero(chord: Chord, tuning: &'static Tuning, capo: u8) -> Element<'static,
         );
     }
 
-    let chord_block = column![symbol, chord_tone_chips(chord)]
+    let chord_block = column![symbol, chord_tone_chips(chord, spelling)]
         .spacing(26)
         .align_x(alignment::Horizontal::Center);
 
@@ -136,6 +143,7 @@ pub fn hero(chord: Chord, tuning: &'static Tuning, capo: u8) -> Element<'static,
         frets: voicing.frets,
         start_fret: voicing.start_fret,
         chord,
+        spelling,
         fingerprint,
     })
     .width(Length::Fixed(dw))
@@ -157,7 +165,7 @@ pub fn hero(chord: Chord, tuning: &'static Tuning, capo: u8) -> Element<'static,
 /// The chord-tone chip row beneath the symbol: one rounded chip per distinct
 /// chord tone, the root tinted with the lavender accent. A slash bass that
 /// is not itself a chord tone is appended as a neutral chip.
-fn chord_tone_chips(chord: Chord) -> Element<'static, Message> {
+fn chord_tone_chips(chord: Chord, spelling: Spelling) -> Element<'static, Message> {
     let mut chips = row![].spacing(8).align_y(alignment::Vertical::Center);
     let root_pc = chord.root.to_semitone();
     let mut seen = [false; 12];
@@ -167,12 +175,12 @@ fn chord_tone_chips(chord: Chord) -> Element<'static, Message> {
             continue;
         }
         seen[s] = true;
-        chips = chips.push(tone_chip(pc.as_str(), pc.to_semitone() == root_pc));
+        chips = chips.push(tone_chip(pc.name(spelling), pc.to_semitone() == root_pc));
     }
     if let Some(bass) = chord.bass {
         let s = bass.to_semitone() as usize;
         if !seen[s] {
-            chips = chips.push(tone_chip(bass.as_str(), false));
+            chips = chips.push(tone_chip(bass.name(spelling), false));
         }
     }
     chips.into()
@@ -250,10 +258,12 @@ pub fn lowest_sounding_pc(voicing: &FretboardVoicing, tuning: &Tuning) -> Option
 /// Fingerprint of the inputs that determine the hero's appearance. The
 /// parent shell keys its `iced::widget::lazy` cache on this (plus a state
 /// tag) and the Canvas clears its layer cache when it changes — so the hero
-/// repaints only on a chord / tuning / capo change, never per frame.
-pub fn hero_fingerprint(chord: Chord, tuning: &Tuning, capo: u8) -> u64 {
+/// repaints only on a chord / spelling / tuning / capo change, never per
+/// frame.
+pub fn hero_fingerprint(chord: Chord, spelling: Spelling, tuning: &Tuning, capo: u8) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     chord.hash(&mut h);
+    spelling.hash(&mut h);
     tuning.name.hash(&mut h);
     capo.hash(&mut h);
     h.finish()
@@ -268,6 +278,7 @@ struct FingeringDiagram {
     frets: Vec<Option<u8>>,
     start_fret: u8,
     chord: Chord,
+    spelling: Spelling,
     fingerprint: u64,
 }
 
@@ -325,6 +336,7 @@ impl FingeringDiagram {
             &self.frets,
             self.start_fret,
             &self.chord,
+            self.spelling,
         );
 
         // Fret lines — the first is a heavy nut bar in open position, an

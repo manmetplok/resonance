@@ -808,8 +808,9 @@ fn placement_ids(app: &Resonance) -> HashSet<u64> {
     app.compose_state().placements.iter().map(|p| p.id).collect()
 }
 
-/// A fresh placement has no derived clips (nothing is generated until the
-/// user asks), so placing and removing one changes only the placement set.
+/// Placing a section fills the new placement with the section's derived
+/// clips (BUG-73), so placing and removing one changes the placement set
+/// and the clip set — and undo/redo still take the diff path.
 #[test]
 fn placing_and_removing_a_section_undoes_through_the_diff_path() {
     let mut f = fixture("placement");
@@ -828,10 +829,9 @@ fn placing_and_removing_a_section_undoes_through_the_diff_path() {
         .into_iter()
         .find(|id| !ids.contains(id))
         .expect("the edit placed a section");
-    assert_eq!(
-        placed.project.file.midi_clips.len(),
-        before.project.file.midi_clips.len(),
-        "a fresh placement generates no clips, or the gate still sees a clip change"
+    assert!(
+        placed.project.file.midi_clips.len() > before.project.file.midi_clips.len(),
+        "the new placement gets the section's derived clips"
     );
     let removed = edit(
         &mut f,

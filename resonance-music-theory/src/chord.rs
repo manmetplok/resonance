@@ -1,4 +1,5 @@
-use crate::pitch::PitchClass;
+use crate::pitch::{PitchClass, Spelling};
+use crate::scale::Scale;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -134,13 +135,48 @@ impl Chord {
     }
 }
 
-impl fmt::Display for Chord {
+impl Chord {
+    /// This chord's symbol spelled for `key`: flats in a flat key
+    /// (`Bbmaj7` in D minor), sharps otherwise or with no key. The slash
+    /// bass follows the same spelling. The text parses back to the same
+    /// chord.
+    pub fn display_in(self, key: Option<&Scale>) -> SpelledChord {
+        self.spelled(key.map(Scale::spelling).unwrap_or_default())
+    }
+
+    /// This chord's symbol with an explicit accidental preference.
+    pub fn spelled(self, spelling: Spelling) -> SpelledChord {
+        SpelledChord {
+            chord: self,
+            spelling,
+        }
+    }
+}
+
+/// A [`Chord`] paired with the accidental its symbol is written with;
+/// see [`Chord::display_in`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpelledChord {
+    pub chord: Chord,
+    pub spelling: Spelling,
+}
+
+impl fmt::Display for SpelledChord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.root, self.quality)?;
-        if let Some(bass) = self.bass {
-            write!(f, "/{}", bass)?;
+        let c = &self.chord;
+        write!(f, "{}{}", c.root.name(self.spelling), c.quality)?;
+        if let Some(bass) = c.bass {
+            write!(f, "/{}", bass.name(self.spelling))?;
         }
         Ok(())
+    }
+}
+
+/// Sharps, with no key to spell for — use [`Chord::display_in`] wherever
+/// a key is known.
+impl fmt::Display for Chord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.spelled(Spelling::Sharps).fmt(f)
     }
 }
 

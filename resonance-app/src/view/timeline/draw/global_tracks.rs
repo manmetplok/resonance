@@ -384,7 +384,7 @@ impl TimelineCanvas<'_> {
                 resonance_music_theory::Mode::Minor => "min".to_string(),
                 other => other.to_string(),
             };
-            let _ = write!(out, "  ·  {} {}", scale.root, mode_label);
+            let _ = write!(out, "  ·  {} {}", scale.root_name(), mode_label);
         }
 
         // Chord count: sum of every section's progression.

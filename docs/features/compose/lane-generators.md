@@ -1,6 +1,6 @@
 # Lane generators and derived clips
 
-> Verified against master @ `f9438e38` + the chord-change vocal melody flow (BUG-70) on 2026-10-13.
+> Verified against master @ `acac5ea3` + fill on place (BUG-73) on 2026-10-15.
 > Spec history: `docs/history/refactor/A-6-derived-clips.md` (derived-clip map), `docs/history/specs/melody-generation-research.md` + `todo.md` (generator quality).
 
 Each `(section definition, track)` pair is a **lane**. A lane can carry a
@@ -140,8 +140,6 @@ the app.
 
 ## Known gaps
 
-- A new placement stays empty until the lane regenerates —
-  [section-placement-editing](../../intents/compose/section-placement-editing.md).
 - Hand edits to derived clips are silently overwritten by the next
   regenerate (no lock/detach). No intent yet.
 - Melody `EmbellishmentStyle` has no GUI control —

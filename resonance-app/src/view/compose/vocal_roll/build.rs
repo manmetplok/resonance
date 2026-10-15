@@ -44,6 +44,7 @@ pub fn build_canvas<'a>(
         params,
         bank: app.voicebanks.profile(&params.voicebank),
         chords: &definition.chords,
+        chord_spelling: definition.chord_spelling(),
         section_beats: definition.length_bars * meter.numerator as u32,
         scroll_y: editor_state.scroll_y,
         zoom_x: editor_state.zoom_x,

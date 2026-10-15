@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 
 use resonance_audio::types::TrackId;
-use resonance_music_theory::{Chord, GeneratedMaterial, GeneratorSpec, MotifSource, Scale};
+use resonance_music_theory::{
+    Chord, GeneratedMaterial, GeneratorSpec, MotifSource, Scale, Spelling,
+};
 
 use super::generate::GenerateParams;
 use super::lane_generator::LaneGeneratorConfig;
@@ -115,6 +117,21 @@ impl PatternEntry {
 }
 
 impl SectionDefinitionState {
+    /// The key this section's chord symbols are spelled in: its scale,
+    /// else the key its chords imply ([`resonance_music_theory::infer_scale`]),
+    /// else none (sharps).
+    pub fn spelling_key(&self) -> Option<Scale> {
+        self.scale.or_else(|| {
+            resonance_music_theory::infer_scale(&super::generate::to_timed_chords(&self.chords))
+        })
+    }
+
+    /// The accidental this section's chord symbols use — flats in a flat
+    /// key (`Bbmaj7` in D minor), sharps otherwise.
+    pub fn chord_spelling(&self) -> Spelling {
+        self.spelling_key().map(|k| k.spelling()).unwrap_or_default()
+    }
+
     /// The section's "primary" drum pattern: the first arrangement
     /// entry's pattern, or `None` when the arrangement is empty (meaning
     /// "fall through to the project default"). Back-compat shim for

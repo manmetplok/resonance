@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use printpdf::*;
 use resonance_music_theory::{
-    fretboard_voicing, Chord, PitchClass, Scale, Tuning, BASS_4, BASS_5, GUITAR_6,
+    fretboard_voicing, Chord, PitchClass, Scale, Spelling, Tuning, BASS_4, BASS_5, GUITAR_6,
     GUITAR_8,
 };
 
@@ -203,13 +203,14 @@ fn draw_fretboard_cell(
     frets: &[Option<u8>],
     start_fret: u8,
     chord: &Chord,
+    spelling: Spelling,
 ) {
     // Shared, backend-agnostic geometry. Passing the page-space cell origin
     // makes the layout reproduce the original arithmetic exactly; this PDF
     // backend then applies its own fonts/colours so the emitted ops stay
     // byte-for-byte identical to the original inline code.
     let dims = pdf_dims(tuning);
-    let lo = chord_box::layout(&dims, (cell_x, cell_y), tuning, frets, start_fret, chord);
+    let lo = chord_box::layout(&dims, (cell_x, cell_y), tuning, frets, start_fret, chord, spelling);
 
     // Chord name
     let name_x = cell_x + (CELL_W - lo.name.len() as f32 * 2.2) / 2.0;
@@ -357,16 +358,16 @@ fn draw_scale_fretboard(ops: &mut Vec<Op>, y: f32, tuning: &Tuning, scale: &Scal
 
 // -- Keyboard chord cell -----------------------------------------------------
 
-fn draw_keyboard_cell(ops: &mut Vec<Op>, cell_x: f32, cell_y: f32, chord: &Chord) {
+fn draw_keyboard_cell(ops: &mut Vec<Op>, cell_x: f32, cell_y: f32, chord: &Chord, spelling: Spelling) {
     let chord_pcs: Vec<u8> = chord.pitch_classes().map(|pc| pc.to_semitone()).collect();
     let root_pc = chord.bass.unwrap_or(chord.root).to_semitone();
 
-    let name = chord.to_string();
+    let name = chord.spelled(spelling).to_string();
     let name_x = cell_x + (CELL_W - name.len() as f32 * 2.2) / 2.0;
     ops.extend(text_op(&name, name_x, cell_y, 7.0, BuiltinFont::HelveticaBold, black()));
 
     let kb_y = cell_y + FB_CHORD_NAME_H;
-    draw_keyboard_keys(ops, cell_x + 1.0, kb_y, CELL_W - 2.0, KB_KEY_H, KB_BLACK_H, &chord_pcs, root_pc, true);
+    draw_keyboard_keys(ops, cell_x + 1.0, kb_y, CELL_W - 2.0, KB_KEY_H, KB_BLACK_H, &chord_pcs, root_pc, true, spelling);
 }
 
 // -- Keyboard scale diagram (full width) -------------------------------------
@@ -384,7 +385,7 @@ fn draw_scale_keyboard(ops: &mut Vec<Op>, y: f32, scale: &Scale) -> f32 {
 
     // Use 2 octaves for scale, full width
     let kb_w = USABLE_W;
-    draw_keyboard_keys_2oct(ops, MARGIN, kb_y, kb_w, KB_SCALE_KEY_H, KB_SCALE_BLACK_H, &scale_pcs, root_pc);
+    draw_keyboard_keys_2oct(ops, MARGIN, kb_y, kb_w, KB_SCALE_KEY_H, KB_SCALE_BLACK_H, &scale_pcs, root_pc, scale.spelling());
 
     kb_y + KB_SCALE_KEY_H + 3.0
 }
@@ -393,7 +394,7 @@ fn draw_scale_keyboard(ops: &mut Vec<Op>, y: f32, scale: &Scale) -> f32 {
 
 fn draw_keyboard_keys(
     ops: &mut Vec<Op>, x: f32, y: f32, w: f32, key_h: f32, black_h: f32,
-    highlighted_pcs: &[u8], root_pc: u8, show_names: bool,
+    highlighted_pcs: &[u8], root_pc: u8, show_names: bool, spelling: Spelling,
 ) {
     let white_key_w = w / KB_WHITE_COUNT as f32;
     let black_key_w = white_key_w * 0.6;
@@ -407,7 +408,7 @@ fn draw_keyboard_keys(
         rect_filled(ops, kx, y, white_key_w - 0.3, key_h, fill, gray(0.3), 0.3);
 
         if is_ct && show_names {
-            let name = PitchClass::from_semitone(pc).as_str();
+            let name = PitchClass::from_semitone(pc).name(spelling);
             let col = if is_root { white() } else { gray(0.15) };
             ops.extend(text_op(name, kx + 0.3, y + key_h - 1.8, 3.0, BuiltinFont::HelveticaBold, col));
         }
@@ -422,7 +423,7 @@ fn draw_keyboard_keys(
         rect_filled(ops, bx, y, black_key_w, black_h, fill, black(), 0.3);
 
         if is_ct && show_names {
-            let name = PitchClass::from_semitone(pc).as_str();
+            let name = PitchClass::from_semitone(pc).name(spelling);
             ops.extend(text_op(name, bx + 0.2, y + black_h - 1.2, 2.5, BuiltinFont::HelveticaBold, white()));
         }
     }
@@ -430,7 +431,7 @@ fn draw_keyboard_keys(
 
 fn draw_keyboard_keys_2oct(
     ops: &mut Vec<Op>, x: f32, y: f32, w: f32, key_h: f32, black_h: f32,
-    highlighted_pcs: &[u8], root_pc: u8,
+    highlighted_pcs: &[u8], root_pc: u8, spelling: Spelling,
 ) {
     let octave_w = w / 2.0;
     let white_key_w = octave_w / KB_WHITE_COUNT as f32;
@@ -447,7 +448,7 @@ fn draw_keyboard_keys_2oct(
             rect_filled(ops, kx, y, white_key_w - 0.3, key_h, fill, gray(0.3), 0.3);
 
             if is_ct {
-                let name = PitchClass::from_semitone(pc).as_str();
+                let name = PitchClass::from_semitone(pc).name(spelling);
                 let col = if is_root { white() } else { gray(0.15) };
                 ops.extend(text_op(name, kx + 0.5, y + key_h - 2.5, 4.0, BuiltinFont::HelveticaBold, col));
             }
@@ -462,7 +463,7 @@ fn draw_keyboard_keys_2oct(
             rect_filled(ops, bx, y, black_key_w, black_h, fill, black(), 0.3);
 
             if is_ct {
-                let name = PitchClass::from_semitone(pc).as_str();
+                let name = PitchClass::from_semitone(pc).name(spelling);
                 ops.extend(text_op(name, bx + 0.3, y + black_h - 1.5, 3.0, BuiltinFont::HelveticaBold, white()));
             }
         }
@@ -629,7 +630,8 @@ fn render_fretboard_pages(
             cursor_y += scale_h;
         }
 
-        // Chord diagrams in rows of 8
+        // Chord diagrams in rows of 8, spelled in the section's key.
+        let spelling = def.chord_spelling();
         for row_chords in chords.chunks(CHORDS_PER_ROW) {
             if cursor_y + FB_CELL_H > max_y {
                 pages.push(new_page(std::mem::take(&mut ops)));
@@ -640,7 +642,7 @@ fn render_fretboard_pages(
             for (col, cs) in row_chords.iter().enumerate() {
                 let cell_x = MARGIN + col as f32 * CELL_W;
                 let v = fretboard_voicing(&cs.chord, tuning);
-                draw_fretboard_cell(&mut ops, cell_x, cursor_y, tuning, &v.frets, v.start_fret, &cs.chord);
+                draw_fretboard_cell(&mut ops, cell_x, cursor_y, tuning, &v.frets, v.start_fret, &cs.chord, spelling);
             }
 
             cursor_y += FB_CELL_H + ROW_GAP;
@@ -677,7 +679,8 @@ fn render_keyboard_pages(
             cursor_y = end_y;
         }
 
-        // Chord diagrams
+        // Chord diagrams, spelled in the section's key.
+        let spelling = def.chord_spelling();
         for row_chords in chords.chunks(CHORDS_PER_ROW) {
             if cursor_y + KB_CELL_H > max_y {
                 pages.push(new_page(std::mem::take(&mut ops)));
@@ -687,7 +690,7 @@ fn render_keyboard_pages(
 
             for (col, cs) in row_chords.iter().enumerate() {
                 let cell_x = MARGIN + col as f32 * CELL_W;
-                draw_keyboard_cell(&mut ops, cell_x, cursor_y, &cs.chord);
+                draw_keyboard_cell(&mut ops, cell_x, cursor_y, &cs.chord, spelling);
             }
 
             cursor_y += KB_CELL_H + ROW_GAP;

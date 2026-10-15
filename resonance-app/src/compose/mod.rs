@@ -40,7 +40,7 @@ pub use section::{
     ChordState, EditSectionForm, EntryLength, NewSectionForm, PatternEntry, SectionDefinitionState,
     SectionPlacementState, SelectedLane,
 };
-pub use state::{ComposeState, RailPanelKey, VocalTakeSources};
+pub use state::{ComposeState, RailPanelKey, VocalTakeLayout, VocalTakeSources};
 pub use vocal_melody::{LaneMelodyFlags, VocalMelodyChoice};
 pub use vocal_render_status::{
     VocalLaneErrorKind, VocalLaneKey, VocalLaneRenderState, VocalLaneRenderStatus,

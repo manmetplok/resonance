@@ -18,7 +18,7 @@ impl<'a> ChordLaneCanvas<'a> {
         // ---- Lane side panel ----
         let chord_count = self.definition.chords.len();
         let scale_word = match (chord_count, self.definition.scale.as_ref()) {
-            (n, Some(scale)) => format!("{} \u{00b7} {} chords", scale.root, n),
+            (n, Some(scale)) => format!("{} \u{00b7} {} chords", scale.root_name(), n),
             (n, None) => format!("{} chords", n),
         };
         lane_side::draw(
@@ -34,6 +34,9 @@ impl<'a> ChordLaneCanvas<'a> {
             Some(&scale_word),
             self.chords_selected,
         );
+
+        // Chord symbols are spelled in the section's key (BUG-72).
+        let spelling = self.definition.chord_spelling();
 
         // ---- Grid area (right of name column) ----
         let grid_x = NAME_COLUMN_WIDTH;
@@ -176,7 +179,7 @@ impl<'a> ChordLaneCanvas<'a> {
 
             // Chord symbol — italic serif, primary text color.
             frame.fill_text(canvas::Text {
-                content: chord.chord.to_string(),
+                content: chord.chord.spelled(spelling).to_string(),
                 position: Point::new(x + 8.0, block_top + 16.0),
                 color: theme::TEXT_1,
                 size: 18.0.into(),

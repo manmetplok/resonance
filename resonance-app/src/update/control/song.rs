@@ -86,21 +86,24 @@ fn sections(app: &Resonance, request: &Request) -> Response {
         .compose
         .definitions
         .iter()
-        .map(|d| SectionDefinitionView {
-            id: d.id.into(),
-            name: d.name.clone(),
-            length_bars: d.length_bars,
-            scale: d.scale.as_ref().map(view_model::key_scale),
-            chords: d
-                .chords
-                .iter()
-                .map(|c| ChordView {
-                    id: c.id.into(),
-                    start_beat: c.start_beat as f64,
-                    duration_beats: c.duration_beats as f64,
-                    symbol: c.chord.to_string(),
-                })
-                .collect(),
+        .map(|d| {
+            let spelling_key = d.spelling_key();
+            SectionDefinitionView {
+                id: d.id.into(),
+                name: d.name.clone(),
+                length_bars: d.length_bars,
+                scale: d.scale.as_ref().map(view_model::key_scale),
+                chords: d
+                    .chords
+                    .iter()
+                    .map(|c| ChordView {
+                        id: c.id.into(),
+                        start_beat: c.start_beat as f64,
+                        duration_beats: c.duration_beats as f64,
+                        symbol: c.chord.display_in(spelling_key.as_ref()).to_string(),
+                    })
+                    .collect(),
+            }
         })
         .collect();
     let result = SectionsView {

@@ -190,6 +190,8 @@ impl TimelineCanvas<'_> {
             let beats_per_bar = self.tempo_map.numerator.max(1) as f32;
             let section_bars = definition.length_bars as f32;
             let section_pixel_width = section_end_x - section_x;
+            // Roots are spelled in the section's key (BUG-72).
+            let spelling = definition.chord_spelling();
             for chord in &definition.chords {
                 let chord_start_bars = chord.start_beat as f32 / beats_per_bar;
                 let chord_end_bars =
@@ -301,7 +303,7 @@ impl TimelineCanvas<'_> {
                 // Chord symbol: render root + quality suffix on one line.
                 // Tiny — fits in the chord block height of ~38 px.
                 if visible_w > 14.0 {
-                    let root_label = chord.chord.root.as_str();
+                    let root_label = chord.chord.root.name(spelling);
                     let suffix = chord.chord.quality.suffix();
                     frame.fill_text(canvas::Text {
                         content: format!("{}{}", root_label, suffix),
@@ -424,7 +426,12 @@ impl TimelineCanvas<'_> {
                 frame.fill_text(canvas::Text {
                     content: format!(
                         "{}{}",
-                        region.chord.root.as_str(),
+                        region.chord.root.name(
+                            self.chord_track
+                                .key_at(region.start_sample)
+                                .map(|k| k.spelling())
+                                .unwrap_or_default()
+                        ),
                         region.chord.quality.suffix()
                     ),
                     position: Point::new(text_x, strip_y + 1.0),
