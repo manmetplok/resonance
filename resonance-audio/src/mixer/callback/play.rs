@@ -118,6 +118,11 @@ pub(super) fn render_playing_block(
 
     let split = seam::detect(shared, playhead, frames);
     let new_playhead = seam::render_arrangement(block, scratch, timing.transport, monitor, split);
+    if split.is_some() {
+        // After this callback's live-MIDI pickup, so every event it
+        // stamped belongs to the pass the wrap just ended (BUG-22).
+        seam::count_wrap(shared);
+    }
 
     run_master_passes(
         inputs,

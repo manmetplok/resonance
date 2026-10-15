@@ -192,7 +192,9 @@ pub(crate) fn handle_midi_clock_event(
                 .tempo_map
                 .load()
                 .tick_to_abs_sample(0, abs_tick, ctx.sample_rate);
-            ctx.shared.playhead.store(sample, Ordering::SeqCst);
+            let from = ctx.shared.playhead.swap(sample, Ordering::SeqCst);
+            // A relocate is a seek to a cycle-record run (BUG-20).
+            super::super::transport::restart_cycle_record_pass(ctx, state, from);
             let _ = ctx.event_tx.send(AudioEvent::PlayheadMoved(sample));
         }
     }

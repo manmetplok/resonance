@@ -455,10 +455,7 @@ fn push_to_ringbufs(user_data: &mut UserData, samples: &[f32], frame_stride: usi
             // rotate the take's channels forever (finding #17).
             let dropped = crate::mixer::push_recording_frames(prod, samples, frame_stride);
             if dropped > 0 {
-                user_data
-                    .shared
-                    .recording_overflow
-                    .fetch_add(dropped as u64, Ordering::Relaxed);
+                user_data.shared.note_recording_dropped(dropped as u64);
             }
         }
     }

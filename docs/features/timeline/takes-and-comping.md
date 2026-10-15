@@ -1,6 +1,6 @@
 # Takes and comping (app side)
 
-> Verified against master @ `ef215b08` on 2026-10-15.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: none in `docs/history/specs/`; epic #15 / design doc #165 and todos #409–#414, #1392–#1401, ba doc #292, cited in code comments.
 
 When cycle-record mode is on, every loop pass recorded on an armed track
@@ -148,3 +148,6 @@ tempo change or a bar shift.
 - Recording latency (PDC latch, pass cuts at the loop seam) is engine work;
   code review RT-01 / RT-02 are fixed in `resonance-audio/src/recording.rs`
   (`record_pdc_samples`, `CycleCut`). See [recording.md](../hardware-io/recording.md).
+  A seek or loop move mid-run ends the pass there and recuts from the new
+  playhead, so a run can file a short take under the old slot and its
+  later passes under the new one (BUG-20).

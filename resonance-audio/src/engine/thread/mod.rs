@@ -15,6 +15,8 @@
 
 mod dispatch;
 mod load_report;
+mod loop_record_session;
+pub(crate) use loop_record_session::LoopRecordSession;
 #[cfg(feature = "test-internals")]
 pub(crate) mod test_support;
 
@@ -31,11 +33,11 @@ use crate::clap_host::{ClapBundle, PluginMap};
 use crate::midi_clock::{
     ClockTempoTracker, MidiClockEvent, MidiClockReceiver, MidiClockSender,
 };
-use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
+use crate::midi_hardware::{ForwardedLiveMidi, LiveControlEvent, LiveMidiEvent};
 use crate::mixer::MidiStash;
 use crate::recording::RecordingState;
 use crate::types::*;
-use resonance_common::{TakeGroup, TakeGroupId, TimelineRange};
+use resonance_common::{TakeGroup, TakeGroupId};
 
 use super::import_queue::ImportQueue;
 use super::midi::MidiHardwareState;
@@ -101,22 +103,6 @@ pub(crate) struct RecordingMidiState {
     /// On NoteOff we look the note up here, set its `duration_ticks`,
     /// and remove the entry. Stuck NoteOns get closed at transport stop.
     pub open_notes: HashMap<u8, usize>,
-}
-
-/// Bookkeeping for an in-flight cycle-record (loop-record) run. Created
-/// in [`transport::open_recording_session`] when loop-record mode and a
-/// loop range are both active, advanced at each loop seam, and torn down
-/// when recording stops. Lives on the engine control thread so it never
-/// touches the audio callback.
-pub(crate) struct LoopRecordSession {
-    /// The loop region being cycled over, in sample frames. Reported on
-    /// every `AudioEvent::TakeCaptured` as the take's slot.
-    pub slot: TimelineRange,
-    /// Zero-based index of the MIDI pass currently being captured, bumped
-    /// at each playhead wrap. Audio passes are cut by sample count and
-    /// counted by `RecordingState::audio_passes_rolled` (code review
-    /// RT-02).
-    pub pass_index: u32,
 }
 
 /// Mutable engine-thread-local state that persists across command
@@ -431,7 +417,7 @@ pub(crate) struct EngineThreadParams {
     // Events already picked up (and instrument-delivered) by the audio
     // callback, forwarded here for recording + MIDI-thru bookkeeping
     // (doc #260 finding #16).
-    pub live_midi_fwd_rx: Receiver<LiveMidiEvent>,
+    pub live_midi_fwd_rx: Receiver<ForwardedLiveMidi>,
     pub live_control_tx: Sender<LiveControlEvent>,
     pub live_control_rx: Receiver<LiveControlEvent>,
     pub clock_tx: Sender<MidiClockEvent>,
@@ -498,9 +484,6 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
     // isn't rolling so a fresh play re-tints the controls.
     let mut last_automated_value_emit = std::time::Instant::now();
     let mut live_value_emitter = automation::LiveValueEmitter::default();
-    // Previous-iteration playhead, used to detect a loop wrap so the
-    // cycle-record seam handler can roll the just-finished pass into a take.
-    let mut last_playhead: SamplePos = 0;
     // The plugin host-request poll runs at most once per housekeeping
     // tick, not after every command (code review HOST-02).
     let mut last_host_poll: Option<std::time::Instant> = None;
@@ -589,6 +572,8 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         // on the audio thread (within one quantum — doc #260 finding
         // #16); this pass only does the non-realtime bookkeeping:
         // record-into-clip and Thru-to-output.
+        // The wrap count is read first (`poll_loop_record_seam`, BUG-22).
+        let wraps_seen = ctx.shared.loop_wraps();
         for ev in live_midi_fwd_rx.try_iter() {
             midi::handle_live_midi_event(&ctx, &mut state, ev);
         }
@@ -743,9 +728,9 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         // finish, keep the sync-to-tempo ratio current, and throttle the
         // AuditionPosition events that drive the preview scrub playhead.
         audition::poll_audition(&ctx, &mut last_audition_report);
-        // Cycle-record: when the playhead wraps a loop boundary mid-record,
-        // roll the just-completed pass into a take and start a fresh one.
-        transport::poll_loop_record_seam(&ctx, &mut state, &mut last_playhead);
+        // Cycle-record: once the audio thread has wrapped the loop
+        // mid-record, roll the finished MIDI pass into a take.
+        transport::poll_loop_record_seam(&ctx, &mut state, wraps_seen);
 
         // Report playhead position at ~60Hz using wall-clock time
         if ctx.shared.playing.load(Ordering::SeqCst)

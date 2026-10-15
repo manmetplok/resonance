@@ -16,7 +16,7 @@ use std::sync::Arc;
 use ringbuf::traits::Producer;
 
 use resonance_audio::test_support::{
-    count_in_arm, EngineHandlerHarness, LatencyComp, MixAudioHarness,
+    count_in_arm, EngineHandlerHarness, LatencyComp, LiveMidiEvent, MixAudioHarness,
 };
 use resonance_audio::types::*;
 use resonance_common::{TakeContent, TimelineRange};
@@ -484,4 +484,271 @@ fn the_recording_ring_holds_the_same_time_at_any_channel_count() {
             "{channels} channels: {len} samples is under {RECORDING_RING_SECONDS} s"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// BUG-20: a seek or a loop move during cycle-record
+// ---------------------------------------------------------------------------
+
+/// Every `TakeCaptured` as `(content, slot, extent)`.
+fn captured(events: &[AudioEvent]) -> Vec<(TakeContent, TimelineRange, TimelineRange)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            AudioEvent::TakeCaptured {
+                content,
+                slot,
+                extent,
+                ..
+            } => Some((content.clone(), *slot, *extent)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A seek mid-pass ends the pass there and starts the next one where the
+/// playhead landed: the pass cut afterwards falls at the loop end the
+/// playhead really reaches, and every pass after that is a whole loop. The
+/// session used to ignore the seek and keep cutting one loop length from
+/// the punch-in, so every later pass straddled the real seam.
+#[test]
+fn a_seek_during_cycle_record_rolls_the_pass_and_recuts_from_the_new_playhead() {
+    const SEEK_TO: u64 = LOOP_IN + LOOP_LEN / 4;
+    let (mut h, dir, mut input) = cycle_session("seek", 0);
+
+    push_ramp(&mut input, 0, LOOP_LEN / 2);
+    h.recording_tick();
+    assert!(audio_takes(&h.drain_events()).is_empty(), "half a pass");
+
+    h.dispatch(AudioCommand::SeekTo(SEEK_TO));
+    let at_seek = audio_takes(&h.drain_events());
+    assert_eq!(at_seek.len(), 1, "the seek rolls the pass it interrupted");
+    assert_eq!(at_seek[0].1, TimelineRange::new(LOOP_IN, LOOP_LEN / 2));
+
+    // The input callback's next push latches the post-seek playhead.
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, LOOP_LEN / 2, LOOP_LEN - LOOP_LEN / 4);
+    h.recording_tick();
+    let after = audio_takes(&h.drain_events());
+    assert_eq!(after.len(), 1, "the pass from the seek ends at loop_out");
+    let (resumed, extent) = after[0];
+    assert_eq!(extent, TimelineRange::new(SEEK_TO, LOOP_LEN - LOOP_LEN / 4));
+    assert_eq!(clip(&h, resumed).start_sample, SEEK_TO);
+    assert_eq!(clip(&h, resumed).source.as_frames()[0], (LOOP_LEN / 2) as f32);
+
+    let next = LOOP_LEN / 2 + LOOP_LEN - LOOP_LEN / 4;
+    push_ramp(&mut input, next, LOOP_LEN);
+    h.recording_tick();
+    let whole = audio_takes(&h.drain_events());
+    assert_eq!(whole.len(), 1);
+    let (id, extent) = whole[0];
+    assert_eq!(extent, TimelineRange::new(LOOP_IN, LOOP_LEN), "a whole loop again");
+    assert_eq!(clip(&h, id).source.as_frames()[0], next as f32);
+    h.stop();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Moving the loop mid-run rolls the pass under the old slot, and the
+/// passes after it are cut and filed against the new range.
+#[test]
+fn moving_the_loop_during_cycle_record_cuts_later_passes_at_the_new_seams() {
+    const NEW_IN: u64 = 200_000;
+    const NEW_LEN: u64 = 30_000;
+    const LANDED: u64 = NEW_IN + 1_000;
+    let (mut h, dir, mut input) = cycle_session("move-loop", 0);
+
+    push_ramp(&mut input, 0, LOOP_LEN / 2);
+    h.recording_tick();
+    h.drain_events();
+
+    // The playhead is inside the new range when it moves.
+    h.set_playhead(LANDED);
+    h.set_loop_range(true, NEW_IN, NEW_IN + NEW_LEN);
+    let rolled = captured(&h.drain_events());
+    assert_eq!(rolled.len(), 1, "the interrupted pass is rolled: {rolled:?}");
+    assert_eq!(rolled[0].1, TimelineRange::new(LOOP_IN, LOOP_LEN), "under the old slot");
+    assert_eq!(rolled[0].2, TimelineRange::new(LOOP_IN, LOOP_LEN / 2));
+
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, LOOP_LEN / 2, NEW_LEN - 1_000 + NEW_LEN);
+    h.recording_tick();
+    let later = captured(&h.drain_events());
+    let new_slot = TimelineRange::new(NEW_IN, NEW_LEN);
+    let slots_extents: Vec<_> = later.iter().map(|(_, s, e)| (*s, *e)).collect();
+    assert_eq!(
+        slots_extents,
+        vec![
+            (new_slot, TimelineRange::new(LANDED, NEW_LEN - 1_000)),
+            (new_slot, new_slot),
+        ],
+    );
+    h.stop();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Re-sending the loop range the run already cycles over is not a move.
+#[test]
+fn re_sending_the_same_loop_range_does_not_roll_a_pass() {
+    let (mut h, dir, mut input) = cycle_session("same-loop", 0);
+    push_ramp(&mut input, 0, LOOP_LEN / 2);
+    h.recording_tick();
+    h.set_loop_range(true, LOOP_IN, LOOP_IN + LOOP_LEN);
+    assert!(captured(&h.drain_events()).is_empty());
+    push_ramp(&mut input, LOOP_LEN / 2, LOOP_LEN / 2);
+    h.recording_tick();
+    let takes = audio_takes(&h.drain_events());
+    assert_eq!(takes.len(), 1);
+    assert_eq!(takes[0].1, TimelineRange::new(LOOP_IN, LOOP_LEN));
+    h.stop();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The MIDI half of a pass rolls with its audio half at a seek, so the
+/// two stay paired: a note played before the seek is in the pass the seek
+/// ends, one played after it in the next.
+#[test]
+fn a_seek_rolls_the_midi_pass_with_the_audio_pass() {
+    const KEYS: TrackId = 2;
+    let (mut h, dir) = armed("seek-midi");
+    let keys = Track::with_type(KEYS, "keys".into(), TrackType::Instrument);
+    keys.set_record_armed(true);
+    h.push_track(keys);
+    h.set_loop_range(true, LOOP_IN, LOOP_IN + LOOP_LEN);
+    h.set_loop_record_mode(true);
+    h.shared().playhead.store(LOOP_IN, Ordering::Relaxed);
+    let mut input = h.record_with_fake_input(0, 2).expect("session opened");
+    h.shared().latch_recording_start();
+
+    let note = |note: u8| LiveMidiEvent::InboundNoteOn {
+        track_id: KEYS,
+        note,
+        velocity: 0.8,
+        arrival: std::time::Instant::now(),
+    };
+    let notes_of = |c: &TakeContent| match c {
+        TakeContent::Midi { notes } => Some(notes.iter().map(|n| n.note).collect::<Vec<u8>>()),
+        TakeContent::Audio { .. } => None,
+    };
+    push_ramp(&mut input, 0, 6_000);
+    h.set_playhead(LOOP_IN + 5_000);
+    h.live_midi_event(note(60));
+    h.recording_tick();
+    h.drain_events();
+
+    h.dispatch(AudioCommand::SeekTo(LOOP_IN + 2_000));
+    let at_seek = captured(&h.drain_events());
+    let audio = at_seek.iter().filter(|(c, _, _)| notes_of(c).is_none()).count();
+    let midi: Vec<_> = at_seek.iter().filter_map(|(c, _, _)| notes_of(c)).collect();
+    assert_eq!(audio, 1, "the audio half rolls at the seek");
+    assert_eq!(midi, vec![vec![60]], "and the MIDI half with it");
+
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, 6_000, 1_000);
+    h.live_midi_event(note(64));
+    h.stop();
+    let trailing = captured(&h.drain_events());
+    let midi: Vec<_> = trailing.iter().filter_map(|(c, _, _)| notes_of(c)).collect();
+    assert_eq!(midi, vec![vec![64]], "the note after the seek is the next pass's");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---------------------------------------------------------------------------
+// BUG-23: ring-overflow drops are filled, not skipped
+// ---------------------------------------------------------------------------
+
+/// The input callback could not push `frames` whole frames: the ring was
+/// full. What the capture producers do on an overflow.
+fn overflow(h: &EngineHandlerHarness, frames: u64) {
+    h.shared().note_recording_dropped(frames);
+}
+
+/// Frames the ring had to drop are written as silence where they were
+/// lost, so the take keeps wall-clock time: the pass still ends on the
+/// loop boundary and the next pass starts on the input frame that really
+/// belongs at `loop_in`. The drain used to count only the frames it
+/// popped, so after a drop every later seam moved by the drop's length.
+#[test]
+fn dropped_frames_keep_their_place_in_the_take_and_the_cut() {
+    const KEPT: u64 = 5_000;
+    const DROPPED: u64 = 1_500;
+    let (mut h, dir, mut input) = cycle_session("overflow", 0);
+
+    push_ramp(&mut input, 0, KEPT);
+    overflow(&h, DROPPED);
+    h.recording_tick();
+    let events = h.drain_events();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            AudioEvent::RecordingOverflow { dropped_frames } if *dropped_frames == DROPPED
+        )),
+        "the overflow is still reported"
+    );
+    // The frames after the gap carry their own wall-clock index.
+    push_ramp(&mut input, KEPT + DROPPED, LOOP_LEN - KEPT - DROPPED + 1_000);
+    h.recording_tick();
+    let takes = audio_takes(&h.drain_events());
+    assert_eq!(takes.len(), 1, "pass 0 is complete at the loop boundary");
+    let (pass0, extent0) = takes[0];
+    assert_eq!(extent0, TimelineRange::new(LOOP_IN, LOOP_LEN));
+    let frames = clip(&h, pass0).source.as_frames().to_vec();
+    assert_eq!(frames.len() as u64, LOOP_LEN * 2);
+    let at = |f: u64| frames[f as usize * 2];
+    assert_eq!(at(KEPT - 1), (KEPT - 1) as f32);
+    assert_eq!(at(KEPT), 0.0, "the gap is silence");
+    assert_eq!(at(KEPT + DROPPED - 1), 0.0);
+    assert_eq!(at(KEPT + DROPPED), (KEPT + DROPPED) as f32, "the audio after it is in place");
+    assert_eq!(at(LOOP_LEN - 1), (LOOP_LEN - 1) as f32);
+
+    h.stop();
+    let trailing = audio_takes(&h.drain_events());
+    assert_eq!(trailing.len(), 1);
+    assert_eq!(
+        clip(&h, trailing[0].0).source.as_frames()[0],
+        LOOP_LEN as f32,
+        "pass 1 starts on the input frame that played at loop_in"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The gap goes after the frames that were already in the ring when the
+/// drop happened — they were pushed before it — even when the engine
+/// thread drains them only later.
+#[test]
+fn a_gap_lands_after_the_frames_queued_before_it() {
+    let (mut h, dir) = armed("overflow-place");
+    h.shared().playhead.store(10_000, Ordering::Relaxed);
+    let mut input = h.record_with_fake_input(0, 2).expect("session opened");
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, 0, 3_000);
+    overflow(&h, 500);
+    h.recording_tick();
+    push_ramp(&mut input, 3_500, 1_000);
+    h.recording_tick();
+    h.stop();
+    let takes = finished(&h.drain_events());
+    assert_eq!(takes.len(), 1);
+    let (id, _, duration) = takes[0];
+    assert_eq!(duration, 4_500, "the take is as long as the time it covered");
+    let frames = clip(&h, id).source.as_frames().to_vec();
+    assert_eq!(frames[2 * 2_999], 2_999.0);
+    assert_eq!(frames[2 * 3_000], 0.0);
+    assert_eq!(frames[2 * 3_500], 3_500.0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A drop counted before the session opened belongs to no take.
+#[test]
+fn drops_before_the_session_are_not_filled_into_it() {
+    let (mut h, dir) = armed("overflow-before");
+    overflow(&h, 9_999);
+    h.shared().playhead.store(10_000, Ordering::Relaxed);
+    let mut input = h.record_with_fake_input(0, 2).expect("session opened");
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, 0, 2_000);
+    h.recording_tick();
+    h.stop();
+    let takes = finished(&h.drain_events());
+    assert_eq!(takes[0].2, 2_000);
+    let _ = std::fs::remove_dir_all(dir);
 }

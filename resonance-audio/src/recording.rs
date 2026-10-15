@@ -187,6 +187,19 @@ pub struct RecordingState {
     /// Cycle-record audio passes rolled at a seam so far this session:
     /// 0 while the punch-in pass is being captured.
     pub audio_passes_rolled: u32,
+    /// The capture producers' never-reset dropped-frame count
+    /// (`SharedState::recording_dropped_total`), attached when a session
+    /// opens ([`Self::track_dropped_frames`]). `None` drains as before.
+    dropped_total: Option<std::sync::Arc<AtomicU64>>,
+    /// The value of `dropped_total` this session has accounted for.
+    dropped_seen: u64,
+    /// Silence still owed for frames the ring dropped, in input frames
+    /// (BUG-23).
+    gap_frames: u64,
+    /// Ring frames still to pop before that silence goes in: the frames
+    /// that were queued when the drain learned of the drop, which the
+    /// input pushed before it.
+    gap_after: u64,
     /// Reusable per-track deinterleave scratch. Lives here rather than
     /// being a stack local in `drain_ring_to_buffers` so the engine
     /// thread doesn't allocate a fresh `Vec` 60× per second while
@@ -279,6 +292,10 @@ impl RecordingState {
             cycle: CycleCut::Off,
             input_frames_kept: 0,
             audio_passes_rolled: 0,
+            dropped_total: None,
+            dropped_seen: 0,
+            gap_frames: 0,
+            gap_after: 0,
             deint_scratch: Vec::with_capacity(DRAIN_SCRATCH_LEN),
             overflow_reported: false,
             write_errors: Vec::new(),
@@ -341,6 +358,42 @@ impl RecordingState {
         self.start_latch_applied = true;
     }
 
+    /// Start the cycle-record cut over after a seek or a loop move landed
+    /// mid-run (BUG-20), once the interrupted pass has been rolled. The
+    /// next pass is cut like a punch-in: from the start the input
+    /// callback latches at its next push, to `loop_out` of `cycle_slot` —
+    /// the range the run cycles over now — and a loop length per pass
+    /// after that. Nothing is drained until that latch is applied. With
+    /// no valid range (the loop was switched off) or no audio to cut, the
+    /// rest of the run is one uncut pass. The next rolled pass is placed
+    /// at the latched start, like the punch-in one.
+    pub fn rearm_cycle(&mut self, cycle_slot: Option<(SamplePos, SamplePos)>) {
+        self.start_latch_applied = false;
+        self.skip_input_frames = 0;
+        self.input_frames_kept = 0;
+        self.audio_passes_rolled = 0;
+        self.cycle = match cycle_slot {
+            Some((loop_in, loop_out)) if loop_out > loop_in && !self.buffers.is_empty() => {
+                CycleCut::AwaitingLatch {
+                    loop_out,
+                    loop_len: loop_out - loop_in,
+                }
+            }
+            _ => CycleCut::Off,
+        };
+    }
+
+    /// Fill the frames the capture producers drop on a full ring with
+    /// silence, counting from now (`total`'s current value is someone
+    /// else's — a previous session's — damage). Called when a session
+    /// opens its capture stream (BUG-23).
+    pub fn track_dropped_frames(&mut self, total: std::sync::Arc<AtomicU64>) {
+        self.dropped_seen = total.load(Ordering::Acquire);
+        self.dropped_total = Some(total);
+        self.gap_frames = 0;
+        self.gap_after = 0;
+    }
+
     /// Whether the current cycle-record pass has all its frames: the
     /// drain stops at the cut, so the pass is ready to roll.
     pub fn pass_complete(&self) -> bool {
@@ -370,9 +423,11 @@ impl RecordingState {
     /// Whether at least one captured input frame is waiting in the ring.
     pub fn has_pending_input(&self) -> bool {
         use ringbuf::traits::Observer;
-        self.ring_consumer
-            .as_ref()
-            .is_some_and(|c| c.occupied_len() >= self.input_channels.max(1) as usize)
+        self.gap_frames > 0
+            || self
+                .ring_consumer
+                .as_ref()
+                .is_some_and(|c| c.occupied_len() >= self.input_channels.max(1) as usize)
     }
 
     /// Engine frames → input frames at the capture device's rate.
@@ -508,6 +563,23 @@ impl RecordingState {
             return;
         }
 
+        // Frames the producers dropped since the last look (BUG-23): owed
+        // as silence after the frames queued now, which the input pushed
+        // before the drop — the ring was full when it dropped, and only
+        // this drain frees it. One gap at a time; a later drop is picked
+        // up once this one is written.
+        if self.gap_frames == 0 {
+            if let Some(total) = self.dropped_total.as_ref() {
+                let now = total.load(Ordering::Acquire);
+                if now > self.dropped_seen {
+                    use ringbuf::traits::Observer;
+                    self.gap_frames = now - self.dropped_seen;
+                    self.dropped_seen = now;
+                    self.gap_after = (consumer.occupied_len() / channels) as u64;
+                }
+            }
+        }
+
         let mut ring_scratch = [0.0f32; DRAIN_SCRATCH_LEN];
         // Pop whole frames only: a partial frame left in the scratch
         // tail would be consumed but never written, rotating channel
@@ -523,11 +595,27 @@ impl RecordingState {
             if want == 0 {
                 break;
             }
-            let count = consumer.pop_slice(&mut ring_scratch[..want as usize * channels]);
-            if count == 0 {
-                break;
-            }
-            let popped = count / channels;
+            let popped = if self.gap_frames > 0 && self.gap_after == 0 {
+                // The dropped frames, as silence, in their place: the take
+                // and the cut stay on wall-clock time (BUG-23).
+                let n = want.min(self.gap_frames) as usize;
+                ring_scratch[..n * channels].fill(0.0);
+                self.gap_frames -= n as u64;
+                n
+            } else {
+                if self.gap_frames > 0 {
+                    want = want.min(self.gap_after);
+                }
+                let count = consumer.pop_slice(&mut ring_scratch[..want as usize * channels]);
+                if count == 0 {
+                    break;
+                }
+                let popped = count / channels;
+                if self.gap_frames > 0 {
+                    self.gap_after -= popped as u64;
+                }
+                popped
+            };
             // Frames from before timeline 0 are dropped (see
             // `apply_start_latch`).
             let skip = self.skip_input_frames.min(popped as u64) as usize;

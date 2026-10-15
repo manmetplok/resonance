@@ -10,7 +10,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use resonance_common::TakeNote;
 
-use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
+use crate::midi_hardware::{ForwardedLiveMidi, LiveControlEvent, LiveMidiEvent};
 use crate::mixer::{MidiStash, NoteSink};
 use crate::types::*;
 
@@ -195,14 +195,19 @@ fn thru_channel(ctx: &HandlerCtx, track_id: TrackId) -> Option<u8> {
 pub(crate) fn handle_live_midi_event(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
-    event: LiveMidiEvent,
+    forwarded: ForwardedLiveMidi,
 ) {
-    match event {
+    let press_sample = forwarded.press_sample(ctx.sample_rate);
+    let stamp = PickupStamp {
+        loop_wrap: forwarded.loop_wrap,
+        press_sample,
+    };
+    match forwarded.event {
         LiveMidiEvent::InboundNoteOn {
             track_id,
             note,
             velocity,
-            arrival,
+            ..
         } => {
             if let Some(channel) = thru_channel(ctx, track_id) {
                 let velocity_u8 = (velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
@@ -211,20 +216,16 @@ pub(crate) fn handle_live_midi_event(
                     .midi_outputs
                     .send_note_on(track_id, channel, note, velocity_u8);
             }
-            handle_record_midi_event(ctx, state, track_id, true, note, velocity, arrival);
+            handle_record_midi_event(ctx, state, track_id, true, note, velocity, stamp);
         }
-        LiveMidiEvent::InboundNoteOff {
-            track_id,
-            note,
-            arrival,
-        } => {
+        LiveMidiEvent::InboundNoteOff { track_id, note, .. } => {
             if let Some(channel) = thru_channel(ctx, track_id) {
                 state
                     .midi_hw
                     .midi_outputs
                     .send_note_off(track_id, channel, note);
             }
-            handle_record_midi_event(ctx, state, track_id, false, note, 0.0, arrival);
+            handle_record_midi_event(ctx, state, track_id, false, note, 0.0, stamp);
         }
         // Controllers reach the instrument on the audio thread (HOST-13);
         // recording them and sending them Thru is not built yet.
@@ -243,16 +244,30 @@ pub(crate) fn handle_live_control_event(
     crate::engine::midi_map::handle_control_event(ctx, state, event);
 }
 
+/// Where and in which loop pass a live note was played, as the audio
+/// callback stamped it at pickup ([`ForwardedLiveMidi`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PickupStamp {
+    /// `SharedState::loop_wrap_count` at pickup.
+    pub loop_wrap: u64,
+    /// The timeline sample the key went down at: the pickup block's
+    /// playhead minus the time from the midir callback to the pickup.
+    pub press_sample: SamplePos,
+}
+
 /// Append a live note event into the track's currently-recording
 /// MIDI clip when the track is record-armed and transport is
 /// playing. Lazily creates a clip on the first NoteOn.
 ///
-/// `arrival` is the wall-clock instant the midir callback fired for
-/// this event. The recorder uses it to rewind the playhead by the
-/// engine-thread drain delay (typically ~16 ms) so the recorded
-/// `start_tick` reflects the actual key-press moment instead of the
-/// processing moment. Without this, every recorded MIDI note would
-/// land one engine tick late.
+/// The note's position comes from its pickup stamp: the playhead of the
+/// audio block that picked it up, rewound by the time since the midir
+/// callback fired, so the note lands at the key-press moment. Never the
+/// engine thread's later view of the playhead, which sits up to an
+/// engine tick (~16 ms) on and, under cycle-record, can be on the far
+/// side of a loop wrap. Under cycle-record the stamp's wrap count also
+/// picks the pass: a note stamped past the open pass rolls it first, so
+/// a note played after the wrap never lands in the pass before it
+/// (BUG-22).
 pub(crate) fn handle_record_midi_event(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -260,7 +275,7 @@ pub(crate) fn handle_record_midi_event(
     is_note_on: bool,
     note: u8,
     velocity: f32,
-    arrival: std::time::Instant,
+    stamp: PickupStamp,
 ) {
     if !ctx.shared.playing.load(Ordering::Relaxed) {
         return;
@@ -277,14 +292,13 @@ pub(crate) fn handle_record_midi_event(
         return;
     }
 
-    // Press-time playhead = current playhead minus elapsed-since-arrival,
-    // converted to samples. Capture both `now` and `playhead` close
-    // together so the math reflects the same instant on both sides.
-    let now = std::time::Instant::now();
-    let playhead_now = ctx.shared.playhead.load(Ordering::Relaxed);
-    let elapsed_secs = now.saturating_duration_since(arrival).as_secs_f64();
-    let elapsed_samples = (elapsed_secs * ctx.sample_rate as f64) as u64;
-    let press_sample = playhead_now.saturating_sub(elapsed_samples);
+    // Cycle-record: file the note into the pass it was played in.
+    let press_sample = super::super::transport::loop_record_midi_pass_for(
+        ctx,
+        state,
+        stamp.loop_wrap,
+        stamp.press_sample,
+    );
     let abs_tick = sample_to_abs_tick(&ctx.tempo_map.load(), press_sample, ctx.sample_rate);
 
     if is_note_on {

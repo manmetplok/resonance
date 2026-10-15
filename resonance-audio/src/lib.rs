@@ -228,7 +228,7 @@ pub mod test_support {
     pub use crate::midi_hardware::{
         encode_control_change, encode_nrpn, enumerate_midi_inputs, enumerate_midi_outputs,
         panic_messages, parse_control_event_for_test,
-        parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
+        parse_live_event_for_test, ForwardedLiveMidi, LiveControlEvent, LiveMidiEvent,
     };
     pub use crate::mixer::render::slots::PassStats;
     pub use crate::render_pool::sched::{physical_cores, Sched};

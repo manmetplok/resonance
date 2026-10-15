@@ -56,7 +56,7 @@ pub(crate) struct CallbackInputs<'a> {
     /// Live hardware-MIDI in, and the forward channel that hands each
     /// event on to the engine thread for recording / MIDI-thru.
     pub(crate) live_midi_rx: &'a crossbeam_channel::Receiver<LiveMidiEvent>,
-    pub(crate) live_midi_fwd: &'a crossbeam_channel::Sender<LiveMidiEvent>,
+    pub(crate) live_midi_fwd: &'a crossbeam_channel::Sender<crate::midi_hardware::ForwardedLiveMidi>,
     /// Frames the engine sized its scratch for; a larger request from the
     /// backend is clamped to this.
     pub(crate) buf_frames: usize,

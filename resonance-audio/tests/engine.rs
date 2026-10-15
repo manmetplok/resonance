@@ -48,6 +48,8 @@ mod external_instrument_ping;
 mod external_recorded_playback;
 #[path = "engine/freeze_command_plumbing.rs"]
 mod freeze_command_plumbing;
+#[path = "engine/loop_record_midi_seam.rs"]
+mod loop_record_midi_seam;
 #[path = "engine/loop_record_takes.rs"]
 mod loop_record_takes;
 #[path = "engine/master_plugin_move.rs"]

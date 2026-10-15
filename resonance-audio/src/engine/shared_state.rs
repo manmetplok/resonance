@@ -48,6 +48,22 @@ pub struct SharedState {
     /// (`RecordingState::poll_overflow`); a new take zeroes it
     /// (`RecordingState::begin_overflow_episode`).
     pub recording_overflow: AtomicU64,
+    /// Whole input frames the capture callbacks have discarded on a full
+    /// recording ring, ever — never reset, unlike `recording_overflow`,
+    /// which is a per-take report. The recording drain reads how far it
+    /// moved since the last drain and writes that many frames of silence
+    /// where they were lost, so a take and its cycle-record cuts stay on
+    /// wall-clock time across a drop (BUG-23). An `Arc` so the engine
+    /// thread's `RecordingState` can hold it without the whole state.
+    pub recording_dropped_total: Arc<AtomicU64>,
+    /// How many times the audio callback has wrapped the playhead from
+    /// `loop_out` back to `loop_in`, ever. Bumped by the callback at the
+    /// seam ([`SharedState::note_loop_wrap`]); the callback stamps every
+    /// live MIDI event it forwards with the value it read at pickup, so
+    /// the engine thread files a cycle-record note into the pass the
+    /// audio thread played it in rather than polling the playhead for a
+    /// backwards step at its own ~16 ms cadence (BUG-22).
+    pub loop_wrap_count: AtomicU64,
     /// Channel count of the currently-active input stream, or 0 when
     /// no stream is open. Used by the mix callback to de-interleave
     /// per-track monitor audio from a multi-channel input device.
@@ -438,6 +454,39 @@ impl SharedState {
             > 0
     }
 
+    /// The capture callbacks could not push `frames` whole input frames
+    /// into a full recording ring. Counted for the take's overflow report
+    /// and, never reset, for the drain to fill the gap with silence
+    /// (BUG-23). Two atomic adds; safe on the audio thread. The release
+    /// add pairs with the drain's acquire load: the frames pushed before
+    /// the drop are in the ring by the time the drain sees it.
+    #[inline]
+    pub fn note_recording_dropped(&self, frames: u64) {
+        self.recording_overflow
+            .fetch_add(frames, std::sync::atomic::Ordering::Relaxed);
+        self.recording_dropped_total
+            .fetch_add(frames, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Count one loop wrap: the callback has rendered `loop_out` and goes
+    /// on from `loop_in`. One release add, safe on the audio thread. The
+    /// release pairs with the engine loop's acquire load, which it takes
+    /// *before* draining the forwarded live MIDI: every event the callback
+    /// stamped with an older count was sent before this add, so it is in
+    /// that drain (BUG-22).
+    #[inline]
+    pub fn note_loop_wrap(&self) {
+        self.loop_wrap_count
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// The loop wraps counted so far ([`SharedState::note_loop_wrap`]).
+    #[inline]
+    pub fn loop_wraps(&self) -> u64 {
+        self.loop_wrap_count
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Called by the capture callbacks on every recording push: on the
     /// *first* push of a session (armed via `recording_start_pending`)
     /// latch the raw playhead at that instant into
@@ -479,6 +528,8 @@ impl Default for SharedState {
             master_peak_r_bits: AtomicU32::new(0),
             master_fx_bypass: crate::bypass::BypassFade::new(),
             recording_overflow: AtomicU64::new(0),
+            loop_wrap_count: AtomicU64::new(0),
+            recording_dropped_total: Arc::new(AtomicU64::new(0)),
             input_channels: AtomicU16::new(0),
             loop_range: arc_swap::ArcSwap::from_pointee(loop_range::LoopRange::default()),
             count_in_active: AtomicBool::new(false),

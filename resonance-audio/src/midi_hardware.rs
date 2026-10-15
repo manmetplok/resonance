@@ -126,6 +126,59 @@ pub enum LiveMidiEvent {
     },
 }
 
+/// A [`LiveMidiEvent`] as the audio callback forwards it to the engine
+/// thread: stamped, at pickup, with where the transport was. A recorded
+/// note's position and its cycle-record pass come from this stamp, taken
+/// on the thread that plays the note and wraps the loop, never from the
+/// engine thread's later view of the playhead (BUG-22).
+#[derive(Debug, Clone)]
+pub struct ForwardedLiveMidi {
+    pub event: LiveMidiEvent,
+    /// `SharedState::loop_wrap_count` at pickup: the cycle-record pass
+    /// the note was played in. The callback counts a wrap only after its
+    /// pickup, so every event stamped with an older count was forwarded
+    /// before the wrap was published.
+    pub loop_wrap: u64,
+    /// The playhead the picking-up block starts on.
+    pub playhead: u64,
+    /// The instant of the pickup, against which `arrival` measures how
+    /// long before `playhead` the key went down.
+    pub picked_up: std::time::Instant,
+}
+
+impl ForwardedLiveMidi {
+    /// Stamp `event` with the transport as it stands in `shared` now.
+    /// One acquire load each of two atomics; safe on the audio thread.
+    #[inline]
+    pub fn stamp(
+        event: LiveMidiEvent,
+        shared: &crate::engine::SharedState,
+        now: std::time::Instant,
+    ) -> Self {
+        Self {
+            event,
+            loop_wrap: shared.loop_wraps(),
+            playhead: shared
+                .playhead
+                .load(std::sync::atomic::Ordering::Acquire),
+            picked_up: now,
+        }
+    }
+
+    /// The timeline sample the key went down at: the pickup playhead
+    /// minus the time from arrival to pickup.
+    pub fn press_sample(&self, sample_rate: u32) -> u64 {
+        let arrival = match &self.event {
+            LiveMidiEvent::InboundNoteOn { arrival, .. }
+            | LiveMidiEvent::InboundNoteOff { arrival, .. }
+            | LiveMidiEvent::InboundMidi { arrival, .. } => *arrival,
+        };
+        let elapsed = self.picked_up.saturating_duration_since(arrival).as_secs_f64();
+        self.playhead
+            .saturating_sub((elapsed * sample_rate as f64) as u64)
+    }
+}
+
 /// Control-surface MIDI input drained from the midir-spawned thread on
 /// the engine control thread. Unlike [`LiveMidiEvent`] this is not tied
 /// to a track: it carries the raw channel so the mapping layer can match

@@ -1,6 +1,6 @@
 # Recording
 
-> Verified against master @ `ef215b08` on 2026-10-15.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: none in `docs/history/specs/`. Leads: doc #260 (findings #2, #4, #17), code review RT-01 / RT-02 / RT-08 / RT-17 / ENG-03 / STATE-02, design doc D-6 §4.2 / §7a, ba doc #292, W3 (cycle-record mode).
 
 Arm one or more tracks and press Record. Audio tracks stream their input
@@ -53,7 +53,15 @@ area's job ([../timeline/takes-and-comping.md](../timeline/takes-and-comping.md)
 - **Overflow.** If the ring overflows, whole frames are dropped and one
   `RecordingOverflow` per take raises the banner "Recording overflow: N
   input frames were dropped — this take is missing audio and may be out of
-  sync".
+  sync". The dropped frames are written back as silence where they were
+  lost — after the frames that were queued when the drain learned of the
+  drop — so the take keeps wall-clock time and every later cycle-record
+  cut stays on its seam. The producers add to a never-reset counter
+  (`SharedState::recording_dropped_total`, beside the per-take
+  `recording_overflow`); the drain reads how far it moved
+  (`RecordingState::track_dropped_frames`, `drain_ring_to_buffers`). The
+  drain used to count only popped frames, so after a drop the take came
+  up short and every later seam moved by the drop's length (BUG-23).
 - **Disk errors.** A failed write keeps what reached disk: the take is
   finalized up to the failure (or salvaged in memory) and reported, not
   dropped (code review ENG-03).
@@ -66,8 +74,38 @@ With the loop enabled and a real range set:
 
 - **Distinct takes per loop pass on** (`loop_record_mode`, project state,
   undoable): the engine cuts audio by input-frame count at each pass
-  boundary and MIDI at the playhead wrap, emits `TakeCaptured` per pass and
-  starts a new file for the next pass. The trailing pass is filed at Stop.
+  boundary and MIDI at the audio thread's loop wrap, emits `TakeCaptured`
+  per pass and starts a new file for the next pass. The trailing pass is
+  filed at Stop.
+- **MIDI pass boundaries.** The audio callback counts every loop wrap
+  (`SharedState::loop_wrap_count`, bumped at the seam after the block's
+  live-MIDI pickup) and stamps each live event it forwards with that count
+  and the playhead of the picking-up block (`ForwardedLiveMidi`). The
+  engine thread files a note into the pass its stamp names: a note stamped
+  past the open pass rolls it first, and the engine loop rolls a pass
+  nobody played into once it has read a newer count *before* draining the
+  forwarded events (`poll_loop_record_seam`), so no note of the old pass
+  is left to land in the new one. Several wraps with no note between them
+  roll once; an empty pass makes no MIDI take. A later pass's note whose
+  rewound press time falls just before `loop_in` is held at `loop_in`
+  (BUG-22). It used to roll when the engine's ~16 ms poll saw the playhead
+  lower than last time, so boundaries jittered by a tick, a note played
+  just after the wrap could land in the old pass, and a backwards seek
+  rolled a pass.
+- **Seek or loop move mid-run.** A seek, a MIDI-clock song-position
+  relocate, or a change to the loop range while a cycle-record run is
+  recording ends the current pass there (`restart_cycle_record_pass`): its
+  audio and MIDI halves roll together (held notes close at the pre-move
+  playhead), filed under the slot they were recorded against. The cut then
+  re-arms against the range as it stands (`RecordingState::rearm_cycle`)
+  and the start latch is re-armed, so the input callback's next push
+  latches the real post-move playhead: the next pass is placed and cut like
+  a punch-in pass, and every pass after it is a whole loop of the new
+  range. Re-sending the same range is not a move. With the loop switched
+  off the rest of the run is one uncut pass, filed under the old slot.
+  Frames pushed between the roll and the re-armed latch (at most one push)
+  land in the next pass. The session used to ignore all of this and keep
+  cutting one loop length from the punch-in against the old range (BUG-20).
 - **Off:** one clip, no take group. It is trimmed non-destructively to
   the loop range measured from the record start (`trim_start = loop_in −
   start`, `trim_end` at `loop_out − start`), so it shows only the first
@@ -90,8 +128,10 @@ With the loop enabled and a real range set:
 
 - An armed instrument track records live MIDI whenever the transport is
   playing, with Play as well as Record. The first note-on opens a MIDI clip;
-  each note is placed at its arrival time (the drain delay is subtracted,
-  `handle_record_midi_event`). Held notes are closed at Stop.
+  each note is placed at its arrival time: the playhead of the audio block
+  that picked it up, minus the time from the MIDI callback to that pickup
+  (`ForwardedLiveMidi::press_sample`, `handle_record_midi_event`). Held
+  notes are closed at Stop.
 - Only notes are recorded. Controllers, pitch bend and aftertouch reach the
   instrument live but are not recorded or sent Thru.
 - An armed instrument track opens no take file and does not capture audio.
@@ -111,11 +151,11 @@ With the loop enabled and a real range set:
 
 | Concern | Location | Key items |
 |---|---|---|
-| Record / count-in / session | `resonance-audio/src/engine/transport.rs` | `handle_record_with`, `open_recording_session`, `poll_precount`, `settle_count_in_arm`, `apply_recording_start_latch`, `poll_recording_capture` |
+| Record / count-in / session | `resonance-audio/src/engine/transport.rs` | `handle_record_with`, `open_recording_session`, `poll_precount`, `settle_count_in_arm`, `apply_recording_start_latch`, `poll_recording_capture`, `restart_cycle_record_pass` |
 | Take files, drain, finalize | `resonance-audio/src/recording.rs` | `RecordingState`, `create_track_buf`, `drain_ring_to_buffers`, `finalize_recording`, `roll_audio_pass`, `apply_take_shift` |
 | Ring size | `resonance-audio/src/engine/recording_ring.rs` | `recording_ring_len` |
 | Count-in clicks | `resonance-audio/src/mixer/click.rs` | `render_count_in_clicks` |
-| MIDI capture | `resonance-audio/src/engine/midi/live.rs` | `handle_record_midi_event`, `close_open_recordings`, `capture_loop_record_midi_pass` |
+| MIDI capture | `resonance-audio/src/engine/midi/live.rs`, `engine/transport.rs`, `mixer/live_midi.rs` | `handle_record_midi_event`, `close_open_recordings`, `capture_loop_record_midi_pass`, `poll_loop_record_seam`, `loop_record_midi_pass_for`, `ForwardedLiveMidi` (stamped in `pickup_live_midi`) |
 | App transport | `resonance-app/src/update/transport.rs`, `state/transport.rs` | `TransportMessage::Record`, `record_pending`, `loop_record_mode` |
 | App events | `resonance-app/src/engine_events/transport.rs`, `engine_events/clips.rs` | `recording_started`, `recording_overflow`, `recording_finished` |
 
@@ -146,6 +186,9 @@ the app's grant.
 | Start latch, drain, overflow event | `resonance-audio/tests/mixer/recording_start_latch.rs`, `recording_drain.rs`, `recording_overflow_event.rs`, `recording_whole_frame_push.rs` | same |
 | Disk-full salvage (own binary, rlimit) | `resonance-audio/tests/recording_write_failure.rs` | same |
 | Live MIDI record / stop | `resonance-audio/tests/midi_hw/live_record_stop.rs`, `live_arrival_offset.rs` | same |
+| Cycle-record MIDI passes by wrap count and pickup stamp | `resonance-audio/tests/engine/loop_record_midi_seam.rs` | same |
+| Seek / loop move during cycle-record | `resonance-audio/tests/engine/recording_alignment.rs` (BUG-20 section) | same |
+| Overflow gaps filled with silence, cuts kept | `resonance-audio/tests/engine/recording_alignment.rs` (BUG-23 section) | same |
 | Undo + dirty per run | `resonance-app/tests/timeline/recording_undo.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Overflow banner | `resonance-app/tests/mixer/recording_overflow_banner.rs` | same |
 | Loop-record mode persistence | `resonance-app/tests/io/loop_record_mode_persistence.rs` | same |
@@ -162,7 +205,9 @@ count-in click sound, and the two-bar count-in default.
 - The take starts on the count-in's last frame on the audio thread (RT-08);
   before, it waited for the engine thread and an input rebuild.
 - Cycle passes are cut by sample count, not by watching the playhead wrap,
-  so a late engine tick cannot move a cut (RT-02).
+  so a late engine tick cannot move a cut (RT-02). MIDI passes follow the
+  audio thread's wrap count for the same reason (BUG-22); the two halves
+  of a pass can disagree by up to a block about where the seam fell.
 - Punch was folded into the loop range; there is no separate punch region.
 
 ## Known gaps
