@@ -1,6 +1,6 @@
 # Plugin parameters, state and presets (engine side)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: `docs/history/specs/plugin-preset-library.md` (§6–§8,
 > slices P5, P7, P8), `docs/history/reviews/plugin-audit.md` (findings X8,
 > F1, HOST-01), `docs/history/specs/nam-model-library.md` §9.2.
@@ -59,6 +59,13 @@ its state, and loads presets through the plugin. The preset *library*
   the values that moved since the host last read them, then save every
   state, so the saved file holds what the plugin plays. Instances whose
   lock is busy are retried.
+- The app's mirror takes those values — and every other
+  `PluginParamValuesChanged` / `PluginParamsRefreshed` — except for a param
+  an enabled automation lane drives (`AutomationTarget::PluginParam`):
+  a re-read finds it at its automated value under the playhead, which is
+  not the param's own setting, so the mirror (and the file) keep the base
+  value (`engine_events/plugins.rs` `automated_params`, BUG-38). With the
+  lane's Read off, the value is taken as usual.
 - The host's stream callbacks survive misbehaving plugins (null buffers,
   absurd sizes) and report `-1` per `stream.h`.
 
@@ -132,6 +139,7 @@ concurrently with `process()`.
 | Live values at save | `tests/clap_host/plugin_live_values.rs` | same |
 | State / presets / factory / discovery | `tests/clap_host/plugin_preset_state.rs`, `clap_factory_presets.rs`, `preset_discovery.rs`, `clap_ffi_hardening.rs` | same |
 | Kit info | `tests/clap_host/drums_kit_info.rs` | same |
+| Automated params keep their base through a save's rescan (BUG-38) | `resonance-app/tests/plugins/plugin_live_values.rs` | `./scripts/run-tests.py -p resonance-app` |
 | App + control | `resonance-app/tests/plugins/plugin_edited_by_plugin.rs`, `plugin_live_values.rs`, `plugin_param_undo.rs`, `plugin_state_excluded_params.rs`; `tests/control/control_plugin_param_meta.rs`, `control_plugin_param_bounds.rs`, `control_plugin_params_persist.rs`, `control_plugin_presets.rs` | `./scripts/run-tests.py -p resonance-app` |
 
 Not covered: third-party plugins' state-context and preset-load behaviour
