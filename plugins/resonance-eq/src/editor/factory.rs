@@ -12,6 +12,15 @@ use crate::params::EqParams;
 
 use super::app::EqEditorApp;
 
+/// The editor's opening size, px. Wide enough for all eight band
+/// columns side by side; tall enough for the header, a usable curve and
+/// the full band strip (`app::STRIP_H`, raised with it — BUG-41).
+pub const INITIAL_SIZE: (u32, u32) = (960, 804);
+
+/// The smallest size the window may be dragged to, px. Narrower than the
+/// band row, which then scrolls sideways; the header wraps to two rows.
+pub const MIN_SIZE: (u32, u32) = (720, 684);
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -49,7 +58,7 @@ impl EditorFactory for EqEditorFactory {
     }
 
     fn preferred_size(&self) -> (u32, u32) {
-        (960, 730)
+        INITIAL_SIZE
     }
 
     fn create(&self, api_name: &str, is_floating: bool) -> Option<Box<dyn PluginEditor>> {
@@ -66,8 +75,8 @@ impl EditorFactory for EqEditorFactory {
             EditorOptions {
                 title: "Resonance EQ".to_string(),
                 app_id: resonance_plugin::first_party::EQ.to_string(),
-                initial_size: (960, 730),
-                min_size: (720, 610),
+                initial_size: INITIAL_SIZE,
+                min_size: MIN_SIZE,
                 resizable: true,
             },
         )

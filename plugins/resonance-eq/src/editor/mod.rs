@@ -9,7 +9,7 @@ mod nodes;
 mod response;
 mod theme;
 
-pub use factory::EqEditorFactory;
+pub use factory::{EqEditorFactory, INITIAL_SIZE, MIN_SIZE};
 
 /// The EQ editor driven headless at `size`, with a recording announcer
 /// — for `tests/editor_*.rs`. Not plugin API.

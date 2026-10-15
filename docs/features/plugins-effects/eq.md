@@ -1,6 +1,6 @@
 # EQ (`com.resonance.eq`)
 
-> Verified against master @ `6137b6fb` on 2026-10-15.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/specs/warmth-width-depth.md` §6.4 (slice W8: M/S, Tilt/Lift+Dip/Air, auto-gain, dynamic bands).
 
 An 8-band parametric EQ for tracks, busses and the master. Each band is a
@@ -85,6 +85,17 @@ scrolling adjusts Q (not on cuts or the one-knob kinds), right-click opens type/
 toggles the band. The strip uses the shared `editor_widgets::param_slider`.
 The `freq` params parse both "1200 Hz" and "1.2 kHz" from text.
 
+Layout (BUG-41): the window opens at 960×804 with a 720×684 minimum
+(`editor/factory.rs` `INITIAL_SIZE` / `MIN_SIZE`). The band strip is
+`STRIP_H` = 424 px, measured: a column lays out ~401 px tall, plus the
+strip's top pad, the 10 px the row's scroll bar takes and the panel
+margins. Columns are 92 px inside (the slider width), so all eight fit
+side by side at 960; narrower, the row scrolls sideways under a solid bar.
+The header's five groups (title, preset bar, analyzer, output trim,
+auto-gain) wrap as units onto a second row when they do not fit, and the
+"RESONANCE EQ" title is dropped first — it is drawn only while the whole
+header fits on one row (the window title names the plugin anyway).
+
 ## Factory presets
 
 Kick — Punch, Kick — Sub, Snare — Crack, Snare — Body, Bass — Tight,
@@ -115,10 +126,13 @@ Master — Polish.
 | Output gain smoothing | `tests/output_gain.rs` | same |
 | Analyzer: display-only, no heap on the audio thread, worker teardown | `tests/analyzer.rs`, `tests/analyzer_rt.rs`, `tests/analyzer_teardown.rs` | same |
 | Editor binding, typed kHz entry | `tests/editor_controls.rs`, `tests/freq_typed_entry.rs` | same |
+| Editor fits its window: nothing clipped at the initial size, header wraps and band row scrolls at the minimum | `tests/editor_controls/layout.rs` (headless frames, probed rects) | same |
 | Plugin smoke, skill keys | `tests/plugin.rs`, `tests/skill_keys.rs` | same |
 
 Not covered: there is no `state.rs` save/load round trip for the EQ (the
-compressor lacks one too), and no pixel snapshot of the editor.
+compressor lacks one too), and no pixel snapshot of the editor (BUG-41's
+layout was checked by eye in a live Hyprland window at both sizes; the
+layout test asserts on rects, not pixels).
 
 ## Decisions and deviations
 

@@ -6,7 +6,12 @@
 //! params declare `FloatRange::Skewed`, passed no reset default (a
 //! double-click did nothing) and had no typed entry; nothing told the
 //! host about an edit.
+//!
+//! `layout` (BUG-41): the editor fits its window at the factory's sizes.
 #![cfg(feature = "editor")]
+
+#[path = "editor_controls/layout.rs"]
+mod layout;
 
 use plugin_gui_core::egui;
 use resonance_eq::editor::headless_editor;
