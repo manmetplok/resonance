@@ -65,11 +65,9 @@ fix the ones below. The engine-path defects it judged to be design work
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-38 | plugins-instruments | *(likely)* A save-time state refresh moves an automated parameter's mirror to its value at the playhead. | `app/engine_events/plugins.rs:966-990` | review 2026-10-02 FU-P1b |
 | BUG-39 | plugins-instruments | *(likely)* Edge cases: a drums `kit_select` undo races a cache refresh; an in-flight `SavePluginState` is counted as an owed echo. | plugin-state echo bookkeeping | review 2026-10-02 FU-P1c |
 | BUG-41 | plugins-effects | *(likely)* EQ dynamics rows overflow the 350 px strip and the header runs off-window at ≤960 px. | `plugins/resonance-eq/src/editor/app.rs:174`; `factory.rs:70` | review 2026-10-02 FU-P2c |
 | BUG-42 | plugins-effects | Mastering's Transformer saturation at partial `sat_mix` dips the sub band (−2.3 dB at 20 Hz); documented, not fixed. | `plugins/resonance-mastering/src/stages/sat_modes.rs:80-92` | review 2026-10-02 FU-D1a2 (DSP2-16 remainder) |
-| BUG-44 | plugins-instruments | Test gap: the fleet editor checks pin `FLEET.len() == 11` and omit Color and Stereo, so a regression in those two editors' preset bar or palette passes the suite. | `resonance-plugin/tests/fleet_preset_adoption.rs:22,84-90`; `resonance-plugin/tests/fleet_palette.rs:53,139-141` | area docs 2026-10-07 |
 
 ## Compose and vocals
 
@@ -87,4 +85,4 @@ fix the ones below. The engine-path defects it judged to be design work
 | BUG-61 | project-core | Save replies are untagged (`SaveCollector` has no round-trip id), so a late reply from an earlier save can complete a newer one. | `app/update/project_io/mod.rs:661-672` | review 2026-10-02 FU-S2c |
 | BUG-62 | project-core | *(likely)* Save As over another existing `.rproj` leaves that project's `backups/` behind, and clip GC keeps their clips alive. | `app/project/clip_gc.rs:102` seeds the keep-set from `backups/`; nothing clears it on Save As | review 2026-10-02 STATE2-10 |
 | BUG-64 | ui-shell | Stem export's overwrite mode "Ask each" behaves like "Add suffix"; there is no prompt. | `app/update/export.rs:205,234` | review 2026-10-02 FU-A1a7 · intent [audio-engine/stem-export-options.md](audio-engine/stem-export-options.md) |
-| BUG-67 | audio-engine | Frozen tracks may apply their aux sends twice (baked into the cache and sent again). | freeze playback substitution | field report 2026-10-06 §3 · intent [audio-engine/freeze-aux-send-double-apply.md](audio-engine/freeze-aux-send-double-apply.md) |
+| BUG-75 | audio-engine | A frozen drum kit's tap sends are silent: the cache is the summed taps, so there is no per-tap signal left to send, and a kit with taps on a room bus loses the room while frozen. A send on the kit's parent track also taps the whole cache when frozen, but only port 0 when unfrozen. | freeze cache (`audio/engine/bounce/freeze.rs`); documented in [track-freeze](../features/audio-engine/track-freeze.md) | BUG-67 fix 2026-10-15 |
