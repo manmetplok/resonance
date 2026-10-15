@@ -108,11 +108,15 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
             .unwrap_or(false)
     }
 
+    /// A refusal reaches the host twice over (clack 0.2, #102 and
+    /// cddee07): `clap_plugin_gui.set_size` returns `false` — before
+    /// #102 clack answered `true` whatever happened here — and the
+    /// editor's reason goes to `clap_host_log`.
     fn set_size(&self, size: GuiSize) -> Result<(), PluginError> {
         match self.with_editor(|editor| editor.set_size(size.width, size.height)) {
-            Some(true) => Ok(()),
-            Some(false) => Err(PluginError::Message("set_size refused")),
-            None => Err(PluginError::Message("no editor to resize")),
+            Some(Ok(())) => Ok(()),
+            Some(Err(refused)) => Err(PluginError::Error(Box::new(refused))),
+            None => Err(PluginError::Message("set_size: no editor is open")),
         }
     }
 

@@ -86,7 +86,11 @@ extensions, the preset library and the shared editor plumbing.
   `editor_host.rs` picks the platform runtime as `RuntimeEditor`, gives
   `native_api()` (`"wayland"` or `"cocoa"`), wraps a running editor in
   `RuntimeEditorHandle` and lends the announcer to every frame through
-  `AnnouncingApp`/`with_announcer`; `editor_widgets.rs` binds params to the
+  `AnnouncingApp`/`with_announcer`. `PluginEditor::set_size` returns
+  `Result<(), SizeRefused>` (`gui.rs`): a refusal — `RuntimeEditorHandle`
+  refuses once the window is gone or being torn down — reaches the host as
+  `false` from `clap_plugin_gui.set_size`, with the editor's reason in
+  `clap_host_log` (clack before 0.2 answered `true` regardless); `editor_widgets.rs` binds params to the
   pure widgets of `plugin-gui-core`; `preset_ui.rs`, `library_ui.rs` and
   `file_picker.rs` are the shared preset bar, library browser skin and
   non-blocking file picker (Linux; Cocoa calls `rfd` on the main thread).
@@ -145,7 +149,7 @@ Invariants:
 | What | Where | Run |
 |---|---|---|
 | Params, ranges, smoothing, formatters | `resonance-plugin/tests/{param,range,smoother,formatters,typed_entry,param_widgets,knob_binding}.rs` | `./scripts/run-tests.py -p resonance-plugin` |
-| Bridge through clack-host | `tests/clap_bridge_params_state.rs`, `process_abi.rs`, `state.rs`, `state_race.rs`, `midi_events.rs`, `midi_decode.rs`, `sidechain.rs`, `latency.rs`, `latency_runtime.rs`, `render_mode.rs`, `param_announce.rs`, `param_output_flags.rs`, `params_rescan.rs`, `host_handle_retire.rs`, `gui_closed.rs` (with its `reentrancy` module: a host calling back in from `rescan`, `latency.changed` and `gui.closed`), `features.rs` | same |
+| Bridge through clack-host | `tests/clap_bridge_params_state.rs`, `process_abi.rs`, `state.rs`, `state_race.rs`, `midi_events.rs`, `midi_decode.rs`, `sidechain.rs`, `latency.rs`, `latency_runtime.rs`, `render_mode.rs`, `param_announce.rs`, `param_output_flags.rs`, `params_rescan.rs`, `host_handle_retire.rs`, `gui_closed.rs` (with its `reentrancy` module: a host calling back in from `rescan`, `latency.changed` and `gui.closed`; and `editor_set_size`: a refused size is `false` plus the reason in the host log), `features.rs` | same |
 | Fleet rules | `tests/fleet_palette.rs`, `tests/fleet_preset_adoption.rs` (also pins every `CLAP_ID` to `first_party::ALL`) | same |
 | Layering, id spelling | `tools/arch-invariants/tests/architecture.rs` | `cargo test -p arch-invariants` |
 | Third-party host view | `resonance-audio/tests/clap_host/` loads built plugin cdylibs | `./scripts/run-tests.py -p resonance-audio` |

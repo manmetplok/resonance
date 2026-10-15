@@ -14,9 +14,11 @@
 //! `PluginEditor` standing in for `RuntimeEditorHandle`, whose forwarding
 //! to the runtime is the only part not exercised here.
 
-// Host callbacks that call straight back into the plugin — `gui.destroy`
-// from inside `closed()` among them. A module of this binary rather than a
-// binary of its own (the test-binary ratchet, ARCH2-07).
+// More of the editor's host contract, as modules of this binary rather
+// than binaries of their own (the test-binary ratchet, ARCH2-07):
+// host callbacks that call straight back into the plugin (`gui.destroy`
+// from inside `closed()` among them), and a refused `set_size`.
+mod editor_set_size;
 mod reentrancy;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -28,7 +30,7 @@ use clack_extensions::gui::{
 use clack_host::prelude::*;
 use clack_plugin::entry::SinglePluginEntry;
 
-use resonance_plugin::gui::{EditorFactory, PluginEditor};
+use resonance_plugin::gui::{EditorFactory, PluginEditor, SizeRefused};
 use resonance_plugin::{
     ClapBridge, EventIterator, OutputBuffer, Param, ResonancePlugin, TempoInfo,
 };
@@ -61,8 +63,8 @@ impl PluginEditor for FakeEditor {
     fn size(&self) -> (u32, u32) {
         (400, 300)
     }
-    fn set_size(&mut self, _: u32, _: u32) -> bool {
-        true
+    fn set_size(&mut self, _: u32, _: u32) -> Result<(), SizeRefused> {
+        Ok(())
     }
     fn can_resize(&self) -> bool {
         false

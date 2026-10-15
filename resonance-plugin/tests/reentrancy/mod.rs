@@ -41,7 +41,7 @@ use clap_sys::ext::latency::{clap_plugin_latency, CLAP_EXT_LATENCY};
 use clap_sys::ext::params::{clap_plugin_params, CLAP_EXT_PARAMS};
 use clap_sys::plugin::clap_plugin;
 
-use resonance_plugin::gui::{EditorFactory, PluginEditor};
+use resonance_plugin::gui::{EditorFactory, PluginEditor, SizeRefused};
 use resonance_plugin::{
     stable_hash, ClapBridge, EventIterator, FloatParam, FloatRange, HostHandle, OutputBuffer,
     Param, ResonancePlugin, TempoInfo,
@@ -83,8 +83,8 @@ impl PluginEditor for FakeEditor {
     fn size(&self) -> (u32, u32) {
         (400, 300)
     }
-    fn set_size(&mut self, _: u32, _: u32) -> bool {
-        true
+    fn set_size(&mut self, _: u32, _: u32) -> Result<(), SizeRefused> {
+        Ok(())
     }
     fn can_resize(&self) -> bool {
         false
