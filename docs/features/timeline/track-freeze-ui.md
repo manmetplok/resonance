@@ -1,6 +1,6 @@
 # Track freeze (UI and app state)
 
-> Verified against master @ `6137b6fb` on 2026-10-15.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: `docs/history/prototypes/track-freeze-bounce-in-place/index.html` (design doc #181); ba todos #571–#583 and code review UPD-05, cited in code comments.
 
 Freezing renders an instrument or vocal track's post-FX output to a cache
@@ -67,7 +67,11 @@ with **Refreeze** / **Unfreeze to edit** for `Stale`; pink "Freeze failed —
 `Failed` load as `Idle`. Caches live in a sibling `<Project>.freeze/` directory
 next to the `.rproj` bundle (with a self-ignoring `.gitignore`), not inside it.
 On load `rehydrate_frozen_tracks` re-attaches caches; a missing or undecodable
-cache downgrades the track to `Stale`.
+cache downgrades the track to `Stale`. So does a cache rendered by an older
+freeze format (`FreezeCacheRef::format_version` below
+`FREEZE_CACHE_FORMAT_VERSION`, read in `FreezeStatus::from_persisted`): it still
+plays, but the banner offers the refreeze. Version 0 (absent) is every cache
+from before BUG-67, which baked the track's aux sends and return busses in.
 
 **Undo.** Freeze, unfreeze, refreeze and batch freeze are each one undo entry;
 the rendered cache is not in history. `apply_freeze_restore` reconciles after

@@ -99,6 +99,11 @@ impl FreezeStatus {
         match (&state.cache_ref, state.is_frozen) {
             (Some(cache_ref), true) => {
                 let mut cache_ref = cache_ref.clone();
+                // A cache from an older freeze format (BUG-67) still
+                // plays, but stale, so a refreeze is offered.
+                if cache_ref.is_outdated_format() {
+                    cache_ref.status = FreezeCacheStatus::Stale;
+                }
                 if cache_ref.status == FreezeCacheStatus::Stale {
                     FreezeStatus::Stale { cache_ref }
                 } else {

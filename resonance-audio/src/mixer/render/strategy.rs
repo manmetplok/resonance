@@ -447,7 +447,10 @@ impl RenderStrategy<'_> {
 
     /// Decide whether and how a bus renders. Live fades a muted bus out
     /// (its FX keep running until the ramp lands on zero); bounce skips
-    /// muted busses outright.
+    /// muted busses outright. A freeze capture (`freeze_raw`) renders no
+    /// bus: its tracks are forced to master and tap no sends, so a bus
+    /// could only add its own output — a self-noising effect, a tail —
+    /// which the live bus already plays next to the cache (BUG-67).
     pub(crate) fn bus_disposition(
         &self,
         bus: &Bus,
@@ -488,8 +491,8 @@ impl RenderStrategy<'_> {
                 };
                 Some(((bus_last_l, bus_target_l), (bus_last_r, bus_target_r)))
             }
-            Self::Bounce { .. } => {
-                if muted {
+            Self::Bounce { freeze_raw, .. } => {
+                if muted || *freeze_raw {
                     return None;
                 }
                 Some(bounce_gain_endpoints(bus_stereo_gains(bus), auto_gain))

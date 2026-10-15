@@ -49,6 +49,8 @@ mod clip_fade_gain_render;
 mod cycle_load;
 #[path = "mixer/freeze_playback_substitution.rs"]
 mod freeze_playback_substitution;
+#[path = "mixer/freeze_aux_sends.rs"]
+mod freeze_aux_sends;
 #[path = "mixer/graph_rate_assert.rs"]
 mod graph_rate_assert;
 #[path = "mixer/latency_comp.rs"]

@@ -18,6 +18,16 @@ pub enum FreezeCacheStatus {
     Failed,
 }
 
+/// What a freeze cache holds, versioned: a cache whose
+/// [`FreezeCacheRef::format_version`] is below this was rendered by an
+/// older freeze and loads stale, so the user is offered a refreeze.
+///
+/// - `0` (absent in the file): before BUG-67 — the cache baked the frozen
+///   track's aux sends and the return busses' output, which playback then
+///   applied a second time.
+/// - `1`: the frozen tracks' own post-FX signal only.
+pub const FREEZE_CACHE_FORMAT_VERSION: u32 = 1;
+
 /// A reference to a freeze cache file.
 ///
 /// Contains metadata about a frozen track's cached audio file,
@@ -34,6 +44,10 @@ pub struct FreezeCacheRef {
     pub render_fingerprint: u64,
     /// The current status of this cache reference.
     pub status: FreezeCacheStatus,
+    /// The [`FREEZE_CACHE_FORMAT_VERSION`] the cache was rendered at; `0`
+    /// for a cache saved before versions existed.
+    #[serde(default)]
+    pub format_version: u32,
 }
 
 impl FreezeCacheRef {
@@ -51,7 +65,14 @@ impl FreezeCacheRef {
             bit_depth,
             render_fingerprint,
             status,
+            format_version: FREEZE_CACHE_FORMAT_VERSION,
         }
+    }
+
+    /// Whether the cache was rendered by an older freeze whose output no
+    /// longer matches what the track plays unfrozen.
+    pub fn is_outdated_format(&self) -> bool {
+        self.format_version < FREEZE_CACHE_FORMAT_VERSION
     }
 
     /// Returns true if the cache is valid and can be used for playback.

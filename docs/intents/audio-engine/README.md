@@ -8,7 +8,6 @@ Each intent follows [`../_template.md`](../_template.md).
 |---|---|---|
 | [Render clip warp (time-stretch) in playback and bounce](clip-warp-render.md) | partly built | Warp settings are saved, shown and scriptable, but no render path reads them — nothing stretches. |
 | [Expose export formats, sample rate, normalisation and metadata](export-formats-and-metadata.md) | partly built | The engine writes FLAC/MP3/Opus, resamples and normalises, but no GUI or control path can choose any of it. |
-| [Frozen tracks must not apply their aux sends twice](freeze-aux-send-double-apply.md) | idea | Read from the code: a frozen track bakes its send returns into the cache and then applies the sends again. |
 | [Wire up MIDI project export](midi-project-export.md) | partly built | The export dialog's MIDI tab is disabled although a tested SMF writer exists. |
 | [Engine and CLAP host: review leftovers](review-leftovers-engine.md) | idea | Code-quality, robustness and test items in `resonance-audio` and the plugin bridge that the review campaigns left open. |
 | [Live stress run of the parallel render pool](rt-live-stress-run.md) | designed | The parallel render pool is proven offline only; the spec's 10-minute live run was never done. |

@@ -1,6 +1,6 @@
 # Track freeze (engine side)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: prototype `docs/history/prototypes/track-freeze-bounce-in-place/`;
 > "doc #187", "todo #571 / #573 / #577" and code-review findings ENG-07,
 > ENG-08, ENG-13, FU-G3a cited in code.
@@ -27,6 +27,14 @@ banner, staleness and batch freeze are in [track-freeze-ui.md](../timeline/track
   sub-tracks keep their own constant fader and pan (the kit's internal
   balance is baked in) and are also forced to master. Master FX and volume
   are excluded.
+- **No sends, no busses:** the frozen tracks tap no aux send
+  (`SendFilter::Dry`) and no bus renders under `freeze_raw`
+  (`RenderStrategy::bus_disposition`), so the cache holds the tracks' own
+  post-FX signal and nothing of any return — not the wet signal their sends
+  fed, not a return effect's own noise or tail. Playback taps the sends live
+  from the cache, so a top-level frozen track with sends is bit-identical to
+  the unfrozen one (BUG-67; before, the sends were tapped at unity during
+  the freeze, the returns rendered into the cache, and playback sent again).
 - Automation: plugin-parameter lanes of the frozen tracks' plugins are baked
   in (`baked_automation`); gain, pan and mute lanes stay live on playback.
 - Output: 32-bit float stereo WAV, written to `<path>.partial` and renamed
@@ -36,8 +44,10 @@ banner, staleness and batch freeze are in [track-freeze-ui.md](../timeline/track
   `CancelFreeze`, partial file removed) or `FreezeError { message }`.
 - `FreezeCacheRef` records the file name, rate, bit depth, a render
   fingerprint (the frozen tracks' notes, the source chain and instrument,
-  the baked automation) and status. The app computes its own fingerprint to
-  decide staleness.
+  the baked automation), status and `format_version`
+  (`FREEZE_CACHE_FORMAT_VERSION`, now 1). The app computes its own
+  fingerprint to decide staleness, and loads a cache of an older format
+  version `Stale` (version 0 = before BUG-67, with sends baked in).
 
 ### Where the cache lives
 
@@ -96,11 +106,9 @@ with a self-ignoring `.gitignore`. A project never bundles its caches.
 | Cache decode | `tests/bounce/freeze_cache_read.rs` | same |
 | Playback substitution | `tests/mixer/freeze_playback_substitution.rs` | same |
 | Command plumbing | `tests/engine/freeze_command_plumbing.rs` | same |
+| Sends and returns stay out of the cache: frozen = unfrozen bit for bit with pre / post-fader sends, a self-noising return, a kit (BUG-67) | `tests/mixer/freeze_aux_sends.rs` | same |
+| Pre-version cache loads stale | `resonance-app/tests/plugins/freeze_persist.rs` | `./scripts/run-tests.py -p resonance-app` |
 | App | `resonance-app/tests/plugins/freeze_*.rs`, `frozen_track_render.rs`, `track_freeze_menu.rs`, `track_header_freeze_button.rs`; `tests/control/control_track_frozen.rs` | `./scripts/run-tests.py -p resonance-app` |
-
-Not covered: a frozen track with aux sends (no test renders sends through a
-freeze), and "frozen playback is sample-identical to unfrozen" for a track
-with sends.
 
 ## Decisions and deviations
 
@@ -110,9 +118,12 @@ with sends.
 
 ## Known gaps
 
-- **Aux sends are applied twice for a frozen track.** The freeze render
-  passes no send filter, so the track's sends are tapped (at unity, since
-  `freeze_raw` gains are 1.0), the return busses render, and their wet
-  output is summed into the cache. On playback the reduction applies the
-  same sends again from the cache. Read from the code, not yet measured:
-  [freeze-aux-send-double-apply](../../intents/audio-engine/freeze-aux-send-double-apply.md).
+- **A frozen multi-output kit cannot replay its taps' sends or routing.**
+  The cache is the summed kit, so no per-tap signal is left: a tap's send
+  to a room return is silent while the kit is frozen (pinned by
+  `a_frozen_kits_tap_send_is_neither_baked_nor_doubled` — never doubled,
+  never baked), and a tap routed to a bus plays to master through the
+  parent. The other way round, a send on the kit's *parent* track taps the
+  whole cache while frozen, but only the parent's own main output (port 0,
+  silent on the drum kit) unfrozen. Exact replay would need per-send feeds
+  stored next to the cache.
