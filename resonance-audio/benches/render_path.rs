@@ -9,7 +9,8 @@
 //! readback, gain ramps / summing, latency compensation and metering.
 //! Plugin DSP is out of scope (it lives in `plugins/`).
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 
 use resonance_audio::test_support::{
     mix_track_clips, sum_to_output, sum_to_stereo, RenderBenchHarness,

@@ -22,7 +22,9 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-use crate::drumkit_library::install::{copy_stream, is_litter, CHUNK};
+use crate::drumkit_library::install::{
+    copy_stream, entry_path, entry_read_err, is_litter, CHUNK,
+};
 use crate::drumkit_library::{ImportJob, ImportProgress, LibraryError};
 
 /// What the content looks like.
@@ -87,7 +89,7 @@ fn plan(
         if e.is_dir() {
             continue;
         }
-        let Some(path) = e.enclosed_name() else {
+        let Some(path) = entry_path(&e) else {
             continue;
         };
         if is_litter(&path) {
@@ -201,7 +203,8 @@ fn extract(
         job.check_cancel()?;
         let e = archive.by_index(*i).map_err(zip_err(*i))?;
         let mut capped = e.take(declared + 1);
-        let n = copy_stream(&mut capped, &dest.join(rel), &mut buf, job, &mut progress)?;
+        let n = copy_stream(&mut capped, &dest.join(rel), &mut buf, job, &mut progress)
+            .map_err(entry_read_err(*i))?;
         if n > *declared {
             return Err(LibraryError::Zip(format!(
                 "entry {i} inflates past its declared size"

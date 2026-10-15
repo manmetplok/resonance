@@ -725,6 +725,70 @@ fn zip_entries_that_escape_are_skipped_and_inflating_past_the_declared_size_fail
     assert!(!root.join(STAGING_DIR).exists());
 }
 
+/// The package install (voicebanks, vocoders) shares the kit install's
+/// entry filter: `..` escapes and absolute names are skipped, the rest of
+/// the archive installs, and an entry that inflates past its declared
+/// size fails the install as a bad archive.
+#[test]
+fn package_install_skips_escaping_entries_and_refuses_inflation() {
+    use resonance_common::plok_download::package::{install_package, PackageError, PackageRule};
+    let src = temp_root("pkg-slip-src");
+    let out = temp_root("pkg-slip-out");
+    let rule = PackageRule {
+        what: "voicebank",
+        is_marker: &|p: &Path| p.file_name().is_some_and(|n| n == "dsconfig.yaml"),
+        max_depth: 0,
+    };
+    let entries: Vec<(String, Vec<u8>)> = vec![
+        ("Bank/dsconfig.yaml".into(), b"name: x".to_vec()),
+        ("Bank/sub/model.onnx".into(), vec![7u8; 64]),
+        ("../evil.txt".into(), b"evil".to_vec()),
+        ("Bank/../../evil2.txt".into(), b"evil".to_vec()),
+        // Rooted names that would land inside the bank once their root
+        // is dropped (as zip's own `enclosed_name` does since zip 9).
+        ("/Bank/abs-evil.txt".into(), b"evil".to_vec()),
+        ("\\Bank\\win-abs-evil.txt".into(), b"evil".to_vec()),
+        ("C:/Bank/drive-evil.txt".into(), b"evil".to_vec()),
+    ];
+    let zip_path = src.join("Bank.zip");
+    zip_of(&zip_path, &entries);
+    let dest = out.join("banks").join("bank");
+    install_package(&zip_path, &dest, &rule, ImportJob::new()).unwrap();
+    assert!(dest.join("dsconfig.yaml").is_file());
+    assert!(dest.join("sub/model.onnx").is_file());
+    for f in ["evil.txt", "evil2.txt", "abs-evil.txt", "win-abs-evil.txt", "drive-evil.txt"] {
+        assert!(!tree(&out).iter().any(|p| p.ends_with(f)), "{f} extracted");
+        assert!(!out.parent().unwrap().join(f).exists(), "{f} escaped");
+    }
+
+    // The onnx entry's headers claim 4 bytes; it holds 64.
+    let mut bytes = std::fs::read(&zip_path).unwrap();
+    let mut i = 0;
+    let mut patched = 0;
+    while i + 46 < bytes.len() {
+        let (size_at, name_len_at, name_at) = match &bytes[i..i + 4] {
+            b"PK\x03\x04" => (22, 26, 30),
+            b"PK\x01\x02" => (24, 28, 46),
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let name_len = u16::from_le_bytes([bytes[i + name_len_at], bytes[i + name_len_at + 1]]);
+        if bytes[i + name_at..i + name_at + name_len as usize].ends_with(b".onnx") {
+            bytes[i + size_at..i + size_at + 4].copy_from_slice(&4u32.to_le_bytes());
+            patched += 1;
+        }
+        i += 4;
+    }
+    assert_eq!(patched, 2);
+    std::fs::write(&zip_path, &bytes).unwrap();
+    let dest2 = out.join("banks").join("bomb");
+    let err = install_package(&zip_path, &dest2, &rule, ImportJob::new()).unwrap_err();
+    assert!(matches!(err, PackageError::Library(LibraryError::Zip(_))), "{err}");
+    assert!(!dest2.exists());
+}
+
 /// A pid with no process behind it: a child that has exited and been
 /// reaped.
 #[cfg(unix)]

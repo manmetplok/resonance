@@ -12,7 +12,8 @@
 //! Run with:
 //!   cargo bench -p resonance-wavetable --no-default-features
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 use resonance_plugin::{EventIterator, NoteEvent};
 use resonance_wavetable::dsp::engine::SynthEngine;
 use resonance_wavetable::params::WavetableParams;

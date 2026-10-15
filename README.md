@@ -36,14 +36,14 @@ planned is indexed in [docs/README.md](docs/README.md).
 ### System packages
 
 The PipeWire bindings are generated with bindgen, so they need clang. MP3
-export compiles LAME from source, so it needs a C compiler. Opus export links
-the system libopus. The file dialogs use GTK 3.
+export compiles LAME from source, so it needs a C compiler. Opus export
+builds libopus from source with CMake. The file dialogs use GTK 3.
 
 **Debian / Ubuntu**
 
 ```sh
 sudo apt install build-essential clang pkg-config cmake \
-  libpipewire-0.3-dev libspa-0.2-dev libasound2-dev libopus-dev \
+  libpipewire-0.3-dev libspa-0.2-dev libasound2-dev \
   libgtk-3-dev libwayland-dev libxkbcommon-dev libegl-dev \
   mesa-vulkan-drivers
 ```
@@ -52,7 +52,7 @@ sudo apt install build-essential clang pkg-config cmake \
 
 ```sh
 sudo dnf install gcc gcc-c++ clang pkgconf-pkg-config cmake \
-  pipewire-devel alsa-lib-devel opus-devel \
+  pipewire-devel alsa-lib-devel \
   gtk3-devel wayland-devel libxkbcommon-devel mesa-libEGL-devel \
   mesa-vulkan-drivers vulkan-loader
 ```
@@ -61,7 +61,7 @@ sudo dnf install gcc gcc-c++ clang pkgconf-pkg-config cmake \
 
 ```sh
 sudo pacman -S --needed base-devel clang pkgconf cmake \
-  pipewire alsa-lib opus gtk3 wayland libxkbcommon mesa vulkan-icd-loader
+  pipewire alsa-lib gtk3 wayland libxkbcommon mesa vulkan-icd-loader
 ```
 
 ### Realtime priority (recommended)
@@ -94,15 +94,14 @@ plugins to use them from a checkout.
 - macOS on Apple Silicon or Intel.
 - **Xcode Command Line Tools**: `xcode-select --install`
 - **Rust**, stable, installed with [rustup](https://rustup.rs).
-- **Homebrew**, for three build dependencies:
+- **Homebrew**, for two build dependencies:
 
 ```sh
-brew install opus pkgconf cmake
+brew install pkgconf cmake
 ```
 
-The system `libopus` is required. Building opus from source fails with
-CMake 4 (the bundled `audiopus_sys` build script is too old for it), and
-`pkgconf` is how the build finds the Homebrew copy.
+CMake builds libopus from source for Opus export (`opusic-sys`, which
+works with CMake 4).
 
 ### Microphone permission
 
@@ -294,10 +293,6 @@ app logs a warning that lists the directories it scanned.
 **macOS: the input list is empty, or arming a track hangs.** A
 microphone-permission dialog is waiting for an answer. It may be behind other
 windows.
-
-**macOS: `audiopus_sys` / CMake error while building.** Run
-`brew install opus pkgconf`. The build must find the system libopus rather
-than compile it from source.
 
 **Linux: `libspa` / `pipewire` bindgen errors.** Install `clang` and the
 PipeWire development headers. See [System packages](#system-packages).

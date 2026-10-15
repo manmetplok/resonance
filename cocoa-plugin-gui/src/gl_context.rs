@@ -83,7 +83,11 @@ pub(crate) fn load_glow() -> Result<(Arc<glow::Context>, libloading::Library), E
     // SAFETY: loading a system framework runs no arbitrary init code
     // beyond the framework's own, which is the point of the call.
     let lib = unsafe { libloading::Library::new(OPENGL_FRAMEWORK) }
-        .map_err(|e| EditorError::GlLoad(format!("OpenGL.framework: {e}")))?;
+        .map_err(|e| {
+            // libloading 0.9 keeps the dlerror() text in source().
+            let detail = std::error::Error::source(&e).map(|s| format!(": {s}"));
+            EditorError::GlLoad(format!("OpenGL.framework: {e}{}", detail.unwrap_or_default()))
+        })?;
 
     // SAFETY: the loader only resolves symbols from the framework we just
     // opened; a missing symbol becomes a null pointer, which glow treats

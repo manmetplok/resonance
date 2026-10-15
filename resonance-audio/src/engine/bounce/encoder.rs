@@ -555,7 +555,7 @@ const OPUS_MAX_PACKET: usize = 4000;
 const OPUS_PACKETS_PER_PAGE: usize = 50;
 
 /// Ogg-Opus sink backed by `libopus` (built from bundled source by
-/// `audiopus_sys`, behind the `opus` feature) and the pure-Rust `ogg`
+/// `opusic-sys`, behind the `opus` feature) and the pure-Rust `ogg`
 /// container muxer. libopus runs only at a small set of rates, so the export
 /// pipeline resamples to 48 kHz *before* the sink (see
 /// `output_sample_rate` in [`super::wav`]); frames therefore always arrive
