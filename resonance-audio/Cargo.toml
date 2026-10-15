@@ -90,5 +90,5 @@ harness = false
 libc.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-alsa-sys = "0.3"
+alsa-sys = "0.4"
 pipewire = { version = "0.9", features = ["v0_3_49"] }

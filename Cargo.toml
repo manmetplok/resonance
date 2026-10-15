@@ -48,7 +48,7 @@ time = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
 crossbeam-channel = "0.5"
 arc-swap = "1"
-midir = "0.10"
+midir = "0.11"
 schemars = "1"
 # Benchmark harness. `default-features = false` + `cargo_bench_support` keeps
 # the dependency tree small (no plotters/gnuplot HTML report generation).
