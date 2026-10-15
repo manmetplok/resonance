@@ -1,6 +1,6 @@
 # Plugin SDK (`resonance-plugin`)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `5d6a2993` on 2026-10-15.
 > Spec history: none as a single spec; pieces come from the plugin audit
 > (`docs/history/reviews/plugin-audit.md`, `plugin-audit-plan.md`) and the
 > code-review campaigns (`docs/history/reviews/code-review-todo.md`).
@@ -8,7 +8,8 @@
 `resonance-plugin` is the thin framework every first-party CLAP plugin is
 built on. A plugin implements one trait, `ResonancePlugin`, declares its
 params as code, and calls `export_clap!`; the crate turns that into a CLAP
-plugin over `clack-plugin` (it replaced nih-plug). It also holds what the
+plugin over `clack-plugin` (it replaced nih-plug; pinned by commit in the
+workspace `Cargo.toml`, clack 0.2 at `27ca2839`). It also holds what the
 app and the plugins must agree on: the first-party CLAP ids, the private CLAP
 extensions, the preset library and the shared editor plumbing.
 
@@ -53,6 +54,19 @@ extensions, the preset library and the shared editor plumbing.
   (`clap_bridge/param_flags.rs`) and `com.resonance.kit-info` (the drum
   kit's pads as JSON, `clap_bridge/kit_info.rs`). Their ABIs live in
   `resonance-common` (`kit_info`, `param_flags`, `preset_session`).
+- **Re-entrant host calls are served.** CLAP lets a host call back into the
+  plugin from inside a host function the plugin called (`get_value` during
+  `params.rescan()`, `latency.get()` during the `latency.changed()` made in
+  `activate`, `gui.destroy()` during `gui.closed()`). clack 0.2 hands every
+  main-thread call a `&ClapMainThread`, so the bridge keeps the plugin slot,
+  the open editor and the preset-report bookkeeping in `Cell`/`RefCell`
+  (`clap_bridge/shared.rs`: `plugin_ref`, `plugin_mut`, `with_editor`,
+  `destroy_editor`) and holds no borrow across a call that can re-enter. A
+  re-entrant reader that finds the plugin slot busy takes the active-plugin
+  path (the shared mirror); a writer gets a `PluginError`; a `gui.destroy`
+  that lands inside another editor call is carried out when that call
+  returns. None of it is on the audio thread: `ClapAudioProcessor` owns its
+  own plugin object and `process` touches no cell.
 - **Host handle.** `HostHandle` (`host.rs`) is the plugin's only way to call
   the host: report latency (`set_latency_samples`), request a restart,
   process or main-thread callback, ask for a params or param-text rescan,
@@ -72,7 +86,11 @@ extensions, the preset library and the shared editor plumbing.
   `editor_host.rs` picks the platform runtime as `RuntimeEditor`, gives
   `native_api()` (`"wayland"` or `"cocoa"`), wraps a running editor in
   `RuntimeEditorHandle` and lends the announcer to every frame through
-  `AnnouncingApp`/`with_announcer`; `editor_widgets.rs` binds params to the
+  `AnnouncingApp`/`with_announcer`. `PluginEditor::set_size` returns
+  `Result<(), SizeRefused>` (`gui.rs`): a refusal — `RuntimeEditorHandle`
+  refuses once the window is gone or being torn down — reaches the host as
+  `false` from `clap_plugin_gui.set_size`, with the editor's reason in
+  `clap_host_log` (clack before 0.2 answered `true` regardless); `editor_widgets.rs` binds params to the
   pure widgets of `plugin-gui-core`; `preset_ui.rs`, `library_ui.rs` and
   `file_picker.rs` are the shared preset bar, library browser skin and
   non-blocking file picker (Linux; Cocoa calls `rfd` on the main thread).
@@ -131,7 +149,7 @@ Invariants:
 | What | Where | Run |
 |---|---|---|
 | Params, ranges, smoothing, formatters | `resonance-plugin/tests/{param,range,smoother,formatters,typed_entry,param_widgets,knob_binding}.rs` | `./scripts/run-tests.py -p resonance-plugin` |
-| Bridge through clack-host | `tests/clap_bridge_params_state.rs`, `process_abi.rs`, `state.rs`, `state_race.rs`, `midi_events.rs`, `midi_decode.rs`, `sidechain.rs`, `latency.rs`, `latency_runtime.rs`, `render_mode.rs`, `param_announce.rs`, `param_output_flags.rs`, `params_rescan.rs`, `host_handle_retire.rs`, `gui_closed.rs`, `features.rs` | same |
+| Bridge through clack-host | `tests/clap_bridge_params_state.rs`, `process_abi.rs`, `state.rs`, `state_race.rs`, `midi_events.rs`, `midi_decode.rs`, `sidechain.rs`, `latency.rs`, `latency_runtime.rs`, `render_mode.rs`, `param_announce.rs`, `param_output_flags.rs`, `params_rescan.rs`, `host_handle_retire.rs`, `gui_closed.rs` (with its `reentrancy` module: a host calling back in from `rescan`, `latency.changed` and `gui.closed`; and `editor_set_size`: a refused size is `false` plus the reason in the host log), `features.rs` | same |
 | Fleet rules | `tests/fleet_palette.rs`, `tests/fleet_preset_adoption.rs` (also pins every `CLAP_ID` to `first_party::ALL`) | same |
 | Layering, id spelling | `tools/arch-invariants/tests/architecture.rs` | `cargo test -p arch-invariants` |
 | Third-party host view | `resonance-audio/tests/clap_host/` loads built plugin cdylibs | `./scripts/run-tests.py -p resonance-audio` |

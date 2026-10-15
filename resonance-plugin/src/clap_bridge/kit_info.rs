@@ -46,7 +46,7 @@ unsafe extern "C" fn get<P: ResonancePlugin>(
     cap: usize,
 ) -> usize {
     PluginWrapper::<ClapBridge<P>>::handle(plugin as *const clap_plugin, |plugin| {
-        let main = plugin.main_thread().as_ref();
+        let main = plugin.main_thread();
         let Some(json) = main
             .kit_info_source
             .as_ref()

@@ -492,7 +492,7 @@ fn get_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
         .plugin_shared_handle()
         .get_extension::<PluginParams>()
         .expect("params extension")
-        .get_value(&mut instance.plugin_handle(), clap_id(id))
+        .get_value(&instance.plugin_handle(), clap_id(id))
         .unwrap_or_else(|| panic!("param `{id}` is unknown to the bridge"))
 }
 
@@ -507,7 +507,7 @@ fn load_state(instance: &mut PluginInstance<TestHost>, bytes: &[u8]) {
         .plugin_shared_handle()
         .get_extension::<PluginState>()
         .expect("state extension")
-        .load(&mut instance.plugin_handle(), &mut &bytes[..])
+        .load(&instance.plugin_handle(), &mut &bytes[..])
         .expect("state load");
 }
 
@@ -517,7 +517,7 @@ fn save_state(instance: &mut PluginInstance<TestHost>) -> Value {
         .plugin_shared_handle()
         .get_extension::<PluginState>()
         .expect("state extension")
-        .save(&mut instance.plugin_handle(), &mut bytes)
+        .save(&instance.plugin_handle(), &mut bytes)
         .expect("state save");
     serde_json::from_slice(&bytes).expect("the bridge must save valid JSON")
 }
@@ -805,7 +805,7 @@ fn a_panicking_extra_state_load_does_not_disable_the_editor_push_back() {
         .plugin_shared_handle()
         .get_extension::<PluginState>()
         .expect("state extension")
-        .load(&mut instance.plugin_handle(), &mut &bytes[..]);
+        .load(&instance.plugin_handle(), &mut &bytes[..]);
     assert!(result.is_err(), "a panicking saver must fail the load");
     audio.wait_blocks(3);
 

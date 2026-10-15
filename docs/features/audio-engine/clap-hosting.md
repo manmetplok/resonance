@@ -1,6 +1,6 @@
 # CLAP plugin hosting
 
-> Verified against master @ `6137b6fb` on 2026-10-15.
+> Verified against master @ `5d6a2993` on 2026-10-15.
 > Spec history: `docs/history/reviews/plugin-audit.md`,
 > `docs/history/reviews/plugin-audit-plan.md` (doc #275),
 > `docs/history/specs/realtime-multithreading.md` §4.6 / §11.2,
@@ -117,8 +117,12 @@ restore bypass states exactly.
 ### Editors
 
 `OpenPluginEditor` / `ClosePluginEditor` drive `is_api_supported → create →
-set_size → show` as a **floating** window, Wayland on Linux and Cocoa on
-macOS; embedding is not implemented. `PluginEditorState { open, failure }` is
+show` (and `hide → destroy`) as a **floating** window, Wayland on Linux and
+Cocoa on macOS; embedding is not implemented. There is no size negotiation:
+`get_size`/`set_size` are `[main-thread & !floating]` in `gui.h`, so the
+plugin sizes its own window (`clap_host/gui.rs`, code review HOST-15). The
+host talks to plugins through raw `clap-sys`, not clack-host, so a clack
+upgrade changes only the first-party plugins' side of the ABI. `PluginEditorState { open, failure }` is
 the only truth about whether an editor is open, including a window the user
 closed from its titlebar. The window runtimes are in
 [plugin-editor-runtimes.md](../plugins-instruments/plugin-editor-runtimes.md) / [plugin-windows.md](../ui-shell/plugin-windows.md).

@@ -27,7 +27,7 @@ use clack_host::events::event_types::{
 };
 use clack_host::events::{EventFlags, EventHeader, Match, Pckn};
 use clack_host::prelude::*;
-use clack_host::utils::{Cookie, FixedPoint};
+use clack_host::utils::FixedPoint;
 use clack_plugin::entry::SinglePluginEntry;
 
 use common::{ProcessHarness, TestHost, TestHostShared};
@@ -348,7 +348,7 @@ fn clap_id(id: &str) -> ClapId {
 }
 
 fn param_event(time: u32, id: &str, value: f64) -> ParamValueEvent {
-    ParamValueEvent::new(time, clap_id(id), Pckn::match_all(), value, Cookie::empty())
+    ParamValueEvent::new(time, clap_id(id), Pckn::match_all(), value)
 }
 
 fn note_on(time: u32, key: u16, velocity: f64) -> NoteOnEvent {

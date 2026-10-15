@@ -169,10 +169,9 @@ mod live {
 
         // The size the plugin wants, asked for explicitly so the opening
         // geometry is not part of the assertion.
-        assert!(
-            editor.set_size(preferred.0, preferred.1),
-            "the runtime refused the plugin's own preferred size {preferred:?}"
-        );
+        editor.set_size(preferred.0, preferred.1).unwrap_or_else(|e| {
+            panic!("the runtime refused the plugin's own preferred size {preferred:?}: {e}")
+        });
         let at_preferred = wait_until(&*editor, |seen| seen == preferred);
         assert_eq!(
             at_preferred, preferred,
@@ -181,10 +180,9 @@ mod live {
 
         // And a second, different size, so the first result cannot be a
         // handle that simply never changed.
-        assert!(
-            editor.set_size(RESIZED.0, RESIZED.1),
-            "the runtime refused a resize to {RESIZED:?}"
-        );
+        editor.set_size(RESIZED.0, RESIZED.1).unwrap_or_else(|e| {
+            panic!("the runtime refused a resize to {RESIZED:?}: {e}")
+        });
         let at_resized = wait_until(&*editor, |seen| seen == RESIZED);
         assert_eq!(
             at_resized, RESIZED,
