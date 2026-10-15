@@ -38,7 +38,7 @@ use crate::message::{ClipMessage, Message, PoolMessage};
 use crate::state::ClipState;
 use crate::Resonance;
 use iced::Task;
-use resonance_audio::types::{ClipId, FadeCurve, TrackType};
+use resonance_audio::types::{ClipId, FadeCurve};
 use resonance_control::methods::clip::{
     self as proto, AmountSpec, DeleteParams, FadeResult, FadeShape, MoveParams, PlaceParams,
     SetFadeParams, SetGainParams, TrimParams, TrimResult,
@@ -280,7 +280,7 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
     let Some(track) = app.registry.tracks.iter().find(|t| t.id == track_id) else {
         return reject(request, no_track(track_id));
     };
-    if !takes_audio_clips(app, track) {
+    if !crate::update::clips::takes_audio_clips(app, track) {
         return reject(
             request,
             RpcError::invalid_params(format!(
@@ -492,20 +492,6 @@ pub(crate) fn import_result(app: &Resonance, asset_ids: &[u64]) -> pool_proto::I
 // clip.move / clip.trim / clip.delete
 // ---------------------------------------------------------------------------
 
-/// Whether `track` can hold audio clips.
-///
-/// An external-instrument track does, even though its type is
-/// `Instrument`: its sound is outboard, so what lands on it is recorded
-/// AUDIO — the mixer renders it through the audio-track branch, and
-/// `clip.trim` has always worked on those takes. Only `clip.place` and
-/// `clip.move` refused, which meant a hardware take could be cut but
-/// never copied or re-placed: duplicating an 8-bar section was
-/// impossible over the API and had to be spliced outside the project
-/// (ba doc #275 P2).
-fn takes_audio_clips(app: &Resonance, track: &crate::state::TrackState) -> bool {
-    track.track_type == TrackType::Audio || app.devices.external_instruments.contains_key(&track.id)
-}
-
 fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: MoveParams = match request.params() {
         Ok(p) => p,
@@ -518,7 +504,7 @@ fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
 
     let new_track_id = match params.track_id {
         Some(id) => match app.registry.tracks.iter().find(|t| t.id == id.0) {
-            Some(t) if takes_audio_clips(app, t) => id.0,
+            Some(t) if crate::update::clips::takes_audio_clips(app, t) => id.0,
             Some(t) => {
                 return reject(
                     request,

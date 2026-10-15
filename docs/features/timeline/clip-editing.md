@@ -1,6 +1,6 @@
 # Clip editing: place, move, split, trim, delete
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: no single spec. Placement came from doc #175 (drag to
 > timeline, prototype `docs/intents/prototypes/audio-sample-import-media-browser/`),
 > the `clip.*` control methods from docs #265/#275/#276, and the deferral
@@ -52,9 +52,10 @@ Import, the pool and relinking are covered in
   lane under the pointer becomes the clip's track (group headers, automation
   and take rows keep the original lane). The mirror updates live; the engine
   gets one `MoveClip` / `MoveMidiClip` on release. One undo step per drag.
-- Audio and MIDI clips both move across tracks in the GUI. The GUI does **not**
-  check the target track's kind, so an audio clip dragged onto an instrument
-  lane is accepted but will not play there (see Known gaps).
+- Audio and MIDI clips both move across tracks in the GUI. An audio clip only
+  lands on a lane that takes audio clips — an audio or external-instrument
+  track (`update/clips.rs::takes_audio_clips`, the rule `clip.move` uses);
+  over an instrument, drums or vocal lane it stays on its own lane.
 - `clip.move` (audio only) takes `start` and an optional `track_id`, which
   must be an audio or external-instrument track.
 - `notes.move_clip` moves a MIDI clip to a 1-based `start_bar` or to a section
@@ -213,8 +214,6 @@ events (the command is tested, not the chord).
   cannot change track. → [midi-clip-arrange-api.md](../../intents/timeline/midi-clip-arrange-api.md)
 - No copy, paste or duplicate for clips (Duplicate Selection works on section
   placements only). → [clip-copy-duplicate.md](../../intents/timeline/clip-copy-duplicate.md)
-- A GUI drag can move an audio clip onto an instrument, drums or vocal lane,
-  where it is silent. The API refuses the same move.
 - No snap toggle or snap-bypass modifier.
 - No clip rename, in the GUI or the API.
 - `song.tracks` reports a clip's start and length but not its trim offsets.

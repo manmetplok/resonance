@@ -417,6 +417,21 @@ pub fn start_clip_drag(
     }
 }
 
+/// Whether `track` can hold audio clips.
+///
+/// An external-instrument track does, even though its type is
+/// `Instrument`: its sound is outboard, so what lands on it is recorded
+/// AUDIO — the mixer renders it through the audio-track branch, and
+/// `clip.trim` has always worked on those takes. Only `clip.place` and
+/// `clip.move` refused, which meant a hardware take could be cut but
+/// never copied or re-placed: duplicating an 8-bar section was
+/// impossible over the API and had to be spliced outside the project
+/// (ba doc #275 P2). The GUI clip drag applies the same rule (BUG-12).
+pub(crate) fn takes_audio_clips(app: &Resonance, track: &crate::state::TrackState) -> bool {
+    track.track_type == resonance_audio::types::TrackType::Audio
+        || app.devices.external_instruments.contains_key(&track.id)
+}
+
 pub fn update_clip_drag(r: &mut Resonance, x: f32, y: f32) {
     let original_track_id = r
         .ui
@@ -427,7 +442,18 @@ pub fn update_clip_drag(r: &mut Resonance, x: f32, y: f32) {
     let Some(orig) = original_track_id else {
         return;
     };
-    let target_track_id = r.track_id_at_arrange_y(y).unwrap_or(orig);
+    // Only a lane that takes audio clips gets one: instrument and vocal
+    // tracks never mix clips, so one dropped there would play nothing.
+    // Over such a lane the clip stays on its own, as over a group header.
+    let target_track_id = r
+        .track_id_at_arrange_y(y)
+        .filter(|id| {
+            r.registry
+                .tracks
+                .iter()
+                .any(|t| t.id == *id && takes_audio_clips(r, t))
+        })
+        .unwrap_or(orig);
     let bpm = r.transport.bpm;
     let num = r.transport.time_sig_num;
     let sample_rate = r.sample_rate;

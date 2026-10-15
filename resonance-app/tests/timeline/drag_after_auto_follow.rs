@@ -104,3 +104,52 @@ fn loop_drag_does_not_jump_after_auto_follow() {
     assert!(expected <= 2 * SR as u64, "baseline lands near 1 s, got {expected}");
     assert_eq!(drag(&mut after_playback()), expected);
 }
+
+/// An audio clip dragged over an instrument or vocal lane stays on its
+/// own lane — those tracks never mix audio clips, so it would play
+/// nothing there (BUG-12). Another audio lane still takes it, and so
+/// does an external-instrument track, whose takes are audio (the same
+/// rule `clip.move` applies).
+#[test]
+fn audio_clip_drag_skips_instrument_and_vocal_lanes() {
+    use resonance_app::message::ExternalInstrumentMessage;
+    use resonance_app::theme::TRACK_HEIGHT;
+    use resonance_audio::types::{AudioCommand, TrackType};
+
+    let (mut app, _task) = Resonance::new_for_test();
+    let rx = app.test_capture_engine();
+    app.test_set_sample_rate(SR);
+    app.test_set_arrange_zoom(ZOOM);
+    app.test_add_track(1, TrackType::Audio);
+    app.test_add_track(2, TrackType::Instrument);
+    app.test_add_track(3, TrackType::Vocal);
+    app.test_add_track(4, TrackType::Audio);
+    app.test_add_track(5, TrackType::Instrument);
+    app.test_dispatch(Message::ExternalInstrument(ExternalInstrumentMessage::Enable(5)));
+    app.test_push_clip(clip());
+    let row_y = |row: f32| app.test_arrange_header_offset() + TRACK_HEIGHT * (row + 0.5);
+    let (instrument, vocal, audio, external) = (row_y(1.0), row_y(2.0), row_y(3.0), row_y(4.0));
+
+    let drag_to = |app: &mut Resonance, y: f32| {
+        app.test_dispatch(Message::Clip(ClipMessage::StartClipDrag {
+            clip_id: 7,
+            grab_offset_x: 0.0,
+            start_x: 0.0,
+            start_y: 0.0,
+        }));
+        app.test_dispatch(Message::Clip(ClipMessage::UpdateClipDrag(0.0, y)));
+        app.test_dispatch(Message::Clip(ClipMessage::EndClipDrag));
+        app.test_clips().iter().find(|c| c.id == 7).unwrap().track_id
+    };
+    assert_eq!(drag_to(&mut app, instrument), 1, "not onto the instrument lane");
+    assert_eq!(drag_to(&mut app, vocal), 1, "not onto the vocal lane");
+    assert_eq!(drag_to(&mut app, audio), 4, "another audio lane takes it");
+    assert_eq!(drag_to(&mut app, external), 5, "an external-instrument lane takes it");
+    let moves: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|c| match c {
+            AudioCommand::MoveClip { new_track_id, .. } => Some(new_track_id),
+            _ => None,
+        })
+        .collect();
+    assert!(!moves.contains(&2) && !moves.contains(&3), "engine told {moves:?}");
+}
