@@ -20,7 +20,7 @@ use crate::g2p::{resolve_draft, SyllableStress};
 use crate::rng::XorShift;
 use crate::scale::Scale;
 
-use super::primitives::scale_from_chords;
+use super::primitives::vocal_scale;
 use super::syllables::count_syllables;
 
 /// A vocal melody plus which of its notes are generator-made holds.
@@ -34,8 +34,9 @@ pub struct VocalDerivation {
     pub auto_holds: Vec<bool>,
 }
 
-/// [`derive_vocal_with_motif`], then the `params.syllable_mode` melisma
-/// pass. Deterministic per `seed`.
+/// [`derive_vocal_with_motif`] (same `scale`: the section's key, `None`
+/// to infer one), then the `params.syllable_mode` melisma pass.
+/// Deterministic per `seed`.
 ///
 /// * **Syllabic** — one note per lyric unit; no auto holds.
 /// * **Mixed** — at most one melisma per line: the line's last syllable
@@ -48,6 +49,7 @@ pub fn derive_vocal_with_holds(
     ticks_per_beat: u32,
     beats_per_bar: u32,
     motif_intervals: Option<&[i8]>,
+    scale: Option<Scale>,
     seed: u64,
 ) -> VocalDerivation {
     let notes = derive_vocal_with_motif(
@@ -56,13 +58,14 @@ pub fn derive_vocal_with_holds(
         ticks_per_beat,
         beats_per_bar,
         motif_intervals,
+        scale,
         seed,
     );
     let Some(odds) = Odds::for_mode(params.syllable_mode) else {
         let auto_holds = vec![false; notes.len()];
         return VocalDerivation { notes, auto_holds };
     };
-    let scale = if params.stay_in_scale { scale_from_chords(chords) } else { None };
+    let scale = vocal_scale(params.stay_in_scale, chords, scale);
     let (lo, hi) = if params.range.0 <= params.range.1 {
         params.range
     } else {

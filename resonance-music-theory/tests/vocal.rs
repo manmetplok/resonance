@@ -4,6 +4,8 @@
 
 #[path = "vocal/refit.rs"]
 mod refit;
+#[path = "vocal/section_scale.rs"]
+mod section_scale;
 
 use resonance_music_theory::{
     derive_vocal, derive_vocal_with_meter, generate_lyrics, vocal_phrase_spans, Chord,

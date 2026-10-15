@@ -45,6 +45,6 @@ pub(in crate::derive::vocal) use cleanup::enforce_no_overlap;
 pub(in crate::derive::vocal) use climax::apply_section_climax;
 pub(in crate::derive::vocal) use motif::{apply_motif_pitches, MotifPitchContext};
 pub(in crate::derive::vocal) use primitives::{
-    chord_at_beat, contour_height, scale_from_chords, snap_to_scale, total_beats,
+    chord_at_beat, contour_height, snap_to_scale, total_beats, vocal_scale,
 };
 pub(in crate::derive::vocal) use srdc::apply_srdc_layout;

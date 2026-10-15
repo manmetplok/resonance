@@ -69,7 +69,7 @@ fn render(
     p.use_section_motif = motif.is_some();
     p.draft = generate_lyrics(&p, seed);
 
-    let notes = derive_vocal_with_motif(&chords(), &p, 480, beats_per_bar, motif, seed);
+    let notes = derive_vocal_with_motif(&chords(), &p, 480, beats_per_bar, motif, None, seed);
     let rendered: Vec<String> = notes
         .iter()
         .map(|n| {
@@ -109,7 +109,7 @@ fn render_lines(
     p.lines = lines_count;
     p.draft = generate_lyrics(&p, seed);
 
-    let notes = derive_vocal_with_motif(&chords(), &p, 480, 4, None, seed);
+    let notes = derive_vocal_with_motif(&chords(), &p, 480, 4, None, None, seed);
     let rendered: Vec<String> = notes
         .iter()
         .map(|n| {

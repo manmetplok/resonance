@@ -352,7 +352,15 @@ fn seed_demo_vocal_melody(
         return;
     };
     let timed = crate::compose::generate::to_timed_chords(&def.chords);
-    let notes = resonance_music_theory::derive_vocal(&timed, &params, TPQN as u32, cfg.seed);
+    let notes = resonance_music_theory::derive_vocal_with_motif(
+        &timed,
+        &params,
+        TPQN as u32,
+        4,
+        None,
+        def.scale,
+        cfg.seed,
+    );
     let duration_ticks = def.length_bars as u64 * app.transport.time_sig_num as u64 * TPQN;
     let midi_notes: Vec<MidiNote> = notes
         .iter()

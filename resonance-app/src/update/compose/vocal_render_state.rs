@@ -249,7 +249,27 @@ fn status_from(
         }
         (_, None) => status.state = VocalLaneRenderState::Stale,
     }
+    // A take is installed per placement. A placement without one (the
+    // section was placed again after the render) sings nothing, so the
+    // lane is not done: it needs a render, though no phrase changed
+    // (BUG-73).
+    if status.state == VocalLaneRenderState::Rendered && !every_placement_has_a_take(r, lane) {
+        status.state = VocalLaneRenderState::Stale;
+    }
     status
+}
+
+/// Whether each placement of the lane's section has an installed take.
+fn every_placement_has_a_take(
+    r: &crate::Resonance,
+    (definition_id, track_id): VocalLaneKey,
+) -> bool {
+    let clips = &r.compose.vocal_audio.clips;
+    r.compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .all(|p| clips.contains_key(&(definition_id, p.id, track_id)))
 }
 
 /// The lane's render state now. Reads the memo when the lane has not

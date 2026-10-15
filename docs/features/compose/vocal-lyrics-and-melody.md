@@ -1,7 +1,8 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `f9438e38` + the `singing` skill, voice presets and the
-> chord-change melody flow (BUG-70) on 2026-10-13.
+> Verified against master @ `ef215b08` + the section-scale fix (BUG-71) on
+> 2026-10-15; the rest @ `f9438e38` + the `singing` skill, voice presets and
+> the chord-change melody flow (BUG-70) on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §3, §6 (slices 1, 3, 8); `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.
@@ -129,6 +130,17 @@ line, re-rolled from a small template corpus, or set by an agent.
   avoid clashes, use-section-motif. Post-passes: cadence formulas per line,
   one section climax, srdc layout, no overlaps. Needs chords and a
   non-empty draft; otherwise nothing is generated.
+- **Stay in scale** snaps the walked (non-anchored) notes, the motif
+  re-skin, srdc copies and the melisma ornaments to the **section's
+  scale** — the definition's `scale`, or the chord track's key at the
+  section when one is pinned — passed in as `derive_vocal_with_motif` /
+  `derive_vocal_with_holds`'s `scale`. A section without one infers the
+  key from the whole progression (`infer_scale`, as re-fit does), never
+  from the first chord (BUG-71: a D-minor chorus opening on Bbmaj7 sang
+  Eb). Chord-tone anchors and cadence landings still pick tones of the
+  sounding chord, so a minor key's V7 can put its raised leading tone
+  (A7's C# in D minor) under the line; that is the only kind of
+  out-of-scale note the generator writes.
 - **`SyllableMode`** (`melody/melisma.rs`, `derive_vocal_with_holds`,
   which `roll_vocal_melody` calls). After the syllabic melody is final, a
   seeded pass (its own `XorShift`, so the syllabic passes' draws are
@@ -406,6 +418,7 @@ vocal lane goes through `update/compose/vocal_melody.rs`
 | Chord change over control: hand-written melody kept and flagged, generated lane kept by default, a note edit clears the flag, `regenerate` equals `vocal.generate` with the lane's seed, `refit` keeps rhythm / count / velocity / lyrics and fits the new chords, `vocal.refit_melody` (and its refusal), one `edit.undo` takes back edit + outcome, a remembered choice answers control, resize keeps and re-lays, an unchanged melody reports nothing | `resonance-app/tests/control/control_vocal_melody.rs` | `./scripts/run-tests.py -p resonance-app` |
 | The question: asks and keeps until answered, Apply + edit = one undo entry (undo / redo both), Cancel / Esc restores the chords and leaves no redo, remember skips it until "Ask again", hand-edited rows default to Keep, a chord-lane drag asks once at its release, the badge's Re-fit / Regenerate | `resonance-app/tests/compose/compose_vocal_melody_prompt.rs` | same |
 | Goldens: the question, the rail badge, the vocal-roll chip | `tests/snapshots/compose_vocal_melody_prompt-wgpu.png`, `compose_vocal_rail_melody_predates-wgpu.png`, `compose_vocal_roll_melody_predates-wgpu.png` | `RESONANCE_BLESS=1` |
+| Stay in scale keeps the section's key (BUG-71: D-minor chorus on Bbmaj7 F/A Gm7 A7), with and without a section scale | `resonance-music-theory/tests/vocal/section_scale.rs` (module of `vocal`); over control `control_vocal_generate.rs` (`generate_keeps_to_the_section_key_not_the_first_chord`) | both crates |
 | Re-fit theory: invariants, already-fitting notes stay, contour tie-break, repeats, inferred key, a generated melody re-fitted to another progression | `resonance-music-theory/tests/vocal/refit.rs` (module of `vocal`) | `./scripts/run-tests.py -p resonance-music-theory` |
 
 Not covered: theme/POV/clichés (they have no effect).

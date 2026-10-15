@@ -483,3 +483,74 @@ fn acceptance_lane_to_editable_notes_without_the_gui() {
     let _: MutationAck = response.result().expect("set_lyrics succeeds");
     assert_eq!(app.test_vocal_lines(def, TRACK), vec!["one more line"]);
 }
+
+/// BUG-71: `stay_in_scale` keeps the line in the *section's* key. The
+/// live repro — a D-minor chorus on Bbmaj7 F/A Gm7 A7, pop ballad,
+/// mixed syllables, seed 7 — sang Eb on 9 of 29 notes because the
+/// generator guessed Bb major from the first chord.
+#[test]
+fn generate_keeps_to_the_section_key_not_the_first_chord() {
+    let mut app = app_with_project();
+    let response = call(
+        &mut app,
+        "section.create",
+        &section_proto::CreateParams {
+            name: "Chorus".to_owned(),
+            length_bars: 8,
+            scale: Some(KeyScale {
+                tonic: "D".to_owned(),
+                scale: "minor".to_owned(),
+            }),
+            place: true,
+        },
+    );
+    let section_id = response
+        .result::<section_proto::CreateResult>()
+        .expect("section.create succeeds")
+        .section_id;
+    let mut params = harmony_proto::ApplyProgressionParams::for_section(section_id);
+    params.symbols = Some(
+        ["Bbmaj7", "F/A", "Gm7", "A7", "Bbmaj7", "F/A", "Gm7", "A7"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    );
+    call(&mut app, "harmony.apply_progression", &params)
+        .result::<serde_json::Value>()
+        .expect("the progression applies");
+
+    app.test_add_track(TRACK, TrackType::Vocal);
+    call(
+        &mut app,
+        "section.set_lane_generator",
+        &section_proto::SetLaneGeneratorParams {
+            section_id,
+            track_id: ProtoTrackId(TRACK),
+            kind: section_proto::LaneKind::Vocal,
+            seed: None,
+            options: Some(serde_json::json!({
+                "style": "pop_ballad",
+                "syllable_mode": "mixed",
+                "stay_in_scale": true,
+            })),
+        },
+    )
+    .result::<section_proto::SetLaneGeneratorResult>()
+    .expect("the vocal lane installs");
+
+    let result: proto::GenerateResult = generate(&mut app, true, Some(7))
+        .result()
+        .expect("vocal.generate succeeds");
+    let view = notes_of(&mut app, u64::from(result.clip_id));
+    assert!(!view.notes.is_empty());
+    // D natural minor, plus A7's C# (the dominant's leading tone, a
+    // chord tone the generator may anchor on).
+    const D_MINOR_OR_LEADING_TONE: [u8; 8] = [2, 4, 5, 7, 9, 10, 0, 1];
+    let strays: Vec<u8> = view
+        .notes
+        .iter()
+        .map(|n| n.pitch)
+        .filter(|p| !D_MINOR_OR_LEADING_TONE.contains(&(p % 12)))
+        .collect();
+    assert!(strays.is_empty(), "out-of-key pitches {strays:?} in a D-minor section");
+}

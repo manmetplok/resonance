@@ -32,7 +32,7 @@ use super::climax::enforce_single_climax;
 use super::{GeneratedNote, TimedChord};
 use melody::{
     apply_line_cadence_formulas, apply_motif_pitches, apply_section_climax, apply_srdc_layout,
-    enforce_no_overlap, line_note_stresses, scale_from_chords, total_beats, MotifPitchContext,
+    enforce_no_overlap, line_note_stresses, total_beats, vocal_scale, MotifPitchContext,
 };
 use style::derive_with_profile;
 
@@ -66,7 +66,7 @@ pub fn derive_vocal_with_meter(
     beats_per_bar: u32,
     seed: u64,
 ) -> Vec<GeneratedNote> {
-    derive_vocal_with_motif(chords, params, ticks_per_beat, beats_per_bar, None, seed)
+    derive_vocal_with_motif(chords, params, ticks_per_beat, beats_per_bar, None, None, seed)
 }
 
 /// Same as [`derive_vocal_with_meter`] but optionally re-skins the
@@ -79,15 +79,19 @@ pub fn derive_vocal_with_meter(
 /// When `params.use_section_motif` is `false` or `motif_intervals` is
 /// empty, the motif is ignored — equivalent to plain
 /// [`derive_vocal_with_meter`].
+///
+/// `scale` is the section's key, which `params.stay_in_scale` keeps the line
+/// in; `None` infers one from the whole progression ([`crate::infer_scale`]).
 pub fn derive_vocal_with_motif(
     chords: &[TimedChord],
     params: &VocalParams,
     ticks_per_beat: u32,
     beats_per_bar: u32,
     motif_intervals: Option<&[i8]>,
+    scale: Option<Scale>,
     seed: u64,
 ) -> Vec<GeneratedNote> {
-    let ctx = match VocalContext::build(chords, params, ticks_per_beat, beats_per_bar, seed) {
+    let ctx = match VocalContext::build(chords, params, ticks_per_beat, beats_per_bar, scale, seed) {
         Some(ctx) => ctx,
         None => return Vec::new(),
     };
@@ -240,6 +244,7 @@ impl<'a> VocalContext<'a> {
         params: &'a VocalParams,
         ticks_per_beat: u32,
         beats_per_bar: u32,
+        section_scale: Option<Scale>,
         seed: u64,
     ) -> Option<Self> {
         if chords.is_empty() || params.draft.is_empty() {
@@ -278,11 +283,7 @@ impl<'a> VocalContext<'a> {
             .zip(&line_syllables)
             .map(|(line, &count)| line_note_stresses(line, count))
             .collect();
-        let scale = if params.stay_in_scale {
-            scale_from_chords(chords)
-        } else {
-            None
-        };
+        let scale = vocal_scale(params.stay_in_scale, chords, section_scale);
         Some(Self {
             chords,
             params,
