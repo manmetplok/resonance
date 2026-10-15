@@ -1,6 +1,6 @@
 # Plugin bundling and adding a plugin crate
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: ba todos #1250 and #1073 (in the script's own comments);
 > macOS bundle layout from `docs/history/macos/macos-editor-plan.md`
 > item 3e.
@@ -49,11 +49,13 @@ checks then require more, and fail until done:
 3. Depend only on allowed crates (the plugin row of the layering rules in
    ARCHITECTURE.md; `resonance-common` items only from
    `PLUGIN_COMMON_ITEMS`).
-4. If it ships factory presets, add it to `ALL_PLUGINS` in
+4. Add it to `ALL_PLUGINS` and `FLEET` in
    `resonance-plugin/tests/fleet_preset_adoption.rs` (instruments also to
-   `INSTRUMENT_PLUGINS`). This is not enforced: nothing fails if a new
-   plugin is missing from that list or from the two `FLEET` lists, which
-   pin a count of 11 and already leave out color and stereo.
+   `INSTRUMENT_PLUGINS`) and to `FLEET` in `tests/fleet_palette.rs`, with
+   the knob family its editor draws. Both `FLEET`s pin a count of 13; the
+   palette one is also compared with every `plugins/*` crate that has an
+   `src/editor/theme.rs`, and the preset one with `ALL_PLUGINS`, so a new
+   editor crate fails until it is listed.
 5. If a skill names its params, add a `skill_keys` test
    (`resonance_dsp_test_support::skill_keys_test!`).
 

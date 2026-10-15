@@ -1,6 +1,6 @@
 # Plugin preset library
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: `docs/history/specs/plugin-preset-library.md`. Its status
 > line ("round 1 built on `feat/plugin-presets`") is stale: round 2 (P2–P8,
 > its review round and verification pass) is on master. P9 is partly built,
@@ -123,15 +123,14 @@ models share the same browser model and marks.
 |---|---|---|
 | Format, bank, library, session | `resonance-plugin/tests/{presets,preset_library}.rs` | `./scripts/run-tests.py -p resonance-plugin` |
 | Browser model + egui smoke renders | `resonance-plugin/tests/{library_view,library_ui_render,preset_bar_render,preset_bar_rescan,kit_rows}.rs` | same |
-| Fleet rules (every factory file complete, ids pinned, session adopted) | `resonance-plugin/tests/fleet_preset_adoption.rs` | same |
+| Fleet rules (every factory file complete, ids pinned, session adopted and preset bar drawn by all 13 plugins) | `resonance-plugin/tests/fleet_preset_adoption.rs` | same |
 | Per-plugin factory banks | e.g. `plugins/resonance-wavetable/tests/presets.rs`, `plugins/*/tests/skill_keys.rs` | per plugin |
 | Host engine | `resonance-audio/tests/clap_host/{preset_discovery,plugin_preset_state,clap_factory_presets}.rs` | `./scripts/run-tests.py -p resonance-audio` |
 | App + control | `resonance-app/tests/control/{control_plugin_presets,control_presets_library}.rs`, `resonance-app/tests/mixer/mixer_preset_bar.rs`, `resonance-app/tests/io/preset_tab_widgets.rs` | `./scripts/run-tests.py -p resonance-app` |
 | MCP lockstep | `resonance-mcp/tests/agent_plugin_lockstep.rs` | `./scripts/run-tests.py -p resonance-mcp` |
 
 Not covered: no golden images for the preset bar or browser (the render
-tests are headless egui smoke tests). `fleet_preset_adoption.rs` lists 11
-plugins and does not check color or stereo for session adoption.
+tests are headless egui smoke tests).
 
 ## Decisions and deviations
 

@@ -20,7 +20,7 @@
 //! where the point is to catch a *new* file (a plot module added next
 //! year is exactly where a stray colour appears). It is a source-text
 //! check, which is a blunt instrument — but the alternative is a
-//! dependency from this crate onto all eleven plugins that depend on it,
+//! dependency from this crate onto every plugin that depends on it,
 //! which is a cycle.
 //!
 //! **Adding a plugin crate means adding it to [`FLEET`].**
@@ -54,6 +54,11 @@ const FLEET: &[(&str, &str, Knobs)] = &[
     (
         "resonance-amp",
         include_str!("../../plugins/resonance-amp/src/editor/theme.rs"),
+        Knobs::Themed,
+    ),
+    (
+        "resonance-color",
+        include_str!("../../plugins/resonance-color/src/editor/theme.rs"),
         Knobs::Themed,
     ),
     (
@@ -102,6 +107,11 @@ const FLEET: &[(&str, &str, Knobs)] = &[
         Knobs::Themed,
     ),
     (
+        "resonance-stereo",
+        include_str!("../../plugins/resonance-stereo/src/editor/theme.rs"),
+        Knobs::Themed,
+    ),
+    (
         "resonance-wavetable",
         include_str!("../../plugins/resonance-wavetable/src/editor/theme.rs"),
         Knobs::Themed,
@@ -130,16 +140,23 @@ const RETIRED: &[(&str, &str)] = &[
     ("0x80,0x80,0x88", "the classic dim text"),
 ];
 
-/// The audit counted eleven plugins. If that number moves, the list above
-/// has to move with it — otherwise this file silently stops covering the
-/// newcomer.
+/// The audit counted eleven plugins; color and stereo came after it
+/// (BUG-44). If that number moves, the list above has to move with it —
+/// otherwise this file silently stops covering the newcomer. Stated
+/// against the plugin crates on disk, so a new one fails here even before
+/// anyone remembers this file.
 #[test]
-fn the_fleet_is_the_size_the_audit_counted() {
-    assert_eq!(
-        FLEET.len(),
-        11,
-        "the palette finding is about 11 plugins; add the new crate to FLEET"
-    );
+fn the_fleet_is_every_plugin_crate() {
+    assert_eq!(FLEET.len(), 13, "a plugin crate was added; add it to FLEET");
+    let mut on_disk: Vec<String> = std::fs::read_dir(plugins_dir())
+        .expect("the plugins directory is readable")
+        .flatten()
+        .filter(|e| e.path().join("src/editor/theme.rs").is_file())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    on_disk.sort();
+    let fleet: Vec<&str> = FLEET.iter().map(|(name, _, _)| *name).collect();
+    assert_eq!(fleet, on_disk, "every plugin with an editor theme belongs in FLEET");
 }
 
 /// Every editor's theme module re-exports the one shared palette, rather
@@ -269,7 +286,7 @@ fn plugins_dir() -> PathBuf {
 }
 
 /// Every editor source in the fleet, plus the shared widget kit they all
-/// draw from — a colour hardcoded there reaches all eleven windows at
+/// draw from — a colour hardcoded there reaches every window at
 /// once, which is how the blue knob arc survived two migrations.
 fn editor_sources() -> Vec<PathBuf> {
     let mut files = Vec::new();
