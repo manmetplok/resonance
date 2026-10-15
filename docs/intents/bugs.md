@@ -23,9 +23,6 @@ fix the ones below. The engine-path defects it judged to be design work
 |---|---|
 | BUG-02 | Build it the way [mixer/sub-track-solo.md](mixer/sub-track-solo.md) describes: sub-track solo counts in the total, and the parent becomes a fan-out driver. |
 | BUG-04 | Bus levels are longest-path levels over the send graph, and sends are pulled by level instead of index. Keep the source-index summing order. |
-| BUG-20 | On a seek or loop-range change during cycle-record, roll the current audio and MIDI pass, re-arm the start latch with the new loop, and update the session slot. |
-| BUG-22 | The seam bumps a wrap-count atomic, and live MIDI events are filed into passes by the wrap count they arrived under (this also stops a backward seek from rolling a MIDI pass). |
-| BUG-23 | A monotonic drop total that is never reset; the drain writes the delta as silence and adds it to the cut clock. |
 | BUG-39, BUG-61 | Request ids on `SavePluginState` / `SaveAllPluginStates` / `SaveClipsToProjectDir` and their replies; collectors ignore replies whose id doesn't match. |
 | BUG-41 | Taller strip (about 440 px) and window, a horizontal scroll over the bands, and a header that wraps. |
 | BUG-42 | A phase-matched dry path (complementary split) for Transformer saturation; re-bless the mastering goldens. |
@@ -51,9 +48,6 @@ fix the ones below. The engine-path defects it judged to be design work
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-20 | hardware-io | Seeking or moving the loop range during cycle-record is ignored by the take session; later passes are cut at stale seams. | `audio/engine/transport.rs:672` (`handle_seek_to` ignores `loop_record_session`) | review 2026-10-02 FU-R1b |
-| BUG-22 | hardware-io | MIDI cycle-record passes roll on the engine-thread playhead wrap, so pass boundaries jitter by ~16 ms (audio passes are sample-exact). | `audio/engine/transport.rs:804-818` | review 2026-10-02 FU-R1f |
-| BUG-23 | hardware-io | Input-ring overflow drops are reported but not compensated, so every later cycle cut shifts by the dropped frames. | `audio/recording.rs:397-418` | review 2026-10-02 FU-R1a |
 
 ## Plugins and the CLAP host
 
