@@ -1,6 +1,6 @@
 # Transport and metronome
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: none in `docs/history/specs/`; `docs/history/specs/command-palette.md` §5 lists the transport shortcuts. Leads: ba doc #275 P1.4 (tempo re-anchoring), ba doc #286 §2, CTL-01, FU-D6a.
 
 The transport bar plays, pauses, stops, records, loops and seeks, holds the
@@ -21,7 +21,9 @@ tracks; see [../timeline/tempo-and-signature-map.md](../timeline/tempo-and-signa
   (`play_start`); **Play/Pause** (`Shift+Space`) keeps the position.
 - **Pause** keeps the playhead. **Stop** sets it to 0.
 - Pause and Stop both finish a recording, release held notes on instrument
-  plugins and send all-notes-off to hardware MIDI outputs, close open MIDI
+  plugins and send all-notes-off to hardware MIDI outputs, rest pitch bend,
+  mod wheel and sustain on all 16 channels of both (BUG-24; the loop seam's
+  note release leaves controllers alone), close open MIDI
   recordings and send MIDI clock Stop (Stop also sends Song Position 0).
 - Seeking while playing releases held notes the same way.
 - Skip back/forward buttons move ±5 s. Bar and beat nudges, marker and
@@ -115,6 +117,7 @@ Send and receive are set in Settings → General → MIDI Clock; see
 | Control methods, position resolution | `resonance-app/tests/control/control_transport.rs`, `control_position_beats.rs` | same |
 | Engine tempo, seek race, loop snapshot and seam | `resonance-audio/tests/engine/tempo_handlers.rs`, `playhead_seek_race.rs`, `resonance-audio/tests/mixer/loop_range_snapshot.rs`, `loop_seam_edges.rs` | `./scripts/run-tests.py -p resonance-audio` |
 | Beat position math | `resonance-audio/tests/types/transport_pos_beats.rs` | same |
+| Panic controller resets (plugin, hardware) | `resonance-audio/tests/clap_host/clap_note_dialect.rs`, `tests/midi_hw/midi_hardware_emit.rs` | same |
 
 Not covered: the click synthesis and its timing have no direct test.
 

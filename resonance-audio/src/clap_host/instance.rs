@@ -950,10 +950,25 @@ impl ClapInstance {
     /// sub-block. Those are timed after a *seam*, which is why the seam
     /// panic keeps them; after a Stop or a seek there is no "after" for
     /// them to belong to, and a carried note-on delivered behind the
-    /// 128 offs would hang. Allocation-free.
+    /// 128 offs would hang.
+    ///
+    /// It also rests every channel's pitch bend, mod wheel and sustain
+    /// (BUG-24) on a plugin that takes MIDI, so a bend held at Stop does
+    /// not bend the next note. Controllers still queued are superseded by
+    /// the panic, like its queued notes, and dropped first — which also
+    /// guarantees the resets fit. The loop-seam panic leaves controllers
+    /// alone: the performer may still be holding the wheel.
+    /// Allocation-free.
     pub fn all_notes_off_and_drop_carried(&mut self) {
+        const _: () = assert!(crate::limits::MAX_PENDING_MIDI >= 16 * 3);
         self.carried_notes.clear();
         self.all_notes_off();
+        self.pending_midi.clear();
+        for ch in 0u8..=15 {
+            for msg in crate::midi_hardware::controller_rest_messages(ch) {
+                self.queue_midi(msg, 0);
+            }
+        }
     }
 
     /// Read-only view of the pending note queue. Test surface only —

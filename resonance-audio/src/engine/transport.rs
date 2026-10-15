@@ -633,7 +633,9 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     let _ = ctx.event_tx.send(AudioEvent::Stopped);
 }
 
-/// Send all-notes-off to every instrument plugin's primary instance.
+/// Send all-notes-off to every instrument plugin's primary instance, with
+/// pitch bend, mod wheel and sustain rested on every channel
+/// (`all_notes_off_and_drop_carried`, BUG-24).
 /// Called from Pause, Stop and Seek so a hardware key still held when the
 /// user pauses doesn't leave the plugin sustaining indefinitely (no
 /// hardware NoteOff will arrive once the user lets go past Pause).

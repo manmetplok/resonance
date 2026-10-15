@@ -3,7 +3,34 @@
 //! the exact byte sequences for a 7-bit Control Change, a 7-bit NRPN, and
 //! a 14-bit NRPN.
 
-use resonance_audio::test_support::{encode_control_change, encode_nrpn};
+use resonance_audio::test_support::{encode_control_change, encode_nrpn, panic_messages};
+
+/// A MIDI panic returns every channel's performance controllers to rest,
+/// not just its notes (BUG-24): a pitch bend or mod wheel left off-centre
+/// at Stop used to bend / modulate the next note played.
+#[test]
+fn a_panic_releases_held_notes_then_rests_every_channels_controllers() {
+    let msgs = panic_messages([(2u8, 60u8), (9, 36)]);
+    assert_eq!(&msgs[..2], &[[0x82, 60, 0], [0x89, 36, 0]], "explicit note-offs first");
+    for ch in 0u8..=15 {
+        let per: Vec<[u8; 3]> = msgs[2..]
+            .iter()
+            .copied()
+            .filter(|m| m[0] & 0x0F == ch)
+            .collect();
+        assert_eq!(
+            per,
+            vec![
+                [0xE0 | ch, 0x00, 0x40], // pitch bend centre
+                [0xB0 | ch, 1, 0],       // mod wheel 0
+                [0xB0 | ch, 64, 0],      // sustain off
+                [0xB0 | ch, 123, 0],     // all notes off
+            ],
+            "channel {ch}"
+        );
+    }
+    assert_eq!(msgs.len(), 2 + 16 * 4);
+}
 
 #[test]
 fn control_change_exact_bytes() {
