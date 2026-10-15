@@ -83,14 +83,35 @@
 //! The linear filters of a voicing (the 5 Hz DC blocker of Tube, Tape and
 //! Warm, Tape's head bump, Transformer's sub-sonic high-pass) run on the
 //! wet path only, so at a partial `sat_mix` their phase shift meets the
-//! unshifted dry signal and the blend dips in the sub band. Measured at
-//! mix 0.5 against the average of mix 0 and mix 1 (small signal): Blend,
-//! Tube and Tape stay within 0.15 dB down to 15 Hz; Transformer dips
-//! −0.7 dB at 30 Hz, −2.3 dB at 20 Hz and −4.7 dB at 15 Hz. This is kept
-//! for now: running the dry share through the same filters would make
-//! `sat_mix` 0 no longer the dry signal, and these filters are part of
-//! the voicing (DSP2-16, documented rather than changed; a phase-matched
-//! dry path for Transformer is a follow-up).
+//! dry signal. Where that shift is large the two shares partly cancel and
+//! the blend dips below both endpoints. Blend, Tube and Tape stay within
+//! 0.15 dB of the endpoints' blend down to 15 Hz; their filters barely
+//! turn the phase there.
+//!
+//! Transformer's high-pass (18 Hz, Q 0.9) turns it a lot: 108° at 15 Hz,
+//! 79° at 20, 46° at 30. With an untouched dry share, mix 0.5 dipped
+//! −0.7 dB at 30 Hz, −2.3 dB at 20 Hz and −4.7 dB at 15 Hz (BUG-42). So
+//! Transformer's dry share runs through a first-order allpass at the
+//! high-pass's corner ([`DryAllpass`]). Both turn the phase from 180° at
+//! DC to 0° and agree at the corner (90°); elsewhere they differ by less
+//! than 17° from 10 Hz up, which leaves the blend within 0.1 dB of the
+//! endpoints' at any mix (`tests/sat_modes.rs`). Only the *dry share*
+//! is allpassed, `(1 − mix)·(allpass(dry) − dry)` on top of the plain
+//! blend, so:
+//!
+//! - mix 1 is bit-for-bit what it was (the term is multiplied by zero,
+//!   and skipped);
+//! - mix 0 is the dry signal exactly: the allpass's corner rides the mix
+//!   up from 0 Hz, reaching 18 Hz at mix 0.05, and a 0 Hz first-order
+//!   allpass is the identity. At mix 0 the filter is not run at all; its
+//!   state follows the input, so a mix rising off zero starts settled
+//!   and sweeps the phase in instead of stepping it (a step would thump
+//!   the sub band). Ramping over the first 5 % of the mix keeps the
+//!   mismatch inside the same 0.1 dB at every mix.
+//!
+//! A complementary (Linkwitz-Riley) split was the alternative: put the
+//! dry signal's sub band back under the wet path's. It changes mix 1
+//! (below 18 Hz the output would be the dry signal), so it was not taken.
 
 use resonance_dsp::tape::hf_loss_corner_hz;
 use resonance_dsp::{
@@ -270,6 +291,58 @@ impl HighPass64 {
     }
 }
 
+/// The mix at and above which [`DryAllpass`] sits at its full corner
+/// (module docs, `sat_mix` in the sub band).
+const DRY_ALLPASS_RAMP_MIX: f64 = 0.05;
+
+/// First-order allpass on Transformer's dry share, phase-matched to the
+/// sub-sonic high-pass (module docs, `sat_mix` in the sub band): 180° at
+/// DC, 90° at its corner, 0° at Nyquist, `H(z) = −(c + z⁻¹)/(1 + c·z⁻¹)`.
+/// Its corner rides the mix from 0 Hz (the identity) up to
+/// [`TRANSFORMER_SUBSONIC_HZ`]. f64 state, like [`HighPass64`].
+struct DryAllpass {
+    /// `tan(π·f/fs)` at the full corner; the bilinear prewarp.
+    t_full: f64,
+    x1: f64,
+    y1: f64,
+}
+
+impl DryAllpass {
+    fn new(sample_rate: f32) -> Self {
+        let w = std::f64::consts::PI * TRANSFORMER_SUBSONIC_HZ as f64 / sample_rate as f64;
+        Self {
+            t_full: w.tan(),
+            x1: 0.0,
+            y1: 0.0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.x1 = 0.0;
+        self.y1 = 0.0;
+    }
+
+    /// Hold the state the 0 Hz allpass (the identity) would have after
+    /// passing `x`, without filtering: mix is 0.
+    #[inline]
+    fn follow(&mut self, x: f32) {
+        self.x1 = x as f64;
+        self.y1 = x as f64;
+    }
+
+    /// One sample at wet share `mix` (> 0).
+    #[inline]
+    fn process(&mut self, x: f32, mix: f32) -> f32 {
+        let t = self.t_full * (mix as f64 / DRY_ALLPASS_RAMP_MIX).min(1.0);
+        let c = (t - 1.0) / (t + 1.0);
+        let x = x as f64;
+        let y = -c * x - self.x1 - c * self.y1;
+        self.x1 = x;
+        self.y1 = y;
+        y as f32
+    }
+}
+
 /// One channel of a non-Blend mode.
 pub struct ModeChannel {
     wet_os: Oversampler,
@@ -281,6 +354,8 @@ pub struct ModeChannel {
     hf_loss: HfLoss,
     emphasis: EmphasisPair,
     subsonic: HighPass64,
+    /// Transformer's dry-share phase match for `subsonic`.
+    dry_phase: DryAllpass,
     hf_bell: Biquad,
 }
 
@@ -314,6 +389,7 @@ impl ModeChannel {
             hf_loss,
             emphasis,
             subsonic,
+            dry_phase: DryAllpass::new(sample_rate),
             hf_bell,
         }
     }
@@ -327,6 +403,7 @@ impl ModeChannel {
         self.hf_loss.reset();
         self.emphasis.reset();
         self.subsonic.reset();
+        self.dry_phase.reset();
         self.hf_bell.reset();
     }
 
@@ -370,6 +447,21 @@ impl ModeChannel {
             }
             SatMode::Console | SatMode::Inflator | SatMode::Blend => {}
         }
-        dry + (wet - dry) * mix
+        let blend = dry + (wet - dry) * mix;
+        if mode != SatMode::Transformer {
+            return blend;
+        }
+        // The dry share, phase-matched to the sub-sonic high-pass (module
+        // docs, `sat_mix` in the sub band). Neither endpoint moves: at
+        // mix 0 the filter only follows, at mix 1 its share is zero.
+        if mix <= 0.0 {
+            self.dry_phase.follow(dry);
+            return blend;
+        }
+        let shifted = self.dry_phase.process(dry, mix);
+        if mix >= 1.0 {
+            return blend;
+        }
+        blend + (1.0 - mix) * (shifted - dry)
     }
 }

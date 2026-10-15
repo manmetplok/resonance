@@ -20,17 +20,43 @@ use super::app::EqEditorApp;
 use super::theme;
 
 /// Width of a band column's sliders, px — the `slider_width` the raw
-/// `egui::Slider`s were laid out with, so the 104 px column is unchanged.
+/// `egui::Slider`s were laid out with.
 const SLIDER_W: f32 = 92.0;
+
+/// Inner width of a band column, px: the slider and combo width, so a
+/// column is no wider than its widest control. At 104 px the eight
+/// columns came to ~1040 px and the last one ran off the 960 px default
+/// window (BUG-41); at 92 they pitch at 118 px and all eight fit.
+pub(crate) const COLUMN_W: f32 = SLIDER_W;
 
 pub(crate) fn draw_band_strip(ui: &mut egui::Ui, app: &mut EqEditorApp) {
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        for i in 0..NUM_BANDS {
-            draw_band_column(ui, app, i);
-            ui.add_space(4.0);
-        }
-    });
+    // Below the width the eight columns need (the 720 px minimum
+    // window, say), the row scrolls sideways rather than clipping the
+    // last bands. A solid bar, so it never covers the bottom readouts;
+    // it takes room only while the row overflows, and `STRIP_H` leaves
+    // that room.
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+    let view = egui::ScrollArea::horizontal()
+        .id_salt("eq_band_strip_scroll")
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for i in 0..NUM_BANDS {
+                    if i > 0 {
+                        ui.add_space(4.0);
+                    }
+                    draw_band_column(ui, app, i);
+                }
+            });
+        });
+    // For the layout test (BUG-41): the visible part of the row, scroll
+    // bar excluded; the whole strip, scroll bar included; and the row's
+    // full extent — each with the strip panel's clip.
+    editor_widgets::probe(ui, "eq_band_strip_view", view.inner_rect);
+    editor_widgets::probe(ui, "eq_band_strip", ui.min_rect());
+    let content = egui::Rect::from_min_size(view.inner_rect.min, view.content_size);
+    editor_widgets::probe(ui, "eq_band_strip_content", content);
 }
 
 fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize) {
@@ -42,7 +68,7 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
         theme::TEXT_DIM
     };
 
-    egui::Frame::group(ui.style())
+    let column = egui::Frame::group(ui.style())
         .fill(if selected {
             theme::PANEL_LIGHT
         } else {
@@ -62,8 +88,8 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
             // inherits a horizontal parent layout. Everything inside a band
             // cell needs to stack vertically, hence the explicit wrap.
             ui.vertical(|ui| {
-                ui.set_min_width(104.0);
-                ui.set_max_width(104.0);
+                ui.set_min_width(COLUMN_W);
+                ui.set_max_width(COLUMN_W);
 
                 // Header row — index + enable toggle.
                 ui.horizontal(|ui| {
@@ -174,6 +200,9 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                 });
             });
         });
+    // The whole column, for the layout test: it must sit inside the
+    // strip, Release readout and frame included (BUG-41).
+    editor_widgets::probe(ui, &format!("eq_band_column{band_index}"), column.response.rect);
 }
 
 /// A band slider bound to `param` — its own travel (declared skew),

@@ -1,6 +1,6 @@
 # Mastering (`com.resonance.mastering`)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/specs/warmth-width-depth.md` §6.3 (slice W9: EQ M/S, per-band width, clipper, sat modes, inflator; W10 assistant; W12 de-harsh) and `docs/history/specs/deharsh-resonance-suppressor.md`. Audit findings M1–M5 and P8 in `docs/history/reviews/plugin-audit.md` were fixed since; M6 is still open.
 
 A complete mastering chain in one plugin for the master bus. Ten stages run
@@ -145,6 +145,18 @@ editor.
   documented rather than compensated.
 - The saturator's character modes share `resonance-dsp` primitives with
   [Color](color.md), not code.
+- Transformer's sub-sonic high-pass (18 Hz, Q 0.9) runs on the wet path
+  only, so its dry share at a partial `sat_mix` runs through a first-order
+  allpass at the same corner, phase-matched to it (BUG-42). Unmatched,
+  mix 0.5 dipped −0.7 dB at 30 Hz, −2.3 at 20 and −4.7 at 15 below the
+  blend of the endpoints; matched, every mode stays within 0.15 dB of it
+  from 15 Hz up (`tests/sat_modes.rs`, criterion ±0.3 dB). Mix 0 and mix 1
+  render bit-for-bit as before: the allpass's corner rides the mix up from
+  0 Hz (full at mix 0.05) and its share is zero at mix 1. A complementary
+  crossover was rejected because it changes mix 1. The `sat_transformer`
+  and `w9_sweeps_between_blocks` scenarios of `golden/w9_golden.f32`
+  (both at a partial mix) were re-blessed for it; the other ten are
+  unchanged. Module docs: `src/stages/sat_modes.rs`.
 - Stale module comment: `src/editor/mod.rs` still describes the
   "Phase 2" analyzer-only editor ("No processing controls yet — those
   arrive in Phase 3").
