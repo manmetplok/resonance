@@ -876,7 +876,7 @@ fn handle_save_track_as_preset(
         // The GUI reaches this only if the prompt's own guard was
         // bypassed; it normally offers "Overwrite" instead.
         r.banners.error_message = Some(format!(
-            "Save preset: a preset named {name:?} already exists — save it under another name,              or overwrite it"
+            "Save preset: a preset named {name:?} already exists — save it under another name, or overwrite it"
         ));
         return;
     }
