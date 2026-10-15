@@ -287,7 +287,7 @@ fn controller_events_reach_the_plugin_through_process() {
             .expect("a MIDI_INPUT plugin must expose the note-ports extension");
         let mut buffer = NotePortInfoBuffer::new();
         let info = ext
-            .get(&mut instance.plugin_handle(), 0, true, &mut buffer)
+            .get(&instance.plugin_handle(), 0, true, &mut buffer)
             .expect("one note input port");
         assert!(
             info.supported_dialects.supports(NoteDialect::Midi),

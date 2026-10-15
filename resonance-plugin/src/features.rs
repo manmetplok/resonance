@@ -27,15 +27,10 @@
 use std::ffi::CStr;
 
 // The standard set clack exposes: the five main categories, the
-// sub-categories, and the audio capabilities.
+// sub-categories, and the audio capabilities. Since clack 0.2 (#98) that
+// includes `GATE`, `EXPANDER` and `NOTE_DETECTOR`, which this module used
+// to define itself.
 pub use clack_plugin::plugin::features::*;
-
-/// `"gate"` — standard CLAP, missing from clack's re-export.
-pub const GATE: &CStr = c"gate";
-/// `"expander"` — standard CLAP, missing from clack's re-export.
-pub const EXPANDER: &CStr = c"expander";
-/// `"note-detector"` — standard CLAP, missing from clack's re-export.
-pub const NOTE_DETECTOR: &CStr = c"note-detector";
 
 /// `"resonance:cabinet-simulator"` — a speaker-cabinet impulse loader.
 ///

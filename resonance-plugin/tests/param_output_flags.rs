@@ -16,7 +16,6 @@ use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams};
 use clack_extensions::state::PluginState;
 use clack_host::events::event_types::ParamValueEvent;
 use clack_host::prelude::*;
-use clack_host::utils::Cookie;
 use clack_plugin::entry::SinglePluginEntry;
 
 use resonance_plugin::{
@@ -236,14 +235,14 @@ fn clap_id(id: &str) -> ClapId {
 
 fn get_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
     let ext = params_ext(instance);
-    ext.get_value(&mut instance.plugin_handle(), clap_id(id))
+    ext.get_value(&instance.plugin_handle(), clap_id(id))
         .expect("known param")
 }
 
 fn flags_of(instance: &mut PluginInstance<TestHost>, index: u32) -> ParamInfoFlags {
     let ext = params_ext(instance);
     let mut buffer = ParamInfoBuffer::new();
-    ext.get_info(&mut instance.plugin_handle(), index, &mut buffer)
+    ext.get_info(&instance.plugin_handle(), index, &mut buffer)
         .expect("info")
         .flags
 }
@@ -251,7 +250,7 @@ fn flags_of(instance: &mut PluginInstance<TestHost>, index: u32) -> ParamInfoFla
 fn save_state(instance: &mut PluginInstance<TestHost>) -> Value {
     let ext = state_ext(instance);
     let mut bytes = Vec::new();
-    ext.save(&mut instance.plugin_handle(), &mut bytes)
+    ext.save(&instance.plugin_handle(), &mut bytes)
         .expect("state save");
     serde_json::from_slice(&bytes).expect("json")
 }
@@ -259,7 +258,7 @@ fn save_state(instance: &mut PluginInstance<TestHost>) -> Value {
 fn load_state(instance: &mut PluginInstance<TestHost>, state: &Value) {
     let ext = state_ext(instance);
     let bytes = serde_json::to_vec(state).unwrap();
-    ext.load(&mut instance.plugin_handle(), &mut &bytes[..])
+    ext.load(&instance.plugin_handle(), &mut &bytes[..])
         .expect("state load");
 }
 
@@ -335,7 +334,6 @@ fn a_host_write_to_a_read_only_param_is_ignored() {
             clap_id(id),
             Pckn::match_all(),
             value,
-            Cookie::empty(),
         ));
     }
     let mut output = EventBuffer::new();
@@ -427,7 +425,6 @@ fn an_active_flush_mirrors_the_landed_value_not_the_wire_value() {
             clap_id(id),
             Pckn::match_all(),
             value,
-            Cookie::empty(),
         ));
     }
     let mut output = EventBuffer::new();

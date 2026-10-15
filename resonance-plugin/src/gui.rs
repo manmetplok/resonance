@@ -16,6 +16,21 @@
 //! a specific one. For the wavetable synth we use the sibling
 //! `wayland-plugin-gui` crate, but nothing here requires it.
 
+/// Why an editor did not take the size a host asked for
+/// ([`PluginEditor::set_size`]). The text ends up in the host's log, so it
+/// should name what happened ("the editor's window thread is gone"), not
+/// just that something did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SizeRefused(pub String);
+
+impl std::fmt::Display for SizeRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "editor refused set_size: {}", self.0)
+    }
+}
+
+impl std::error::Error for SizeRefused {}
+
 /// A live editor window created by an [`EditorFactory`]. Owns the GUI thread
 /// and resources; dropping the box must tear everything down cleanly.
 pub trait PluginEditor: Send {
@@ -28,8 +43,12 @@ pub trait PluginEditor: Send {
     /// Current window size in logical pixels.
     fn size(&self) -> (u32, u32);
 
-    /// Request the window be resized. Returns `true` on success.
-    fn set_size(&mut self, width: u32, height: u32) -> bool;
+    /// Request the window be resized.
+    ///
+    /// A refusal says why: the CLAP bridge answers the host's
+    /// `clap_plugin_gui.set_size` with `false` and hands the reason to
+    /// clack, which logs it through the host's `clap_host_log`.
+    fn set_size(&mut self, width: u32, height: u32) -> Result<(), SizeRefused>;
 
     /// Whether this editor can be resized by the host.
     fn can_resize(&self) -> bool;

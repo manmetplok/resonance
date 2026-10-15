@@ -17,7 +17,6 @@ use clack_extensions::state::PluginState;
 use clack_extensions::state_context::{PluginStateContext, StateContextType};
 use clack_host::events::event_types::ParamValueEvent;
 use clack_host::prelude::*;
-use clack_host::utils::Cookie;
 use clack_plugin::entry::SinglePluginEntry;
 use resonance_drums::drum_map::NUM_PADS;
 use resonance_drums::level::db_to_gain;
@@ -72,7 +71,7 @@ fn load(instance: &mut PluginInstance<TestHost>, state: &Value) -> bool {
         .get_extension::<PluginState>()
         .expect("state extension");
     let bytes = serde_json::to_vec(state).unwrap();
-    ext.load(&mut instance.plugin_handle(), &mut &bytes[..])
+    ext.load(&instance.plugin_handle(), &mut &bytes[..])
         .is_ok()
 }
 
@@ -81,7 +80,7 @@ fn value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
         .plugin_shared_handle()
         .get_extension::<PluginParams>()
         .expect("params extension");
-    ext.get_value(&mut instance.plugin_handle(), ClapId::new(stable_hash(id)))
+    ext.get_value(&instance.plugin_handle(), ClapId::new(stable_hash(id)))
         .unwrap_or_else(|| panic!("param `{id}` is unknown to the bridge"))
 }
 
@@ -90,7 +89,7 @@ fn has_param(instance: &mut PluginInstance<TestHost>, id: &str) -> bool {
         .plugin_shared_handle()
         .get_extension::<PluginParams>()
         .expect("params extension");
-    ext.get_value(&mut instance.plugin_handle(), ClapId::new(stable_hash(id)))
+    ext.get_value(&instance.plugin_handle(), ClapId::new(stable_hash(id)))
         .is_some()
 }
 
@@ -107,7 +106,6 @@ fn flush(instance: &mut PluginInstance<TestHost>, changes: &[(&str, f64)]) {
             ClapId::new(stable_hash(id)),
             Pckn::match_all(),
             *v,
-            Cookie::empty(),
         ));
     }
     let mut output = EventBuffer::new();
@@ -192,7 +190,7 @@ fn a_v1_preset_converts_on_the_bridges_preset_load() {
         .expect("state-context extension");
     let bytes = serde_json::to_vec(&v1_state()).unwrap();
     ext.load(
-        &mut instance.plugin_handle(),
+        &instance.plugin_handle(),
         &mut &bytes[..],
         StateContextType::ForPreset,
     )
@@ -251,7 +249,7 @@ fn a_fresh_instance_is_stereo_and_stays_stereo_through_its_own_state() {
         .get_extension::<PluginState>()
         .expect("state extension");
     let mut saved = Vec::new();
-    ext.save(&mut instance.plugin_handle(), &mut saved)
+    ext.save(&instance.plugin_handle(), &mut saved)
         .expect("save");
     let mut reopened = hosted();
     assert!(load(&mut reopened, &serde_json::from_slice(&saved).unwrap()));
@@ -291,7 +289,7 @@ fn load_preset(instance: &mut PluginInstance<TestHost>, doc: &Value) {
         .expect("state-context extension");
     let bytes = serde_json::to_vec(doc).unwrap();
     ext.load(
-        &mut instance.plugin_handle(),
+        &instance.plugin_handle(),
         &mut &bytes[..],
         StateContextType::ForPreset,
     )
@@ -399,7 +397,7 @@ fn saved(instance: &mut PluginInstance<TestHost>) -> Value {
         .get_extension::<PluginState>()
         .expect("state extension");
     let mut bytes = Vec::new();
-    ext.save(&mut instance.plugin_handle(), &mut bytes)
+    ext.save(&instance.plugin_handle(), &mut bytes)
         .expect("save");
     serde_json::from_slice(&bytes).unwrap()
 }

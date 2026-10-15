@@ -1,6 +1,6 @@
 # Plugin editor runtimes
 
-> Verified against master @ `5d6a2993` on 2026-10-15 (egui 0.37 / SCTK 0.21 upgrade).
+> Verified against master @ `6cea87c2` on 2026-10-15 (egui 0.37 / SCTK 0.21 upgrade).
 > Spec history: `docs/history/macos/macos-editor-plan.md`,
 > `docs/history/macos/macos-linux-verification.md`.
 
@@ -45,7 +45,10 @@ per platform. A plugin never names a runtime; it gets the right one through
   loop cannot wedge the host.
 - **Sizes.** The runtime publishes every applied size into `SharedSize`;
   `get_size` reports it. Tiling compositors override the requested size,
-  so tests assert requested sizes only.
+  so tests assert requested sizes only. `set_size` refuses only once the
+  window is gone (`EditorError::ChannelClosed`); `RuntimeEditorHandle`
+  turns that into a `SizeRefused` whose reason reaches the host's log
+  ([plugin-sdk.md](plugin-sdk.md)).
 - **Scope limits (both runtimes):** no clipboard, drag and drop or IME; no
   window retitle.
 - **Off-platform builds.** Each runtime compiles its windowing body only on

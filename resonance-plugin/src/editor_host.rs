@@ -46,7 +46,7 @@ pub fn native_api() -> &'static str {
 // same reason: one import surface for factories on every platform.
 pub use plugin_gui_core::{EditorApp, EditorError, EditorOptions};
 
-use crate::gui::PluginEditor;
+use crate::gui::{PluginEditor, SizeRefused};
 
 /// Adapts a running [`RuntimeEditor`] to [`PluginEditor`].
 ///
@@ -111,14 +111,16 @@ impl PluginEditor for RuntimeEditorHandle {
             .unwrap_or(self.size)
     }
 
-    fn set_size(&mut self, width: u32, height: u32) -> bool {
-        if let Some(r) = &mut self.runtime {
-            if r.set_size(width, height).is_ok() {
-                self.size = (width, height);
-                return true;
-            }
-        }
-        false
+    fn set_size(&mut self, width: u32, height: u32) -> Result<(), SizeRefused> {
+        let Some(r) = &mut self.runtime else {
+            return Err(SizeRefused("the editor is being torn down".into()));
+        };
+        // Both runtimes refuse only once the window itself is gone (the
+        // user closed it, or its thread died): `EditorError::ChannelClosed`.
+        r.set_size(width, height)
+            .map_err(|e| SizeRefused(format!("the editor window is gone ({e})")))?;
+        self.size = (width, height);
+        Ok(())
     }
 
     fn can_resize(&self) -> bool {

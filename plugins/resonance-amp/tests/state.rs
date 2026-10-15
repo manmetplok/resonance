@@ -457,14 +457,14 @@ fn state_ext(instance: &PluginInstance<TestHost>) -> PluginState {
 fn host_state(instance: &mut PluginInstance<TestHost>) -> Value {
     let ext = state_ext(instance);
     let mut bytes = Vec::new();
-    ext.save(&mut instance.plugin_handle(), &mut bytes)
+    ext.save(&instance.plugin_handle(), &mut bytes)
         .expect("state save");
     serde_json::from_slice(&bytes).expect("the bridge must save valid JSON")
 }
 
 fn host_load(instance: &mut PluginInstance<TestHost>, bytes: &[u8]) -> bool {
     let ext = state_ext(instance);
-    ext.load(&mut instance.plugin_handle(), &mut &bytes[..])
+    ext.load(&instance.plugin_handle(), &mut &bytes[..])
         .is_ok()
 }
 
@@ -475,7 +475,7 @@ fn host_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
         .plugin_shared_handle()
         .get_extension::<PluginParams>()
         .expect("the bridge must expose the params extension");
-    ext.get_value(&mut instance.plugin_handle(), ClapId::new(stable_hash(id)))
+    ext.get_value(&instance.plugin_handle(), ClapId::new(stable_hash(id)))
         .unwrap_or_else(|| panic!("param `{id}` is unknown to the bridge"))
 }
 
@@ -629,19 +629,19 @@ fn an_active_instance_still_converts_parameter_text_both_ways() {
     let gain = ClapId::new(stable_hash("output_gain"));
     let mut buf = [0u8; 128];
     let text = ext
-        .value_to_text(&mut instance.plugin_handle(), gain, 0.5, &mut buf)
+        .value_to_text(&instance.plugin_handle(), gain, 0.5, &mut buf)
         .expect("value_to_text while active")
         .to_vec();
     let text = String::from_utf8(text).unwrap();
     assert!(text.ends_with("dB"), "the plugin's own formatting, not a bare number: {text:?}");
     let c = std::ffi::CString::new(text.clone()).unwrap();
     let back = ext
-        .text_to_value(&mut instance.plugin_handle(), gain, &c)
+        .text_to_value(&instance.plugin_handle(), gain, &c)
         .expect("text_to_value while active");
     assert!((back - 0.5).abs() < 1e-3, "{text:?} parsed back to {back}");
     let select = ClapId::new(stable_hash("file_select"));
     let c = std::ffi::CString::new("slot 12").unwrap();
-    assert_eq!(ext.text_to_value(&mut instance.plugin_handle(), select, &c), Some(12.0));
+    assert_eq!(ext.text_to_value(&instance.plugin_handle(), select, &c), Some(12.0));
     instance.deactivate(processor);
 }
 
