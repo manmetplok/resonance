@@ -222,3 +222,23 @@ conformance!(
     reload_follows_the_index_stamp,
     rescans_wait_for_the_lock,
 );
+
+/// Library ids are persisted (presets, `library.json`, agent references),
+/// so the digest must never drift across a `sha2` upgrade. Pinned against
+/// known SHA-256 vectors, and a file longer than one 64 KiB read chunk so
+/// the streaming path is covered too.
+#[test]
+fn ids_are_pinned_sha256_digests() {
+    use nam_library::{hash_bytes, hash_file};
+    assert_eq!(hash_bytes(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert_eq!(hash_bytes(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    let bytes: Vec<u8> = (0..200_000u32).map(|i| ((i * 31 + 7) % 251) as u8).collect();
+    let pinned = "3d46a15a54cf33991f077e628582a654e184f139cf03fcbcd7c89fb4213e1023";
+    assert_eq!(hash_bytes(&bytes), pinned);
+    let dir = std::env::temp_dir().join(format!("resonance-content-index-digest-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("blob.bin");
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(hash_file(&path).unwrap(), pinned);
+    let _ = std::fs::remove_dir_all(&dir);
+}

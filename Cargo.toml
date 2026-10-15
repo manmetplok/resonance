@@ -69,7 +69,7 @@ tokio = "1"
 anyhow = "1"
 libc = "0.2"
 libloading = "0.8"
-sha2 = "0.10"
+sha2 = "0.11"
 ureq = { version = "3", features = ["json"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
