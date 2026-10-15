@@ -154,8 +154,9 @@ fn open(app: &mut Resonance, dir: &Path) {
 }
 
 fn finish_collect(app: &mut Resonance) {
-    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let request = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { request, clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request, states: Vec::new() });
 }
 
 fn marker_owner(dir: &Path) -> Option<String> {

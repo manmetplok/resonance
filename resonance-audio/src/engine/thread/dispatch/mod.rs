@@ -99,7 +99,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::SetAutomationReadEnabled { .. }
         | AudioCommand::SetProjectDir(..)
         | AudioCommand::LoadClipFromWav { .. }
-        | AudioCommand::SaveClipsToProjectDir
+        | AudioCommand::SaveClipsToProjectDir { .. }
         | AudioCommand::PersistClipWavs => clips::dispatch_clips(ctx, state, cmd),
 
         // Tracks
@@ -140,7 +140,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::LoadPluginPresetState { .. }
         | AudioCommand::LoadPluginPresetFromLocation { .. }
         | AudioCommand::SetPluginPresetIgnoredParams { .. }
-        | AudioCommand::SaveAllPluginStates => plugins::dispatch_plugins(ctx, state, cmd),
+        | AudioCommand::SaveAllPluginStates { .. } => plugins::dispatch_plugins(ctx, state, cmd),
 
         // Bounce / export / freeze
         AudioCommand::BounceToWav { .. }

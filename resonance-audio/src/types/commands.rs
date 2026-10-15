@@ -610,8 +610,12 @@ pub enum AudioCommand {
         path: PathBuf,
         name: String,
     },
+    /// Report the plugin's full state as `AudioEvent::PluginStateSaved`,
+    /// which echoes `request` so the app can tell which refresh a reply
+    /// answers (BUG-39).
     SavePluginState {
         instance_id: PluginInstanceId,
+        request: u64,
     },
     LoadPluginState {
         instance_id: PluginInstanceId,
@@ -871,15 +875,19 @@ pub enum AudioCommand {
     /// `{project_dir}/audio/clip_{id}.wav`. Recorded clips already
     /// do (they stream there during capture); in-RAM imported clips
     /// get transcoded. Emits `AudioEvent::ClipsSavedToProjectDir`
-    /// when done so the save path can write project.json.
-    SaveClipsToProjectDir,
+    /// when done so the save path can write project.json. `request` is
+    /// echoed in the reply, so a save collector takes only the reply to
+    /// its own request (BUG-61).
+    SaveClipsToProjectDir { request: u64 },
     /// Write `{project_dir}/audio/clip_{id}.wav` for every in-engine
     /// audio clip that has none yet, silently (code review FU-V5b). Sent
     /// whenever the app captures an undo snapshot, so a full-reload undo
     /// finds the audio of every clip the snapshot names.
     PersistClipWavs,
-    /// Batch save all plugin states for project save.
-    SaveAllPluginStates,
+    /// Batch save all plugin states for project save (or a track-preset
+    /// capture). `request` is echoed in `AudioEvent::AllPluginStatesSaved`
+    /// so each requester takes only its own reply (BUG-61).
+    SaveAllPluginStates { request: u64 },
     /// Remove all tracks, clips, and plugins (for project load). Also
     /// revokes the engine's id grant ([`AudioCommand::GrantIds`]): the
     /// project loaded next may already hold ids inside it, so every replay

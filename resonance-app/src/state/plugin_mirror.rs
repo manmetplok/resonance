@@ -79,22 +79,44 @@ pub struct PluginMirror {
 }
 
 /// See [`PluginMirror::owed_blobs`].
+///
+/// Refreshes are matched to their echoes by request id (BUG-39): other
+/// `SavePluginState`s are in flight too (a plugin add's seed, an editor
+/// close), and counting echoes by position took an earlier one's — the
+/// state from *before* the change — for the change's own.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct OwedBlob {
-    /// Refreshes asked for, one per change that made the blob stale.
-    pub marks: u64,
-    /// Echoes (`PluginStateSaved`) received since the first mark. The
-    /// k-th echo is the state after the k-th change: engine commands and
-    /// events are both FIFO.
-    pub echoes: u64,
-    /// The late slots of snapshots taken while owed, each with the mark
-    /// count it was taken at: the echo of that mark fills it. Behind a
-    /// lock so `snapshot_for_undo(&self)` can register one.
+    /// The refreshes still in flight, oldest first: one per change that
+    /// made the blob stale.
+    pub refreshes: Vec<OwedRefresh>,
+    /// The late slots of snapshots taken while owed, each with the request
+    /// id of the refresh whose echo fills it. Behind a lock so
+    /// `snapshot_for_undo(&self)` can register one.
     pub slots: std::sync::Arc<
         std::sync::Mutex<Vec<(u64, crate::undo::snapshot::LateBlob)>>,
     >,
-    /// An undo / redo restored since: the echoes still owed describe a
-    /// state the restore replaced, so they fill the slots waiting on them
-    /// but no longer the live cache.
+}
+
+/// One refresh of an [`OwedBlob`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OwedRefresh {
+    /// The `SavePluginState` request id its echo carries.
+    pub request: u64,
+    /// An undo / redo restored since it was asked for: its echo describes
+    /// a state the restore replaced, so it fills the slots waiting on it
+    /// but not the live cache. Per refresh, so a change made after the
+    /// restore owes a live echo again (BUG-39).
     pub superseded: bool,
+}
+
+impl OwedBlob {
+    /// The refresh a snapshot taken now is owed: the newest one, unless a
+    /// restore superseded it — the cache then holds the restored blob,
+    /// which is the live state.
+    pub fn owed_now(&self) -> Option<u64> {
+        self.refreshes
+            .last()
+            .filter(|f| !f.superseded)
+            .map(|f| f.request)
+    }
 }

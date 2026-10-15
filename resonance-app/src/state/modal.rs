@@ -51,6 +51,10 @@ pub struct ModalState {
     /// untitled project). Dropped when that save fails or its dialog is
     /// cancelled.
     pub switch_after_save: Option<ProjectSwitch>,
+    /// When set, "Replace project X? Its history and media will be
+    /// deleted." is up: the Save As target holds another project
+    /// (BUG-62). Holds the target bundle path.
+    pub confirm_replace_project: Option<std::path::PathBuf>,
 }
 
 /// A GUI request to replace the open project, parked behind the

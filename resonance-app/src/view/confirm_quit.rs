@@ -1,7 +1,8 @@
 //! Confirmation dialogs for leaving a project with unsaved changes: closing
 //! the window, and replacing the project through Open / New (code review
-//! UX-01). Both follow the same backdrop + centered-dialog pattern as the
-//! confirm-delete-track overlay, and share [`unsaved_changes_dialog`].
+//! UX-01); and for a Save As that would replace another project on disk
+//! (BUG-62). All follow the same backdrop + centered-dialog pattern as the
+//! confirm-delete-track overlay, and share [`confirm_dialog`].
 use iced::widget::{button, column, container, mouse_area, opaque, row, stack, text, Space};
 use iced::{alignment, Element, Length};
 
@@ -21,11 +22,9 @@ pub(crate) fn view_confirm_quit_overlay<'a>(_r: &'a Resonance) -> Element<'a, Me
 
 /// The Save / Don't save / Cancel dialog a GUI Open or New raises over
 /// unsaved changes (code review UX-01). "Save" on an untitled project goes
-/// through Save As, then carries on.
-pub(crate) fn view_confirm_switch_overlay<'a>(
-    r: &'a Resonance,
-    switch: &ProjectSwitch,
-) -> Element<'a, Message> {
+/// through Save As, then carries on. `None` when that dialog is not up.
+pub(crate) fn view_confirm_switch_overlay(r: &Resonance) -> Option<Element<'_, Message>> {
+    let switch = r.modals.confirm_switch.as_ref()?;
     let current = r
         .io
         .project_path
@@ -49,7 +48,7 @@ pub(crate) fn view_confirm_switch_overlay<'a>(
         "Save As\u{2026}"
     };
     let choice = |c| Message::ProjectIo(ProjectIoMessage::SwitchChoice(c));
-    unsaved_changes_dialog(
+    Some(unsaved_changes_dialog(
         format!(
             "Save the changes to \u{201c}{current}\u{201d} before {action}? \
              Unsaved changes are lost otherwise."
@@ -57,7 +56,28 @@ pub(crate) fn view_confirm_switch_overlay<'a>(
         choice(SwitchChoice::Cancel),
         ("Don't Save", choice(SwitchChoice::Discard)),
         (save_label, choice(SwitchChoice::Save)),
-    )
+    ))
+}
+
+/// "Replace project X?" before a Save As writes over another project
+/// (BUG-62): replacing deletes that project's backups, autosave and media.
+/// `None` when that dialog is not up.
+pub(crate) fn view_confirm_replace_overlay(r: &Resonance) -> Option<Element<'_, Message>> {
+    let target = r.modals.confirm_replace_project.as_deref()?;
+    let name = target
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("the project");
+    let choice = |replace| Message::ProjectIo(ProjectIoMessage::ReplaceProjectChoice(replace));
+    Some(confirm_dialog(
+        "Replace project?",
+        format!(
+            "Replace project \u{201c}{name}\u{201d}? Its history and media will be deleted."
+        ),
+        choice(false),
+        None,
+        ("Replace", choice(true), true),
+    ))
 }
 
 /// The shared unsaved-changes dialog: a title, `explanation`, and Cancel /
@@ -67,6 +87,25 @@ fn unsaved_changes_dialog<'a>(
     cancel: Message,
     (discard_label, discard): (&'static str, Message),
     (save_label, save): (&'static str, Message),
+) -> Element<'a, Message> {
+    confirm_dialog(
+        "Unsaved changes",
+        explanation,
+        cancel,
+        Some((discard_label, discard)),
+        (save_label, save, false),
+    )
+}
+
+/// A confirmation dialog: `title`, `explanation`, then Cancel, an optional
+/// destructive button and the confirming button (itself styled destructive
+/// when `save_destroys` is set). A backdrop click sends `cancel` too.
+fn confirm_dialog<'a>(
+    title: &'static str,
+    explanation: String,
+    cancel: Message,
+    discard: Option<(&'static str, Message)>,
+    (save_label, save, save_destroys): (&'static str, Message, bool),
 ) -> Element<'a, Message> {
     // Backdrop swallows pointer input so the DAW behind is inert while
     // the dialog is up. Clicking the dimmed area cancels.
@@ -83,7 +122,7 @@ fn unsaved_changes_dialog<'a>(
     )
     .on_press(cancel.clone());
 
-    let title = text("Unsaved changes")
+    let title = text(title)
         .size(20)
         .font(theme::SERIF_ITALIC_FONT)
         .color(theme::TEXT_1);
@@ -94,29 +133,35 @@ fn unsaved_changes_dialog<'a>(
         .padding([8, 18])
         .style(|_theme, status| theme::ghost_button_style(status));
 
-    let discard_btn = button(text(discard_label).size(13).color(theme::TEXT_1))
-        .on_press(discard)
+    let discard_btn = discard.map(|(discard_label, discard)| {
+        button(text(discard_label).size(13).color(theme::TEXT_1))
+            .on_press(discard)
+            .padding([8, 18])
+            .style(|_theme, status| theme::destructive_button_style(status))
+    });
+
+    let save_btn = if save_destroys {
+        button(text(save_label).size(13).color(theme::TEXT_1))
+            .on_press(save)
+            .padding([8, 18])
+            .style(|_theme, status| theme::destructive_button_style(status))
+    } else {
+        button(
+            text(save_label)
+                .size(13)
+                .font(theme::UI_FONT_SEMIBOLD)
+                .color(theme::BG_0),
+        )
+        .on_press(save)
         .padding([8, 18])
-        .style(|_theme, status| theme::destructive_button_style(status));
+        .style(|_theme, status| theme::primary_button_style(status))
+    };
 
-    let save_btn = button(
-        text(save_label)
-            .size(13)
-            .font(theme::UI_FONT_SEMIBOLD)
-            .color(theme::BG_0),
-    )
-    .on_press(save)
-    .padding([8, 18])
-    .style(|_theme, status| theme::primary_button_style(status));
-
-    let button_row = row![
-        Space::new().width(Length::Fill),
-        cancel_btn,
-        discard_btn,
-        save_btn
-    ]
-    .spacing(8)
-    .align_y(alignment::Vertical::Center);
+    let button_row = row![Space::new().width(Length::Fill), cancel_btn]
+        .push(discard_btn)
+        .push(save_btn)
+        .spacing(8)
+        .align_y(alignment::Vertical::Center);
 
     let dialog_content = column![
         title,

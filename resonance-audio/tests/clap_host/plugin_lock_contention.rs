@@ -373,8 +373,11 @@ fn a_held_effect_lock_is_counted_as_a_miss() {
 #[test]
 fn state_saves_do_not_hold_the_instance_lock() {
     let saves = [
-        AudioCommand::SaveAllPluginStates,
-        AudioCommand::SavePluginState { instance_id: FIRST },
+        AudioCommand::SaveAllPluginStates { request: 1 },
+        AudioCommand::SavePluginState {
+            instance_id: FIRST,
+            request: 1,
+        },
         AudioCommand::SavePluginPresetState { instance_id: FIRST },
     ];
     for cmd in saves {
@@ -401,10 +404,12 @@ fn state_saves_do_not_hold_the_instance_lock() {
         assert_eq!(fake.saves.load(Ordering::SeqCst), 1, "{label}: saved once");
         let events = h.drain_events();
         let delivered = events.iter().any(|e| match e {
-            AudioEvent::AllPluginStatesSaved { states } => {
+            AudioEvent::AllPluginStatesSaved { states, .. } => {
                 states.iter().any(|(id, data)| *id == FIRST && data == b"fake-state")
             }
-            AudioEvent::PluginStateSaved { instance_id, data } => {
+            AudioEvent::PluginStateSaved {
+                instance_id, data, ..
+            } => {
                 *instance_id == FIRST && data == b"fake-state"
             }
             AudioEvent::PluginPresetStateSaved {
@@ -459,7 +464,10 @@ fn an_unlocked_save_excludes_a_bounce_threads_render_set() {
             inst.0.set_render_mode(true)
         })
     };
-    h.dispatch(AudioCommand::SavePluginState { instance_id: FIRST });
+    h.dispatch(AudioCommand::SavePluginState {
+        instance_id: FIRST,
+        request: 1,
+    });
     assert!(bounce.join().expect("bounce stand-in"), "render.set accepted");
     assert_eq!(fake.render_sets.load(Ordering::SeqCst), 1);
     assert_eq!(

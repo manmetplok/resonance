@@ -121,6 +121,20 @@ fn sets(cmds: &[AudioCommand]) -> Vec<(u32, f64)> {
         .collect()
 }
 
+/// The request ids of the state refreshes `cmds` ask of the plugin, in
+/// order: what their `PluginStateSaved` echoes carry (BUG-39).
+fn state_requests(cmds: &[AudioCommand]) -> Vec<u64> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            AudioCommand::SavePluginState {
+                instance_id: PLUGIN,
+                request,
+            } => Some(*request),
+            _ => None,
+        })
+        .collect()
+}
+
 fn loaded_blobs(cmds: &[AudioCommand]) -> Vec<Vec<u8>> {
     cmds.iter()
         .filter_map(|c| match c {
@@ -137,7 +151,9 @@ fn save_with_engine_report(
     moved: Vec<ParamValueUpdate>,
 ) -> resonance_app::project::ProjectFile {
     let _ = app.update(Message::ProjectIo(ProjectIoMessage::SaveProject));
+    let request = app.test_save_request();
     app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir {
+        request,
         clip_files: Vec::new(),
     });
     app.test_apply_engine_event(AudioEvent::PluginParamValuesChanged {
@@ -145,6 +161,7 @@ fn save_with_engine_report(
         values: moved,
     });
     app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved {
+        request,
         states: vec![(PLUGIN, vec![0xB0])],
     });
     app.test_build_project_file()
@@ -271,17 +288,13 @@ fn an_edit_recorded_while_a_kit_pick_blob_is_owed_does_not_undo_the_pick() {
             gesture: true,
         },
     });
-    let asks_for_blob = |c: &AudioCommand| {
-        matches!(c, AudioCommand::SavePluginState { instance_id } if *instance_id == PLUGIN)
+    let [request] = state_requests(&drain(&rx))[..] else {
+        panic!("the pick asks for one fresh blob");
     };
-    assert!(drain(&rx).iter().any(asks_for_blob));
     // An unrelated edit before the echo.
     let _ = app.update(Message::Track(TrackMessage::SetTrackVolume(TRACK, -6.0)));
     // The fresh blob arrives.
-    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
-        instance_id: PLUGIN,
-        data: vec![0xA5],
-    });
+    echo(&mut app, request, vec![0xA5]);
     assert_eq!(app.test_cached_plugin_state(PLUGIN), Some(vec![0xA5]));
     drain(&rx);
 
@@ -320,16 +333,91 @@ fn an_owed_blob_landing_after_an_undo_does_not_replace_the_restored_cache() {
     let _ = app.update(Message::Undo);
     let cmds = drain(&rx);
     assert_eq!(sets(&cmds), vec![(kit(), 2.0)], "driven back before the echo");
-    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
-        instance_id: PLUGIN,
-        data: vec![0xA5],
-    });
+    let [request] = state_requests(&cmds)[..] else {
+        panic!("the pick asked for one fresh blob");
+    };
+    echo(&mut app, request, vec![0xA5]);
     assert_eq!(app.test_cached_plugin_state(PLUGIN), Some(vec![0xA0]));
 
     // Redo: the redo snapshot was owed the echo, so it brings the pick's
     // blob back.
     let _ = app.update(Message::Redo);
     assert_eq!(loaded_blobs(&drain(&rx)), vec![vec![0xA5]]);
+}
+
+fn pick_kit_in_editor(app: &mut Resonance, value: f64) {
+    app.test_apply_engine_event(AudioEvent::PluginParamEdited {
+        instance_id: PLUGIN,
+        edit: PluginParamEdit {
+            param_id: kit(),
+            value,
+            text: format!("Kit {value}"),
+            gesture: true,
+        },
+    });
+}
+
+fn echo(app: &mut Resonance, request: u64, data: Vec<u8>) {
+    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
+        instance_id: PLUGIN,
+        request,
+        data,
+    });
+}
+
+/// A state refresh asked for before the kit pick (closing the editor)
+/// answers first, with the state from before the pick. It is not the
+/// pick's echo: the snapshot owed the pick's blob must not be filled with
+/// it (BUG-39).
+#[test]
+fn an_earlier_refreshs_echo_does_not_fill_a_kit_picks_slot() {
+    let (mut app, rx) = app("earlier_echo");
+    let _ = app.update(Message::Plugin(PluginMessage::ClosePluginEditor(PLUGIN)));
+    pick_kit_in_editor(&mut app, 5.0);
+    let _ = app.update(Message::Track(TrackMessage::SetTrackVolume(TRACK, -6.0)));
+    let [close, pick] = state_requests(&drain(&rx))[..] else {
+        panic!("one refresh for the close, one for the pick");
+    };
+    echo(&mut app, close, vec![0xC0]); // before the pick
+    echo(&mut app, pick, vec![0xA5]);
+    assert_eq!(app.test_cached_plugin_state(PLUGIN), Some(vec![0xA5]));
+    drain(&rx);
+
+    // Undo the volume: the snapshot holds the pick's blob, the live one.
+    let _ = app.update(Message::Undo);
+    let cmds = drain(&rx);
+    assert!(
+        loaded_blobs(&cmds).is_empty(),
+        "the volume undo pushes no blob: {:?}",
+        loaded_blobs(&cmds)
+    );
+}
+
+/// A kit pick, its undo before the echo, then another pick: the second
+/// pick's echo is live state. The first's entry was superseded by the
+/// undo, and reusing it kept the second echo out of the cache and its
+/// snapshots unfilled (BUG-39).
+#[test]
+fn a_kit_pick_after_an_undo_of_an_owed_pick_refreshes_the_cache() {
+    let (mut app, rx) = app("pick_after_undo");
+    pick_kit_in_editor(&mut app, 5.0);
+    let _ = app.update(Message::Undo);
+    pick_kit_in_editor(&mut app, 6.0);
+    let _ = app.update(Message::Track(TrackMessage::SetTrackVolume(TRACK, -6.0)));
+    let [first, second] = state_requests(&drain(&rx))[..] else {
+        panic!("one refresh per pick");
+    };
+    echo(&mut app, first, vec![0xA5]); // the undo replaced this state
+    echo(&mut app, second, vec![0xA6]); // live
+    assert_eq!(app.test_cached_plugin_state(PLUGIN), Some(vec![0xA6]));
+    drain(&rx);
+
+    // Undo the volume: its snapshot was owed the second pick's blob.
+    let _ = app.update(Message::Undo);
+    assert!(loaded_blobs(&drain(&rx)).is_empty(), "the kit stays");
+    // Undo the second pick: the state the first undo restored comes back.
+    let _ = app.update(Message::Undo);
+    assert_eq!(loaded_blobs(&drain(&rx)), vec![vec![0xA0]]);
 }
 
 /// A write to a read-only output is gated before the undo bookkeeping.

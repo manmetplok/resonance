@@ -70,6 +70,10 @@ pub struct PendingPresetSave {
     /// What to call the preset. Already trimmed, and already checked
     /// against an existing preset of the same name.
     pub name: String,
+    /// The id sent with this capture's `SaveAllPluginStates`: only the
+    /// reply carrying it writes the preset, and that reply is never a
+    /// collecting project save's (BUG-61).
+    pub request: u64,
 }
 
 /// Application state.

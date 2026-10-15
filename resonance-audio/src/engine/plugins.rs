@@ -750,21 +750,28 @@ fn sync_then_unlock<H>(
     Some(handle(&mut inst.0))
 }
 
-pub(crate) fn handle_save_plugin_state(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
+pub(crate) fn handle_save_plugin_state(
+    ctx: &HandlerCtx,
+    instance_id: PluginInstanceId,
+    request: u64,
+) {
     if let Some(mutex) = ctx.plugins().get(&instance_id) {
         if let Some(handle) = sync_then_unlock(mutex, |inst| inst.state_save_handle()) {
             // SAFETY: engine thread; the instance stays in `ctx.plugins()`
             // for the whole command (only the engine thread removes one).
             if let Some(data) = handle.and_then(|h| unsafe { h.save() }) {
-                let _ = ctx
-                    .event_tx
-                    .send(AudioEvent::PluginStateSaved { instance_id, data });
+                let _ = ctx.event_tx.send(AudioEvent::PluginStateSaved {
+                    instance_id,
+                    request,
+                    data,
+                });
             }
         } else {
             // Audio thread holds the lock — retry next tick
-            let _ = ctx
-                .cmd_tx_retry
-                .send(AudioCommand::SavePluginState { instance_id });
+            let _ = ctx.cmd_tx_retry.send(AudioCommand::SavePluginState {
+                instance_id,
+                request,
+            });
         }
     }
 }
@@ -1038,7 +1045,7 @@ pub fn reload_plugin_state(
     })))
 }
 
-pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
+pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx, request: u64) {
     let mut states = Vec::new();
     let plugins_guard = ctx.plugins();
     let mut retry = false;
@@ -1072,11 +1079,13 @@ pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
     }
     drop(plugins_guard);
     if retry {
-        let _ = ctx.cmd_tx_retry.send(AudioCommand::SaveAllPluginStates);
+        let _ = ctx
+            .cmd_tx_retry
+            .send(AudioCommand::SaveAllPluginStates { request });
     } else {
         let _ = ctx
             .event_tx
-            .send(AudioEvent::AllPluginStatesSaved { states });
+            .send(AudioEvent::AllPluginStatesSaved { request, states });
     }
 }
 

@@ -9,6 +9,8 @@ mod dialogs;
 mod instantiate;
 pub mod reconcile;
 pub(crate) mod recovery;
+mod replace;
+mod save_as;
 pub(crate) mod replay;
 pub mod replay_diff;
 mod serialize;
@@ -65,7 +67,12 @@ pub enum ProjectIoMessage {
     OpenProject,
     /// User clicked a recent entry in the startup modal.
     OpenRecent(std::path::PathBuf),
+    /// The Save As dialog's answer; over another project it asks first.
     SavePathSelected(Option<String>),
+    /// "Replace project X?" answered: replace and save, or save nothing.
+    ReplaceProjectChoice(bool),
+    /// Save As with any replace already confirmed (control `confirm`).
+    SaveAsConfirmed(String),
     OpenPathSelected(Option<String>),
     /// Async save completion. The `bool` is `true` when the completed
     /// save was an autosave (routes to `last_autosave_at`, keeps `dirty`
@@ -137,6 +144,8 @@ impl ProjectIoMessage {
             | Self::OpenProject
             | Self::OpenRecent(..)
             | Self::SavePathSelected(..)
+            | Self::ReplaceProjectChoice(..)
+            | Self::SaveAsConfirmed(..)
             | Self::OpenPathSelected(..)
             | Self::ProjectSaved(..)
             | Self::ProjectLoaded(..)
@@ -267,31 +276,10 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 r.banners.error_message = Some(format!("Save template failed: {e}"));
             }
         }
-        ProjectIoMessage::SavePathSelected(Some(path)) => {
-            // Case-insensitive: `Song.RPROJ` / `Song.Rproj` already carry
-            // the extension and must not be doubled into
-            // `Song.RPROJ.rproj`. Callers (the control `project.save` /
-            // `save_as` handlers included) may already have normalized
-            // this, but the check is repeated here so this handler stays
-            // correct standalone for its other caller, the rfd save
-            // dialog.
-            let has_rproj_ext = std::path::Path::new(&path)
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("rproj"));
-            let path = if has_rproj_ext {
-                std::path::PathBuf::from(path)
-            } else {
-                std::path::PathBuf::from(format!("{path}.rproj"))
-            };
-            // The session writes clip WAVs into this bundle from now on;
-            // one it already holds must not get its clip ids re-issued
-            // (FU-A6c), nor its asset ids (D-7a).
-            r.seed_clip_ids_on_disk(&path);
-            r.seed_asset_ids_on_disk(&path);
-            r.io.project_path = Some(path);
-            return start_save(r);
-        }
+        // Over another project these ask first, then replace (BUG-62).
+        ProjectIoMessage::SavePathSelected(Some(path)) => return replace::selected(r, path),
+        ProjectIoMessage::ReplaceProjectChoice(replace) => return replace::answer(r, replace),
+        ProjectIoMessage::SaveAsConfirmed(path) => return replace::confirmed(r, path),
         ProjectIoMessage::SavePathSelected(None) => {
             // "Save" on the unsaved-changes dialog of an untitled project
             // went through Save As; cancelling that dialog cancels the
@@ -457,6 +445,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.io.loading = true;
             r.io.pending_load = Some(loaded);
             r.session.undo.clear();
+            r.io.carry_clip_wavs_from = None;
             r.plugin_mirror.state_cache.clear();
             r.plugin_mirror.owed_blobs.clear();
             r.plugin_mirror.kit_info.clear();
@@ -615,11 +604,12 @@ pub fn start_autosave(r: &mut Resonance) -> Task<Message> {
 /// flag rides along on the collector so the completion path
 /// (`engine_events::project_io`) routes correctly.
 fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
-    // Never run two engine round-trips at once: the engine's
-    // `ClipsSavedToProjectDir` / `AllPluginStatesSaved` carry no tag, so a
-    // second collector would take the first one's results — a manual Save
-    // As finishing with an autosave's scratch-dir clips (code review
-    // STATE-11). An autosave backs off (the timer retries); a manual save
+    // Never run two engine round-trips at once: the engine has one
+    // project dir, so a second save's `SetProjectDir` would redirect the
+    // first one's clips — a manual Save As finishing with an autosave's
+    // scratch-dir clips (code review STATE-11). The replies carry the
+    // save's request id, so a collector never takes another's (BUG-61).
+    // An autosave backs off (the timer retries); a manual save
     // is queued and starts the moment the in-flight collector completes
     // (`start_queued_save`).
     if r.io.save_state.is_some() {
@@ -659,8 +649,10 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
 
     r.io.saving = true;
     let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+    let request = r.io.next_engine_request();
     r.io.save_state = Some(SaveCollector {
         path,
+        request,
         clip_files: HashMap::new(),
         plugin_states: Vec::new(),
         clips_done: false,
@@ -669,8 +661,8 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
         clips_error: None,
         started: std::time::Instant::now(),
     });
-    let _ = r.engine.send(AudioCommand::SaveClipsToProjectDir);
-    let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
+    let _ = r.engine.send(AudioCommand::SaveClipsToProjectDir { request });
+    let _ = r.engine.send(AudioCommand::SaveAllPluginStates { request });
     Task::none()
 }
 
@@ -805,7 +797,8 @@ pub(crate) fn autosave_scratch_dir(r: &Resonance) -> Option<std::path::PathBuf> 
 ///
 /// The dir is the one the autosave already writes to, so the two share a
 /// clip id space and files; it is removed on a clean quit, and its WAVs
-/// carry over into the bundle on the first Save As ([`recovery::after_save`]).
+/// carry over into the bundle on the first Save As (the save's write task,
+/// `engine_events::project_io::try_finish_save`).
 pub(crate) fn anchor_untitled_project(r: &mut Resonance) {
     r.io.untitled_anchor = None;
     let Some(dir) = autosave_scratch_dir(r) else {

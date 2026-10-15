@@ -131,15 +131,20 @@ fn undoing_a_plugin_side_kit_change_restores_the_previous_state_blob() {
     let (mut app, rx) = app();
     plugin_edits(&mut app, KIT, 5.0);
     assert_eq!(app.test_plugin_param(DRUMS, KIT), Some(5.0));
-    assert!(
-        drain(&rx).iter().any(
-            |c| matches!(c, AudioCommand::SavePluginState { instance_id } if *instance_id == DRUMS)
-        ),
-        "the cached blob is refreshed after a state-excluded edit"
-    );
+    let request = drain(&rx)
+        .into_iter()
+        .find_map(|c| match c {
+            AudioCommand::SavePluginState {
+                instance_id: DRUMS,
+                request,
+            } => Some(request),
+            _ => None,
+        })
+        .expect("the cached blob is refreshed after a state-excluded edit");
     // The engine's echo: the state with the new kit in it.
     app.test_apply_engine_event(AudioEvent::PluginStateSaved {
         instance_id: DRUMS,
+        request,
         data: vec![0xA5],
     });
 
@@ -177,14 +182,19 @@ fn undoing_a_mic_setup_pick_restores_the_state_from_before_it() {
     let (mut app, rx) = app();
     plugin_edits(&mut app, MIC_SETUP, 1.0);
     assert!(app.test_can_undo(), "a pick is one undoable edit");
-    assert!(
-        drain(&rx).iter().any(
-            |c| matches!(c, AudioCommand::SavePluginState { instance_id } if *instance_id == DRUMS)
-        ),
-        "the cached blob is refreshed after the pick"
-    );
+    let request = drain(&rx)
+        .into_iter()
+        .find_map(|c| match c {
+            AudioCommand::SavePluginState {
+                instance_id: DRUMS,
+                request,
+            } => Some(request),
+            _ => None,
+        })
+        .expect("the cached blob is refreshed after the pick");
     app.test_apply_engine_event(AudioEvent::PluginStateSaved {
         instance_id: DRUMS,
+        request,
         data: vec![0xB1],
     });
 

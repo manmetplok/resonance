@@ -46,6 +46,10 @@ resonance-app = { path = ".", features = ["test-support"] }
 # for tests only; resolver 2 keeps it out of `cargo build -p resonance-app`.
 resonance-audio = { path = "../resonance-audio", features = ["test-internals"] }
 iced_test = "0.14"
+# `common::run_task`: drive an update's `Task` (a save's disk write) to
+# completion in a test. Both are already in the tree through iced.
+iced_runtime = "0.14"
+futures = "0.3"
 tempfile = "3"
 # The voicebank install tests serve zipped fixture banks and pin their hash.
 zip.workspace = true

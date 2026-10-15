@@ -74,6 +74,7 @@ pub fn begin_instantiate(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.io.loading = true;
     r.io.pending_load = Some(loaded);
     r.session.undo.clear();
+    r.io.carry_clip_wavs_from = None;
     r.plugin_mirror.state_cache.clear();
     r.plugin_mirror.owed_blobs.clear();
     r.plugin_mirror.kit_info.clear();

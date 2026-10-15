@@ -90,6 +90,7 @@ fn presets(app: &mut Resonance) -> PresetsView {
 /// Play the engine echo that completes a save: the plugins' state blobs.
 fn deliver_plugin_states(app: &mut Resonance) {
     app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved {
+        request: app.test_preset_save_request().expect("a preset capture is armed"),
         states: vec![(SYNTH, vec![1, 2, 3, 4])],
     });
 }
@@ -120,7 +121,7 @@ fn a_saved_track_becomes_a_preset_that_makes_another_track() {
     assert!(
         drain(&rx)
             .iter()
-            .any(|c| matches!(c, AudioCommand::SaveAllPluginStates)),
+            .any(|c| matches!(c, AudioCommand::SaveAllPluginStates { .. })),
         "the capture asks the engine for the plugins' state blobs"
     );
     deliver_plugin_states(&mut app);
@@ -326,7 +327,7 @@ fn the_gui_prompt_arms_the_same_capture() {
     assert!(
         drain(&rx)
             .iter()
-            .any(|c| matches!(c, AudioCommand::SaveAllPluginStates)),
+            .any(|c| matches!(c, AudioCommand::SaveAllPluginStates { .. })),
         "the GUI message runs the same capture as track.save_preset"
     );
     deliver_plugin_states(&mut app);
@@ -376,4 +377,51 @@ fn gui_overwrite_refusal_reads_as_one_sentence() {
     let banner = app.test_error_message().expect("a colliding name is refused");
     assert!(banner.contains("already exists"), "{banner:?}");
     assert!(!banner.contains("  "), "double space in the banner: {banner:?}");
+}
+
+/// A preset capture during a project save: each `AllPluginStatesSaved`
+/// reaches only the requester whose id it carries (BUG-61). The capture's
+/// reply used to satisfy the save's collector too, so the save could
+/// finish on blobs it never asked for and its own reply fell on nothing.
+#[test]
+fn a_preset_capture_reply_does_not_complete_a_collecting_save() {
+    let mut app = app();
+    with_instrument(&mut app);
+    let dir = tempfile::tempdir().expect("temp dir");
+    app.test_set_project_path(dir.path().join("song.rproj"));
+
+    let _ = app.update(Message::ProjectIo(
+        resonance_app::message::ProjectIoMessage::SaveProject,
+    ));
+    let save = app.test_save_request();
+    let _ = app.update(Message::Track(TrackMessage::SaveTrackAsPreset {
+        track_id: TRACK,
+        name: "Mid Save Capture".to_owned(),
+        overwrite: true,
+    }));
+    let capture = app.test_preset_save_request().expect("the capture is armed");
+    assert_ne!(save, capture, "the capture has its own request id");
+
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir {
+        request: save,
+        clip_files: Vec::new(),
+    });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved {
+        request: capture,
+        states: vec![(SYNTH, vec![7, 7])],
+    });
+    assert!(
+        presets(&mut app).presets.iter().any(|p| p.name == "Mid Save Capture"),
+        "the capture's reply wrote the preset"
+    );
+    assert!(
+        app.test_save_in_flight().is_some(),
+        "the save still waits for its own plugin states"
+    );
+
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved {
+        request: save,
+        states: vec![(SYNTH, vec![8, 8])],
+    });
+    assert_eq!(app.test_save_in_flight(), None, "the save took its own reply");
 }

@@ -44,8 +44,9 @@ fn app_with_captured_save(tag: &str) -> Resonance {
     assert!(app.is_dirty());
 
     let _ = app.update(Message::ProjectIo(ProjectIoMessage::SaveProject));
-    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let request = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { request, clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request, states: Vec::new() });
     app
 }
 

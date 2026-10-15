@@ -1,6 +1,6 @@
 # Save, open, new and quit
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/reviews/code-review-todo.md` (STATE-01, STATE-09,
 > STATE-11, STATE-12, STATE2-02, UX-01, UX-04, FU-A1a); control surface from
 > ba doc #265 (todos #1149/#1151).
@@ -21,16 +21,24 @@ Every manual save also writes a timestamped backup.
 - A save is a two-part engine round-trip followed by an async write:
   1. `SetProjectDir(path)`, then `SaveClipsToProjectDir` (the engine writes,
      copies or transcodes every audio clip WAV into `path/audio/`) and
-     `SaveAllPluginStates`, in parallel. The `SaveCollector` waits for both.
+     `SaveAllPluginStates`, in parallel. Both carry the save's `request` id
+     (`ProjectIoState::next_engine_request`), which the engine echoes in
+     `ClipsSavedToProjectDir` / `ClipsSaveFailed` / `AllPluginStatesSaved`.
+     The `SaveCollector` waits for both replies carrying its id.
   2. `try_finish_save` builds the `ProjectFile`, fills in the cached blob for
      any plugin the engine could not save (a missing `.clap`), and writes
      `project.json`, MIDI files and plugin blobs off the update loop.
   3. On success: a versioned backup, then the clip WAV GC (see
      [clip-storage-and-gc.md](clip-storage-and-gc.md)), then
      `ProjectSaved(Ok)`.
-- Only one collector runs at a time (the engine's replies are untagged). A
+- Only one collector runs at a time (the engine has one project dir). A
   manual save during another save is queued and starts when the first
   finishes; an autosave backs off.
+- A collector ignores replies with another id (BUG-61): a late reply to a
+  save the watchdog abandoned, or the `AllPluginStatesSaved` of a
+  "save track as preset" capture, which sends its own id and is the only
+  thing its reply completes. Plugin-state replies refresh the undo blob
+  cache whoever asked.
 - A save cleans only what it captured: an edit made while the files were
   being written leaves the project dirty (`save_capture_revision`).
 - A collector the engine never answers is failed after 180 s by the tick
@@ -41,6 +49,26 @@ Every manual save also writes a timestamped backup.
 - Save As into an existing bundle first raises the clip-id and asset-id
   counters past every `clip_<id>.wav` / `asset_<id>.wav` already there, so
   no file is overwritten.
+- **Save As onto another project** — a folder with a `project.json` that is
+  not the open project's (compared through symlinks) — asks first:
+  "Replace project X? Its history and media will be deleted."
+  (`ConfirmReplaceProject`). Cancel saves nothing (and cancels a pending
+  switch, like cancelling the Save As dialog). Replace moves the target's
+  `project.json`, `project.autosave.json`, `autosave/`, `backups/`,
+  `audio/`, `midi/` and `plugins/` into a sibling
+  `.<name>.replaced-<pid>-<ns>` dir (one rename each, on the update loop),
+  deletes that dir in a background task, then saves (BUG-62). Other files
+  in the folder stay. It refuses — moving nothing and saving nothing, with
+  a banner — when an entry is, holds or sits inside a dir the session
+  still reads (the open project, the untitled scratch dir, a pending Save
+  As carry source), or another running Resonance holds the target's
+  session marker; a rename that fails puts back what already moved
+  (`update/project_io/replace.rs`). Without the clear, the old backups
+  kept the old clips alive through the GC and the old autosave was
+  offered for recovery.
+- Save As copies the clip WAVs only the undo history names from the old
+  bundle into the new one, in the save's write task (BUG-60; see
+  [clip-storage-and-gc.md](clip-storage-and-gc.md)).
 
 ### Versioned backups
 
@@ -93,10 +121,12 @@ backup is logged and does not fail the save. Autosaves never back up.
 | Concern | Location | Key items |
 |---|---|---|
 | Message enum + handler | `resonance-app/src/update/project_io/mod.rs` | `ProjectIoMessage`, `handle`, `begin_save`, `start_save`, `request_switch`, `perform_switch`, `start_open`, `check_save_watchdog`, `anchor_untitled_project` |
+| Save As, replacing another project | `resonance-app/src/update/project_io/save_as.rs`, `replace.rs` | `with_rproj_extension`, `save_as_to`; `replaces_another_project`, `save_as_confirmed`, `REPLACED_ENTRIES` |
 | Engine replies | `resonance-app/src/engine_events/project_io.rs` | `clips_saved`, `all_plugin_states_saved`, `try_finish_save`, `report_clips_without_audio`, `all_cleared` |
 | Disk I/O | `resonance-app/src/project/io.rs` | `save_project`, `load_project`, `write_backup`, `prune_backups`, `list_backups` |
 | Dialogs | `resonance-app/src/update/project_io/dialogs.rs` | `save_project_as_dialog`, `open_project_dialog`, `load_project_task` |
-| State | `resonance-app/src/state/project_io.rs`, `state/modal.rs` | `ProjectIoState` (`project_path`, `save_state`, `pending_load`, `open_token`, `untitled_anchor`, …), `ProjectSwitch` |
+| State | `resonance-app/src/state/project_io.rs`, `state/modal.rs` | `ProjectIoState` (`project_path`, `save_state`, `pending_load`, `open_token`, `untitled_anchor`, `carry_clip_wavs_from`, …), `ProjectSwitch`, `confirm_replace_project` |
+| Dialog | `resonance-app/src/view/confirm_quit.rs` | `view_confirm_replace_overlay` |
 | Recent list | `resonance-app/src/recent.rs` | `add`, `remove`, `MAX_RECENT` |
 | Control handlers | `resonance-app/src/update/control/project.rs` | `new`, `open`, `save`, `save_as`, `busy_guard`, `dirty_guard` |
 | View | `resonance-app/src/view/startup.rs` | startup modal |
@@ -115,7 +145,11 @@ blob from the old project can land on a colliding instance id in the new one.
   `project.save {path?, confirm}` → `mcp__resonance__project_save`,
   `project.save_as {path, confirm}` → `mcp__resonance__project_save_as`.
   Unsaved changes on new/open, or overwriting another existing path, answer
-  `needs_confirmation` until `confirm: true`. Paths must be absolute. The
+  `needs_confirmation` until `confirm: true`. For a save over another
+  project the refusal says its history and media would be deleted, and
+  `confirm: true` is the answer to the GUI's "Replace project?" dialog
+  (`ProjectIoMessage::SaveAsConfirmed`): the target is cleared the same
+  way, then saved. No new parameter; the protocol version is unchanged. Paths must be absolute. The
   job completes only after the replay ran, so a read right after
   `job_wait` sees the new project.
 - **Agent skills:** none in `resonance-agent-plugin/skills/`. The
@@ -130,6 +164,8 @@ blob from the old project can land on a colliding instance id in the new one.
 | Failed open keeps path | `resonance-app/tests/io/open_failure_keeps_path.rs` | same |
 | Late edit keeps dirty | `resonance-app/tests/io/save_keeps_dirty_for_late_edit.rs` | same |
 | Engine never answers, clip save fails | `resonance-app/tests/io/save_failure_recovery.rs` | same |
+| Replace-project dialog, cancel, clear, refusals, control confirm | `resonance-app/tests/io/save_as_existing_project.rs` | same |
+| Replies reach only their own request | `resonance-app/tests/io/save_reply_tagging.rs`, `tests/control/control_track_presets.rs` (`a_preset_capture_reply_does_not_complete_a_collecting_save`), `resonance-audio/tests/engine/save_clips_always_answers.rs` | same, `-p resonance-audio` |
 | Backups | `resonance-app/tests/io/project_backups.rs` | same |
 | Control `project.*` | `resonance-app/tests/control/control_project.rs`, `control_jobs.rs`, `control_mutation_gate_loading.rs` | same |
 
@@ -142,6 +178,9 @@ command-capturing engine), and opening a backup JSON end to end.
 - The control API never shows a dialog: `project.open` decides recovery up
   front with `recover_autosave`, and dirty or overwrite cases are refused
   with `needs_confirmation` instead of a modal.
+- Replacing a project deletes its files right away (in the background),
+  not after the save succeeds: the user confirmed the deletion, and the
+  open project is still in memory to save again if the write fails.
 - Backups hard-link side files rather than copy them; audio WAVs are shared
   by name because they never change.
 

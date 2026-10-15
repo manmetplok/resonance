@@ -18,7 +18,9 @@
 //! Guards (doc #265):
 //! - `new`/`open` while the current project has unsaved changes, and
 //!   saving over an existing path that isn't the project's own, require
-//!   `"confirm": true` → `needs_confirmation` otherwise.
+//!   `"confirm": true` → `needs_confirmation` otherwise. Confirmed, a save
+//!   over another project replaces it: its history and media are deleted
+//!   first, as the GUI's "Replace project?" dialog does (BUG-62).
 //! - A save/load already in flight → `busy` (a second collector would
 //!   clobber the first).
 
@@ -239,20 +241,37 @@ fn save_impl(
             // Overwriting an existing project at a *different* path is
             // destructive; saving over the project's own path is a normal
             // save and needs no confirmation.
-            let is_current = app.io.project_path.as_deref() == Some(target);
+            let is_current = app
+                .io
+                .project_path
+                .as_deref()
+                .is_some_and(|open| crate::project::same_dir(open, target));
             if target.exists() && !is_current && !confirm {
+                // Another project there is replaced whole: its history and
+                // media go too (BUG-62), so the refusal says so.
+                let what = if target.join(crate::project::PROJECT_JSON).is_file() {
+                    "holds another project; saving there replaces it and deletes its \
+                     history (backups, autosave) and media"
+                } else {
+                    "already exists and would be overwritten"
+                };
                 return (
                     super::failure(
                         request,
                         RpcError::needs_confirmation(format!(
-                            "{normalized:?} already exists and would be overwritten; \
-                             pass \"confirm\": true to replace it"
+                            "{normalized:?} {what}; pass \"confirm\": true to replace it"
                         )),
                     ),
                     Task::none(),
                 );
             }
-            ProjectIoMessage::SavePathSelected(Some(normalized))
+            // A client cannot answer the GUI's "Replace project?" dialog:
+            // `confirm` is its answer.
+            if confirm {
+                ProjectIoMessage::SaveAsConfirmed(normalized)
+            } else {
+                ProjectIoMessage::SavePathSelected(Some(normalized))
+            }
         }
         None => {
             if app.io.project_path.is_none() {

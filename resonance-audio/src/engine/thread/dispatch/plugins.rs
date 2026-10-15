@@ -55,8 +55,11 @@ pub(super) fn dispatch_plugins(
         AudioCommand::ClosePluginEditor { instance_id } => {
             plugins::handle_close_plugin_editor(ctx, instance_id)
         }
-        AudioCommand::SavePluginState { instance_id } => {
-            plugins::handle_save_plugin_state(ctx, instance_id)
+        AudioCommand::SavePluginState {
+            instance_id,
+            request,
+        } => {
+            plugins::handle_save_plugin_state(ctx, instance_id, request)
         }
         AudioCommand::LoadPluginState { instance_id, data } => {
             plugins::handle_load_plugin_state(ctx, instance_id, data)
@@ -85,7 +88,9 @@ pub(super) fn dispatch_plugins(
             instance_id,
             clap_ids,
         } => plugins::handle_set_plugin_preset_ignored_params(ctx, instance_id, clap_ids),
-        AudioCommand::SaveAllPluginStates => plugins::handle_save_all_plugin_states(ctx),
+        AudioCommand::SaveAllPluginStates { request } => {
+            plugins::handle_save_all_plugin_states(ctx, request)
+        }
         _ => unreachable!("dispatch_plugins: unexpected command"),
     }
 }

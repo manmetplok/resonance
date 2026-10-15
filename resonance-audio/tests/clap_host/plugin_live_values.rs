@@ -214,7 +214,7 @@ fn a_project_save_carries_an_editor_edit_made_with_the_transport_stopped() {
     // The editor moves the knob; no block runs.
     plugin.live = 0.75;
 
-    harness.dispatch(AudioCommand::SaveAllPluginStates);
+    harness.dispatch(AudioCommand::SaveAllPluginStates { request: 5 });
     let events = harness.drain_events();
 
     let values_at = events
@@ -232,9 +232,10 @@ fn a_project_save_carries_an_editor_edit_made_with_the_transport_stopped() {
     assert_eq!(*instance_id, INSTANCE);
     assert_eq!(values.len(), 1);
     assert_eq!((values[0].id, values[0].value), (PARAM, 0.75));
-    let AudioEvent::AllPluginStatesSaved { states } = &events[states_at] else {
+    let AudioEvent::AllPluginStatesSaved { request, states } = &events[states_at] else {
         unreachable!()
     };
+    assert_eq!(*request, 5, "the reply carries the request it answers (BUG-61)");
     assert_eq!(saved_value(states), 0.75, "the saved state has the edit");
 }
 
@@ -242,7 +243,7 @@ fn a_project_save_carries_an_editor_edit_made_with_the_transport_stopped() {
 fn a_project_save_reports_no_values_when_nothing_moved() {
     let (mut harness, plugin) = harness_with_fake(0.25);
 
-    harness.dispatch(AudioCommand::SaveAllPluginStates);
+    harness.dispatch(AudioCommand::SaveAllPluginStates { request: 5 });
     let events = harness.drain_events();
 
     assert!(
@@ -259,11 +260,19 @@ fn a_single_state_save_flushes_first() {
     let (mut harness, plugin) = harness_with_fake(0.25);
     plugin.live = 0.5;
 
-    harness.dispatch(AudioCommand::SavePluginState { instance_id: INSTANCE });
+    harness.dispatch(AudioCommand::SavePluginState {
+        instance_id: INSTANCE,
+        request: 12,
+    });
     let events = harness.drain_events();
 
     let saved = events.iter().find_map(|e| match e {
-        AudioEvent::PluginStateSaved { instance_id, data } if *instance_id == INSTANCE => {
+        // The echo carries the request it answers (BUG-39).
+        AudioEvent::PluginStateSaved {
+            instance_id,
+            request: 12,
+            data,
+        } if *instance_id == INSTANCE => {
             Some(f64::from_le_bytes(data.as_slice().try_into().expect("8 bytes")))
         }
         _ => None,

@@ -1131,6 +1131,11 @@ pub struct LoadedProject {
 /// plugin state blobs, then write `project.json`.
 pub struct SaveCollector {
     pub path: PathBuf,
+    /// The id this save sent with its `SaveClipsToProjectDir` and
+    /// `SaveAllPluginStates`. A reply carrying another id is not this
+    /// save's — a reply to a save the watchdog abandoned, or to a
+    /// track-preset capture — and is never collected (BUG-61).
+    pub request: u64,
     /// Map from clip id to project-relative WAV path, returned by
     /// `AudioEvent::ClipsSavedToProjectDir`.
     pub clip_files: HashMap<ClipId, String>,

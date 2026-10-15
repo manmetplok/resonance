@@ -53,8 +53,9 @@ fn a_failed_clip_save_fails_the_save_and_frees_the_collector() {
 
     dispatch(&mut app, ProjectIoMessage::SaveProject);
     assert!(app.test_save_in_flight().is_some());
-    app.test_apply_engine_event(AudioEvent::ClipsSaveFailed { error: DISK_FULL.to_owned() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let save = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSaveFailed { request: save, error: DISK_FULL.to_owned() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request: save, states: Vec::new() });
 
     assert_eq!(app.test_save_in_flight(), None, "the collector is gone");
     assert!(!app.is_saving(), "the save is over");
@@ -73,8 +74,9 @@ fn a_failed_clip_save_fails_the_control_job_and_the_next_save_is_not_busy() {
 
     let job = started_job(roundtrip(&mut app, request(1, "project.save", json!({}))));
     assert_eq!(job_status(&mut app, job).state, JobState::Pending);
-    app.test_apply_engine_event(AudioEvent::ClipsSaveFailed { error: DISK_FULL.to_owned() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let save = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSaveFailed { request: save, error: DISK_FULL.to_owned() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request: save, states: Vec::new() });
 
     let status = job_status(&mut app, job);
     assert_eq!(status.state, JobState::Error, "{status:?}");
@@ -99,8 +101,9 @@ fn a_manual_save_queued_behind_a_failed_autosave_runs() {
 
     dispatch(&mut app, ProjectIoMessage::Autosave);
     dispatch(&mut app, ProjectIoMessage::SaveProject);
-    app.test_apply_engine_event(AudioEvent::ClipsSaveFailed { error: DISK_FULL.to_owned() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let save = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSaveFailed { request: save, error: DISK_FULL.to_owned() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request: save, states: Vec::new() });
 
     assert_eq!(
         app.test_save_in_flight(),
@@ -109,7 +112,7 @@ fn a_manual_save_queued_behind_a_failed_autosave_runs() {
     );
     let clip_saves = cmds
         .try_iter()
-        .filter(|c| matches!(c, AudioCommand::SaveClipsToProjectDir))
+        .filter(|c| matches!(c, AudioCommand::SaveClipsToProjectDir { .. }))
         .count();
     assert_eq!(clip_saves, 2, "one engine round-trip per save");
     assert!(
@@ -179,8 +182,9 @@ fn an_autosave_clip_failure_counts_toward_the_indicator() {
     let mut app = titled_app(&dir);
     for _ in 0..3 {
         dispatch(&mut app, ProjectIoMessage::Autosave);
-        app.test_apply_engine_event(AudioEvent::ClipsSaveFailed { error: DISK_FULL.to_owned() });
-        app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+        let save = app.test_save_request();
+        app.test_apply_engine_event(AudioEvent::ClipsSaveFailed { request: save, error: DISK_FULL.to_owned() });
+        app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request: save, states: Vec::new() });
     }
     let shown = app.test_autosave_failing().expect("indicator raised");
     assert!(shown.contains("No space left"), "{shown}");

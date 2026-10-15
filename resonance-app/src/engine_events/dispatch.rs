@@ -790,9 +790,11 @@ fn route_plugins(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             identity,
         } => plugins::preset_identity(r, instance_id, identity),
         E::PluginKitInfo { instance_id, info } => plugins::kit_info(r, instance_id, info),
-        E::PluginStateSaved { instance_id, data } => {
-            plugins::state_saved(r, instance_id, data)
-        }
+        E::PluginStateSaved {
+            instance_id,
+            request,
+            data,
+        } => plugins::state_saved(r, instance_id, request, data),
         // The engine's real editor open/failed/closed report (ba doc
         // #283, ba todo #1347). This is the ONLY thing that moves
         // `PluginSlotState.editor_open`; `update/plugin.rs` no longer
@@ -835,12 +837,15 @@ fn route_session(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             r.media.browser.audition.position_frame = 0;
         }
         // Project save / load — these return a Task<Message>.
-        E::ClipsSavedToProjectDir { clip_files } => {
-            return project_io::clips_saved(r, clip_files)
+        E::ClipsSavedToProjectDir {
+            request,
+            clip_files,
+        } => return project_io::clips_saved(r, request, clip_files),
+        E::ClipsSaveFailed { request, error } => {
+            return project_io::clips_save_failed(r, request, error)
         }
-        E::ClipsSaveFailed { error } => return project_io::clips_save_failed(r, error),
-        E::AllPluginStatesSaved { states } => {
-            return project_io::all_plugin_states_saved(r, states)
+        E::AllPluginStatesSaved { request, states } => {
+            return project_io::all_plugin_states_saved(r, request, states)
         }
         E::AllCleared => return project_io::all_cleared(r),
         // Automation lanes (doc #162 §3, todo #378): one-way engine→app

@@ -51,6 +51,29 @@ impl Resonance {
         self.io.save_state.as_ref().map(|s| (s.path.clone(), s.autosave))
     }
 
+    /// Test-only: the request id the collecting save sent the engine —
+    /// what its `ClipsSavedToProjectDir` / `ClipsSaveFailed` /
+    /// `AllPluginStatesSaved` replies must carry to be collected (BUG-61).
+    /// Panics when no save is collecting.
+    #[doc(hidden)]
+    pub fn test_save_request(&self) -> u64 {
+        self.io.save_state.as_ref().expect("a save is collecting").request
+    }
+
+    /// Test-only: the Save As target the "Replace project?" dialog is
+    /// asking about, if it is up (BUG-62).
+    #[doc(hidden)]
+    pub fn test_confirm_replace_project(&self) -> Option<&std::path::Path> {
+        self.modals.confirm_replace_project.as_deref()
+    }
+
+    /// Test-only: the request id of the armed track-preset capture's
+    /// `SaveAllPluginStates`, if one is waiting (BUG-61).
+    #[doc(hidden)]
+    pub fn test_preset_save_request(&self) -> Option<u64> {
+        self.presets.pending_preset_save.as_ref().map(|p| p.request)
+    }
+
     /// Test-only: pretend the collecting save started `age` ago, for the
     /// save watchdog (code review STATE2-02).
     #[doc(hidden)]

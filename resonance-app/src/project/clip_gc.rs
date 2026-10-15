@@ -39,6 +39,57 @@ pub fn collect_clip_ids(file: &ProjectFile, out: &mut BTreeSet<ClipId>) {
     }
 }
 
+/// Copy each `from/audio/clip_<id>.wav` that `to/audio/` lacks into it —
+/// the clips an undo history names when a save moves the project to a new
+/// folder: an untitled project's first save from its scratch dir (code
+/// review UX-03), and a Save As from the old bundle (BUG-60). `only`
+/// limits the copy to those ids (a Save As carries what the history names,
+/// not every stray file); `None` copies them all.
+///
+/// Ids are never reused (STATE-08), so a file already in `to` is the same
+/// clip and is left alone. `from` and `to` being one directory (also
+/// through a symlink) copies nothing. Best effort: a failed copy only costs
+/// that clip's audio on an undo past the save, and is logged. Returns the
+/// files written. Runs off the update loop, in the save's write task.
+pub fn carry_clip_wavs(
+    from: &Path,
+    to: &Path,
+    only: Option<&BTreeSet<ClipId>>,
+) -> Vec<PathBuf> {
+    if super::io::same_dir(from, to) {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(from.join("audio")) else {
+        return Vec::new();
+    };
+    let target_dir = to.join("audio");
+    let mut copied = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(id) = name.to_str().and_then(clip_wav_id) else {
+            continue;
+        };
+        if only.is_some_and(|ids| !ids.contains(&id)) || !entry.path().is_file() {
+            continue;
+        }
+        let target = target_dir.join(&name);
+        if target.exists() {
+            continue;
+        }
+        let result = std::fs::create_dir_all(&target_dir)
+            .and_then(|()| std::fs::copy(entry.path(), &target).map(drop));
+        match result {
+            Ok(()) => copied.push(target),
+            Err(e) => tracing::warn!(
+                "carry {} into {}: {e}",
+                entry.path().display(),
+                target_dir.display()
+            ),
+        }
+    }
+    copied
+}
+
 /// The id in a `clip_<id>.wav` file name (or a path ending in one).
 fn clip_wav_id(name: &str) -> Option<ClipId> {
     let file = name.rsplit(['/', '\\']).next()?;

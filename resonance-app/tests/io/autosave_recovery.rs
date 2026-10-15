@@ -311,8 +311,9 @@ fn a_crashed_untitled_session_is_offered_at_startup() {
         &mut app,
         ProjectIoMessage::SavePathSelected(Some(target.display().to_string())),
     );
-    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let request = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { request, clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request, states: Vec::new() });
     update(&mut app, ProjectIoMessage::ProjectSaved(Ok(()), false));
     assert!(!recovered.exists());
 }

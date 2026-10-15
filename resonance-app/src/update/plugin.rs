@@ -156,12 +156,16 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             // fresh blob is back the cache is stale, and a snapshot taken
             // meanwhile is owed it (STATE2-07).
             if state_excluded == Some(true) {
+                let request = request_plugin_state(r, instance_id);
                 r.plugin_mirror
                     .owed_blobs
                     .entry(instance_id)
                     .or_default()
-                    .marks += 1;
-                let _ = r.engine.send(AudioCommand::SavePluginState { instance_id });
+                    .refreshes
+                    .push(crate::state::plugin_mirror::OwedRefresh {
+                        request,
+                        superseded: false,
+                    });
             }
             if let Some(identity) = r.presets.plugin_preset_identity.get_mut(&instance_id) {
                 if !identity.reported {
@@ -230,7 +234,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             // always be trusted to clear the flag.
             let _ = r.engine
                 .send(AudioCommand::ClosePluginEditor { instance_id });
-            let _ = r.engine.send(AudioCommand::SavePluginState { instance_id });
+            request_plugin_state(r, instance_id);
         }
         PluginMessage::RescanPlugins => {
             // Clear the previous run's failures up front: leaving them
@@ -453,4 +457,20 @@ fn take_capture(
     let token = r.presets.capture_seq;
     r.presets.pending_captures.entry(token).or_default().push(late);
     Some(token)
+}
+
+/// Ask the engine for `instance_id`'s full state, under a fresh request
+/// id its `PluginStateSaved` echoes. Returns the id, so a caller that owes
+/// a snapshot the result can tell that echo from any other refresh in
+/// flight for the same plugin (BUG-39).
+pub(crate) fn request_plugin_state(
+    r: &mut Resonance,
+    instance_id: resonance_audio::types::PluginInstanceId,
+) -> u64 {
+    let request = r.io.next_engine_request();
+    let _ = r.engine.send(AudioCommand::SavePluginState {
+        instance_id,
+        request,
+    });
+    request
 }

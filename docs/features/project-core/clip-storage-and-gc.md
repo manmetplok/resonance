@@ -1,6 +1,6 @@
 # Clip storage and clip WAV GC
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/reviews/code-review-todo.md` (FU-V5a, FU-V5b,
 > STATE-08, STATE-12, UX-03); take reader from epic #15 / ba todo #1400.
 
@@ -26,7 +26,18 @@ dialogs) is in the timeline area ([audio-pool-and-import.md](../timeline/audio-p
 - **Untitled projects** use the session's scratch dir
   (`<data>/resonance/autosave/<session-id>/`) as the engine's project dir, so
   this all works before the first save; the first Save As copies the WAVs the
-  undo history still names into the bundle (`carry_scratch_clip_wavs`).
+  undo history still names into the bundle (`carry_clip_wavs`).
+- **Save As carries the history's clips.** The engine writes only the live
+  clips into a new bundle, and an undo resolves a snapshot's `audio/clip_<id>.wav`
+  against the *current* bundle. So a Save As remembers the bundle it left
+  (`ProjectIoState::carry_clip_wavs_from`), and the first save to the new
+  one that reaches its write copies, from the old `audio/`, every WAV the
+  project or an undo/redo snapshot names (`Resonance::history_clip_ids`)
+  that the new one lacks (BUG-60). Both carries run in the save's write
+  task, off the update loop, before the GC; an existing file is never
+  overwritten, and a source that is the target (also through a symlink,
+  `project::same_dir`) copies nothing. A save that fails before its write keeps the
+  source for the retry; opening or creating another project drops it.
 - **Take waveforms are read from disk.** A cycle-record take is never a
   mirrored clip, so `load_take_peaks` reads its WAV to build the lane's
   peaks and missing-media state. It runs on `TakeCaptured`, on project load
@@ -55,11 +66,11 @@ recording. Rendered vocal takes have their own reaper
 
 | Concern | Location | Key items |
 |---|---|---|
-| GC | `resonance-app/src/project/clip_gc.rs` | `reap_unreferenced_clip_wavs`, `collect_clip_ids`, `clip_wav_id` |
-| Keep set + call site | `resonance-app/src/engine_events/project_io.rs` | `Resonance::clip_gc_keep`, `try_finish_save` |
+| GC + carry | `resonance-app/src/project/clip_gc.rs` | `reap_unreferenced_clip_wavs`, `carry_clip_wavs`, `collect_clip_ids`, `clip_wav_id` |
+| Keep set, carries + call site | `resonance-app/src/engine_events/project_io.rs` | `Resonance::clip_gc_keep`, `Resonance::history_clip_ids`, `clip_wav_carries`, `try_finish_save` |
 | Take reader | `resonance-app/src/project/take_audio.rs` | `load_take_peaks` |
 | Persist before snapshot | `resonance-app/src/undo/snapshot.rs` | `snapshot_for_undo` (`AudioCommand::PersistClipWavs`) |
-| Untitled anchor + carry-over | `resonance-app/src/update/project_io/{mod.rs,recovery.rs}` | `anchor_untitled_project`, `undo_anchor_dir`, `carry_scratch_clip_wavs` |
+| Untitled anchor, Save As source | `resonance-app/src/update/project_io/{mod.rs,save_as.rs,recovery.rs}` | `anchor_untitled_project`, `undo_anchor_dir`, `save_as_to` (sets `carry_clip_wavs_from`), `after_save` (removes the scratch dir) |
 | Engine side | `resonance-audio/src/engine/clips.rs`, `types/commands.rs` | `SaveClipsToProjectDir`, `PersistClipWavs`, `LoadClipFromWav` |
 | Vocal takes | `resonance-app/src/update/compose/vocal_audio_io.rs` | `reap_orphaned_takes`, `vocal_audio_dir` |
 
@@ -78,7 +89,8 @@ undo history both depend on it. See [entity-ids.md](entity-ids.md).
 
 | What | Where | Run |
 |---|---|---|
-| GC keep rules | `resonance-app/tests/io/clip_wav_gc.rs` | `./scripts/run-tests.py -p resonance-app` |
+| GC keep rules, carry rules | `resonance-app/tests/io/clip_wav_gc.rs` | `./scripts/run-tests.py -p resonance-app` |
+| Save As carries undo-only clips; undo finds them | `resonance-app/tests/io/save_as_history_clips.rs` | same |
 | Undo finds re-added clip audio | `resonance-app/tests/timeline/undo_clip_audio_persist.rs` | same |
 | Take lanes + peaks across load | `resonance-app/tests/io/take_lanes_persistence.rs` | same |
 | Untitled anchor / carry-over | `resonance-app/tests/io/project_lifecycle_ux.rs` | same |

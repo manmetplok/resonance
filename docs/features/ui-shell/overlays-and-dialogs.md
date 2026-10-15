@@ -1,6 +1,6 @@
 # Overlays, dialogs and the status area
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/specs/command-palette.md` §3.2 (overlay gate,
 > Esc order); code review UX-01/04/05/07/13 (status area, project switch).
 
@@ -26,22 +26,23 @@ this order:
 | 6 | `Palette` | `ui.palette` is open | close |
 | 7 | `ConfirmQuit` | window close requested with unsaved changes | Cancel |
 | 8 | `ConfirmProjectSwitch` | GUI Open / Open Recent / New over unsaved changes | Cancel |
-| 9 | `ConfirmDeleteTrack` | deleting a track that has clips | Cancel |
-| 10 | `BounceDialog` | bounce-in-place setup for an external instrument | Cancel |
-| 11 | `ExportDialog` | Export (⇧⌘E) | Close |
-| 12 | `ImportDialog` | MIDI import | Cancel |
-| 13 | `ImportProgress` | audio import transcoding | Dismiss |
-| 14 | `MissingPlugins` | a project loaded with missing plugin slots | Dismiss |
-| 15 | `Relink` | a project loaded with missing audio files | Dismiss |
-| 16 | `Settings` | `ui.mixer.settings_open` | Close |
-| 17 | `PresetBrowser` | the host preset browser is open | Esc reverts the audition; backdrop keeps it |
-| 18 | `AddTrackMenu` | the add-track popover | Close |
-| 19 | `MarkersOverview` | the markers popover | Close |
-| 20 | `DrumGroupsManager` | Compose drum-groups manager | Close |
-| 21 | `MarkerMenu` | marker context menu or inline rename | Close or cancel the rename |
-| 22 | `MidiMenu` | the right-click MIDI Learn menu | Close |
-| 23 | `TrackMenu` | track context menu or its "Save as preset…" prompt | Close |
-| 24 | `SelectionBar` | Arrange with two or more tracks selected | non-modal |
+| 9 | `ConfirmReplaceProject` | Save As onto a folder holding another project (BUG-62): "Replace project X? Its history and media will be deleted." | Cancel (saves nothing) |
+| 10 | `ConfirmDeleteTrack` | deleting a track that has clips | Cancel |
+| 11 | `BounceDialog` | bounce-in-place setup for an external instrument | Cancel |
+| 12 | `ExportDialog` | Export (⇧⌘E) | Close |
+| 13 | `ImportDialog` | MIDI import | Cancel |
+| 14 | `ImportProgress` | audio import transcoding | Dismiss |
+| 15 | `MissingPlugins` | a project loaded with missing plugin slots | Dismiss |
+| 16 | `Relink` | a project loaded with missing audio files | Dismiss |
+| 17 | `Settings` | `ui.mixer.settings_open` | Close |
+| 18 | `PresetBrowser` | the host preset browser is open | Esc reverts the audition; backdrop keeps it |
+| 19 | `AddTrackMenu` | the add-track popover | Close |
+| 20 | `MarkersOverview` | the markers popover | Close |
+| 21 | `DrumGroupsManager` | Compose drum-groups manager | Close |
+| 22 | `MarkerMenu` | marker context menu or inline rename | Close or cancel the rename |
+| 23 | `MidiMenu` | the right-click MIDI Learn menu | Close |
+| 24 | `TrackMenu` | track context menu or its "Save as preset…" prompt | Close |
+| 25 | `SelectionBar` | Arrange with two or more tracks selected | non-modal |
 
 Every overlay except `SelectionBar` is modal (`blocks_keys`). While a modal
 overlay shows:
@@ -85,7 +86,10 @@ In short, Esc goes to the first of these that applies:
   - "Unsaved changes" (Cancel / Discard & Quit / Save & Quit).
   - The project-switch dialog "Save the changes to “X” before opening “Y”"
     (Cancel / Don't Save / Save, or Save As… for an untitled project).
-  - Both share `unsaved_changes_dialog`.
+  - "Replace project?" before a Save As writes over another project
+    (Cancel / Replace, the latter destructive; BUG-62).
+  - All share `confirm_dialog` (the first two through
+    `unsaved_changes_dialog`).
 - `confirm_delete_track.rs`: confirms deleting a track that has audio or
   MIDI clips. An empty track is deleted at once, still as one undo entry.
 - `missing_plugins_dialog.rs`: one row per dead plugin slot, naming the
@@ -153,7 +157,7 @@ slot, so it never moves the view tabs.
 |---|---|---|
 | Overlay choice and gate | `resonance-app/src/state/overlay.rs` | `Overlay`, `root_overlay`, `modal_overlay`, `blocks_keys`, `allows_palette`, `dismiss_message`, `canvas_keys_blocked` |
 | Rendering | `resonance-app/src/view/mod.rs` | `view`, `view_root_overlay`, `view_status_area`, `status_line`, `error_bar` |
-| Modal flags | `resonance-app/src/state/modal.rs` | `confirm_quit`, `confirm_switch`, `switch_after_save`, `quit_after_save`, `confirm_delete_track`, `bounce_dialog`, `export_dialog`, `ProjectSwitch` |
+| Modal flags | `resonance-app/src/state/modal.rs` | `confirm_quit`, `confirm_switch`, `switch_after_save`, `confirm_replace_project`, `quit_after_save`, `confirm_delete_track`, `bounce_dialog`, `export_dialog`, `ProjectSwitch` |
 | Banners | `resonance-app/src/state/banners.rs` | `Banners`, `EngineHealth`, `autosave_failing`, `HistoryNotice` |
 | Message gates | `resonance-app/src/update/gates.rs` | `is_gated_message`, `gates_message` |
 | Quit and switch | `resonance-app/src/update.rs` (`WindowCloseRequested`), `update/project_io/mod.rs` | `request_switch`, `answer_switch`, `perform_switch` |

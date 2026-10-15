@@ -547,6 +547,8 @@ pub enum AudioEvent {
     },
     PluginStateSaved {
         instance_id: PluginInstanceId,
+        /// The `request` of the `SavePluginState` this answers.
+        request: u64,
         data: Vec<u8>,
     },
     /// The answer to `AudioCommand::SavePluginPresetState`. `preset_form`
@@ -844,6 +846,8 @@ pub enum AudioEvent {
     /// project-relative path (e.g. `"audio/clip_42.wav"`), which
     /// the save path writes into `project.json`.
     ClipsSavedToProjectDir {
+        /// The `request` of the `SaveClipsToProjectDir` this answers.
+        request: u64,
         clip_files: Vec<(ClipId, String)>,
     },
     /// Response to `SaveClipsToProjectDir` when a clip could not be
@@ -853,10 +857,14 @@ pub enum AudioEvent {
     /// collector can fail the save rather than wait forever (code review
     /// STATE2-02). `error` is the user-facing reason.
     ClipsSaveFailed {
+        /// The `request` of the `SaveClipsToProjectDir` this answers.
+        request: u64,
         error: String,
     },
     /// All plugin states saved in batch.
     AllPluginStatesSaved {
+        /// The `request` of the `SaveAllPluginStates` this answers.
+        request: u64,
         states: Vec<(PluginInstanceId, Vec<u8>)>,
     },
     /// Engine has been cleared of all state.
