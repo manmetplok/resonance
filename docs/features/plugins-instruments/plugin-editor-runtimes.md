@@ -127,6 +127,10 @@ Linux only.
     the minimum width (its card stroke was not budgeted), now fixed.
   - Text is shaped with harfrust (kerning), so some labels are a few px
     narrower.
+  - The emoji/icon fallback fonts (NotoEmoji, emoji-icon-font) are behind
+    egui's `monochrome_emoji_fonts` feature now; the workspace enables it,
+    or the editors' ◀ ▶ preset/kit steppers and the drums ▶ audition
+    button draw as missing-glyph boxes.
 - **SCTK 0.21** (wayland-client 0.31 unchanged). The per-protocol
   `delegate_*!` macros are gone: `delegate_dispatch2!(State)` is one
   blanket `Dispatch` impl routing each object to its SCTK user data, and

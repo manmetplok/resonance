@@ -35,7 +35,10 @@ serde = { version = "1", features = ["derive"] }
 # lane that was rendered reads stale. Costs ~2x on float parsing only.
 serde_json = { version = "1", features = ["float_roundtrip"] }
 parking_lot = "0.12"
-egui = { version = "0.37", features = ["default_fonts"], default-features = false }
+# `monochrome_emoji_fonts` (implies `default_fonts`): since egui 0.37 the
+# emoji/icon fallback fonts are opt-in, and without them the editors' ◀ ▶
+# glyphs draw as missing-glyph boxes.
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"], default-features = false }
 egui_glow = { version = "0.37", default-features = false }
 iced = { version = "0.14" }
 hound = "3.5"
