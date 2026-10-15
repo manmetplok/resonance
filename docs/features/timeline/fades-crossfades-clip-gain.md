@@ -1,6 +1,6 @@
 # Fades, crossfades and clip gain
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: epic #18, design doc #153, arch doc #156 (todos #316–#320);
 > prototype `docs/history/prototypes/clip-editing-fades-crossfades/index.html`.
 
@@ -35,8 +35,8 @@ set fades and gain by dragging handles on the clip, by typing in the
   raises the gain at 0.15 dB per pixel (`GAIN_DB_PER_PX`), measured from the
   grab point so it does not drift. The clip body is tinted by gain and a dB
   tag is drawn in the header once gain is not unity.
-- The inspector's field and steppers are limited to −60…+12 dB (see
-  [clip-inspector.md](clip-inspector.md)); the drag and the API reach +24 dB.
+- The inspector's field and steppers share the drag's and the API's
+  −60…+24 dB range (see [clip-inspector.md](clip-inspector.md)).
 
 ### Crossfades
 
@@ -152,7 +152,6 @@ playback beyond the shared-function argument.
   drawn bead sits inward but can only be grabbed at the clip's corner. It also
   treats frozen clips as fadeable, while the draw pass does not (review
   FU-W2d).
-- Inspector gain is capped at +12 dB while the drag and the API allow +24 dB.
 - `song.tracks` does not report a clip's fades or gain.
   → [clip-state-readback.md](../../intents/timeline/clip-state-readback.md)
 - No fade or gain on MIDI clips.

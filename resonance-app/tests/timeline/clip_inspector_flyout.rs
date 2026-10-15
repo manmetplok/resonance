@@ -220,6 +220,37 @@ fn gain_stepper_emits_gain_edit_and_updates_clip() {
     assert!((app.test_clips()[0].gain_db - 0.5).abs() < 1e-4);
 }
 
+/// The flyout's range is the engine's: a clip boosted to +20 dB (by a
+/// drag or `clip.set_gain`) steps to +20.5, not down to the old +12
+/// ceiling (BUG-13).
+#[test]
+fn gain_stepper_keeps_a_boost_above_twelve_db() {
+    let mut boosted = clip(7, 1);
+    boosted.gain_db = 20.0;
+    let app = app_with_clip(boosted, true);
+
+    let gain = click_messages(&app, "+0.5")
+        .iter()
+        .find_map(|m| match m {
+            Message::Clip(ClipMessage::SetClipGainDb { clip_id: 7, gain_db }) => Some(*gain_db),
+            _ => None,
+        })
+        .expect("+ stepper emits SetClipGainDb");
+    assert!((gain - 20.5).abs() < 1e-4, "+0.5 from +20 dB is +20.5, got {gain}");
+
+    let mut top = clip(7, 1);
+    top.gain_db = resonance_audio::MAX_CLIP_GAIN_DB;
+    let app = app_with_clip(top, true);
+    let gain = click_messages(&app, "+0.5")
+        .iter()
+        .find_map(|m| match m {
+            Message::Clip(ClipMessage::SetClipGainDb { clip_id: 7, gain_db }) => Some(*gain_db),
+            _ => None,
+        })
+        .expect("+ stepper emits SetClipGainDb");
+    assert_eq!(gain, resonance_audio::MAX_CLIP_GAIN_DB, "clamped at the engine ceiling");
+}
+
 #[test]
 fn curve_segment_emits_curve_edit_and_updates_clip() {
     let mut app = app_with_clip(clip(7, 1), true);
