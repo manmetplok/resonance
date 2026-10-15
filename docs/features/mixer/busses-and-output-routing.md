@@ -1,6 +1,6 @@
 # Busses and track output routing
 
-> Verified against master @ `6137b6fb` on 2026-10-15.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: none as a spec; control-API side came from ba doc #273 (todos #1221, #1226–#1228, #1237, #1238).
 
 A bus is a summing point between tracks and the master with its own fader,
@@ -109,8 +109,8 @@ Not covered: the name a GUI `+ Bus` gives a new bus (see Known gaps).
 
 ## Known gaps
 
-- No bus → bus output route, and a send into a lower-indexed bus is
-  inaudible —
+- No bus → bus output route (bus → bus aux sends do work, in either
+  creation order) —
   [`../../intents/mixer/bus-to-bus-routing.md`](../../intents/mixer/bus-to-bus-routing.md).
 - No bus pan / mute / solo over the control API, no bus solo at all —
   [`../../intents/mixer/bus-control-parity.md`](../../intents/mixer/bus-control-parity.md).

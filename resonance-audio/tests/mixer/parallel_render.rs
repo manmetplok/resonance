@@ -53,7 +53,8 @@ const FEEDER: BusId = 10;
 const RETURN: BusId = 20;
 /// Three more busses so every bus level holds two busses, which then run
 /// as parallel jobs: level 0 = FEEDER, GROUP; level 1 = RETURN (from
-/// FEEDER), MID (from GROUP and FEEDER); level 2 = SUM (from MID, RETURN).
+/// FEEDER and, against creation order, GROUP), MID (from GROUP and
+/// FEEDER); level 2 = SUM (from MID, RETURN).
 const GROUP: BusId = 60;
 const MID: BusId = 70;
 const SUM: BusId = 80;
@@ -313,6 +314,9 @@ fn fixture(threads: usize, shuffle_seed: u64) -> MixAudioHarness {
         send(7, SendSource::Bus(MID), SUM, -1.0, false),
         send(8, SendSource::Bus(RETURN), SUM, -5.0, false),
         send(9, SendSource::Track(9), SUM, -8.0, true),
+        // Into an older (lower-indexed) bus: GROUP was created after
+        // RETURN, so this edge runs against creation order (BUG-04).
+        send(10, SendSource::Bus(GROUP), RETURN, -7.0, false),
     ];
 
     let mut h = MixAudioHarness::new(

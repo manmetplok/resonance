@@ -1,6 +1,6 @@
 # Aux sends and return busses
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: design doc #172 and ba doc #273 (todos #475–#478, #1229, #1269, #1310); no file in `docs/history/specs/`.
 
 An aux send taps a track's signal into a return bus — typically a shared
@@ -33,7 +33,9 @@ an agent uses `track.add_send` / `track.set_send` / `track.remove_send`.
 - **Render.** Track sends are added into the destination's summing buffer
   during the track pass, so a track → return send is sample-correct
   whatever the bus order. Bus-sourced sends are *pulled* by the
-  destination bus from lower-indexed busses only (`pull_bus_aux_sends`).
+  destination bus (`pull_bus_aux_sends`) from every bus at a lower level
+  of the send graph (`bus_pass::assign_levels`), so a bus → bus send is
+  audible whichever bus was created first (BUG-04).
 - **Ids.** Send ids are app-allocated (`AuxSendState::allocate_send_id`,
   ARCH-04 D-2); the engine refuses to reuse a live id.
 - **Mirror.** The app never edits the send list directly: every
@@ -94,7 +96,8 @@ only what the engine accepted.
 | What | Where | Run |
 |---|---|---|
 | Model, cycle check | `resonance-audio/tests/types/aux_send_model.rs`, `resonance-audio/tests/engine/{aux_send_cycle,aux_send_id_duplicate_rejected}.rs` | `./scripts/run-tests.py -p resonance-audio` |
-| Render (pre/post, sub-tracks) | `resonance-audio/tests/mixer/{aux_send_render,sub_track_aux_sends}.rs` | same |
+| Render (pre/post, sub-tracks, bus → older bus live and bounce) | `resonance-audio/tests/mixer/{aux_send_render,sub_track_aux_sends}.rs` | same |
+| Parallel parity (incl. a send into an older bus) | `resonance-audio/tests/mixer/parallel_render.rs` | `RESONANCE_RENDER_THREADS=8 ./scripts/run-tests.py -p resonance-audio` |
 | Handlers, mirror, persistence | `resonance-app/tests/mixer/{aux_send_handlers,aux_send_mirror,aux_send_persistence}.rs` | `./scripts/run-tests.py -p resonance-app` |
 | SENDS group | `resonance-app/tests/mixer/{mixer_inspector_sends,mixer_inspector_sends_snapshot}.rs` | same |
 | Control | `resonance-app/tests/control/control_sends.rs` | same |
@@ -116,5 +119,3 @@ Not covered: bus-sourced sends through any app surface (none exists).
 - Bus-sourced sends exist in the engine and the file format, but neither
   the GUI nor the control API can create one —
   [`../../intents/mixer/bus-control-parity.md`](../../intents/mixer/bus-control-parity.md).
-- A bus → bus send into a lower-indexed bus is accepted and inaudible —
-  [`../../intents/mixer/bus-to-bus-routing.md`](../../intents/mixer/bus-to-bus-routing.md).

@@ -104,30 +104,36 @@ pub(crate) fn apply_track_aux_sends(
     }
 }
 
-/// Aux sends INTO bus `dst_idx` from the busses before it, tapped after
-/// each source's own fader so post-fader reflects the source bus's level
-/// (its pre-fader buffer is intact — the sum into master only reads it).
+/// Aux sends INTO bus `dst_idx` from other busses, tapped after each
+/// source's own fader so post-fader reflects the source bus's level (its
+/// pre-fader buffer is intact — the sum into master only reads it).
 ///
 /// The bus pass runs busses level by level (realtime-multithreading.md
 /// §4.5), so instead of each source pushing its sends as it finishes, each
-/// destination pulls them just before it runs: every source is a
-/// lower-indexed bus of an earlier level, and they are added in source
-/// index order — exactly the order the one serial index-order loop added
-/// them in, so the sum is bit-identical. `source(i)` is bus `i`'s
-/// finished buffer and fader ramp when it reached the mix this block.
-///
-/// Only lower-indexed sources count: return busses are created after their
-/// feeder busses, so the "returns after feeders" ordering holds, and a send
-/// to an earlier-indexed bus (whose own output is already decided) has no
-/// audible effect — it never had one in the serial loop either.
+/// destination pulls them just before it runs. A source counts when its
+/// level (`levels`, from `bus_pass::assign_levels`) is below the
+/// destination's — so it finished at an earlier level — whatever its index:
+/// a send into an older bus is as audible as one into a newer bus (BUG-04).
+/// Sources are added in source-index order, the order the old serial
+/// index-order loop added them in, so the sum is bit-identical at any
+/// thread count. `source(i)` is bus `i`'s finished buffer and fader ramp
+/// when it reached the mix this block; it is only called for a source of a
+/// lower level, never for a bus that may still be running.
 pub(crate) fn pull_bus_aux_sends<'b>(
     dst_idx: usize,
+    levels: &[u8],
     dst: &mut (Vec<f32>, Vec<f32>),
     source: impl Fn(usize) -> Option<(&'b (Vec<f32>, Vec<f32>), GainRamp)>,
     ctx: &BlockCtx<'_>,
 ) {
     let frames = ctx.inputs.frames;
-    for (src_idx, src_bus) in ctx.inputs.busses.values().enumerate().take(dst_idx) {
+    let Some(&dst_level) = levels.get(dst_idx) else {
+        return;
+    };
+    for (src_idx, src_bus) in ctx.inputs.busses.values().enumerate().take(levels.len()) {
+        if levels[src_idx] >= dst_level {
+            continue;
+        }
         let Some(((src_l, src_r), gains)) = source(src_idx) else {
             continue;
         };
