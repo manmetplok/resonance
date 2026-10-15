@@ -2603,6 +2603,80 @@ fn a_late_track_fx_bypass_echo_does_not_clobber_a_re_added_track() {
     settle(&mut f, late, &off, "the delete's echo, then the undo's");
 }
 
+/// BUG-05: the same ledger guard as the track test above, for a bus.
+/// `fx_bypass_changed`'s Bus arm used to skip `owner_removal_owed`
+/// entirely, so a late echo from a toggle made just before a bus delete
+/// could clobber a diff restore's bypass value on the re-added bus.
+#[test]
+fn a_late_bus_fx_bypass_echo_does_not_clobber_a_re_added_bus() {
+    let mut f = fixture("bus-scalar-late-echo");
+    let ids = bus_ids(&f.app);
+    let _ = edit(&mut f, Message::Bus(BusMessage::AddBus));
+    let bus = bus_ids(&f.app)
+        .into_iter()
+        .find(|id| !ids.contains(id))
+        .expect("the add landed a bus");
+
+    // Toggle bypass on: mirrors true at once and sends the command, but
+    // its echo is held rather than answered here — this is the toggle
+    // that predates the delete below.
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Bus(BusMessage::ToggleBusFxBypass(bus)));
+    let stale_bypass_on = drain(&f.rx);
+    assert!(
+        sent(&stale_bypass_on)
+            .contains(&format!("SetFxBypass {{ owner: Bus({bus}), bypassed: true }}")),
+        "the toggle sends the bypass command: {:?}",
+        sent(&stale_bypass_on)
+    );
+    let stale_bypass_on: Vec<_> = stale_bypass_on
+        .into_iter()
+        .filter(|c| matches!(c, AudioCommand::SetFxBypass { .. }))
+        .collect();
+
+    // Toggle back off — a real edit, echoed normally: the delete below,
+    // and the undo's target, both see the bus with bypass off.
+    let off = edit(&mut f, Message::Bus(BusMessage::ToggleBusFxBypass(bus)));
+
+    // Delete the bus: mirrors at once and owes its `BusRemoved` echo —
+    // held, not answered.
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Bus(BusMessage::RemoveBus(bus)));
+    let delete = drain(&f.rx);
+
+    // Undo the delete: a diff restore re-adds the bus fresh under the
+    // same id, mirroring bypass = false (`off`'s value) at once.
+    let undo = step_lands_on(&mut f, Message::Undo, &off, "undo delete");
+
+    // The delete's own removal is still owed — its `BusRemoved` echo
+    // hasn't landed — so the toggle-on echo that predates it is exactly
+    // the "late echo of the old incarnation" case the ledger must filter.
+    assert!(
+        !f.app.test_restore_echoes_settled(),
+        "the delete's BusRemoved echo must still be owed"
+    );
+    for event in engine_answer(&mut f, stale_bypass_on[0].clone()) {
+        f.app.test_apply_engine_event(event);
+    }
+    let bypassed_now = f
+        .app
+        .test_registry()
+        .busses
+        .iter()
+        .find(|b| b.id == bus)
+        .map(|b| b.fx_bypassed);
+    assert_eq!(
+        bypassed_now,
+        Some(false),
+        "a stale bypass-on echo from before the delete must not clobber the re-added bus's restored (off) value"
+    );
+
+    // Flush the rest in the order they were actually sent and confirm the
+    // ledger settles cleanly.
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &off, "the delete's echo, then the undo's");
+}
+
 /// FU-A13a for a re-added member: the entity domain adds the track with
 /// its own mute, and `TrackGroups` then sends the effective one while the
 /// group's macro mute holds.
