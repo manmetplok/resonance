@@ -625,7 +625,10 @@ impl RecordingState {
             }
 
             // Apply loop-range trim via non-destructive trim fields
-            // on the clip so we don't have to rewrite the file.
+            // on the clip so we don't have to rewrite the file. The
+            // take starts at `loop_in` or at the punch-in, whichever is
+            // later: a take punched in mid-loop has nothing before it to
+            // trim and sits where it was played (BUG-69).
             let (clip_start_sample, trim_start_frames, trim_end_frames) =
                 if self.loop_enabled && self.loop_out > self.loop_in {
                     let total_frames = track_buf.frames_written;
@@ -639,7 +642,7 @@ impl RecordingState {
                         continue;
                     }
                     let end_skip = total_frames.saturating_sub(trim_end);
-                    (self.loop_in, trim_start, end_skip)
+                    (self.loop_in.max(self.start_sample), trim_start, end_skip)
                 } else {
                     (self.start_sample, 0, 0)
                 };

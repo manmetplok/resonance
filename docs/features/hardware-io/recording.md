@@ -1,6 +1,6 @@
 # Recording
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: none in `docs/history/specs/`. Leads: doc #260 (findings #2, #4, #17), code review RT-01 / RT-02 / RT-08 / RT-17 / ENG-03 / STATE-02, design doc D-6 §4.2 / §7a, ba doc #292, W3 (cycle-record mode).
 
 Arm one or more tracks and press Record. Audio tracks stream their input
@@ -72,13 +72,12 @@ With the loop enabled and a real range set:
   the loop range measured from the record start (`trim_start = loop_in −
   start`, `trim_end` at `loop_out − start`), so it shows only the first
   pass through the range; any pre-roll before `loop_in` and all audio from
-  later passes stay in the file outside the trim (code reading of
-  `finalize_recording` in `recording.rs`; no test pins this). The Settings
-  hint says the run "is merged into one clip for the whole loop", which
-  overstates it.
-- If Record is pressed *inside* the loop (start after `loop_in`), the clip
-  is still placed at `loop_in` with `trim_start` saturating to 0, so the
-  take would sit early by `start − loop_in` (code reading, unmeasured).
+  later passes stay in the file outside the trim (`finalize_recording` in
+  `recording.rs`). The Settings hint says the run "is merged into one clip
+  for the whole loop", which overstates it.
+- The clip is placed at `max(loop_in, start)`: Record pressed *inside* the
+  loop has nothing before it to trim and lands on the punch-in (BUG-69; it
+  used to be placed at `loop_in`, early by `start − loop_in`).
 - There is no punch-in/out without looping: the old `punch_*` project
   fields are read as the loop range (`#[serde(alias = "punch_in")]`).
 
@@ -138,7 +137,7 @@ the app's grant.
 
 | What | Where | Run |
 |---|---|---|
-| Take placement, count-in hand-off, cycle cuts | `resonance-audio/tests/engine/recording_alignment.rs`, `loop_record_takes.rs` | `./scripts/run-tests.py -p resonance-audio` |
+| Take placement, count-in hand-off, cycle cuts, non-cycle loop trim | `resonance-audio/tests/engine/recording_alignment.rs`, `loop_record_takes.rs` | `./scripts/run-tests.py -p resonance-audio` |
 | Start latch, drain, overflow event | `resonance-audio/tests/mixer/recording_start_latch.rs`, `recording_drain.rs`, `recording_overflow_event.rs`, `recording_whole_frame_push.rs` | same |
 | Disk-full salvage (own binary, rlimit) | `resonance-audio/tests/recording_write_failure.rs` | same |
 | Live MIDI record / stop | `resonance-audio/tests/midi_hw/live_record_stop.rs`, `live_arrival_offset.rs` | same |
@@ -147,7 +146,7 @@ the app's grant.
 | Loop-record mode persistence | `resonance-app/tests/io/loop_record_mode_persistence.rs` | same |
 | By hand | record from a real interface and check the take against the grid | live session |
 
-Not covered: a real capture device end to end, the non-cycle loop trim, the
+Not covered: a real capture device end to end, the
 count-in click sound, and the two-bar count-in default.
 
 ## Decisions and deviations
@@ -164,8 +163,7 @@ count-in click sound, and the two-bar count-in default.
 ## Known gaps
 
 - With "Distinct takes" off, a looped recording keeps only the first pass
-  and a start inside the loop looks misplaced (see Loop and cycle record
-  above); the Settings hint promises a merge.
+  (see Loop and cycle record above); the Settings hint promises a merge.
 - Fixed two-bar count-in, no punch without cycling:
   [count-in-and-punch](../../intents/hardware-io/count-in-and-punch.md).
 - No control-API recording: [record-control-api](../../intents/hardware-io/record-control-api.md).
