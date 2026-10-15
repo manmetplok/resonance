@@ -1,6 +1,6 @@
 # Plugin editor runtimes
 
-> Verified against master @ `5d6a2993` on 2026-10-15 (egui 0.37 upgrade).
+> Verified against master @ `5d6a2993` on 2026-10-15 (egui 0.37 / SCTK 0.21 upgrade).
 > Spec history: `docs/history/macos/macos-editor-plan.md`,
 > `docs/history/macos/macos-linux-verification.md`.
 
@@ -127,6 +127,14 @@ Linux only.
     the minimum width (its card stroke was not budgeted), now fixed.
   - Text is shaped with harfrust (kerning), so some labels are a few px
     narrower.
+- **SCTK 0.21** (wayland-client 0.31 unchanged). The per-protocol
+  `delegate_*!` macros are gone: `delegate_dispatch2!(State)` is one
+  blanket `Dispatch` impl routing each object to its SCTK user data, and
+  frame callbacks carry `FrameCallbackData(surface)` instead of the bare
+  surface. The runtime's own `Dispatch<WlCallback, RemapSync>` stays.
+- `editor_size`'s compositor resize drives Hyprland ≥ 0.56 through its Lua
+  dispatchers (`hl.dsp.window.float` / `resize`), falling back to the old
+  `setfloating` / `resizewindowpixel` syntax.
 
 ## Known gaps
 

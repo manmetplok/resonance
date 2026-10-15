@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use plugin_gui_core::repaint::{plan_repaint, RepaintPlan};
+use smithay_client_toolkit::compositor::FrameCallbackData;
 use smithay_client_toolkit::shell::WaylandSurface;
 use wayland_client::QueueHandle;
 
@@ -291,13 +292,13 @@ pub(super) fn paint_frame(
     // Ask the compositor to tell us when it wants the next frame for
     // this surface. Requested *before* the swap because `eglSwapBuffers`
     // is what commits the surface, and a frame request only rides on the
-    // commit that follows it. SCTK's `delegate_compositor!` routes the
-    // callback (userdata = the surface) to `CompositorHandler::frame`,
+    // commit that follows it. SCTK routes the callback (userdata
+    // `FrameCallbackData`, the surface) to `CompositorHandler::frame`,
     // which clears this gate. The swap itself never blocks: the event
     // loop set eglSwapInterval(0), so pacing happens here, visibly to
     // input handling, instead of inside the GL driver.
     let surface = state.window.wl_surface();
-    surface.frame(qh, surface.clone());
+    surface.frame(qh, FrameCallbackData(surface.clone()));
     state.frame_callback_pending = Some(Instant::now());
 
     egl_ctx.swap_buffers()?;
