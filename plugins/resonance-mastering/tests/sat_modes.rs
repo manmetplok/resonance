@@ -184,6 +184,32 @@ fn every_mode_is_stable_at_full_drive_on_full_scale_noise() {
     }
 }
 
+/// At mix 0 every mode puts out the very same samples — the dry path's
+/// up/down pair and nothing else. Transformer's dry-share allpass
+/// (BUG-42) must not leak into it: its corner is 0 Hz there and it is not
+/// run. A bassy input, so a sub-band phase shift would show.
+#[test]
+fn mix_zero_is_the_same_dry_path_in_every_mode() {
+    let input: Vec<f32> = sine(22.0, 0.4, SR as usize)
+        .iter()
+        .zip(sine(70.0, 0.3, SR as usize))
+        .map(|(a, b)| a + b)
+        .collect();
+    let render = |mode| {
+        run(
+            &SaturatorConfig {
+                mix: 0.0,
+                ..cfg(mode, 9.0)
+            },
+            &input,
+        )
+    };
+    let reference = render(SatMode::Console);
+    for mode in MODES {
+        assert!(render(mode) == reference, "{mode:?}: mix 0 is not the dry path");
+    }
+}
+
 #[test]
 fn mix_zero_is_the_dry_signal() {
     for mode in MODES {
@@ -510,4 +536,47 @@ fn mode_specific_controls_act_only_in_their_mode() {
         assert_eq!(!same(&a, &shaper), mode == SatMode::Blend, "{mode:?}: Shaper");
         assert_eq!(!same(&a, &curve), mode == SatMode::Inflator, "{mode:?}: Curve");
     }
+}
+
+/// A partial `sat_mix` keeps the sub band (BUG-42): at every mix, the
+/// response to a quiet sine at low drive is the blend of the two
+/// endpoints' responses, `(1 − mix)·|mix 0| + mix·|mix 1|`, within
+/// ±0.3 dB, from 15 Hz up.
+///
+/// That line is what a parallel blend of two paths gives when they agree
+/// in phase; a phase disagreement can only fall short of it (the paths
+/// partly cancel), so the shortfall is the cancellation itself, measured
+/// independently of how much the voicing's own filters cut. Transformer's
+/// wet-only sub-sonic high-pass used to put it −0.7 dB at 30 Hz, −2.3 dB
+/// at 20 Hz and −4.7 dB at 15 Hz at mix 0.5; its dry share now runs
+/// through an allpass matched to that high-pass's phase
+/// (`sat_modes.rs`, "`sat_mix` in the sub band").
+#[test]
+fn a_partial_mix_is_the_blend_of_its_endpoints_in_the_sub_band() {
+    const AMP: f64 = 0.0316; // −30 dBFS: the curves' small-signal region
+    const FREQS: [usize; 9] = [15, 20, 25, 30, 40, 60, 100, 1000, 10_000];
+    let settle = 2 * SR as usize;
+    let level = |mode: SatMode, mix: f32, freq: usize| {
+        let input = sine(freq as f64, AMP, settle + SR as usize);
+        let out = run(&SaturatorConfig { mix, ..cfg(mode, 0.0) }, &input);
+        spectrum(&out[settle..])[freq]
+    };
+    let mut report = Vec::new();
+    for mode in MODES {
+        for freq in FREQS {
+            let (dry, wet) = (level(mode, 0.0, freq), level(mode, 1.0, freq));
+            for mix in [0.25f32, 0.5, 0.75] {
+                let m = mix as f64;
+                let want = (1.0 - m) * dry + m * wet;
+                let off = db(level(mode, mix, freq) / want);
+                report.push((mode, freq, mix, off));
+            }
+        }
+    }
+    let bad: Vec<_> = report.iter().filter(|r| r.3.abs() > 0.3).collect();
+    assert!(
+        bad.is_empty(),
+        "a partial mix off its endpoints' blend by more than 0.3 dB \
+         (mode, Hz, mix, dB): {bad:?}"
+    );
 }

@@ -62,6 +62,14 @@ const TAU: f32 = std::f32::consts::TAU;
 // `w9_sweeps_between_blocks`. That is the misaligned crossfade the fix
 // removes. Outside that window it is at most −133 dB (FFT rounding of
 // the moved cross grid) in the first, and bit-identical in the second.
+//
+// Re-blessed for BUG-42: Transformer's dry share at a partial mix now
+// runs through an allpass phase-matched to its sub-sonic high-pass
+// (`sat_modes.rs`). Compared per scenario, only the two that run
+// Transformer at a partial mix moved: `sat_transformer` (mix 0.7, peak
+// delta 0.10) and `w9_sweeps_between_blocks` (mix 0.5; Transformer runs
+// in blocks 27-35, and the limiter and compressors carry it into the
+// capture: peak delta 0.28). The other ten are bit-identical.
 fn golden_path() -> PathBuf {
     golden::golden_path(env!("CARGO_MANIFEST_DIR"), "w9_golden.f32")
 }
