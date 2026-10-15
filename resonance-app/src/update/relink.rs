@@ -23,14 +23,14 @@
 //! cleared, its metadata refreshed, and every clip that references it is
 //! reloaded via [`AudioCommand::LoadClipFromWav`] so playback resumes.
 //!
-//! Undo: the metadata change (missing → present, refreshed source
-//! provenance) rides the normal project snapshot recorded for
-//! `RelinkMessage::Imported(Ok)` (see `undo::classify`), so a relink is
-//! reversible through the same replay path as every other project edit.
-//! The `missing` flag itself is re-derived from disk on replay; because a
-//! successful relink leaves the WAV in the project folder, an undo reverts
-//! the asset's recorded source path/metadata but does not re-hide the
-//! now-present file — the project stays self-contained.
+//! Undo: a relink is **not** undoable (decided, BUG-16). It is a filesystem
+//! fact — pointing the project at a file that was already there, now found
+//! again — not an edit to take back, and "undoing" it would just re-hide a
+//! file that is, in fact, present. `RelinkMessage::Imported(Ok)` and
+//! `ClipImported(_, Ok(_))` both classify as `UndoAction::Skip` (see
+//! `undo::classify`): the metadata change (missing → present, refreshed
+//! source provenance) and the clip reload happen, but record no history
+//! entry.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -62,8 +62,9 @@ use crate::Resonance;
 /// project's `audio/` folder under the asset's stable
 /// `asset_{id}.wav` name (reusing the import-to-pool path), the missing
 /// flag is cleared, and the asset's clips are reloaded so playback
-/// resumes. The metadata change rides the normal project snapshot, so the
-/// relink is undoable. Routed through `update::relink::handle`.
+/// resumes. The metadata change is applied directly and records no undo
+/// entry — a relink is a filesystem fact, not an edit (BUG-16). Routed
+/// through `update::relink::handle`.
 #[derive(Debug, Clone)]
 pub enum RelinkMessage {
     /// Open the OS file picker to locate a replacement file for one
@@ -126,17 +127,19 @@ impl RelinkMessage {
     pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
         use crate::undo::UndoAction;
         match self {
-            // Missing-file relink (doc #175, todo #600). Only the applied outcome
-            // (`Imported(Ok)`) clears the missing flag, refreshes the asset's
-            // source provenance, and reloads its clips, so that one records a
-            // pre-relink snapshot to make the relink reversible.
-            Self::Imported(Ok(_)) => UndoAction::Record,
+            // Missing-file relink (doc #175, todo #600). A relink is a
+            // filesystem fact, not an edit: it just points the project at a
+            // file that was already there, so it records no undo entry
+            // (decided, BUG-16) — `Imported(Ok)` clears the missing flag,
+            // refreshes the asset's source provenance, and reloads its
+            // clips with no history trace.
+            Self::Imported(Ok(_)) => UndoAction::Skip,
             // `Imported(Err)` only sets a transient error string.
             Self::Imported(Err(_)) => UndoAction::Skip,
             // A clip relink adds its new asset to the pool and points the
-            // clip at it: one undoable edit, recorded on the applied
-            // outcome just like an asset relink.
-            Self::ClipImported(_, Ok(_)) => UndoAction::Record,
+            // clip at it — the same filesystem-fact reasoning as an asset
+            // relink above, so it is likewise not undoable (BUG-16).
+            Self::ClipImported(_, Ok(_)) => UndoAction::Skip,
             Self::ClipImported(_, Err(_)) => UndoAction::Skip,
             // Opening the OS picker, its cancel results, and starting the
             // background import are transient — they mutate no project state.

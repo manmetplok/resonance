@@ -6,7 +6,9 @@
 //! existing asset flow; a clip with no missing asset behind it (a recorded
 //! take, a bounce, a lost copy) gets its own row in the relink modal, whose
 //! `Locate…` imports the chosen file as a new pool asset, points the clip
-//! at it (`relink_clip`) and reloads it. One undo takes it back.
+//! at it (`relink_clip`) and reloads it. The relink is a filesystem fact,
+//! not an edit, so it records no undo entry (BUG-16) — an undo right after
+//! it leaves the relinked clip exactly as it is.
 
 use crate::common;
 
@@ -138,10 +140,17 @@ fn locating_a_missing_clip_points_it_at_a_new_asset_and_reloads_it() {
     assert_eq!(reload.0, dir.path().join("audio/asset_900.wav"));
     assert_eq!(reload.1, 96_000, "it keeps its place");
 
-    // One undo takes the relink back.
+    // BUG-16: the relink recorded no undo entry (it is a filesystem fact,
+    // not an edit), so there is nothing to undo — the stack is as empty as
+    // it was before the relink, and Undo leaves the relinked clip intact.
+    assert_eq!(app.test_undo_history().undo_len(), 0, "the relink recorded no entry");
     let _ = app.update(Message::Undo);
-    assert!(app.test_pool_asset(900).is_none());
-    assert_eq!(app.test_clips()[0].asset_ref, None);
+    assert_eq!(
+        app.test_pool_asset(900).map(|a| a.id),
+        Some(900),
+        "undo must not remove the relinked asset"
+    );
+    assert_eq!(app.test_clips()[0].asset_ref.map(|a| a.asset_id), Some(900));
 }
 
 #[test]

@@ -12,8 +12,8 @@
 //! * the batch folder search resolves every missing asset by filename
 //!   (recursively, case-insensitively),
 //! * a failed relink surfaces an error and never wedges the in-flight set,
-//! * and an applied relink is classified as an undoable edit whose
-//!   pre-relink snapshot restores the asset's prior source path.
+//! * and an applied relink records no undo entry at all (BUG-16): it is a
+//!   filesystem fact, not an edit, so there is nothing to take back.
 
 use std::path::{Path, PathBuf};
 
@@ -274,8 +274,14 @@ fn failed_relink_surfaces_error_and_clears_in_flight() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// BUG-16 (decided): a relink is a filesystem fact — the project is
+/// pointed at a file that was already there, now found again — not an
+/// edit, so it is never undoable. Both the classifier and a real
+/// `update()` dispatch (which is what actually records history; unlike
+/// `test_dispatch`) must agree: the asset still updates, but no undo
+/// entry appears.
 #[test]
-fn applied_relink_is_undoable_and_snapshot_restores_prior_path() {
+fn applied_relink_records_no_undo_entry() {
     let dir = temp_dir("undo");
     let src = dir.join("sources/kick.wav");
     write_source_wav(&src, 4_800);
@@ -285,8 +291,7 @@ fn applied_relink_is_undoable_and_snapshot_restores_prior_path() {
     app.test_add_pool_asset(missing_asset(7, "/originally/here/kick.wav"));
     app.test_push_clip(clip(100, 10, Some(7)));
 
-    // The applied relink is classified as a recordable (undoable) edit,
-    // while opening the picker / a failed import are not.
+    // Opening the picker, and the applied relink alike, are not undoable.
     assert!(matches!(
         resonance_app::undo::classify(&Message::Relink(RelinkMessage::Locate(7))),
         resonance_app::undo::UndoAction::Skip
@@ -294,31 +299,25 @@ fn applied_relink_is_undoable_and_snapshot_restores_prior_path() {
     let applied = run_worker(7, &src, &dir);
     assert!(matches!(
         resonance_app::undo::classify(&Message::Relink(applied.clone())),
-        resonance_app::undo::UndoAction::Record
+        resonance_app::undo::UndoAction::Skip
     ));
 
-    // A pre-relink snapshot (what `record_undo` captures) still carries the
-    // asset's OLD source path — so undoing the relink restores it.
-    let snapshot = app.test_snapshot_for_undo();
-    let snap_asset = snapshot
-        .project
-        .file
-        .pool_assets
-        .iter()
-        .find(|a| a.id == 7)
-        .expect("asset in snapshot");
-    assert_eq!(
-        snap_asset.original_path, "/originally/here/kick.wav",
-        "snapshot preserves the pre-relink source path for undo"
-    );
+    let before = app.test_undo_history().undo_len();
 
-    // Apply the relink: the asset now points at the resolved source.
-    app.test_dispatch(Message::Relink(applied));
+    // Apply the relink through the real update entry (the path that
+    // actually records history) — the asset now points at the resolved
+    // source, and no undo entry was added.
+    let _ = app.update(Message::Relink(applied));
     assert_eq!(
         app.test_pool_asset(7).unwrap().original_path,
         src.to_string_lossy()
     );
     assert!(!app.test_pool_asset(7).unwrap().missing);
+    assert_eq!(
+        app.test_undo_history().undo_len(),
+        before,
+        "a relink must not record an undo entry"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
