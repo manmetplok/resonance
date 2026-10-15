@@ -69,16 +69,21 @@ pub(in crate::derive::vocal) fn total_beats(chords: &[TimedChord]) -> u32 {
         .unwrap_or(0)
 }
 
-/// Adopt the chord root + quality of the first chord as a coarse scale
-/// guess when the caller doesn't pass one explicitly. Used by
-/// `derive_vocal` for its in-line snapping when `stay_in_scale` is set.
-pub(in crate::derive::vocal) fn scale_from_chords(chords: &[TimedChord]) -> Option<Scale> {
-    use crate::scale::Mode;
-    chords.first().map(|c| {
-        let mode = match c.chord.quality {
-            crate::chord::ChordQuality::Min | crate::chord::ChordQuality::Min7 => Mode::Minor,
-            _ => Mode::Major,
-        };
-        Scale::new(c.chord.root, mode)
-    })
+/// The scale `stay_in_scale` snaps to: the section's own scale when it
+/// has one, else the key [`infer_scale`] reads off all of `chords`.
+/// `None` when `stay_in_scale` is off (or there is nothing to infer from).
+///
+/// Never guess from the first chord alone: a D-minor chorus that opens
+/// on Bbmaj7 would then snap to Bb major and sing Eb (BUG-71).
+///
+/// [`infer_scale`]: crate::derive::infer_scale
+pub(in crate::derive::vocal) fn vocal_scale(
+    stay_in_scale: bool,
+    chords: &[TimedChord],
+    section_scale: Option<Scale>,
+) -> Option<Scale> {
+    if !stay_in_scale {
+        return None;
+    }
+    section_scale.or_else(|| crate::derive::infer_scale(chords))
 }

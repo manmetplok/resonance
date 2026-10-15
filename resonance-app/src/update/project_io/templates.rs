@@ -905,10 +905,13 @@ fn build_vocal_songwriting() -> BuiltinProject {
             duration_beats: BEATS_PER_CHORD,
         })
         .collect();
-    let generated = resonance_music_theory::derive_vocal(
+    let generated = resonance_music_theory::derive_vocal_with_motif(
         &timed,
         &vocal_params,
         TICKS_PER_QUARTER_NOTE as u32,
+        4,
+        None,
+        section.scale,
         SEED,
     );
     let notes: Vec<MidiNote> = generated

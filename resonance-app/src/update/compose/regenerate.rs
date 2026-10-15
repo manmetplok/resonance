@@ -414,6 +414,7 @@ fn collect_section_vocal_spans(
             TICKS_PER_QUARTER_NOTE as u32,
             beats_per_bar,
             Some(&motif_intervals),
+            def.scale,
             cfg.seed,
         );
         all.extend(resonance_music_theory::vocal_phrase_spans(&notes, params));

@@ -199,6 +199,7 @@ pub(super) fn compute_vocal_melody(
         TICKS_PER_QUARTER_NOTE as u32,
         beats_per_bar,
         Some(&motif_intervals),
+        def.scale,
         cfg.seed,
     );
     if derived.notes.is_empty() {

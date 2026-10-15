@@ -27,8 +27,8 @@ fn syllabic_is_the_syllabic_melody_with_no_holds() {
     for &style in &STYLES {
         for seed in [7u64, 42, 0xABCD] {
             let p = params(style, SyllableMode::Syllabic, seed);
-            let plain = derive_vocal_with_motif(&chords(), &p, 480, 4, None, seed);
-            let derived = derive_vocal_with_holds(&chords(), &p, 480, 4, None, seed);
+            let plain = derive_vocal_with_motif(&chords(), &p, 480, 4, None, None, seed);
+            let derived = derive_vocal_with_holds(&chords(), &p, 480, 4, None, None, seed);
             assert_eq!(derived.notes, plain, "{style:?}/{seed}");
             assert!(derived.auto_holds.iter().all(|h| !h));
         }
@@ -41,9 +41,9 @@ fn holds_for(mode: SyllableMode) -> usize {
     for &style in &STYLES {
         for seed in [7u64, 42, 0xABCD, 99, 1234] {
             let p = params(style, mode, seed);
-            let plain = derive_vocal_with_motif(&chords(), &p, 480, 4, None, seed);
-            let derived = derive_vocal_with_holds(&chords(), &p, 480, 4, None, seed);
-            let again = derive_vocal_with_holds(&chords(), &p, 480, 4, None, seed);
+            let plain = derive_vocal_with_motif(&chords(), &p, 480, 4, None, None, seed);
+            let derived = derive_vocal_with_holds(&chords(), &p, 480, 4, None, None, seed);
+            let again = derive_vocal_with_holds(&chords(), &p, 480, 4, None, None, seed);
             assert_eq!(derived, again, "deterministic per seed");
             assert_eq!(derived.notes.len(), derived.auto_holds.len());
             let holds = derived.auto_holds.iter().filter(|h| **h).count();
@@ -85,8 +85,8 @@ fn mixed_and_melismatic_make_holds_and_melismatic_makes_more() {
 fn a_split_keeps_the_syllables_time_span() {
     let seed = 42;
     let p = params(VocalStyle::PopBallad, SyllableMode::Melismatic, seed);
-    let plain = derive_vocal_with_motif(&chords(), &p, 480, 4, None, seed);
-    let derived = derive_vocal_with_holds(&chords(), &p, 480, 4, None, seed);
+    let plain = derive_vocal_with_motif(&chords(), &p, 480, 4, None, None, seed);
+    let derived = derive_vocal_with_holds(&chords(), &p, 480, 4, None, None, seed);
     // Fold each hold back into the note it continues: the start of each
     // group and the end of its last note are the syllabic note's.
     let mut groups: Vec<(u64, u64)> = Vec::new();
