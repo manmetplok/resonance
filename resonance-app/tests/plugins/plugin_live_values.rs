@@ -137,7 +137,9 @@ fn save_with_engine_report(
     moved: Vec<ParamValueUpdate>,
 ) -> resonance_app::project::ProjectFile {
     let _ = app.update(Message::ProjectIo(ProjectIoMessage::SaveProject));
+    let request = app.test_save_request();
     app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir {
+        request,
         clip_files: Vec::new(),
     });
     app.test_apply_engine_event(AudioEvent::PluginParamValuesChanged {
@@ -145,6 +147,7 @@ fn save_with_engine_report(
         values: moved,
     });
     app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved {
+        request,
         states: vec![(PLUGIN, vec![0xB0])],
     });
     app.test_build_project_file()

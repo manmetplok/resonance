@@ -1,6 +1,6 @@
 # Save, open, new and quit
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/reviews/code-review-todo.md` (STATE-01, STATE-09,
 > STATE-11, STATE-12, STATE2-02, UX-01, UX-04, FU-A1a); control surface from
 > ba doc #265 (todos #1149/#1151).
@@ -21,16 +21,24 @@ Every manual save also writes a timestamped backup.
 - A save is a two-part engine round-trip followed by an async write:
   1. `SetProjectDir(path)`, then `SaveClipsToProjectDir` (the engine writes,
      copies or transcodes every audio clip WAV into `path/audio/`) and
-     `SaveAllPluginStates`, in parallel. The `SaveCollector` waits for both.
+     `SaveAllPluginStates`, in parallel. Both carry the save's `request` id
+     (`ProjectIoState::next_engine_request`), which the engine echoes in
+     `ClipsSavedToProjectDir` / `ClipsSaveFailed` / `AllPluginStatesSaved`.
+     The `SaveCollector` waits for both replies carrying its id.
   2. `try_finish_save` builds the `ProjectFile`, fills in the cached blob for
      any plugin the engine could not save (a missing `.clap`), and writes
      `project.json`, MIDI files and plugin blobs off the update loop.
   3. On success: a versioned backup, then the clip WAV GC (see
      [clip-storage-and-gc.md](clip-storage-and-gc.md)), then
      `ProjectSaved(Ok)`.
-- Only one collector runs at a time (the engine's replies are untagged). A
+- Only one collector runs at a time (the engine has one project dir). A
   manual save during another save is queued and starts when the first
   finishes; an autosave backs off.
+- A collector ignores replies with another id (BUG-61): a late reply to a
+  save the watchdog abandoned, or the `AllPluginStatesSaved` of a
+  "save track as preset" capture, which sends its own id and is the only
+  thing its reply completes. Plugin-state replies refresh the undo blob
+  cache whoever asked.
 - A save cleans only what it captured: an edit made while the files were
   being written leaves the project dirty (`save_capture_revision`).
 - A collector the engine never answers is failed after 180 s by the tick
@@ -130,6 +138,7 @@ blob from the old project can land on a colliding instance id in the new one.
 | Failed open keeps path | `resonance-app/tests/io/open_failure_keeps_path.rs` | same |
 | Late edit keeps dirty | `resonance-app/tests/io/save_keeps_dirty_for_late_edit.rs` | same |
 | Engine never answers, clip save fails | `resonance-app/tests/io/save_failure_recovery.rs` | same |
+| Replies reach only their own request | `resonance-app/tests/io/save_reply_tagging.rs`, `tests/control/control_track_presets.rs` (`a_preset_capture_reply_does_not_complete_a_collecting_save`), `resonance-audio/tests/engine/save_clips_always_answers.rs` | same, `-p resonance-audio` |
 | Backups | `resonance-app/tests/io/project_backups.rs` | same |
 | Control `project.*` | `resonance-app/tests/control/control_project.rs`, `control_jobs.rs`, `control_mutation_gate_loading.rs` | same |
 

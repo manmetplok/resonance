@@ -958,14 +958,21 @@ pub(crate) fn apply_clip_load_failed(
 /// at `{project_dir}/audio/clip_{id}.wav`. Recorded and imported
 /// clips are already `ClipSource::Mapped` and just need their path
 /// returned; any remaining `ClipSource::Memory` clips get transcoded.
-pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut HandlerState) {
+pub(crate) fn handle_save_clips_to_project_dir(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    request: u64,
+) {
     // Always answer: the app's save collector waits on exactly one reply
     // to this command, and a failure that only raised `AudioEvent::Error`
     // used to wedge every later save, open and new for the rest of the
     // session (code review STATE2-02).
     let event = match save_clips_to_project_dir(ctx, state) {
-        Ok(clip_files) => AudioEvent::ClipsSavedToProjectDir { clip_files },
-        Err(error) => AudioEvent::ClipsSaveFailed { error },
+        Ok(clip_files) => AudioEvent::ClipsSavedToProjectDir {
+            request,
+            clip_files,
+        },
+        Err(error) => AudioEvent::ClipsSaveFailed { request, error },
     };
     let _ = ctx.event_tx.send(event);
 }

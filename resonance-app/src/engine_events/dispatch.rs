@@ -835,12 +835,15 @@ fn route_session(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             r.media.browser.audition.position_frame = 0;
         }
         // Project save / load — these return a Task<Message>.
-        E::ClipsSavedToProjectDir { clip_files } => {
-            return project_io::clips_saved(r, clip_files)
+        E::ClipsSavedToProjectDir {
+            request,
+            clip_files,
+        } => return project_io::clips_saved(r, request, clip_files),
+        E::ClipsSaveFailed { request, error } => {
+            return project_io::clips_save_failed(r, request, error)
         }
-        E::ClipsSaveFailed { error } => return project_io::clips_save_failed(r, error),
-        E::AllPluginStatesSaved { states } => {
-            return project_io::all_plugin_states_saved(r, states)
+        E::AllPluginStatesSaved { request, states } => {
+            return project_io::all_plugin_states_saved(r, request, states)
         }
         E::AllCleared => return project_io::all_cleared(r),
         // Automation lanes (doc #162 §3, todo #378): one-way engine→app

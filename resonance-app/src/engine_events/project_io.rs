@@ -8,14 +8,24 @@ use resonance_audio::types::*;
 use crate::message::*;
 use crate::Resonance;
 
+/// The collecting save, if `request` is the id it sent: a reply to any
+/// other request — a save the watchdog abandoned, a track-preset capture —
+/// is not this save's to take (BUG-61).
+fn collector_for(r: &mut Resonance, request: u64) -> Option<&mut crate::project::SaveCollector> {
+    r.io.save_state.as_mut().filter(|save| save.request == request)
+}
+
 pub(super) fn clips_saved(
     r: &mut Resonance,
+    request: u64,
     clip_files: Vec<(ClipId, String)>,
 ) -> Task<Message> {
-    if let Some(ref mut save) = r.io.save_state {
-        save.clip_files = clip_files.into_iter().collect();
-        save.clips_done = true;
-    }
+    let Some(save) = collector_for(r, request) else {
+        tracing::debug!(request, "[save] clip reply for no collecting save; ignored");
+        return Task::none();
+    };
+    save.clip_files = clip_files.into_iter().collect();
+    save.clips_done = true;
     try_finish_save(r)
 }
 
@@ -24,22 +34,24 @@ pub(super) fn clips_saved(
 /// waits for that reply too — tearing it down now would hand that stale
 /// reply to whatever save starts next — and [`try_finish_save`] then fails
 /// the save (code review STATE2-02).
-pub(super) fn clips_save_failed(r: &mut Resonance, error: String) -> Task<Message> {
-    if let Some(ref mut save) = r.io.save_state {
-        save.clips_error = Some(error);
-        save.clips_done = true;
-    } else {
-        tracing::warn!("[save] clip save failed with no save collecting: {error}");
-    }
+pub(super) fn clips_save_failed(r: &mut Resonance, request: u64, error: String) -> Task<Message> {
+    let Some(save) = collector_for(r, request) else {
+        tracing::warn!(request, "[save] clip save failed with no save collecting it: {error}");
+        return Task::none();
+    };
+    save.clips_error = Some(error);
+    save.clips_done = true;
     try_finish_save(r)
 }
 
 pub(super) fn all_plugin_states_saved(
     r: &mut Resonance,
+    request: u64,
     states: Vec<(PluginInstanceId, Vec<u8>)>,
 ) -> Task<Message> {
-    // Refresh the undo cache first, then (if a save was in progress)
-    // hand the states off to the SaveCollector.
+    // Refresh the undo cache first, whoever asked: the blobs are the
+    // plugins' live state. Then hand them to the requester the id names —
+    // a track-preset capture or the collecting save, never both (BUG-61).
     for (instance_id, data) in &states {
         r.plugin_mirror
             .state_cache
@@ -48,13 +60,23 @@ pub(super) fn all_plugin_states_saved(
     // If a preset save was pending, build and save it now: the blobs
     // that just arrived are the only part of a track preset the app
     // cannot produce on its own (ba todo #1303).
-    if let Some(pending) = r.presets.pending_preset_save.take() {
-        super::presets::finish_preset_save(r, &pending);
+    if r
+        .presets
+        .pending_preset_save
+        .as_ref()
+        .is_some_and(|pending| pending.request == request)
+    {
+        if let Some(pending) = r.presets.pending_preset_save.take() {
+            super::presets::finish_preset_save(r, &pending);
+        }
+        return Task::none();
     }
-    if let Some(ref mut save) = r.io.save_state {
-        save.plugin_states = states;
-        save.plugins_done = true;
-    }
+    let Some(save) = collector_for(r, request) else {
+        tracing::debug!(request, "[save] plugin-state reply for no requester; cache refreshed");
+        return Task::none();
+    };
+    save.plugin_states = states;
+    save.plugins_done = true;
     try_finish_save(r)
 }
 

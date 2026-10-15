@@ -211,8 +211,9 @@ fn manual_save_with_path_adds_to_recents() {
 
     // The engine reports both branches, then the async write completes.
     use resonance_audio::types::AudioEvent;
-    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let request = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { request, clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request, states: Vec::new() });
     dispatch(&mut app, ProjectIoMessage::ProjectSaved(Ok(()), false));
 
     assert_eq!(
@@ -357,8 +358,9 @@ fn a_manual_save_during_an_autosave_runs_its_own_engine_round_trip() {
     dispatch(&mut app, ProjectIoMessage::Autosave);
     dispatch(&mut app, ProjectIoMessage::SaveProject);
     // The autosave's two engine reports.
-    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let request = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { request, clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request, states: Vec::new() });
 
     assert_eq!(
         app.test_save_in_flight(),
@@ -367,12 +369,13 @@ fn a_manual_save_during_an_autosave_runs_its_own_engine_round_trip() {
     );
     let clip_saves = cmds
         .try_iter()
-        .filter(|c| matches!(c, AudioCommand::SaveClipsToProjectDir))
+        .filter(|c| matches!(c, AudioCommand::SaveClipsToProjectDir { .. }))
         .count();
     assert_eq!(clip_saves, 2, "one engine round-trip per save");
 
-    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let request = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { request, clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request, states: Vec::new() });
     assert_eq!(app.test_save_in_flight(), None);
 
     // The autosave's completion lands while nothing else is in flight.
@@ -394,8 +397,9 @@ fn an_autosave_completion_does_not_drop_a_running_manual_save() {
     app.test_set_project_path(saved.clone());
 
     dispatch(&mut app, ProjectIoMessage::Autosave);
-    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
-    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    let request = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { request, clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { request, states: Vec::new() });
     // The autosave is writing; the user saves.
     dispatch(&mut app, ProjectIoMessage::SaveProject);
     dispatch(&mut app, ProjectIoMessage::ProjectSaved(Ok(()), true));

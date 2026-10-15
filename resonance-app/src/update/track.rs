@@ -881,8 +881,13 @@ fn handle_save_track_as_preset(
         return;
     }
 
-    r.presets.pending_preset_save = Some(crate::PendingPresetSave { track_id, name });
-    let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
+    let request = r.io.next_engine_request();
+    r.presets.pending_preset_save = Some(crate::PendingPresetSave {
+        track_id,
+        name,
+        request,
+    });
+    let _ = r.engine.send(AudioCommand::SaveAllPluginStates { request });
     r.ui.interaction.preset_save = None;
 }
 

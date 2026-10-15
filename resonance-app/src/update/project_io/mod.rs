@@ -615,11 +615,12 @@ pub fn start_autosave(r: &mut Resonance) -> Task<Message> {
 /// flag rides along on the collector so the completion path
 /// (`engine_events::project_io`) routes correctly.
 fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
-    // Never run two engine round-trips at once: the engine's
-    // `ClipsSavedToProjectDir` / `AllPluginStatesSaved` carry no tag, so a
-    // second collector would take the first one's results — a manual Save
-    // As finishing with an autosave's scratch-dir clips (code review
-    // STATE-11). An autosave backs off (the timer retries); a manual save
+    // Never run two engine round-trips at once: the engine has one
+    // project dir, so a second save's `SetProjectDir` would redirect the
+    // first one's clips — a manual Save As finishing with an autosave's
+    // scratch-dir clips (code review STATE-11). The replies carry the
+    // save's request id, so a collector never takes another's (BUG-61).
+    // An autosave backs off (the timer retries); a manual save
     // is queued and starts the moment the in-flight collector completes
     // (`start_queued_save`).
     if r.io.save_state.is_some() {
@@ -659,8 +660,10 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
 
     r.io.saving = true;
     let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+    let request = r.io.next_engine_request();
     r.io.save_state = Some(SaveCollector {
         path,
+        request,
         clip_files: HashMap::new(),
         plugin_states: Vec::new(),
         clips_done: false,
@@ -669,8 +672,8 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
         clips_error: None,
         started: std::time::Instant::now(),
     });
-    let _ = r.engine.send(AudioCommand::SaveClipsToProjectDir);
-    let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
+    let _ = r.engine.send(AudioCommand::SaveClipsToProjectDir { request });
+    let _ = r.engine.send(AudioCommand::SaveAllPluginStates { request });
     Task::none()
 }
 

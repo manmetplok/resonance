@@ -1038,7 +1038,7 @@ pub fn reload_plugin_state(
     })))
 }
 
-pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
+pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx, request: u64) {
     let mut states = Vec::new();
     let plugins_guard = ctx.plugins();
     let mut retry = false;
@@ -1072,11 +1072,13 @@ pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
     }
     drop(plugins_guard);
     if retry {
-        let _ = ctx.cmd_tx_retry.send(AudioCommand::SaveAllPluginStates);
+        let _ = ctx
+            .cmd_tx_retry
+            .send(AudioCommand::SaveAllPluginStates { request });
     } else {
         let _ = ctx
             .event_tx
-            .send(AudioEvent::AllPluginStatesSaved { states });
+            .send(AudioEvent::AllPluginStatesSaved { request, states });
     }
 }
 

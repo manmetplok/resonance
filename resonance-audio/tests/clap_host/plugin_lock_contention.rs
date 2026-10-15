@@ -373,7 +373,7 @@ fn a_held_effect_lock_is_counted_as_a_miss() {
 #[test]
 fn state_saves_do_not_hold_the_instance_lock() {
     let saves = [
-        AudioCommand::SaveAllPluginStates,
+        AudioCommand::SaveAllPluginStates { request: 1 },
         AudioCommand::SavePluginState { instance_id: FIRST },
         AudioCommand::SavePluginPresetState { instance_id: FIRST },
     ];
@@ -401,7 +401,7 @@ fn state_saves_do_not_hold_the_instance_lock() {
         assert_eq!(fake.saves.load(Ordering::SeqCst), 1, "{label}: saved once");
         let events = h.drain_events();
         let delivered = events.iter().any(|e| match e {
-            AudioEvent::AllPluginStatesSaved { states } => {
+            AudioEvent::AllPluginStatesSaved { states, .. } => {
                 states.iter().any(|(id, data)| *id == FIRST && data == b"fake-state")
             }
             AudioEvent::PluginStateSaved { instance_id, data } => {

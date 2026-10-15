@@ -85,7 +85,9 @@ pub(super) fn dispatch_plugins(
             instance_id,
             clap_ids,
         } => plugins::handle_set_plugin_preset_ignored_params(ctx, instance_id, clap_ids),
-        AudioCommand::SaveAllPluginStates => plugins::handle_save_all_plugin_states(ctx),
+        AudioCommand::SaveAllPluginStates { request } => {
+            plugins::handle_save_all_plugin_states(ctx, request)
+        }
         _ => unreachable!("dispatch_plugins: unexpected command"),
     }
 }

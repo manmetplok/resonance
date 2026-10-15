@@ -156,6 +156,20 @@ pub struct ProjectIoState {
     /// STATE2-04). `None` until then, or when the platform has no data
     /// directory. `project_path`, when set, always wins.
     pub untitled_anchor: Option<std::path::PathBuf>,
+    /// The last id handed out by [`Self::next_engine_request`].
+    pub(crate) next_engine_request: u64,
+}
+
+impl ProjectIoState {
+    /// A fresh id for an engine request whose reply must reach its own
+    /// requester and no other: a save's `SaveClipsToProjectDir` /
+    /// `SaveAllPluginStates` (BUG-61), a track-preset capture's
+    /// `SaveAllPluginStates`, a `SavePluginState` refresh (BUG-39). The
+    /// engine echoes it in the reply. Never 0, never repeated in a session.
+    pub(crate) fn next_engine_request(&mut self) -> u64 {
+        self.next_engine_request += 1;
+        self.next_engine_request
+    }
 }
 
 /// Structural echoes a diff restore is still owed by the engine (ARCH-01

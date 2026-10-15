@@ -55,7 +55,7 @@ fn pcm() -> Vec<f32> {
 /// Run the save and return its replies: the completion and failure
 /// events, in order (any other event is ignored).
 fn save_replies(h: &mut EngineHandlerHarness) -> Vec<AudioEvent> {
-    h.dispatch(AudioCommand::SaveClipsToProjectDir);
+    h.dispatch(AudioCommand::SaveClipsToProjectDir { request: REQUEST });
     h.drain_events()
         .into_iter()
         .filter(|e| {
@@ -67,9 +67,13 @@ fn save_replies(h: &mut EngineHandlerHarness) -> Vec<AudioEvent> {
         .collect()
 }
 
+/// The request id every save here sends: each reply must echo it, so the
+/// app's collector can tell its own reply from a late one (BUG-61).
+const REQUEST: u64 = 41;
+
 fn single_failure(replies: Vec<AudioEvent>) -> String {
     match replies.as_slice() {
-        [AudioEvent::ClipsSaveFailed { error }] => error.clone(),
+        [AudioEvent::ClipsSaveFailed { request: REQUEST, error }] => error.clone(),
         other => panic!("expected exactly one ClipsSaveFailed, got {other:?}"),
     }
 }
@@ -82,7 +86,10 @@ fn a_successful_save_answers_with_the_clip_files() {
     h.push_clip(clip(7, ClipSource::memory(pcm())));
 
     match save_replies(&mut h).as_slice() {
-        [AudioEvent::ClipsSavedToProjectDir { clip_files }] => {
+        [AudioEvent::ClipsSavedToProjectDir {
+            request: REQUEST,
+            clip_files,
+        }] => {
             assert_eq!(clip_files, &vec![(7, "audio/clip_7.wav".to_owned())]);
         }
         other => panic!("expected exactly one ClipsSavedToProjectDir, got {other:?}"),
