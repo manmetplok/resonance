@@ -32,9 +32,9 @@ Templates: [feature doc](features/_template.md) · [intent](intents/_template.md
 | **UI shell** | Commands, palette, keymap, views, overlays, settings, startup/recovery, media browser, preset browser, plugin windows, performance mode, theme, UI goldens | [13 docs](features/ui-shell/README.md) | [7 intents](intents/ui-shell/README.md) (4 partly built) |
 | **Project core** | File format, save/open, autosave, clip storage, templates, undo, Reconcile, ids, app state, update loop, hermetic tests, arch invariants | [12 docs](features/project-core/README.md) | [4 intents](intents/project-core/README.md) (2 partly built) |
 | **Plugins — effects** | EQ, compressor, gate, delay, granular delay, reverb, stereo, color, IR, mastering, mastering-assist engine, de-harsh | [12 docs](features/plugins-effects/README.md) | [6 intents](intents/plugins-effects/README.md) (1 partly built) |
-| **Plugins — instruments & platform** | Wavetable, drums + kit library, amp + NAM library, preset library, plugin SDK, editor runtimes, DSP/metering crates, 3rd-party hosting, bundling | [13 docs](features/plugins-instruments/README.md) | [9 intents](intents/plugins-instruments/README.md) (6 partly built) |
+| **Plugins — instruments & platform** | Wavetable, drums + kit library, amp + NAM library, preset library, plugin SDK, editor runtimes, DSP/metering crates, 3rd-party hosting, bundling | [13 docs](features/plugins-instruments/README.md) | [10 intents](intents/plugins-instruments/README.md) (6 partly built) |
 
-Totals: **125 feature docs**, **88 intents**, **46 known bugs**, 12 unbuilt prototypes.
+Totals: **125 feature docs**, **89 intents**, **46 known bugs**, 12 unbuilt prototypes.
 
 ## Guides
 

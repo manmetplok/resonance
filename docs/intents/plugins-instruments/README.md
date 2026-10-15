@@ -12,6 +12,7 @@ Each intent follows [`../_template.md`](../_template.md).
 | [macOS port: open checks and embedded editors](macos-port-open-checks.md) | partly built | Cocoa-side changes since 2026-09-29 are unverified on a Mac; embedded editors are not built. |
 | [NAM A2-Lite: run slimmable models at reduced size](nam-a2-lite-sizes.md) | partly built | Slimmable NAM models always run at full size; reduced sizes would save CPU. |
 | [NAM: load models with a top-level post-stack head](nam-post-stack-head.md) | idea | Some NAM WaveNet exports end in a top-level head after the layer stacks. |
+| [Orchestral instruments from open sample libraries (an SFZ sampler)](orchestral-sample-library.md) | idea | No sampled acoustic instruments; strings, winds and brass are faked on the wavetable synth. |
 | [Preset library: what round 2 left out](preset-library-remaining.md) | partly built | Preset library round 2 left P9 partly built and P10 unbuilt. |
 | [Third-party plugin hosting: catalog UI, scan control and isolation](third-party-hosting-gaps.md) | partly built | Users cannot see or steer the plugin scan; no catalog UI, scan folders or crash isolation. |
 | [Wavetable synth: Mod Wheel and Aftertouch mod sources](wavetable-mod-wheel-aftertouch.md) | partly built | Mod Wheel and Aftertouch are listed as wavetable mod sources but do nothing. |
