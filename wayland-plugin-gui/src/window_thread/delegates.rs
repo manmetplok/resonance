@@ -262,7 +262,7 @@ impl KeyboardHandler for State {
         _raw_modifiers: RawModifiers,
         _layout: u32,
     ) {
-        self.input.set_modifiers(modifiers);
+        self.input.set_modifiers(modifiers, &mut self.pending_events);
     }
 }
 

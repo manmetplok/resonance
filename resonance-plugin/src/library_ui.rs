@@ -108,7 +108,7 @@ struct TextFocusPlugin;
 struct TextFocusAtEnd(bool);
 
 fn text_focus_id() -> egui::Id {
-    egui::Id::new("resonance_library_ui_text_focus_at_end")
+    egui::Id::unique("resonance_library_ui_text_focus_at_end")
 }
 
 impl egui::Plugin for TextFocusPlugin {
@@ -159,14 +159,14 @@ pub fn search_field(ui: &mut egui::Ui, model: &mut BrowserModel, hint: &str, wid
 /// so a thousand rows cost one screen.
 pub fn library_list(
     ui: &mut egui::Ui,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     model: &mut BrowserModel,
     rows: &dyn LibraryRows,
     opts: &ListOptions<'_>,
 ) -> ListResponse {
     let mut out = ListResponse::default();
     let row_h = opts.row_height;
-    let salt = egui::Id::new(id_salt);
+    let salt = egui::Id::unique(id_salt);
 
     // Keyboard, before layout, so the scroll can follow the move.
     let mut scroll_to: Option<usize> = None;
@@ -376,7 +376,7 @@ fn elided(
 /// stays open for the next one. Returns whether the selection changed.
 pub fn facet_menu(
     ui: &mut egui::Ui,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     label: &str,
     model: &mut BrowserModel,
     rows: &dyn LibraryRows,
@@ -390,7 +390,7 @@ pub fn facet_menu(
         n => format!("{label}: {n}"),
     };
     let mut changed = false;
-    egui::ComboBox::from_id_salt(egui::Id::new(id_salt))
+    egui::ComboBox::from_id_salt(egui::Id::unique(id_salt))
         .selected_text(text)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
@@ -530,13 +530,13 @@ pub struct TagRowResponse {
 /// the focus away on that very frame.
 pub fn tag_row(
     ui: &mut egui::Ui,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     tags: &[String],
     draft: &mut String,
     suggestions: &[String],
 ) -> TagRowResponse {
     let mut out = TagRowResponse::default();
-    let id = egui::Id::new(id_salt);
+    let id = egui::Id::unique(id_salt);
     ui.horizontal_wrapped(|ui| {
         for t in tags {
             if tag_pill(ui, t, false, true).removed {

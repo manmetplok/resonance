@@ -106,11 +106,13 @@ mod gesture {
             ..Default::default()
         };
         let mut out = GestureEdit::default();
-        let _ = ctx.run_ui(input, |ui| {
+        ctx.run_ui(input, |ui| {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
-                .show_inside(ui, |ui| out = widget(ui));
-        });
+                .show(ui, |ui| out = widget(ui));
+        })
+        .textures_delta
+        .clear();
         out
     }
 
@@ -222,23 +224,27 @@ mod gesture {
                 }
                 edit
             };
-            let mut run = |events: Vec<egui::Event>| {
+            let mut run = |mut events: Vec<egui::Event>| {
+                // egui keeps held modifiers itself since 0.36; this event
+                // replaces the old `RawInput::modifiers` field.
+                events.insert(0, egui::Event::ModifiersChanged(mods));
                 let input = egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
                         egui::vec2(400.0, 300.0),
                     )),
-                    modifiers: mods,
                     events,
                     ..Default::default()
                 };
-                let _ = ctx.run_ui(input, |ui| {
+                ctx.run_ui(input, |ui| {
                     egui::CentralPanel::default()
                         .frame(egui::Frame::NONE)
-                        .show_inside(ui, |ui| {
+                        .show(ui, |ui| {
                             slider(ui);
                         });
-                });
+                })
+                .textures_delta
+                .clear();
             };
             run(Vec::new());
             // Down near the left end — far from the thumb at 0.5.
@@ -339,11 +345,13 @@ mod gesture {
             ..Default::default()
         };
         let mut out = GestureEdit::default();
-        let _ = ctx.run_ui(input, |ui| {
+        ctx.run_ui(input, |ui| {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
-                .show_inside(ui, |ui| out = widget(ui));
-        });
+                .show(ui, |ui| out = widget(ui));
+        })
+        .textures_delta
+        .clear();
         out
     }
 

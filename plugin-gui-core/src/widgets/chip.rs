@@ -275,7 +275,7 @@ pub fn chip_styled(ui: &mut egui::Ui, chip: &Chip<'_>) -> bool {
     // press into a click for any clickable widget.
     response.widget_info(|| {
         egui::WidgetInfo::selected(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             chip.enabled,
             chip.active,
             galley.text(),

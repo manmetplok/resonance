@@ -73,7 +73,7 @@ fn draw_csd_frame(
     // existing pointer event pipeline (no manual hit-testing here); the rect
     // is identical to `FrameLayout::close_button_rect`, the same geometry the
     // unit test drives.
-    let resp = ui.interact(close_rect, egui::Id::new("wpg_csd_close"), Sense::click());
+    let resp = ui.interact(close_rect, egui::Id::unique("wpg_csd_close"), Sense::click());
     if resp.hovered() {
         painter.rect_filled(close_rect, 0.0, CLOSE_HOVER);
     }
@@ -212,7 +212,6 @@ pub(super) fn paint_frame(
             egui::vec2(w as f32, h as f32),
         )),
         events,
-        modifiers: state.input.modifiers(),
         time: Some(start_time.elapsed().as_secs_f64()),
         // PUX-10: tracked from the keyboard enter/leave events instead
         // of hardcoded, so alt-tabbing away is reflected here too.
@@ -225,7 +224,7 @@ pub(super) fn paint_frame(
     // The close button feeds the same `close_requested` path as the SSD
     // `xdg_toplevel.close` event (drained in the event loop).
     let mut csd_close = false;
-    let full_output = state.egui_ctx.run_ui(raw_input, |ui| {
+    let mut full_output = state.egui_ctx.run_ui(raw_input, |ui| {
         if csd {
             if draw_csd_frame(ui, title, layout, app) {
                 csd_close = true;
@@ -259,7 +258,7 @@ pub(super) fn paint_frame(
         [pw as u32, ph as u32],
         pixels_per_point,
         &clipped_primitives,
-        &full_output.textures_delta,
+        &mut full_output.textures_delta,
     );
 
     // Optional framebuffer dump via env var — kept for dev

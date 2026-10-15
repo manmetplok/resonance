@@ -93,7 +93,10 @@ fn frame(
         events,
         ..Default::default()
     };
-    let out = ctx.run_ui(input, |ui| f(ui));
+    let mut out = ctx.run_ui(input, |ui| f(ui));
+    // Headless: no painter takes the texture uploads, and egui
+    // (0.36+) asserts a dropped TexturesDelta was handled.
+    out.textures_delta.clear();
     texts(&out.shapes)
 }
 
@@ -352,9 +355,12 @@ fn a_long_confirm_prompt_keeps_its_buttons_on_screen() {
         screen_rect: Some(screen),
         ..Default::default()
     };
-    let out = ctx.run_ui(input, |ui| {
+    let mut out = ctx.run_ui(input, |ui| {
         confirm_delete_row(ui, &mut model, "amp-model:0000", &prompt, Some("detail"));
     });
+    // Headless: no painter takes the texture uploads, and egui
+    // (0.36+) asserts a dropped TexturesDelta was handled.
+    out.textures_delta.clear();
     let drawn = visible_texts(&out.shapes);
     for button in ["Delete", "Cancel"] {
         let (_, rect) = drawn

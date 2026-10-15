@@ -82,7 +82,7 @@ use plugin_gui_core::widgets::{
 // ---------------------------------------------------------------------------
 
 fn announcer_id() -> egui::Id {
-    egui::Id::new("resonance_edit_announcer")
+    egui::Id::unique("resonance_edit_announcer")
 }
 
 /// Lend `announcer` to every control drawn in `ctx` from now on. The
@@ -131,7 +131,7 @@ pub fn apply_and_announce(ctx: &egui::Context, params: &[&dyn Param], apply: imp
 }
 
 fn gesture_id(param: &dyn Param) -> egui::Id {
-    egui::Id::new(("resonance_param_gesture", param.id()))
+    egui::Id::unique(("resonance_param_gesture", param.id()))
 }
 
 /// Apply one frame of a continuous control's [`GestureEdit`] to `param`:
@@ -203,13 +203,19 @@ pub struct ProbedRect {
 struct ProbeSink(Arc<Mutex<Vec<ProbedRect>>>);
 
 fn probe_id() -> egui::Id {
-    egui::Id::new("resonance_editor_probe")
+    egui::Id::unique("resonance_editor_probe")
 }
 
 /// Report a control's rect to a headless test frame. One context lookup
-/// when no test is listening.
+/// when no test is listening. A pass egui will discard and re-run (the
+/// first frame, once the theme is applied) reports nothing: its layout
+/// is not what gets painted.
 pub fn probe(ui: &egui::Ui, name: &str, rect: egui::Rect) {
-    if let Some(sink) = ui.ctx().data(|d| d.get_temp::<ProbeSink>(probe_id())) {
+    if let Some(sink) = ui
+        .ctx()
+        .data(|d| d.get_temp::<ProbeSink>(probe_id()))
+        .filter(|_| !ui.ctx().will_discard())
+    {
         if let Ok(mut v) = sink.0.lock() {
             v.push(ProbedRect {
                 name: name.to_string(),
@@ -374,7 +380,7 @@ fn draw_entry(ui: &mut egui::Ui, param: &dyn Param, mut entry: TypedEntry, size:
         egui::TextEdit::singleline(&mut entry.text)
             .id(id.with("field"))
             .font(egui::TextStyle::Monospace)
-            .horizontal_align(egui::Align::Center)
+            .align(egui::Align2::CENTER_TOP)
             .margin(egui::Margin::symmetric(2, 2)),
     );
     if !entry.focus_requested {
@@ -881,13 +887,17 @@ pub mod headless {
         }
 
         /// Run one frame with `events`; 1/60 s of egui time passes.
-        pub fn frame(&mut self, events: Vec<egui::Event>) -> FrameProbe {
+        pub fn frame(&mut self, mut events: Vec<egui::Event>) -> FrameProbe {
             self.time += 1.0 / 60.0;
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, self.size);
+            // egui keeps the held modifiers itself and only learns of
+            // them through this event (no `RawInput::modifiers` since
+            // 0.36); re-stating them every frame keeps "held for the
+            // following frames" exact.
+            events.insert(0, egui::Event::ModifiersChanged(self.modifiers));
             let input = egui::RawInput {
                 screen_rect: Some(screen),
                 time: Some(self.time),
-                modifiers: self.modifiers,
                 events,
                 ..Default::default()
             };
@@ -896,7 +906,10 @@ pub mod headless {
             }
             install_announcer(&self.ctx, &self.announcer);
             let app = &mut self.app;
-            let out = self.ctx.run_ui(input, |ui| app.ui(ui));
+            let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
+            // Headless: no painter takes the texture uploads, and egui
+            // (0.36+) asserts a dropped TexturesDelta was handled.
+            out.textures_delta.clear();
             let mut texts = Vec::new();
             fn walk(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<ProbedText>) {
                 match shape {

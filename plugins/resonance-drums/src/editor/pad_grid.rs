@@ -49,8 +49,12 @@ const MIN_CLICK_VELOCITY: f32 = 0.05;
 pub(crate) const GRID_SHARE: f32 = 0.58;
 /// The width the inspector keeps, whatever the grid would like.
 pub(crate) const INSPECTOR_MIN_W: f32 = 440.0;
-/// The narrowest grid column: six of the smallest cells.
-const GRID_MIN_W: f32 = COLS as f32 * CELL_MIN.x + (COLS - 1) as f32 * CELL_GAP + 2.0 * PAD_MARGIN;
+/// The narrowest grid column: six of the smallest cells, inside the
+/// card's margins and its 1 px stroke. (The stroke was once left out:
+/// the last column ran 2 px past the scroll area, hidden only by the
+/// 3 px clip margin egui dropped in 0.36.)
+const GRID_MIN_W: f32 =
+    COLS as f32 * CELL_MIN.x + (COLS - 1) as f32 * CELL_GAP + 2.0 * PAD_MARGIN + 2.0 * CARD_STROKE;
 
 /// The grid column's width for `avail` (grid + inspector, gaps excluded):
 /// [`GRID_SHARE`] of it, less what the inspector needs
@@ -75,6 +79,8 @@ fn cell_size(avail: egui::Vec2) -> egui::Vec2 {
 
 /// The card's inner margin.
 const PAD_MARGIN: f32 = 12.0;
+/// The card's stroke width ([`super::controls::card`]).
+const CARD_STROKE: f32 = 1.0;
 
 /// What a click on a cell asked for.
 pub(crate) struct CellClick {
@@ -180,7 +186,7 @@ struct Cell<'a> {
 
 fn draw_cell(ui: &mut egui::Ui, rect: egui::Rect, pad: usize, cell: &Cell<'_>) -> Option<CellClick> {
     let response = ui
-        .interact(rect, ui.id().with(("pad_cell", pad)), egui::Sense::click())
+        .interact(rect, ui.scope_id().with(("pad_cell", pad)), egui::Sense::click())
         .on_hover_text(if !cell.present {
             "Not in this kit: this pad is silent"
         } else if cell.muted {

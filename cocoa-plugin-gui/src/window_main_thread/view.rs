@@ -656,7 +656,11 @@ impl EditorView {
             },
         );
 
-        let events = std::mem::take(&mut *ivars.pending_events.borrow_mut());
+        let mut events = std::mem::take(&mut *ivars.pending_events.borrow_mut());
+        // egui keeps the held modifiers itself and learns of them only
+        // through this event (no `RawInput::modifiers` since 0.36).
+        // Stated every frame, as the field was.
+        events.insert(0, egui::Event::ModifiersChanged(ivars.input.borrow().modifiers()));
         let raw_input = egui::RawInput {
             viewport_id: egui::ViewportId::ROOT,
             viewports,
@@ -665,7 +669,6 @@ impl EditorView {
                 egui::vec2(w, h),
             )),
             events,
-            modifiers: ivars.input.borrow().modifiers(),
             time: Some(ivars.start_time.elapsed().as_secs_f64()),
             focused: true,
             ..Default::default()
@@ -674,7 +677,7 @@ impl EditorView {
         // The app borrow spans `ui()`, which may start a modal run loop
         // (rfd). Nested paints are already rejected by `in_paint`; nothing
         // else on the main thread touches `app`.
-        let full_output = {
+        let mut full_output = {
             let mut app = ivars.app.borrow_mut();
             ivars.egui_ctx.run_ui(raw_input, |ui| app.ui(ui))
         };
@@ -684,6 +687,9 @@ impl EditorView {
             .tessellate(full_output.shapes, pixels_per_point);
 
         let Some(paint) = &mut *ivars.paint.borrow_mut() else {
+            // Torn down mid-frame (see `paint`): nothing will upload these,
+            // and egui (0.36+) asserts a dropped TexturesDelta was handled.
+            full_output.textures_delta.clear();
             return;
         };
         use glow::HasContext;
@@ -697,7 +703,7 @@ impl EditorView {
             [pw as u32, ph as u32],
             pixels_per_point,
             &clipped_primitives,
-            &full_output.textures_delta,
+            &mut full_output.textures_delta,
         );
 
         // Dev-only frame dump (`CPG_DUMP_FRAME=<path>`, frame picked by

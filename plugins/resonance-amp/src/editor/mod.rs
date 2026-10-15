@@ -88,7 +88,10 @@ impl HeadlessEditor {
             ..Default::default()
         };
         let app = &mut self.app;
-        let out = self.ctx.run_ui(input, |ui| app.ui(ui));
+        let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
+        // Headless: no painter takes the texture uploads, and egui
+        // (0.36+) asserts a dropped TexturesDelta was handled.
+        out.textures_delta.clear();
         let mut texts = Vec::new();
         fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
             match shape {
