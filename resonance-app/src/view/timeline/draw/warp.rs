@@ -59,6 +59,15 @@ impl TimelineCanvas<'_> {
         {
             return None;
         }
+        // The trim handle owns the clip's two vertical edges even where
+        // they cross the marker strip — otherwise the strip shadows trim
+        // along its whole height and the edge is only reachable above it
+        // (BUG-15).
+        if (pos.x - rect.x).abs() <= theme::CLIP_EDGE_THRESHOLD
+            || (pos.x - (rect.x + rect.width)).abs() <= theme::CLIP_EDGE_THRESHOLD
+        {
+            return None;
+        }
         let nearest = clip
             .warp
             .markers
