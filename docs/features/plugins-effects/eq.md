@@ -1,6 +1,6 @@
 # EQ (`com.resonance.eq`)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: `docs/history/specs/warmth-width-depth.md` §6.4 (slice W8: M/S, Tilt/Lift+Dip/Air, auto-gain, dynamic bands).
 
 An 8-band parametric EQ for tracks, busses and the master. Each band is a
@@ -23,7 +23,9 @@ output so a boost can be judged at matched level.
   above the audible band, 40 kHz for +12 dB at 20 kHz).
 - **Cut slopes** (`band{n}_slope`): 12 / 24 / 48 dB/oct, used only by Low
   Cut and High Cut. The cascades are true Butterworth (−3 dB at the
-  cutoff, maximally flat).
+  cutoff, maximally flat), so each stage's Q comes from the slope and the
+  band's own `q` is unused: the strip shows no Q on a cut band and the
+  node's scroll does nothing there.
 - **M/S** (`band{n}_ms`): Stereo (default), Mid or Side. A Mid/Side band
   splits `m = (L+R)/2`, `s = (L−R)/2`, filters one component and
   recombines. A Stereo band runs the original arithmetic exactly.
@@ -79,7 +81,7 @@ them.
 A response plot with the live spectrum behind it (pre-EQ or post-EQ, one at
 a time), one node per enabled band and a control strip below. Node
 interactions: drag moves frequency and gain (frequency only for cuts),
-scrolling adjusts Q, right-click opens type/slope/disable, double-click
+scrolling adjusts Q (not on cuts or the one-knob kinds), right-click opens type/slope/disable, double-click
 toggles the band. The strip uses the shared `editor_widgets::param_slider`.
 The `freq` params parse both "1200 Hz" and "1.2 kHz" from text.
 

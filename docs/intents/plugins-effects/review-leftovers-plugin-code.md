@@ -8,7 +8,7 @@
 
 Performance, consistency and hygiene items in the first-party plugins that
 the 2026-10-02 campaign left open. Audible or visible plugin defects are in
-[`../bugs.md`](../bugs.md) (BUG-40…BUG-42).
+[`../bugs.md`](../bugs.md) (BUG-41, BUG-42).
 
 ## What it would do
 
