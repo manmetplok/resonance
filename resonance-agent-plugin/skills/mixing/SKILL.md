@@ -145,6 +145,18 @@ The vocabulary, the numbers, the exact keys and presets, and the stop rules are
 in `${CLAUDE_SKILL_DIR}/references/character.md`. Read it before the first
 character move.
 
+## 3c. The shape check
+
+Once balance and tone hold, look at the whole mix as a shape: every part
+placed by pan and width, by frequency, and by level and depth. A good mix
+is a tree — a mono trunk, branches widening to about 2.5–5 kHz, a narrower
+top, parts on different layers at every height — and it is not dense: gaps
+are fine where nothing is missing. `meter_stems` with `detail: ["spectrum",
+"stereo", "depth"]` gives it in one pass. How to read it, what bends it
+(wide lows from choruses, delays and overhead rumble; a reverb return's low
+tail; bright stereo parts widening the top) and the fixes are in
+`${CLAUDE_SKILL_DIR}/references/mix-shape.md`.
+
 ## 4. Verify, then decide whether to continue
 
 Re-measure over **the same range** as step 1 and compare the specific number you
@@ -171,6 +183,9 @@ path and is visible live in the GUI; `edit_undo` reverses them one at a time.
 - `${CLAUDE_SKILL_DIR}/references/character.md` — the warmth/harshness
   vocabulary, the warmth procedure with its targets and stop rules, and the
   plugin keys and presets for each lever.
+- `${CLAUDE_SKILL_DIR}/references/mix-shape.md` — the mix as a 3D tree
+  (width × frequency × depth): measuring it, what bends it, the fixes, and
+  level moves near the fader ceiling.
 - `${CLAUDE_SKILL_DIR}/references/roles.md` — per-role staging (level, pan,
   width, send, pre-delay, layer, character), and how to infer a track's role
   from what `song_tracks` and the meters report. Shared with `spatial`.

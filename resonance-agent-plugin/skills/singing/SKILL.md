@@ -155,8 +155,15 @@ range.
 syllable on the grid, and does not space quick syllables evenly:
 - Keep each phrase's first word and its held end where the music wants
   them; move the syllables *inside* the phrase by a few tens of ms (about
-  -25..+65 ms, mostly late for a laid-back feel), and let the spacing
-  between them vary.
+  ±30 ms, centred), and let the spacing between them vary.
+- **Do not let the vocal drift late overall.** The bank's own duration model
+  already puts each vowel about 15 ms after its note starts; a late-biased
+  humanize on top of that left a lead 20–60 ms behind tight drums, which
+  reads as sluggish. Check it: detect the sung onsets in a stem and compare
+  them with the beat grid (onsets a little *ahead* of the grid are right —
+  that is the consonant before the vowel). If the vocal lags, shift every
+  note of every vocal part by the same amount (about 0.03 beat) so the
+  parts keep their relation.
 - A syllable under about a third of a beat (≈250 ms) is heard as clipped.
   Give it room by borrowing time from its neighbours inside the phrase, not
   by moving the phrase — and never leave the result evenly spaced: that is
@@ -246,7 +253,24 @@ Only after the words and notes are right. In order of reach:
   it when written rests are being sung through.
 - **`velocity_dynamics`** (0..1, default 0.5) — how far note velocity moves
   loudness, on every bank. Vary velocities by phrase stress: it is the
-  cheapest phrasing there is.
+  cheapest phrasing there is. Where the bank takes tension,
+  `tension_velocity_amount` makes a harder note brighter too, so velocity
+  is word emphasis:
+  - read the lyric for the words that carry it (images, verbs, the rhyme
+    word, the held line end) and give them the higher velocities; fillers
+    (the, on, for, it, is) the lower ones. Generated and humanized melodies
+    often have it backwards — a filler at 102, the line's last word at 58;
+  - keep the spread modest, about 80–98: a wide range does not read as
+    phrasing on a synth voice, it reads as words dropping out;
+  - re-run the intelligibility check after: a softened word can turn into
+    another one, and a single velocity is the fix.
+- **Legato.** A gap of `rest_threshold_beats` (default 0.5) or more between
+  two notes is sung as a rest, so a line whose notes stop short of the next
+  syllable comes out staccato even when nobody wrote a rest. For a bound,
+  sung line hold each syllable until the next one starts inside the line
+  (keep the real breaths between lines), raise `rest_threshold_beats` to
+  about 0.75, and keep `consonant_emphasis` at 0.5 or below — crisper
+  consonants chop the line further.
 - **`bank_timing` / `bank_pitch`** (default on) — the voicebank's own
   duration and pitch models. Leave them on; they sing clearer. With
   `bank_pitch` on, `vibrato`, `vibrato_rate` and `portamento_ms` are not
