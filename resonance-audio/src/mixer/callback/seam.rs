@@ -80,6 +80,15 @@ pub(super) fn detect(shared: &SharedState, playhead: u64, frames: usize) -> Opti
     }
 }
 
+/// Publish that the loop wrapped in this buffer (`SharedState::
+/// note_loop_wrap`): the engine thread rolls the cycle-record MIDI pass on
+/// it, and files each live note by the count it was picked up under
+/// (BUG-22). One atomic add.
+#[inline]
+pub(super) fn count_wrap(shared: &SharedState) {
+    shared.note_loop_wrap();
+}
+
 /// Render the arrangement for this buffer — one sub-block, or two around
 /// the seam — and return the playhead the next buffer starts on.
 ///

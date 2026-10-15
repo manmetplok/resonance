@@ -5,7 +5,7 @@
 //! renders the block (doc #260 finding #16).
 
 use crate::engine::SharedState;
-use crate::midi_hardware::LiveMidiEvent;
+use crate::midi_hardware::{ForwardedLiveMidi, LiveMidiEvent};
 use crate::types::*;
 
 use super::midi_stash::MidiStash;
@@ -42,7 +42,7 @@ pub fn live_instrument_for(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn pickup_live_midi(
     live_midi_rx: &crossbeam_channel::Receiver<LiveMidiEvent>,
-    live_midi_fwd: &crossbeam_channel::Sender<LiveMidiEvent>,
+    live_midi_fwd: &crossbeam_channel::Sender<ForwardedLiveMidi>,
     shared: &SharedState,
     midi_stash: &mut MidiStash,
     sample_rate: u32,
@@ -74,7 +74,7 @@ pub(super) fn pickup_live_midi(
                 arrival,
             } => {
                 deliver_controller(tracks_guard, plugins_guard, *track_id, *data, *arrival, now, sample_rate, frames);
-                let _ = live_midi_fwd.try_send(ev);
+                let _ = live_midi_fwd.try_send(ForwardedLiveMidi::stamp(ev, shared, now));
                 continue;
             }
         };
@@ -101,8 +101,10 @@ pub(super) fn pickup_live_midi(
         }
         // Bookkeeping (record-into-clip, MIDI thru) stays on the engine
         // thread; a full forward channel just drops the bookkeeping,
-        // never the audible note.
-        let _ = live_midi_fwd.try_send(ev);
+        // never the audible note. Stamped with the loop pass and the
+        // playhead it was picked up in, before this callback can wrap
+        // the loop (BUG-22).
+        let _ = live_midi_fwd.try_send(ForwardedLiveMidi::stamp(ev, shared, now));
     }
 }
 

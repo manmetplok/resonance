@@ -113,8 +113,8 @@ pub struct MixAudioHarness {
     continuity: crate::mixer::TransportContinuity,
     live_midi_tx: crossbeam_channel::Sender<LiveMidiEvent>,
     live_midi_rx: crossbeam_channel::Receiver<LiveMidiEvent>,
-    live_fwd_tx: crossbeam_channel::Sender<LiveMidiEvent>,
-    live_fwd_rx: crossbeam_channel::Receiver<LiveMidiEvent>,
+    live_fwd_tx: crossbeam_channel::Sender<crate::midi_hardware::ForwardedLiveMidi>,
+    live_fwd_rx: crossbeam_channel::Receiver<crate::midi_hardware::ForwardedLiveMidi>,
 }
 
 #[doc(hidden)]
@@ -430,6 +430,11 @@ impl MixAudioHarness {
     /// Live-MIDI events the callback forwarded to the engine thread.
     pub fn drain_forwarded_midi(&self) -> usize {
         self.live_fwd_rx.try_iter().count()
+    }
+
+    /// Live-MIDI events the callback forwarded, with their pickup stamps.
+    pub fn take_forwarded_midi(&self) -> Vec<crate::midi_hardware::ForwardedLiveMidi> {
+        self.live_fwd_rx.try_iter().collect()
     }
 
     /// Run one audio callback and return the interleaved output.

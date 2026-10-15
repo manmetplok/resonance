@@ -14,7 +14,7 @@ use ringbuf::traits::Split;
 use thiserror::Error;
 
 use crate::midi_clock::MidiClockEvent;
-use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
+use crate::midi_hardware::{ForwardedLiveMidi, LiveControlEvent, LiveMidiEvent};
 use crate::mixer;
 use crate::platform::{self, DeviceDirection};
 use crate::types::*;
@@ -553,8 +553,8 @@ struct EngineChannels {
     event_rx: Receiver<AudioEvent>,
     live_midi_tx: Sender<LiveMidiEvent>,
     live_midi_rx: Receiver<LiveMidiEvent>,
-    live_midi_fwd_tx: Sender<LiveMidiEvent>,
-    live_midi_fwd_rx: Receiver<LiveMidiEvent>,
+    live_midi_fwd_tx: Sender<ForwardedLiveMidi>,
+    live_midi_fwd_rx: Receiver<ForwardedLiveMidi>,
     live_control_tx: Sender<LiveControlEvent>,
     live_control_rx: Receiver<LiveControlEvent>,
     clock_tx: Sender<MidiClockEvent>,
@@ -574,7 +574,7 @@ impl EngineChannels {
         // quantum) and forwards each event on this channel for the
         // engine thread's recording / MIDI-thru bookkeeping.
         let (live_midi_fwd_tx, live_midi_fwd_rx) =
-            crossbeam_channel::bounded::<LiveMidiEvent>(1024);
+            crossbeam_channel::bounded::<ForwardedLiveMidi>(1024);
         // Separate channel for the dedicated control-surface input. Same
         // bound + rationale as the per-track live MIDI channel above.
         let (live_control_tx, live_control_rx) =
@@ -636,7 +636,7 @@ impl Snapshots {
 struct MixerFactory<'a> {
     snapshots: &'a Snapshots,
     live_midi_rx: &'a Receiver<LiveMidiEvent>,
-    live_midi_fwd_tx: &'a Sender<LiveMidiEvent>,
+    live_midi_fwd_tx: &'a Sender<ForwardedLiveMidi>,
     sample_rate: u32,
     buf_frames: usize,
     quantum: usize,

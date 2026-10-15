@@ -151,8 +151,14 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
 /// ends. Non-blocking; a full forward channel drops the bookkeeping only,
 /// exactly as `pickup_live_midi` does.
 fn forward_live_midi_unplayed(inputs: &CallbackInputs<'_>) {
+    if inputs.live_midi_rx.is_empty() {
+        return;
+    }
+    let now = std::time::Instant::now();
     for ev in inputs.live_midi_rx.try_iter() {
-        let _ = inputs.live_midi_fwd.try_send(ev);
+        let _ = inputs.live_midi_fwd.try_send(
+            crate::midi_hardware::ForwardedLiveMidi::stamp(ev, inputs.shared, now),
+        );
     }
 }
 

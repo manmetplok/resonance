@@ -56,9 +56,6 @@ pub struct EngineHandlerHarness {
     /// so the engine's own `HandlerState` has nowhere left to keep one).
     /// Never reset, so repeated calls on one harness never reissue an id.
     next_test_asset_id: AssetId,
-    /// The engine loop's previous-iteration playhead, for
-    /// [`Self::recording_tick`]'s loop-seam poll.
-    last_playhead: SamplePos,
 }
 
 impl Default for EngineHandlerHarness {
@@ -104,7 +101,6 @@ impl EngineHandlerHarness {
             cmd_rx_retry,
             state: HandlerState::new(48_000, live_midi_tx, live_control_tx, clock_tx),
             next_test_asset_id: 1,
-            last_playhead: 0,
         };
         // The app grants the engine clip ids at startup (ARCH-04 D-7d);
         // the harness does the same, so recording and live-MIDI tests keep
@@ -155,7 +151,7 @@ impl EngineHandlerHarness {
         let cmd_tx_retry = cmd_tx.clone();
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
         let (live_midi_tx, _live_midi_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(8);
-        let (_live_midi_fwd_tx, live_midi_fwd_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(8);
+        let (_live_midi_fwd_tx, live_midi_fwd_rx) = crossbeam_channel::bounded::<crate::midi_hardware::ForwardedLiveMidi>(8);
         let (live_control_tx, live_control_rx) = crossbeam_channel::bounded::<LiveControlEvent>(8);
         let (clock_tx, clock_rx) = crossbeam_channel::bounded::<MidiClockEvent>(8);
         let (prod, _cons) = ringbuf::HeapRb::<f32>::new(1).split();
@@ -1139,8 +1135,25 @@ impl EngineHandlerHarness {
 
     /// Run the real live-MIDI bookkeeping for `event` (record-into-clip
     /// when the track is armed and the transport rolls).
+    /// Stamped as the audio callback would stamp it picking it up now:
+    /// the current loop-wrap count and playhead.
     pub fn live_midi_event(&mut self, event: crate::midi_hardware::LiveMidiEvent) {
-        self.with_ctx(|ctx, state| crate::engine::midi::handle_live_midi_event(ctx, state, event));
+        let stamped = crate::midi_hardware::ForwardedLiveMidi::stamp(
+            event,
+            &self.shared,
+            std::time::Instant::now(),
+        );
+        self.forwarded_live_midi(stamped);
+    }
+
+    /// Run the real live-MIDI bookkeeping for an event as the audio
+    /// callback forwarded it, with whatever pickup stamp the test gives
+    /// it — a note picked up before a loop wrap the engine thread only
+    /// files after it, say (BUG-22).
+    pub fn forwarded_live_midi(&mut self, forwarded: crate::midi_hardware::ForwardedLiveMidi) {
+        self.with_ctx(|ctx, state| {
+            crate::engine::midi::handle_live_midi_event(ctx, state, forwarded)
+        });
     }
 
     /// Move the playhead the handlers read, as the audio callback does.
@@ -1316,15 +1329,15 @@ impl EngineHandlerHarness {
 
     /// The engine loop's per-tick recording steps, in its order: the
     /// count-in poll, then the latch / drain / cycle-record cut
-    /// (`poll_recording_capture`), then the MIDI loop-seam poll.
+    /// (`poll_recording_capture`), then the MIDI loop-seam poll against
+    /// the loop-wrap count as it stands now.
     pub fn recording_tick(&mut self) {
-        let mut last = self.last_playhead;
+        let wraps_seen = self.shared.loop_wraps();
         self.with_ctx(|ctx, state| {
             transport::poll_precount(ctx, state);
             transport::poll_recording_capture(ctx, state);
-            transport::poll_loop_record_seam(ctx, state, &mut last);
+            transport::poll_loop_record_seam(ctx, state, wraps_seen);
         });
-        self.last_playhead = last;
     }
 
     /// Publish a plugin-delay-compensation table, as the engine's comp

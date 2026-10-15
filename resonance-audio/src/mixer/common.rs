@@ -159,6 +159,8 @@ pub(super) fn advance_playhead_silent(
         if hi > lo && playhead < hi && new_playhead >= hi {
             // Modulo keeps a loop shorter than one buffer inside the loop.
             new_playhead = lo + (new_playhead - hi) % (hi - lo);
+            // A wrap like the rendering path's seam (BUG-22).
+            shared.note_loop_wrap();
         }
     }
     new_playhead
