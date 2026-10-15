@@ -1188,11 +1188,16 @@ pub enum AudioEvent {
     ABSourceChanged {
         source: ABSource,
     },
-    /// Loudness-match toggled. `offset_db` is the gain offset the engine
-    /// applies to the active reference when `enabled` is true.
+    /// Loudness-match toggled, or the active reference re-matched while
+    /// it is on. `offset_db` is the gain offset the engine applies to the
+    /// active reference when `enabled` is true; `mix_lufs` is the mix's
+    /// integrated loudness it was matched to, or `None` when no offset
+    /// could be computed (no active / analysed reference, or no mix
+    /// measurement yet) and `offset_db` is 0.
     RefLoudnessMatchChanged {
         enabled: bool,
         offset_db: f32,
+        mix_lufs: Option<f32>,
     },
     /// The reference's manual level trim changed (dB).
     RefTrimChanged {

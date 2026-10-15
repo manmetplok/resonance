@@ -865,8 +865,12 @@ fn route_session(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::ReferenceRemoved { id } => reference::removed(r, id),
         E::ActiveReferenceChanged { id } => reference::active_changed(r, id),
         E::ABSourceChanged { source } => reference::ab_source_changed(r, source),
-        E::RefLoudnessMatchChanged { enabled, offset_db } => {
-            reference::loudness_match_changed(r, enabled, offset_db)
+        E::RefLoudnessMatchChanged {
+            enabled,
+            offset_db,
+            mix_lufs,
+        } => {
+            reference::loudness_match_changed(r, enabled, offset_db, mix_lufs)
         }
         E::RefTrimChanged { db } => reference::trim_changed(r, db),
         E::RefMarkerAdded {

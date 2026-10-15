@@ -155,10 +155,24 @@ fn active_and_source_and_settings_fold_in() {
         AudioEvent::RefLoudnessMatchChanged {
             enabled: true,
             offset_db: -2.5,
+            mix_lufs: Some(-14.0),
         },
     );
     assert!(app.test_reference().loudness_match);
     assert_eq!(app.test_reference().monitor.offset_db, -2.5);
+    assert_eq!(app.test_reference().monitor.matched_mix_lufs, Some(-14.0));
+
+    // A match with nothing to match against clears the target.
+    fold(
+        &mut app,
+        AudioEvent::RefLoudnessMatchChanged {
+            enabled: true,
+            offset_db: 0.0,
+            mix_lufs: None,
+        },
+    );
+    assert_eq!(app.test_reference().monitor.offset_db, 0.0);
+    assert_eq!(app.test_reference().monitor.matched_mix_lufs, None);
 
     fold(&mut app, AudioEvent::RefTrimChanged { db: -4.0 });
     assert_eq!(app.test_reference().trim_db, -4.0);

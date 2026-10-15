@@ -8,7 +8,9 @@ use iced::{alignment, Color, Element, Length};
 use resonance_audio::types::{ABSource, ReferenceId};
 
 use crate::message::*;
-use crate::reference::{ReferenceEntry, ReferenceMarkerState, ReferenceMessage, ReferenceState};
+use crate::reference::{
+    ReferenceEntry, ReferenceMarkerState, ReferenceMessage, ReferenceState, ReferenceStatus,
+};
 use crate::theme::{self};
 use crate::util::format_db_signed;
 
@@ -29,7 +31,7 @@ pub(super) fn ab_controls<'a>(
             Space::new().height(10),
             marker_row(state, entry),
             Space::new().height(14),
-            loudness_row(state),
+            loudness_row(state, entry),
             Space::new().height(12),
             trim_row(state.trim_db),
         ]
@@ -186,8 +188,10 @@ fn marker_chip(ref_id: ReferenceId, mk: &ReferenceMarkerState) -> Element<'stati
 }
 
 /// The loudness-match toggle, with the engine-reported gain offset shown
-/// alongside once matching is engaged.
-fn loudness_row(state: &ReferenceState) -> Element<'static, Message> {
+/// alongside once matching is engaged, and beneath it what was matched:
+/// the reference's loudness → the mix loudness it was levelled to, or why
+/// nothing was.
+fn loudness_row(state: &ReferenceState, entry: &ReferenceEntry) -> Element<'static, Message> {
     let matched = state.loudness_match;
     let offset_db = state.monitor.offset_db;
 
@@ -211,9 +215,38 @@ fn loudness_row(state: &ReferenceState) -> Element<'static, Message> {
         text("off").size(11).color(theme::TEXT_3)
     };
 
-    row![toggle, Space::new().width(Length::Fill), offset]
-        .align_y(alignment::Vertical::Center)
-        .into()
+    let row = row![toggle, Space::new().width(Length::Fill), offset]
+        .align_y(alignment::Vertical::Center);
+    if !matched {
+        return row.into();
+    }
+    column![
+        row,
+        Space::new().height(6),
+        text(match_caption(entry, state.monitor.matched_mix_lufs))
+            .size(10)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_3),
+    ]
+    .spacing(0)
+    .into()
+}
+
+/// What the loudness match levelled: "-9.4 → -16.1 LUFS", or why the
+/// offset is 0 — the reference is still being measured (the engine
+/// matches it when analysis lands), or the mix has not played since the
+/// transport last started, so there is no loudness to match to. Matching
+/// is on demand, so after playing the user switches it off and on again.
+fn match_caption(entry: &ReferenceEntry, mix_lufs: Option<f32>) -> String {
+    match mix_lufs {
+        Some(mix) if entry.integrated_lufs.is_finite() => {
+            format!("{:.1} \u{2192} {mix:.1} LUFS", entry.integrated_lufs)
+        }
+        _ if matches!(entry.status, ReferenceStatus::Analyzing(_)) => {
+            "Matches once analysis finishes".to_string()
+        }
+        _ => "No mix loudness yet \u{2014} play, then re-toggle".to_string(),
+    }
 }
 
 /// The reference level trim: a ±12 dB slider with a monospace readout.

@@ -114,9 +114,15 @@ pub(super) fn ab_source_changed(r: &mut Resonance, source: ABSource) {
     r.reference.monitor.ab_source = source;
 }
 
-pub(super) fn loudness_match_changed(r: &mut Resonance, enabled: bool, offset_db: f32) {
+pub(super) fn loudness_match_changed(
+    r: &mut Resonance,
+    enabled: bool,
+    offset_db: f32,
+    mix_lufs: Option<f32>,
+) {
     r.reference.loudness_match = enabled;
     r.reference.monitor.offset_db = offset_db;
+    r.reference.monitor.matched_mix_lufs = mix_lufs;
 }
 
 pub(super) fn trim_changed(r: &mut Resonance, db: f32) {

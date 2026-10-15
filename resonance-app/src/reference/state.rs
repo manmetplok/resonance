@@ -152,9 +152,14 @@ pub struct ReferenceMonitorState {
     /// Whether the reference cursor follows the mix transport.
     pub loop_to_mix: bool,
     /// Applied loudness-match gain offset (dB), reported by the engine —
-    /// readback derived from the active reference's analysis, re-reported
-    /// whenever loudness matching is (re)set.
+    /// mix integrated LUFS − the active reference's, re-reported whenever
+    /// loudness matching is switched on or the active reference changes
+    /// while it is on.
     pub offset_db: f32,
+    /// The mix's integrated loudness (LUFS) the offset was matched to, or
+    /// `None` when the engine could not match (no mix measurement yet, or
+    /// the reference is still analysing) and `offset_db` is 0.
+    pub matched_mix_lufs: Option<f32>,
     /// Latest A/B meter snapshot (transient; repopulated each poll).
     pub ab_meter: Option<AbMeters>,
     /// The source to restore when a momentary-audition gesture ends.

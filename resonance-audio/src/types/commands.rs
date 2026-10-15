@@ -1422,10 +1422,12 @@ pub enum AudioCommand {
         source: ABSource,
     },
     /// Toggle loudness-matching the active reference to the mix. When
-    /// enabled the engine applies the measured per-reference gain
-    /// offset so both audition at the same loudness. Emits
-    /// `AudioEvent::RefLoudnessMatchChanged` (carrying the applied
-    /// offset).
+    /// enabled the engine matches the active reference to the mix's live
+    /// integrated loudness (offset = mix LUFS − reference LUFS, computed
+    /// now and again whenever the active reference changes while matching
+    /// is on) so both audition at the same loudness. Emits
+    /// `AudioEvent::RefLoudnessMatchChanged` (carrying the applied offset
+    /// and the mix loudness it was matched to).
     SetRefLoudnessMatch {
         enabled: bool,
     },
