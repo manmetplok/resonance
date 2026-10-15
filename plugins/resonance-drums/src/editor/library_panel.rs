@@ -126,7 +126,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         .stroke(egui::Stroke::new(1.0, theme::BORDER))
         .corner_radius(6.0)
         .inner_margin(egui::Margin::same(FRAME_MARGIN));
-    let modal = egui::Modal::new(egui::Id::new("drums_kit_library"))
+    let modal = egui::Modal::new(egui::Id::unique("drums_kit_library"))
         .backdrop_color(egui::Color32::from_black_alpha(180))
         .frame(frame);
     let response = modal.show(ui.ctx(), |ui| {
@@ -262,7 +262,7 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         .frame(egui::Frame::NONE)
         .resizable(false)
         .show_separator_line(false)
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.separator();
             draw_footer(ui, app);
         });
@@ -270,7 +270,7 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         .frame(egui::Frame::NONE)
         .resizable(false)
         .show_separator_line(false)
-        .show_inside(ui, |ui| draw_actions(ui, app));
+        .show(ui, |ui| draw_actions(ui, app));
 
     let detail_h = (ui.available_height() * 0.45).clamp(60.0, 200.0);
     let list_h = (ui.available_height() - detail_h - 12.0).max(44.0);

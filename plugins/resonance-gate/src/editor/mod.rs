@@ -121,9 +121,9 @@ impl EditorApp for GateEditorApp {
 
         egui::Panel::top("gate_header")
             .exact_size(HEADER_H)
-            .show_inside(ui, |ui| draw_header(ui, self));
+            .show(ui, |ui| draw_header(ui, self));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_body(ui, &self.params));
+        egui::CentralPanel::default().show(ui, |ui| draw_body(ui, &self.params));
 
         debug_assert_eq!(PARAM_COUNT, 8, "editor knob list is out of date");
     }

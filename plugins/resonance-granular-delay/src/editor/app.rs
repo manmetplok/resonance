@@ -67,17 +67,17 @@ impl EditorApp for GranularEditorApp {
 
         egui::Panel::top("granular_header")
             .exact_size(HEADER_H)
-            .show_inside(ui, |ui| draw_header(ui, self));
+            .show(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("granular_strip")
             .exact_size(STRIP_H)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 // Signal-flow strip (ba todo #1141): fits the 246 px
                 // band at the 1320 px window width.
                 controls::draw(ui, &self.params, &self.viz);
             });
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // Hero buffer view (ba todo #1139) + direct manipulation
             // (ba todo #1144): tap drag = time, cloud drag = pitch,
             // scroll = density.

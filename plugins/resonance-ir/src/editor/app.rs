@@ -45,11 +45,11 @@ impl EditorApp for IrEditorApp {
 
         egui::Panel::top("ir_header")
             .exact_size(42.0)
-            .show_inside(ui, |ui| header::draw(ui, self));
+            .show(ui, |ui| header::draw(ui, self));
 
         egui::Panel::bottom("ir_strip")
             .exact_size(120.0)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     controls::draw(ui, &self.params);
                     ui.add_space(16.0);
@@ -59,7 +59,7 @@ impl EditorApp for IrEditorApp {
                 });
             });
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
+        egui::CentralPanel::default().show(ui, |ui| draw_center(ui, self));
     }
 }
 

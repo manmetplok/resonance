@@ -53,13 +53,13 @@ impl EditorApp for CompressorEditorApp {
 
         egui::Panel::top("comp_header")
             .exact_size(40.0)
-            .show_inside(ui, |ui| draw_header(ui, self));
+            .show(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("comp_strip")
             .exact_size(110.0)
-            .show_inside(ui, |ui| control_strip::draw_control_strip(ui, self));
+            .show(ui, |ui| control_strip::draw_control_strip(ui, self));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
+        egui::CentralPanel::default().show(ui, |ui| draw_center(ui, self));
     }
 }
 

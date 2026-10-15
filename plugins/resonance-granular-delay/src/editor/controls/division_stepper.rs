@@ -97,8 +97,8 @@ pub fn division_stepper(
         egui::pos2(body.right() - btn_w, body.top()),
         body.max,
     );
-    let prev = ui.interact(prev_rect, ui.id().with((p.id(), "prev")), egui::Sense::click());
-    let next = ui.interact(next_rect, ui.id().with((p.id(), "next")), egui::Sense::click());
+    let prev = ui.interact(prev_rect, ui.scope_id().with((p.id(), "prev")), egui::Sense::click());
+    let next = ui.interact(next_rect, ui.scope_id().with((p.id(), "next")), egui::Sense::click());
     let arrow_color = |r: &egui::Response, on: bool| {
         if !on {
             theme::TEXT_4

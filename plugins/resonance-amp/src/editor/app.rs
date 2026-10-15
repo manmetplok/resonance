@@ -260,11 +260,11 @@ impl EditorApp for AmpEditorApp {
 
         egui::Panel::top("amp_header")
             .exact_size(38.0)
-            .show_inside(ui, |ui| header::draw(ui, self));
+            .show(ui, |ui| header::draw(ui, self));
 
         egui::Panel::top("amp_tuner")
             .exact_size(72.0)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 let painter = ui.painter_at(rect);
                 tuner_view::draw(&painter, rect, &self.viz);
@@ -272,9 +272,9 @@ impl EditorApp for AmpEditorApp {
 
         egui::Panel::bottom("amp_strip")
             .exact_size(140.0)
-            .show_inside(ui, |ui| controls::draw(ui, &self.params));
+            .show(ui, |ui| controls::draw(ui, &self.params));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
+        egui::CentralPanel::default().show(ui, |ui| draw_center(ui, self));
 
         if self.library_panel.open {
             library_panel::draw(ui, self);

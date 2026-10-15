@@ -111,9 +111,9 @@ impl EditorApp for StereoEditorApp {
 
         egui::Panel::top("stereo_header")
             .exact_size(HEADER_H)
-            .show_inside(ui, |ui| draw_header(ui, self));
+            .show(ui, |ui| draw_header(ui, self));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_body(ui, self));
+        egui::CentralPanel::default().show(ui, |ui| draw_body(ui, self));
     }
 }
 

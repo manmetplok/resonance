@@ -856,15 +856,15 @@ impl EditorApp for DrumsEditorApp {
         egui::Panel::top("drums_header")
             .exact_size(HEADER_H)
             .frame(bar(theme::BG_1))
-            .show_inside(ui, |ui| chrome::draw_header(ui, self));
+            .show(ui, |ui| chrome::draw_header(ui, self));
         egui::Panel::top("drums_tabs")
             .exact_size(TAB_BAR_H)
             .frame(bar(theme::BG_1))
-            .show_inside(ui, |ui| chrome::draw_tab_bar(ui, self));
+            .show(ui, |ui| chrome::draw_tab_bar(ui, self));
         egui::Panel::bottom("drums_status")
             .exact_size(STATUS_H)
             .frame(bar(theme::BG_1))
-            .show_inside(ui, |ui| chrome::draw_status_bar(ui, self));
+            .show(ui, |ui| chrome::draw_status_bar(ui, self));
 
         egui::CentralPanel::default()
             .frame(
@@ -872,7 +872,7 @@ impl EditorApp for DrumsEditorApp {
                     .fill(theme::BG_0)
                     .inner_margin(egui::Margin::same(12)),
             )
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 // A missing kit says so over every tab, with what to do
                 // about it (§5.3).
                 if super::missing_kit::draw(ui, self) {

@@ -90,13 +90,13 @@ impl EditorApp for EqEditorApp {
         egui::Panel::top("eq_header")
             .frame(header_frame)
             .min_size(HEADER_MIN_H)
-            .show_inside(ui, |ui| draw_header(ui, self));
+            .show(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("eq_strip")
             .exact_size(STRIP_H)
-            .show_inside(ui, |ui| control_strip::draw_band_strip(ui, self));
+            .show(ui, |ui| control_strip::draw_band_strip(ui, self));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
             response::draw(ui, rect, self);
         });
@@ -197,7 +197,7 @@ fn separator_width(ui: &egui::Ui) -> f32 {
 }
 
 fn group_id(salt: &str) -> egui::Id {
-    egui::Id::new(("eq_header_group", salt))
+    egui::Id::unique(("eq_header_group", salt))
 }
 
 /// The width `salt`'s group took when last drawn, px.

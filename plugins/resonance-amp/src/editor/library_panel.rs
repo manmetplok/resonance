@@ -69,7 +69,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     ui.painter()
         .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(180));
     let rect = screen.shrink(24.0);
-    egui::Area::new(egui::Id::new("amp_library_panel"))
+    egui::Area::new(egui::Id::unique("amp_library_panel"))
         .fixed_pos(rect.min)
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {

@@ -53,16 +53,16 @@ impl EditorApp for DelayEditorApp {
 
         egui::Panel::top("delay_header")
             .exact_size(42.0)
-            .show_inside(ui, |ui| draw_header(ui, self));
+            .show(ui, |ui| draw_header(ui, self));
 
         // The strip wraps its cards to the window, so its height follows
         // the width (code review PUX-03).
         let strip_h = controls::strip_height(ui.available_width());
         egui::Panel::bottom("delay_strip")
             .exact_size(strip_h)
-            .show_inside(ui, |ui| controls::draw(ui, &self.params));
+            .show(ui, |ui| controls::draw(ui, &self.params));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
+        egui::CentralPanel::default().show(ui, |ui| draw_center(ui, self));
     }
 }
 
