@@ -1,6 +1,6 @@
 # Clip warp and tempo detection
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: doc #166 (warp + tempo detection, engine side, 2026-06-22);
 > GUI and control API from the 2026-10-02 review campaign, batch W2
 > (FU-A1a1, de2625d3) — `docs/history/reviews/code-review-2026-10-02.md`
@@ -139,5 +139,3 @@ Not covered: anything audible — there is no render path to test.
   (FU-W2b). → same intent.
 - `song.tracks` does not report warp state (FU-W2c).
   → [clip-state-readback.md](../../intents/timeline/clip-state-readback.md)
-- A marker within the hit width of a clip's bottom corner shadows the trim
-  handle there (FU-W2e).

@@ -80,8 +80,8 @@ bounce/export/freeze render the same samples. Tempo detection
 5. Tempo detection moved to a worker, with a control-thread stall test
    (FU-W2b).
 6. Remove the caveats from `view/clip_inspector/warp.rs` and
-   `resonance-mcp/src/tools/clip.rs`; fix the warp-marker strip shadowing the
-   trim handle at the clip's bottom corners (FU-W2e).
+   `resonance-mcp/src/tools/clip.rs` (FU-W2e's marker-vs-trim shadowing at
+   the clip's corners was fixed separately as BUG-15).
 
 ## How we'd know it works
 

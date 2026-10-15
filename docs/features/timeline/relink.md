@@ -1,6 +1,6 @@
 # Missing-media relink
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: `docs/intents/prototypes/audio-sample-import-media-browser/DESIGN.md` (doc #175, todos #600 / #607; W4 / FU-A1a3 for clips).
 
 A project can be opened without its audio, for example after it was moved
@@ -56,10 +56,12 @@ project, so the project is self-contained again.
   - If the asset or clip was deleted while its import ran, the result is
     dropped and the new WAV is simply left on disk.
   - Only the last failure is kept (`RelinkState::last_error`).
-- **Undo:** only a successful result records an entry (`Imported(Ok)` /
-  `ClipImported(_, Ok)` are `Record`). On replay, `missing` is worked out
-  from the disk again. Undoing an asset relink therefore restores the old
-  source path and metadata but does not hide the restored file again.
+- **Undo:** a relink records no undo entry at all (`Imported(Ok)` /
+  `ClipImported(_, Ok)` both classify `Skip`, BUG-16). Relinking is a
+  filesystem fact — the project is pointed at a file that was already
+  there, now found again — not an edit to take back; "undoing" it would
+  only re-hide a file that is, in fact, present. The metadata change and
+  clip reload still apply; they just leave no history trace.
 - **Leave offline** closes the modal and cancels any running folder walk.
 
 ## Where the logic lives
@@ -91,7 +93,7 @@ import-progress modal.
 
 | What | Where | Run |
 |---|---|---|
-| Asset relink, metadata, clip reload, undo | `resonance-app/tests/io/relink.rs` | `./scripts/run-tests.py -p resonance-app` |
+| Asset relink, metadata, clip reload, no undo entry | `resonance-app/tests/io/relink.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Clip relink (W4) | `resonance-app/tests/io/relink_clip.rs` | same |
 | Folder walk, cancel, stale result | `resonance-app/tests/io/relink_folder_scan.rs` | same |
 | Modal behaviour + goldens | `resonance-app/tests/io/relink_modal.rs`; `relink_modal_{two_missing_files,one_resolved,searching,missing_clip}-wgpu.png` | `RESONANCE_BLESS=1 cargo test -p resonance-app --test io` |

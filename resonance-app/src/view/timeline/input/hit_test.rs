@@ -160,18 +160,15 @@ impl TimelineCanvas<'_> {
         self.warp_hit_in_rect(clip, rect, pos).map(|hit| (hit, indent))
     }
 
-    /// Build the fade/gain handle geometry for an audio clip.
-    ///
-    /// The per-clip fade lengths and the `fadeable` (frozen / no-source)
-    /// flag live on `ClipState` once todo #316 mirrors them in from the
-    /// engine. Until then fades read as 0 (handles sit at the top corners,
-    /// discoverable on hover) and every audio clip is treated as fadeable;
-    /// the gain bead is always present. Swap these reads for the real
-    /// `ClipState` fields when #316 lands — the geometry math is unchanged.
-    fn clip_handles(&self, _clip: &state::ClipState, rect: Rectangle) -> ClipHandles {
-        let fade_in_seconds = 0.0;
-        let fade_out_seconds = 0.0;
-        let fadeable = true;
+    /// Build the fade/gain handle geometry for an audio clip, mirroring
+    /// `draw::clip::draw_clip` / `draw_clip_handles`: fade lengths come
+    /// from the clip's own frame counts, and a frozen track (no editable
+    /// sample source) is not fadeable — the gain bead is always present.
+    fn clip_handles(&self, clip: &state::ClipState, rect: Rectangle) -> ClipHandles {
+        let sr = self.sample_rate as f32;
+        let fade_in_seconds = clip.fade_in_frames as f32 / sr;
+        let fade_out_seconds = clip.fade_out_frames as f32 / sr;
+        let fadeable = !self.frozen_tracks.contains(&clip.track_id);
         hit_test::audio_clip_handles(rect, fade_in_seconds, fade_out_seconds, self.zoom, fadeable)
     }
 

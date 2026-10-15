@@ -11,7 +11,7 @@
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{ClipMessage, ClipWarpMessage, Message};
-use resonance_app::state::{ClipState, ClipWarpState, TempoDetectStatus, ViewMode};
+use resonance_app::state::{ClipEdge, ClipState, ClipWarpState, TempoDetectStatus, ViewMode};
 use resonance_app::view::timeline::TimelineState;
 use resonance_app::{theme, Resonance};
 use resonance_audio::test_support::Receiver;
@@ -493,6 +493,40 @@ fn canvas_press_on_a_marker_starts_its_drag() {
     let _ = app.update(msg);
     assert!((warp_of(&app).markers[1].timeline_beat - 5.0).abs() < 1e-9);
     assert_eq!(entries(&app), 1);
+}
+
+/// BUG-15: a marker sitting right at the clip's left edge used to win
+/// over the trim handle even inside `CLIP_EDGE_THRESHOLD` of the edge —
+/// the marker strip shadowed trim along its whole height, so the only
+/// way to grab trim on a warped clip was above the strip. The edge must
+/// now fall through to trim regardless of a marker landing on it.
+#[test]
+fn a_marker_at_the_clip_edge_does_not_shadow_the_trim_handle() {
+    let warp = ClipWarpState {
+        enabled: true,
+        original_bpm: Some(100.0),
+        markers: vec![marker(0, 0.0)],
+        ..ClipWarpState::default()
+    };
+    let (app, _rx) = app_with(warp);
+    let y = strip_y(&app);
+    let mut state = TimelineState::default();
+    // Right on the clip's left edge, inside the strip band vertically —
+    // and exactly where the beat-0 marker projects to.
+    let msg = app
+        .test_timeline_canvas_event(&mut state, &left_press(), 0.0, y)
+        .expect("the press publishes");
+    assert!(
+        matches!(
+            msg,
+            Message::Clip(ClipMessage::StartClipTrim {
+                clip_id: CLIP,
+                edge: ClipEdge::Left,
+                ..
+            })
+        ),
+        "the clip edge must win over the marker at it: {msg:?}"
+    );
 }
 
 #[test]

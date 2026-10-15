@@ -1163,11 +1163,11 @@ pub(super) fn sidechain_route_changed(
 /// longer exists or has already been replaced by a fresh one under the
 /// same id, whose own restored value this must not clobber.
 pub(super) fn fx_bypass_changed(r: &mut Resonance, owner: ChainOwner, bypassed: bool) {
+    if owner_removal_owed(r, owner) {
+        return;
+    }
     match owner {
         ChainOwner::Track(track_id) => {
-            if r.io.restore_echoes.track_removal_owed(track_id) {
-                return;
-            }
             if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
                 track.fx_bypassed = bypassed;
             }
