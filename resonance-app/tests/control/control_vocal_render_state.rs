@@ -461,6 +461,53 @@ fn a_reopened_project_reads_rendered() {
     assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Stale);
 }
 
+/// BUG-73 (status half): a section placed again after its lane rendered
+/// has no take on the new placement, so the lane is not `rendered` — it
+/// reads `stale` (the old take plays where it is, nothing sings on the
+/// new placement) until a render fans out to every placement.
+#[test]
+fn a_placement_without_a_take_keeps_the_lane_from_reading_rendered() {
+    let mut app = app_with_project();
+    let verse = rendered_lane(&mut app, "Verse", 1);
+    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
+
+    call(
+        &mut app,
+        "section.place",
+        &section_proto::PlaceParams {
+            definition_id: SectionDefinitionId(verse),
+            start_bar: 9,
+        },
+    )
+    .result::<section_proto::PlaceResult>()
+    .expect("section.place succeeds");
+    assert_eq!(
+        app.test_vocal_audio_clips(TRACK).len(),
+        1,
+        "placing installs no take (that is the other half of BUG-73)"
+    );
+
+    let view = vocal_view(&mut app);
+    let lane = view
+        .lanes
+        .iter()
+        .find(|l| u64::from(l.definition_id) == verse)
+        .expect("lane listed");
+    assert_eq!(lane.render_state, VocalRenderState::Stale);
+    assert_eq!(lane.stale_units, 0, "no phrase changed; a placement has no take");
+    assert_eq!(view.render_state, VocalRenderState::Stale);
+
+    // A render covers both placements, and the lane reads rendered again.
+    call(
+        &mut app,
+        "vocal.render",
+        &json!({ "track_id": TRACK, "section_id": verse }),
+    );
+    assert!(app.test_finish_vocal_render(verse, TRACK), "vocal.render queued a render");
+    assert_eq!(app.test_vocal_audio_clips(TRACK).len(), 2);
+    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
+}
+
 #[test]
 fn a_track_with_no_lanes_reads_not_rendered() {
     let mut app = app_with_project();

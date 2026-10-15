@@ -1,7 +1,8 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `f9438e38` + the `singing` skill and the chord-change
-> vocal melody flow (BUG-70) on 2026-10-13.
+> Verified against master @ `ef215b08` + the per-placement render state (BUG-73)
+> on 2026-10-15; the rest @ `f9438e38` + the `singing` skill and the
+> chord-change vocal melody flow (BUG-70) on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app
@@ -325,7 +326,11 @@ only marks the lane stale.
     the planner `enqueue_vocal_render` uses); equal key lists =
     `rendered`, otherwise `stale` with `stale_units` = planned units not
     in the take. A take with no recorded keys (saved before this existed)
-    reads `stale`; so does a lane whose plan cannot be built any more.
+    reads `stale`; so does a lane whose plan cannot be built any more,
+    and a lane with a placement that has no installed take (the section
+    was placed again after the render — placing installs nothing yet):
+    `stale` with `stale_units` 0 until a render fans out to every
+    placement (BUG-73).
   - *Memo.* Planning builds every segment, so the expected keys are
     memoised per lane by a **fingerprint** of what the plan reads (clip
     notes and lyrics, params (expression curves included), overrides,
@@ -615,7 +620,7 @@ Jorrit's call — see
 | Real models: AP vs SP rest level before the gate, rest gated silent and breath heard (Lilia), TIGER velocity sweep ±6 dB | `tests/vocal/vocal_dynamics_render.rs` (no-ops unless set) | `RESONANCE_SVS_MODELS_DIR=…/resonance-svs/models cargo test -p resonance-app --test vocal` |
 | Param ranges, serde defaults; wire round-trip and range errors | `resonance-music-theory/tests/vocal_params_validate.rs`, `tests/control/control_vocal_params.rs` | same |
 | Cache key follows the resolved speaker; vocal-roll fingerprint follows a rescan | `tests/vocal/vocal_render_cache.rs` (`the_key_follows_the_resolved_speaker_not_the_params`), `tests/compose/vocal_roll_fingerprint.rs` (`a_rescan_that_changes_the_bank_invalidates`) | same |
-| Render state: per-lane stale / error / rendered, control edits don't render, GUI debounce (timer generations), chord edits stale not stuck, reopen reads `rendered`, keyless take reads `stale`, worst-lane summary; a whole-line shift (control: stale, GUI: armed), a TIGER velocity edit stale only with `velocity_dynamics`, `song.vocal` articulation follows the lane's rest threshold, the debounce generation survives a load, a playhead-only tick skips the settle | `tests/control/control_vocal_render_state.rs`, `control_vocal_render_state_edits.rs` (`test_finish_vocal_render` / `test_fail_vocal_render` land or fail a render through the real messages) | same |
+| Render state: per-lane stale / error / rendered, control edits don't render, GUI debounce (timer generations), chord edits stale not stuck, reopen reads `rendered`, keyless take reads `stale`, worst-lane summary, a placement added after the render reads `stale` (BUG-73); a whole-line shift (control: stale, GUI: armed), a TIGER velocity edit stale only with `velocity_dynamics`, `song.vocal` articulation follows the lane's rest threshold, the debounce generation survives a load, a playhead-only tick skips the settle | `tests/control/control_vocal_render_state.rs`, `control_vocal_render_state_edits.rs` (`test_finish_vocal_render` / `test_fail_vocal_render` land or fail a render through the real messages) | same |
 | Badge goldens | `tests/compose/compose_vocal_render_badge.rs` → `compose_vocal_rail_stale_badge-wgpu.png`, `compose_vocal_rail_error_badge-wgpu.png`, `compose_vocal_roll_stale_badge-wgpu.png` | `RESONANCE_BLESS=1` |
 | In-flight / re-render safety | `tests/compose/vocal_render_inflight_placement.rs`, `vocal_rerender_keeps_saved_audio.rs`, `vocal_tempo_mismatch_warning.rs` | same |
 | Control render, `svs_backend` in hello | `tests/control/control_endpoint.rs`, `control_vocal.rs`, `control_vocal_render_all_lanes.rs`, `control_jobs.rs`, `tests/e2e_compose_via_control.rs` | same |
