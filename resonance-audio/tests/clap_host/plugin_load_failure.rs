@@ -83,6 +83,12 @@ fn a_bundle_that_is_not_there_yields_a_reason_rather_than_a_silent_none() {
         reason.starts_with("Failed to load plugin:"),
         "the reason has to say what failed: {reason}"
     );
+    // ...and why: the system's dlopen reason names the file. libloading
+    // 0.9 moved that text from the error's message to its source().
+    assert!(
+        reason.contains("MegaVerb.clap"),
+        "the reason has to carry the loader's detail: {reason}"
+    );
     assert!(
         bundles.is_empty(),
         "and nothing was pushed onto the bundle list"

@@ -40,9 +40,9 @@ pub enum ClapBundleError {
     InvalidPathEncoding,
     #[error("Invalid path: {0}")]
     InvalidPath(#[source] std::ffi::NulError),
-    #[error("Failed to load library: {0}")]
+    #[error("Failed to load library: {}", with_detail(.0))]
     LoadLibrary(#[source] libloading::Error),
-    #[error("No clap_entry symbol: {0}")]
+    #[error("No clap_entry symbol: {}", with_detail(.0))]
     NoEntrySymbol(#[source] libloading::Error),
     #[error("clap_entry is null")]
     NullEntry,
@@ -74,6 +74,16 @@ pub enum ClapBundleError {
     /// build closure returned a null plugin.
     #[error("test build fn returned a null plugin")]
     TestPluginNull,
+}
+
+/// A libloading error with the system's reason (`dlerror()`), which since
+/// libloading 0.9 is the error's `source()` rather than its message
+/// ("dlopen failed" alone does not say which library was missing).
+fn with_detail(e: &libloading::Error) -> String {
+    match std::error::Error::source(e) {
+        Some(detail) => format!("{e}: {detail}"),
+        None => e.to_string(),
+    }
 }
 
 impl From<ClapBundleError> for EngineError {
