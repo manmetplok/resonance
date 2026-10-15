@@ -7,7 +7,7 @@ use super::shared::ClapMainThread;
 use crate::plugin::ResonancePlugin;
 
 impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
-    fn is_api_supported(&mut self, configuration: GuiConfiguration) -> bool {
+    fn is_api_supported(&self, configuration: GuiConfiguration) -> bool {
         let Some(factory) = &self.editor_factory else {
             return false;
         };
@@ -17,7 +17,7 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
         factory.supports(api, configuration.is_floating)
     }
 
-    fn get_preferred_api(&mut self) -> Option<GuiConfiguration<'_>> {
+    fn get_preferred_api(&self) -> Option<GuiConfiguration<'_>> {
         let factory = self.editor_factory.as_ref()?;
         let (api, is_floating) = factory.preferred()?;
         let api_type = match api {
@@ -33,7 +33,7 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
         })
     }
 
-    fn create(&mut self, configuration: GuiConfiguration) -> Result<(), PluginError> {
+    fn create(&self, configuration: GuiConfiguration) -> Result<(), PluginError> {
         let factory = self
             .editor_factory
             .as_ref()
@@ -50,21 +50,29 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
         // titlebar) to `clap_host_gui.closed()`, once, for every plugin:
         // the runtime latches it on the handle from its own thread and
         // `on_main_thread` delivers it (PLG-01).
-        self.editor_serial += 1;
-        let serial = self.editor_serial;
+        let serial = self.editor_serial.get() + 1;
+        self.editor_serial.set(serial);
         let host_handle = self.host_handle.clone();
         editor.set_closed_callback(Box::new(move || {
             host_handle.report_gui_closed(serial);
         }));
-        self.editor = Some(editor);
+        // A create over a live editor (a host that skipped `destroy`)
+        // replaces it; the old one is torn down outside the borrow.
+        let previous = self
+            .editor
+            .try_borrow_mut()
+            .map_err(|_| PluginError::Message("gui.create re-entered an editor call"))?
+            .replace(editor);
+        self.editor_destroy_pending.set(false);
+        drop(previous);
         Ok(())
     }
 
-    fn destroy(&mut self) {
-        self.editor = None;
+    fn destroy(&self) {
+        self.destroy_editor();
     }
 
-    fn set_scale(&mut self, _scale: f64) -> Result<(), PluginError> {
+    fn set_scale(&self, _scale: f64) -> Result<(), PluginError> {
         // Deliberately refused, per the CLAP gui contract: `set_scale`
         // "can be ignored if the plugin will query the OS directly", and
         // returning false tells the host exactly that. On both platforms
@@ -78,51 +86,37 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
         // `backingScaleFactor`, re-read on
         // `viewDidChangeBackingProperties`. Applying a host-supplied
         // factor on top would double-scale either one. clack maps this
-        // `Err` to a plain `false` return at the C boundary (no host
-        // error log).
+        // `Err` to a `false` return at the C boundary and, since 0.2
+        // (cddee07), logs its message through `clap_host_log` (stderr when
+        // the host has no log extension) — one line per `set_scale` call,
+        // which hosts make once per editor open at most.
         Err(PluginError::Message(
             "scale is derived from the window system",
         ))
     }
 
-    fn get_size(&mut self) -> Option<GuiSize> {
-        if let Some(editor) = &self.editor {
-            let (w, h) = editor.size();
-            Some(GuiSize {
-                width: w,
-                height: h,
-            })
-        } else if let Some(factory) = &self.editor_factory {
-            let (w, h) = factory.preferred_size();
-            Some(GuiSize {
-                width: w,
-                height: h,
-            })
-        } else {
-            None
-        }
+    fn get_size(&self) -> Option<GuiSize> {
+        let (width, height) = match self.with_editor(|editor| editor.size()) {
+            Some(size) => size,
+            None => self.editor_factory.as_ref()?.preferred_size(),
+        };
+        Some(GuiSize { width, height })
     }
 
-    fn can_resize(&mut self) -> bool {
-        self.editor
-            .as_ref()
-            .map(|e| e.can_resize())
+    fn can_resize(&self) -> bool {
+        self.with_editor(|editor| editor.can_resize())
             .unwrap_or(false)
     }
 
-    fn set_size(&mut self, size: GuiSize) -> Result<(), PluginError> {
-        let editor = self
-            .editor
-            .as_mut()
-            .ok_or(PluginError::Message("no editor to resize"))?;
-        if editor.set_size(size.width, size.height) {
-            Ok(())
-        } else {
-            Err(PluginError::Message("set_size refused"))
+    fn set_size(&self, size: GuiSize) -> Result<(), PluginError> {
+        match self.with_editor(|editor| editor.set_size(size.width, size.height)) {
+            Some(true) => Ok(()),
+            Some(false) => Err(PluginError::Message("set_size refused")),
+            None => Err(PluginError::Message("no editor to resize")),
         }
     }
 
-    fn set_parent(&mut self, _window: Window) -> Result<(), PluginError> {
+    fn set_parent(&self, _window: Window) -> Result<(), PluginError> {
         // Floating-only in v1 on both platforms, so there is nothing to
         // parent to. Pretend to succeed so hosts that call set_parent
         // unconditionally (even with is_floating=true) don't fail the
@@ -132,34 +126,24 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
         Ok(())
     }
 
-    fn set_transient(&mut self, _window: Window) -> Result<(), PluginError> {
+    fn set_transient(&self, _window: Window) -> Result<(), PluginError> {
         // v1: no-op. Could later map to xdg-foreign-unstable-v2 on Wayland
         // (or the host NSWindow on macOS) to mark the plugin window as
         // transient for the host window.
         Ok(())
     }
 
-    fn suggest_title(&mut self, title: &str) {
-        if let Some(editor) = &mut self.editor {
-            editor.set_title(title);
-        }
+    fn suggest_title(&self, title: &str) {
+        self.with_editor(|editor| editor.set_title(title));
     }
 
-    fn show(&mut self) -> Result<(), PluginError> {
-        if let Some(editor) = &mut self.editor {
-            editor.show();
-            Ok(())
-        } else {
-            Err(PluginError::Message("no editor to show"))
-        }
+    fn show(&self) -> Result<(), PluginError> {
+        self.with_editor(|editor| editor.show())
+            .ok_or(PluginError::Message("no editor to show"))
     }
 
-    fn hide(&mut self) -> Result<(), PluginError> {
-        if let Some(editor) = &mut self.editor {
-            editor.hide();
-            Ok(())
-        } else {
-            Err(PluginError::Message("no editor to hide"))
-        }
+    fn hide(&self) -> Result<(), PluginError> {
+        self.with_editor(|editor| editor.hide())
+            .ok_or(PluginError::Message("no editor to hide"))
     }
 }

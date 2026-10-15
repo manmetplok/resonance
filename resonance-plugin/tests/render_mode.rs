@@ -107,13 +107,13 @@ fn an_inactive_plugin_is_told_at_once() {
         PluginInstance::<TestHost>::new(|_| TestHostShared, |_| (), &entry, PLUGIN_ID, &host_info)
             .expect("plugin instantiation");
     let ext = render_ext(&instance);
-    assert!(!ext.has_realtime_requirement(&mut instance.plugin_handle()));
+    assert!(!ext.has_realtime_requirement(&instance.plugin_handle()));
     assert_eq!(told(), NEVER);
 
-    ext.set(&mut instance.plugin_handle(), RenderMode::Offline)
+    ext.set(&instance.plugin_handle(), RenderMode::Offline)
         .expect("accepted");
     assert_eq!(told(), OFFLINE);
-    ext.set(&mut instance.plugin_handle(), RenderMode::Realtime)
+    ext.set(&instance.plugin_handle(), RenderMode::Realtime)
         .expect("accepted");
     assert_eq!(told(), REALTIME);
 }

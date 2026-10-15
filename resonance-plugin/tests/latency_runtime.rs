@@ -140,7 +140,7 @@ struct TestHostMainThread<'a> {
 impl<'a> MainThreadHandler<'a> for TestHostMainThread<'a> {}
 
 impl HostLatencyImpl for TestHostMainThread<'_> {
-    fn changed(&mut self) {
+    fn changed(&self) {
         self.shared.latency_changed.store(true, Ordering::SeqCst)
     }
 }
@@ -189,7 +189,7 @@ fn query_latency(instance: &mut PluginInstance<TestHost>) -> u32 {
         .plugin_shared_handle()
         .get_extension::<PluginLatency>()
         .expect("bridge must expose the latency extension");
-    ext.get(&mut instance.plugin_handle())
+    ext.get(&instance.plugin_handle())
 }
 
 /// Take one of the host-side flags, clearing it.

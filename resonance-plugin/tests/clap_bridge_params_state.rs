@@ -19,7 +19,6 @@ use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams};
 use clack_extensions::state::PluginState;
 use clack_host::events::event_types::ParamValueEvent;
 use clack_host::prelude::*;
-use clack_host::utils::Cookie;
 use clack_plugin::entry::SinglePluginEntry;
 
 use resonance_plugin::{
@@ -359,7 +358,7 @@ fn clap_id(id: &str) -> ClapId {
 
 fn get_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
     let ext = params_ext(instance);
-    ext.get_value(&mut instance.plugin_handle(), clap_id(id))
+    ext.get_value(&instance.plugin_handle(), clap_id(id))
         .unwrap_or_else(|| panic!("param `{id}` is unknown to the bridge"))
 }
 
@@ -368,7 +367,7 @@ fn get_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
 fn get_renamed_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
     let ext = params_ext(instance);
     let wire = ClapId::new(resonance_plugin::wire_clap_id(id, BRIDGE_RENAMES));
-    ext.get_value(&mut instance.plugin_handle(), wire)
+    ext.get_value(&instance.plugin_handle(), wire)
         .unwrap_or_else(|| panic!("param `{id}` is unknown to the bridge"))
 }
 
@@ -382,7 +381,6 @@ fn flush_inactive(instance: &mut PluginInstance<TestHost>, changes: &[(&str, f64
             clap_id(id),
             Pckn::match_all(),
             *value,
-            Cookie::empty(),
         ));
     }
     let mut output = EventBuffer::new();
@@ -395,14 +393,14 @@ fn flush_inactive(instance: &mut PluginInstance<TestHost>, changes: &[(&str, f64
 fn save_state(instance: &mut PluginInstance<TestHost>) -> Vec<u8> {
     let ext = state_ext(instance);
     let mut bytes = Vec::new();
-    ext.save(&mut instance.plugin_handle(), &mut bytes)
+    ext.save(&instance.plugin_handle(), &mut bytes)
         .expect("state save");
     bytes
 }
 
 fn load_state(instance: &mut PluginInstance<TestHost>, bytes: &[u8]) -> bool {
     let ext = state_ext(instance);
-    ext.load(&mut instance.plugin_handle(), &mut &bytes[..])
+    ext.load(&instance.plugin_handle(), &mut &bytes[..])
         .is_ok()
 }
 
@@ -420,7 +418,7 @@ fn hidden_params_are_not_exposed_to_the_host() {
     let ext = params_ext(&instance);
 
     assert_eq!(
-        ext.count(&mut instance.plugin_handle()),
+        ext.count(&instance.plugin_handle()),
         4,
         "the hidden param must not be enumerated"
     );
@@ -429,7 +427,7 @@ fn hidden_params_are_not_exposed_to_the_host() {
     let names: Vec<String> = (0..4)
         .map(|i| {
             let info = ext
-                .get_info(&mut instance.plugin_handle(), i, &mut buffer)
+                .get_info(&instance.plugin_handle(), i, &mut buffer)
                 .expect("every index below count() must resolve");
             String::from_utf8(info.name.to_vec()).unwrap()
         })
@@ -447,7 +445,7 @@ fn param_info_carries_the_declared_range_and_flags() {
     let mut buffer = ParamInfoBuffer::new();
 
     let mix = ext
-        .get_info(&mut instance.plugin_handle(), 0, &mut buffer)
+        .get_info(&instance.plugin_handle(), 0, &mut buffer)
         .unwrap();
     assert_eq!(mix.id, clap_id("mix"));
     assert_eq!(mix.min_value, 0.0);
@@ -460,7 +458,7 @@ fn param_info_carries_the_declared_range_and_flags() {
     );
 
     let taps = ext
-        .get_info(&mut instance.plugin_handle(), 1, &mut buffer)
+        .get_info(&instance.plugin_handle(), 1, &mut buffer)
         .unwrap();
     assert_eq!(taps.min_value, 1.0);
     assert_eq!(taps.max_value, 8.0);
@@ -468,7 +466,7 @@ fn param_info_carries_the_declared_range_and_flags() {
     assert!(taps.flags.contains(ParamInfoFlags::IS_STEPPED));
 
     let bypass = ext
-        .get_info(&mut instance.plugin_handle(), 2, &mut buffer)
+        .get_info(&instance.plugin_handle(), 2, &mut buffer)
         .unwrap();
     assert_eq!(bypass.min_value, 0.0);
     assert_eq!(bypass.max_value, 1.0);
@@ -487,7 +485,7 @@ fn param_info_carries_the_declared_module() {
     let modules: Vec<String> = (0..4)
         .map(|i| {
             let info = ext
-                .get_info(&mut instance.plugin_handle(), i, &mut buffer)
+                .get_info(&instance.plugin_handle(), i, &mut buffer)
                 .unwrap();
             String::from_utf8(info.module.to_vec()).unwrap()
         })
@@ -512,7 +510,7 @@ fn a_choice_params_labels_reach_the_host() {
     for (value, label) in [(0.0, "Sine"), (1.0, "Triangle"), (2.0, "Square")] {
         let text = ext
             .value_to_text(
-                &mut instance.plugin_handle(),
+                &instance.plugin_handle(),
                 clap_id("shape"),
                 value,
                 &mut buffer,
@@ -524,11 +522,11 @@ fn a_choice_params_labels_reach_the_host() {
     // And the label comes back the other way, so a host that round-trips
     // its own display lands on the same value.
     assert_eq!(
-        ext.text_to_value(&mut instance.plugin_handle(), clap_id("shape"), c"Square"),
+        ext.text_to_value(&instance.plugin_handle(), clap_id("shape"), c"Square"),
         Some(2.0)
     );
     assert_eq!(
-        ext.text_to_value(&mut instance.plugin_handle(), clap_id("shape"), c"1"),
+        ext.text_to_value(&instance.plugin_handle(), clap_id("shape"), c"1"),
         Some(1.0),
         "the raw index still parses"
     );
@@ -541,10 +539,10 @@ fn an_out_of_bounds_param_index_is_refused() {
     let mut buffer = ParamInfoBuffer::new();
 
     assert!(ext
-        .get_info(&mut instance.plugin_handle(), 4, &mut buffer)
+        .get_info(&instance.plugin_handle(), 4, &mut buffer)
         .is_none());
     assert!(ext
-        .get_info(&mut instance.plugin_handle(), 9999, &mut buffer)
+        .get_info(&instance.plugin_handle(), 9999, &mut buffer)
         .is_none());
 }
 
@@ -554,7 +552,7 @@ fn an_unknown_param_id_has_no_value() {
     let ext = params_ext(&instance);
 
     assert!(ext
-        .get_value(&mut instance.plugin_handle(), clap_id("no_such_param"))
+        .get_value(&instance.plugin_handle(), clap_id("no_such_param"))
         .is_none());
 }
 
@@ -580,7 +578,7 @@ fn value_to_text_uses_the_params_own_formatter() {
 
     let text = ext
         .value_to_text(
-            &mut instance.plugin_handle(),
+            &instance.plugin_handle(),
             clap_id("mix"),
             0.25,
             &mut buffer,
@@ -590,7 +588,7 @@ fn value_to_text_uses_the_params_own_formatter() {
 
     let text = ext
         .value_to_text(
-            &mut instance.plugin_handle(),
+            &instance.plugin_handle(),
             clap_id("taps"),
             4.0,
             &mut buffer,
@@ -600,7 +598,7 @@ fn value_to_text_uses_the_params_own_formatter() {
 
     let text = ext
         .value_to_text(
-            &mut instance.plugin_handle(),
+            &instance.plugin_handle(),
             clap_id("bypass"),
             1.0,
             &mut buffer,
@@ -615,25 +613,25 @@ fn text_to_value_parses_what_value_to_text_produced() {
     let ext = params_ext(&instance);
 
     assert_eq!(
-        ext.text_to_value(&mut instance.plugin_handle(), clap_id("taps"), c"6"),
+        ext.text_to_value(&instance.plugin_handle(), clap_id("taps"), c"6"),
         Some(6.0)
     );
     assert_eq!(
-        ext.text_to_value(&mut instance.plugin_handle(), clap_id("bypass"), c"Off"),
+        ext.text_to_value(&instance.plugin_handle(), clap_id("bypass"), c"Off"),
         Some(0.0)
     );
     assert_eq!(
-        ext.text_to_value(&mut instance.plugin_handle(), clap_id("mix"), c"0.25%"),
+        ext.text_to_value(&instance.plugin_handle(), clap_id("mix"), c"0.25%"),
         Some(0.25)
     );
     // Unparseable text is refused rather than resolving to 0.
     assert_eq!(
-        ext.text_to_value(&mut instance.plugin_handle(), clap_id("taps"), c"lots"),
+        ext.text_to_value(&instance.plugin_handle(), clap_id("taps"), c"lots"),
         None
     );
     // So is an unknown param.
     assert_eq!(
-        ext.text_to_value(&mut instance.plugin_handle(), clap_id("nope"), c"1"),
+        ext.text_to_value(&instance.plugin_handle(), clap_id("nope"), c"1"),
         None
     );
 }
@@ -1110,12 +1108,12 @@ fn a_renamed_param_keeps_its_pre_rename_clap_id() {
     let ext = params_ext(&instance);
     let mut buffer = ParamInfoBuffer::new();
     let info = ext
-        .get_info(&mut instance.plugin_handle(), 0, &mut buffer)
+        .get_info(&instance.plugin_handle(), 0, &mut buffer)
         .expect("mix is param 0");
     assert_eq!(String::from_utf8(info.name.to_vec()).unwrap(), "Mix");
     assert_eq!(info.id, clap_id("wet"), "the rename must pin the old CLAP id");
     let taps = ext
-        .get_info(&mut instance.plugin_handle(), 1, &mut buffer)
+        .get_info(&instance.plugin_handle(), 1, &mut buffer)
         .expect("taps is param 1");
     assert_eq!(taps.id, clap_id("taps"), "an unrenamed param keeps its own hash");
 
@@ -1356,7 +1354,7 @@ fn the_state_upgrade_runs_on_the_bridges_preset_load() {
         .get_extension::<PluginStateContext>()
         .expect("the bridge must expose state-context");
     ext.load(
-        &mut instance.plugin_handle(),
+        &instance.plugin_handle(),
         &mut &br#"{"params":{"gain":0.5}}"#[..],
         StateContextType::ForPreset,
     )

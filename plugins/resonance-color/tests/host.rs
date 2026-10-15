@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
 use clack_host::events::event_types::ParamValueEvent;
 use clack_host::prelude::*;
-use clack_host::utils::Cookie;
 use clack_plugin::entry::SinglePluginEntry;
 
 use resonance_color::ResonanceColor;
@@ -42,7 +41,7 @@ struct TestHostMainThread<'a> {
 impl<'a> MainThreadHandler<'a> for TestHostMainThread<'a> {}
 
 impl HostLatencyImpl for TestHostMainThread<'_> {
-    fn changed(&mut self) {
+    fn changed(&self) {
         self.shared.latency_changed.store(true, Ordering::SeqCst)
     }
 }
@@ -88,7 +87,7 @@ fn query_latency(instance: &mut PluginInstance<TestHost>) -> u32 {
         .plugin_shared_handle()
         .get_extension::<PluginLatency>()
         .expect("the bridge must expose the latency extension");
-    ext.get(&mut instance.plugin_handle())
+    ext.get(&instance.plugin_handle())
 }
 
 fn param_event(id: &str, value: f64) -> ParamValueEvent {
@@ -97,7 +96,6 @@ fn param_event(id: &str, value: f64) -> ParamValueEvent {
         ClapId::new(stable_hash(id)),
         Pckn::match_all(),
         value,
-        Cookie::empty(),
     )
 }
 
@@ -214,7 +212,7 @@ fn every_oversampling_factor_reports_zero_latency_and_never_restarts() {
             .plugin_shared_handle()
             .get_extension::<clack_extensions::state::PluginState>()
             .expect("state extension");
-        ext.load(&mut instance.plugin_handle(), &mut state.as_bytes())
+        ext.load(&instance.plugin_handle(), &mut state.as_bytes())
             .expect("state load");
         let processor = instance
             .activate(|_, _| (), audio_config())

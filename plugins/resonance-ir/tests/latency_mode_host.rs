@@ -29,7 +29,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
 use clack_host::events::event_types::ParamValueEvent;
 use clack_host::prelude::*;
-use clack_host::utils::Cookie;
 use clack_plugin::entry::SinglePluginEntry;
 
 use resonance_ir::dsp::{self, LatencyMode};
@@ -69,7 +68,7 @@ struct TestHostMainThread<'a> {
 impl<'a> MainThreadHandler<'a> for TestHostMainThread<'a> {}
 
 impl HostLatencyImpl for TestHostMainThread<'_> {
-    fn changed(&mut self) {
+    fn changed(&self) {
         self.shared.latency_changed.store(true, Ordering::SeqCst)
     }
 }
@@ -117,7 +116,7 @@ fn query_latency(instance: &mut PluginInstance<TestHost>) -> u32 {
         .plugin_shared_handle()
         .get_extension::<PluginLatency>()
         .expect("the bridge must expose the latency extension");
-    ext.get(&mut instance.plugin_handle())
+    ext.get(&instance.plugin_handle())
 }
 
 fn take_flag(
@@ -137,7 +136,6 @@ fn mode_event(mode: LatencyMode) -> ParamValueEvent {
         ClapId::new(stable_hash("latency_mode")),
         Pckn::match_all(),
         mode.index() as f64,
-        Cookie::empty(),
     )
 }
 

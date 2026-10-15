@@ -54,7 +54,7 @@ pub fn sidechain_port_index(
 // ---------------------------------------------------------------------------
 
 impl<'a, P: ResonancePlugin> PluginAudioPortsImpl for ClapMainThread<'a, P> {
-    fn count(&mut self, is_input: bool) -> u32 {
+    fn count(&self, is_input: bool) -> u32 {
         if is_input {
             input_port_count(self.shared.input_channels, self.shared.sidechain_channels)
         } else {
@@ -62,7 +62,7 @@ impl<'a, P: ResonancePlugin> PluginAudioPortsImpl for ClapMainThread<'a, P> {
         }
     }
 
-    fn get(&mut self, index: u32, is_input: bool, writer: &mut AudioPortInfoWriter) {
+    fn get(&self, index: u32, is_input: bool, writer: &mut AudioPortInfoWriter) {
         if is_input {
             // Main input occupies index 0 when present.
             if index == 0 {
@@ -152,7 +152,7 @@ impl<'a, P: ResonancePlugin> PluginAudioPortsImpl for ClapMainThread<'a, P> {
 // ---------------------------------------------------------------------------
 
 impl<'a, P: ResonancePlugin> PluginNotePortsImpl for ClapMainThread<'a, P> {
-    fn count(&mut self, is_input: bool) -> u32 {
+    fn count(&self, is_input: bool) -> u32 {
         if is_input && P::MIDI_INPUT {
             1
         } else {
@@ -160,7 +160,7 @@ impl<'a, P: ResonancePlugin> PluginNotePortsImpl for ClapMainThread<'a, P> {
         }
     }
 
-    fn get(&mut self, index: u32, is_input: bool, writer: &mut NotePortInfoWriter) {
+    fn get(&self, index: u32, is_input: bool, writer: &mut NotePortInfoWriter) {
         if index == 0 && is_input && P::MIDI_INPUT {
             writer.set(&NotePortInfo {
                 id: ClapId::new(1),

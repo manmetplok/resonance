@@ -134,7 +134,7 @@ fn query_latency(instance: &mut PluginInstance<TestHost>) -> u32 {
         .plugin_shared_handle()
         .get_extension::<PluginLatency>()
         .expect("bridge must expose the latency extension");
-    ext.get(&mut instance.plugin_handle())
+    ext.get(&instance.plugin_handle())
 }
 
 // ---------------------------------------------------------------------------

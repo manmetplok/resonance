@@ -78,7 +78,7 @@ unsafe extern "C" fn set_ignored_params<P: ResonancePlugin>(
         // SAFETY: a NUL-terminated string from the host, valid for the call.
         let text = unsafe { CStr::from_ptr(json) }.to_string_lossy();
         let ids = resonance_common::preset_session::parse_ignored_params(&text);
-        let main = plugin.main_thread().as_mut();
+        let main = plugin.main_thread();
         for (slot, flag) in main.shared.param_preset_ignored.iter().enumerate() {
             let ignored = main
                 .shared
@@ -108,11 +108,11 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
     /// Re-run the preset-modified comparison against the params as they
     /// are now: the plugin's own when it is here, the shared atomics when
     /// it is in the audio processor. `[main-thread]`.
-    pub(super) fn compare_preset_sound(&mut self) {
+    pub(super) fn compare_preset_sound(&self) {
         let Some(saver) = self.extra_state_saver.clone() else {
             return;
         };
-        if let Some(plugin) = &self.plugin {
+        if let Some(plugin) = self.plugin_ref() {
             let refs: Vec<&dyn crate::param::Param> =
                 (0..plugin.param_count()).map(|i| plugin.param(i)).collect();
             saver.compare_preset_modified(&refs);
@@ -126,16 +126,18 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
 
     /// Send the identity report if it changed since the last one, and a
     /// `loaded()` when the identity itself changed. `[main-thread]`.
-    pub(super) fn report_preset_identity(&mut self) {
+    pub(super) fn report_preset_identity(&self) {
         let Some(json) = self.extra_state_saver.as_ref().and_then(|s| s.preset_report()) else {
             return;
         };
-        if self.last_preset_report.as_deref() == Some(json.as_str()) {
+        // The cell is read and replaced in one statement each, so no borrow
+        // is live at the host calls below (which may re-enter).
+        if self.last_preset_report.borrow().as_deref() == Some(json.as_str()) {
             return;
         }
         let previous = self
             .last_preset_report
-            .replace(json.clone())
+            .replace(Some(json.clone()))
             .and_then(|p| IdentityReport::parse(&p));
         let current = IdentityReport::parse(&json);
         let shared = self.host.shared();
@@ -163,7 +165,7 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
             if let Some(r) = current.filter(|r| r.source == "factory" && !r.id.is_empty()) {
                 if let Some(ext) = self.host.shared().get_extension::<HostPresetLoad>() {
                     if let Ok(key) = CString::new(r.id) {
-                        ext.loaded(&mut self.host, Location::Plugin, Some(&key));
+                        ext.loaded(&self.host, Location::Plugin, Some(&key));
                     }
                 }
             }

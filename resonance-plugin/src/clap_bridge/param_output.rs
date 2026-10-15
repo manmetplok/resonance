@@ -13,7 +13,6 @@ use clack_plugin::events::event_types::{
     ParamGestureBeginEvent, ParamGestureEndEvent, ParamValueEvent,
 };
 use clack_plugin::prelude::*;
-use clack_plugin::utils::Cookie;
 
 use super::shared::ClapShared;
 use crate::host::HostHandle;
@@ -53,13 +52,7 @@ pub(crate) fn report_announced<'p>(
         let value = p.get_plain();
         let pushed = out.try_push(ParamGestureBeginEvent::new(0, id)).is_ok()
             && out
-                .try_push(ParamValueEvent::new(
-                    0,
-                    id,
-                    Pckn::match_all(),
-                    value,
-                    Cookie::empty(),
-                ))
+                .try_push(ParamValueEvent::new(0, id, Pckn::match_all(), value))
                 .is_ok()
             && out.try_push(ParamGestureEndEvent::new(0, id)).is_ok();
         if !pushed {

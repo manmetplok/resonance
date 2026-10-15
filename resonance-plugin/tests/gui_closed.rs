@@ -14,6 +14,11 @@
 //! `PluginEditor` standing in for `RuntimeEditorHandle`, whose forwarding
 //! to the runtime is the only part not exercised here.
 
+// Host callbacks that call straight back into the plugin — `gui.destroy`
+// from inside `closed()` among them. A module of this binary rather than a
+// binary of its own (the test-binary ratchet, ARCH2-07).
+mod reentrancy;
+
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -216,14 +221,14 @@ fn open(instance: &mut PluginInstance<TestHost>) {
         api_type: GuiApiType::WAYLAND,
         is_floating: true,
     };
-    gui.create(&mut instance.plugin_handle(), config)
+    gui.create(&instance.plugin_handle(), config)
         .expect("gui create");
-    gui.show(&mut instance.plugin_handle()).expect("gui show");
+    gui.show(&instance.plugin_handle()).expect("gui show");
 }
 
 fn destroy(instance: &mut PluginInstance<TestHost>) {
     let gui = plugin_gui(instance);
-    gui.destroy(&mut instance.plugin_handle());
+    gui.destroy(&instance.plugin_handle());
 }
 
 fn take_callback_request(instance: &PluginInstance<TestHost>) -> bool {

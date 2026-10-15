@@ -18,12 +18,16 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 {
     fn activate(
         _host: HostAudioProcessorHandle<'a>,
-        main_thread: &mut ClapMainThread<'a, P>,
+        main_thread: &ClapMainThread<'a, P>,
         shared: &'a ClapShared<'a>,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
+        // `[main-thread]`, like everything that touches `main_thread`. The
+        // slot's borrow ends with this statement, so the
+        // `latency.changed()` below may be answered by a re-entrant
+        // `latency.get()` (served from the cache, the plugin being gone).
         let mut plugin = main_thread
-            .plugin
+            .plugin_mut()?
             .take()
             .ok_or(PluginError::Message("Plugin not initialized"))?;
 
@@ -59,7 +63,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // second, redundant restart cycle (FU-M1b).
         if main_thread.host_handle.take_latency_dirty() {
             if let Some(latency) = main_thread.host.shared().get_extension::<HostLatency>() {
-                latency.changed(&mut main_thread.host);
+                latency.changed(&main_thread.host);
             }
         }
         // From here on the plugin is active, so a further latency change
@@ -578,7 +582,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         Ok(ProcessStatus::ContinueIfNotQuiet)
     }
 
-    fn deactivate(self, main_thread: &mut ClapMainThread<'a, P>) {
+    fn deactivate(self, main_thread: &ClapMainThread<'a, P>) {
         main_thread.host_handle.set_active(false);
 
         // Hand the plugin back in agreement with the shared values (ba
@@ -604,7 +608,13 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             plugin.set_render_mode(self.shared.render_offline.load(Ordering::Acquire));
         }
         plugin.deactivate();
-        main_thread.plugin = Some(plugin);
+        // No path holds the slot across a call that could re-enter, so it
+        // is free here. Unlike the other borrows this one is not `try_`:
+        // there is no way to report a failure from `deactivate`, and
+        // returning without putting the plugin back would lose it. Were
+        // the invariant ever broken, the panic is caught at clack's FFI
+        // boundary and logged.
+        *main_thread.plugin.borrow_mut() = Some(plugin);
     }
 
     fn reset(&mut self) {

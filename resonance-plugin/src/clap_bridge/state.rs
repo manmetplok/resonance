@@ -91,7 +91,7 @@ impl Param for TempParamOwned {
 }
 
 impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
-    fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
+    fn save(&self, output: &mut OutputStream) -> Result<(), PluginError> {
         let data = self.save_bytes();
         output
             .write_all(&data)
@@ -99,7 +99,7 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
         Ok(())
     }
 
-    fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
+    fn load(&self, input: &mut InputStream) -> Result<(), PluginError> {
         let mut data = Vec::new();
         input
             .read_to_end(&mut data)
@@ -130,7 +130,7 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
     ///
     /// [`ParamTextSource::live_value`]: crate::plugin::ParamTextSource::live_value
     pub(super) fn current_value(&self, slot: usize) -> f64 {
-        if let Some(plugin) = &self.plugin {
+        if let Some(plugin) = self.plugin_ref() {
             if slot < plugin.param_count() {
                 return plugin.param(slot).get_plain();
             }
@@ -157,7 +157,7 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
     /// The full state document, whether the plugin object is here or in
     /// the audio processor. Shared by `clap.state` and the preset form.
     pub(super) fn save_bytes(&self) -> Vec<u8> {
-        if let Some(plugin) = &self.plugin {
+        if let Some(plugin) = self.plugin_ref() {
             // Main-thread path: the plugin's own `save_state` composes
             // params with any extra-state saver via the trait default.
             plugin.save_state()
@@ -185,8 +185,13 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
 
     /// Load a full state document, whether the plugin object is here or in
     /// the audio processor. Shared by `clap.state` and the preset form.
-    pub(super) fn load_bytes(&mut self, data: &[u8]) -> Result<(), PluginError> {
-        if let Some(plugin) = &mut self.plugin {
+    ///
+    /// Inactive, the plugin's own `load_state` runs under a mutable borrow
+    /// of the plugin slot; a re-entrant call that needs the slot meanwhile
+    /// takes the active path or is refused (see [`ClapMainThread`]).
+    pub(super) fn load_bytes(&self, data: &[u8]) -> Result<(), PluginError> {
+        let mut slot = self.plugin_mut()?;
+        if let Some(plugin) = slot.as_mut() {
             if !plugin.load_state(data) {
                 return Err(PluginError::Message("Failed to load state"));
             }
@@ -197,6 +202,9 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
                 }
             }
         } else {
+            // Nothing below needs the (empty) slot; release it before the
+            // extra-state saver runs plugin code.
+            drop(slot);
             // Audio-processor path: parse once, load params into shared
             // atomics, and hand the parsed value to the extra-state saver
             // so file paths etc. land in their shared storage.
