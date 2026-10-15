@@ -78,6 +78,11 @@ With the loop enabled and a real range set:
 - The clip is placed at `max(loop_in, start)`: Record pressed *inside* the
   loop has nothing before it to trim and lands on the punch-in (BUG-69; it
   used to be placed at `loop_in`, early by `start − loop_in`).
+- Record pressed at or after `loop_out` never wraps (the seam fires only on
+  a raw playhead before `loop_out`), so the take gets no loop trim and is
+  kept whole. The test is on the raw latched playhead, not the
+  latency-compensated start. It used to compute an empty trim range and
+  delete the take's file (BUG-74).
 - There is no punch-in/out without looping: the old `punch_*` project
   fields are read as the loop range (`#[serde(alias = "punch_in")]`).
 
