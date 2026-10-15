@@ -43,7 +43,7 @@ rand = "0.10"
 rfd = "0.17"
 rustfft = "6"
 symphonia = { version = "0.6", default-features = false, features = ["wav", "pcm", "flac", "mp3", "ogg", "vorbis", "aac", "isomp4"] }
-dirs = "6"
+dirs = "7"
 time = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
 crossbeam-channel = "0.5"
