@@ -11,7 +11,8 @@
 
 Code-quality, robustness and test items in `resonance-audio` and the
 plugin bridge that the review campaigns left open. User-visible engine
-defects are in [`../bugs.md`](../bugs.md) (BUG-30…BUG-37), not here.
+defects are in [`../bugs.md`](../bugs.md) and
+[live-path-robustness](live-path-robustness.md), not here.
 
 ## What it would do
 

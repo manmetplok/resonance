@@ -1,7 +1,7 @@
 # Known defects
 
 Behaviour defects that exist in the code today (checked against master
-`8eac71b3`, 2026-10-07). Each row is a real, user- or agent-visible fault —
+`ef215b08`, 2026-10-15). Each row is a real, user- or agent-visible fault —
 wrong sound, lost data, a control that does nothing, a security leak — not a
 missing feature. Missing features are intents in the area folders; when a bug
 is part of a larger intent, the Source column links it.
@@ -11,6 +11,30 @@ merged, but not reproduced. Fix any row the usual way: write the failing test
 first. When a bug is fixed, delete its row.
 
 Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
+
+## Decided fixes (triage 2026-10-15)
+
+The triage re-checked every row against `ef215b08` and settled how to
+fix the ones below. The engine-path defects it judged to be design work
+(the former BUG-21, 30, 32, 33, 34, 35 and 37) moved to the intent
+[audio-engine/live-path-robustness.md](audio-engine/live-path-robustness.md).
+
+| ID | Decided fix |
+|---|---|
+| BUG-02 | Build it the way [mixer/sub-track-solo.md](mixer/sub-track-solo.md) describes: sub-track solo counts in the total, and the parent becomes a fan-out driver. |
+| BUG-03 | Offset = live mix integrated LUFS − reference integrated LUFS, handed to the engine thread without a lock; −inf falls back to 0. |
+| BUG-04 | Bus levels are longest-path levels over the send graph, and sends are pulled by level instead of index. Keep the source-index summing order. |
+| BUG-20 | On a seek or loop-range change during cycle-record, roll the current audio and MIDI pass, re-arm the start latch with the new loop, and update the session slot. |
+| BUG-22 | The seam bumps a wrap-count atomic, and live MIDI events are filed into passes by the wrap count they arrived under (this also stops a backward seek from rolling a MIDI pass). |
+| BUG-23 | A monotonic drop total that is never reset; the drain writes the delta as silence and adds it to the cut clock. |
+| BUG-39, BUG-61 | Request ids on `SavePluginState` / `SaveAllPluginStates` / `SaveClipsToProjectDir` and their replies; collectors ignore replies whose id doesn't match. |
+| BUG-41 | Taller strip (about 440 px) and window, a horizontal scroll over the bands, and a header that wraps. |
+| BUG-42 | A phase-matched dry path (complementary split) for Transformer saturation; re-bless the mastering goldens. |
+| BUG-51 | Wire swing and humanize at render time, with jitter seeded from the group seed; the default humanize becomes 0. Fills stay in the intent. |
+| BUG-60 | Save As copies the WAVs that only the undo history names from the old `audio/` into the new one. |
+| BUG-62 | When Save As targets a different existing project, confirm first, then clear its `backups/`, autosave and old media. |
+| BUG-72 | Key-aware spelling: `Scale::prefers_flats`, `Chord::display_in(scale)` at the four display sites. |
+| BUG-73 | Placing a section installs its derived parts and the existing vocal take (the status half is fixed separately). |
 
 ## Mixer and routing
 
@@ -34,7 +58,6 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
 | BUG-20 | hardware-io | Seeking or moving the loop range during cycle-record is ignored by the take session; later passes are cut at stale seams. | `audio/engine/transport.rs:672` (`handle_seek_to` ignores `loop_record_session`) | review 2026-10-02 FU-R1b |
-| BUG-21 | hardware-io | The last count-in block's tail after the downbeat is silent, so a recording starts with a short gap. | `audio/mixer/callback/count_in.rs:118-121` | review 2026-10-02 FU-R1c (RT-08 remainder) · near [hardware-io/count-in-and-punch.md](hardware-io/count-in-and-punch.md) |
 | BUG-22 | hardware-io | MIDI cycle-record passes roll on the engine-thread playhead wrap, so pass boundaries jitter by ~16 ms (audio passes are sample-exact). | `audio/engine/transport.rs:804-818` | review 2026-10-02 FU-R1f |
 | BUG-23 | hardware-io | Input-ring overflow drops are reported but not compensated, so every later cycle cut shifts by the dropped frames. | `audio/recording.rs:397-418` | review 2026-10-02 FU-R1a |
 | BUG-24 | hardware-io | Panic sends all-notes-off only: pitch bend and mod wheel are not reset on plugins or hardware. | `audio/engine/transport.rs:659-678` | review 2026-10-02 FU-H1f |
@@ -45,13 +68,7 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-30 | audio-engine | When the engine thread holds a plugin's instance lock, the audio thread skips that plugin for the block: dry audio leaks through an effect, an instrument drops out. Only counted, not concealed. | `audio/clap_host/slot_locking.rs:15-21` | review 2026-10-02 FU-R2a (RT-07 remainder) |
-| BUG-32 | audio-engine | *(likely)* When a latent plugin first appears on a track that had no delay line, the compensated track restarts from silence (audible gap). | PDC line build, `audio/engine/` latency handling | review 2026-10-02 FU-R3a |
-| BUG-33 | audio-engine | *(likely)* Whole-chain bypass on a latent chain crossfades latent wet against undelayed dry for 5 ms (comb/flam on toggle). | `audio/bypass.rs` / chain bypass | review 2026-10-02 FU-R3b |
-| BUG-34 | audio-engine | Plugin tails are cut by a fixed 3 s hold after stop; the CLAP tail extension is not asked. | no `CLAP_EXT_TAIL` in `audio/` | review 2026-10-02 FU-R4b |
-| BUG-35 | audio-engine | *(likely)* While stopped, busses run without PDC and idle multi-out ports are unrouted. | `audio/mixer/` stopped path | review 2026-10-02 FU-R4c |
 | BUG-36 | audio-engine | *(likely)* The held-note release on stop/seek covers timeline notes only, not live-played notes or hardware MIDI out. | `audio/engine/` note release | review 2026-10-02 FU-R4d |
-| BUG-37 | audio-engine | Plugin port layouts are not re-read after a plugin restart or rescan (no host `audio_ports` extension). | `audio/clap_host/` (no host-side `audio_ports`) | review 2026-10-02 FU-H1c |
 | BUG-38 | plugins-instruments | *(likely)* A save-time state refresh moves an automated parameter's mirror to its value at the playhead. | `app/engine_events/plugins.rs:966-990` | review 2026-10-02 FU-P1b |
 | BUG-39 | plugins-instruments | *(likely)* Edge cases: a drums `kit_select` undo races a cache refresh; an in-flight `SavePluginState` is counted as an owed echo. | plugin-state echo bookkeeping | review 2026-10-02 FU-P1c |
 | BUG-41 | plugins-effects | *(likely)* EQ dynamics rows overflow the 350 px strip and the header runs off-window at ≤960 px. | `plugins/resonance-eq/src/editor/app.rs:174`; `factory.rs:70` | review 2026-10-02 FU-P2c |
