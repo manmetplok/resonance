@@ -66,10 +66,10 @@ fn draw_at(plugin: &ResonanceDrums, pad: usize, width: f32) -> usize {
         screen_rect: Some(screen),
         ..Default::default()
     };
-    let output = ctx.run_ui(input, |ui| {
+    let mut output = ctx.run_ui(input, |ui| {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.allocate_ui_with_layout(
                     egui::vec2(width, 700.0),
                     egui::Layout::top_down(egui::Align::Min),
@@ -77,6 +77,9 @@ fn draw_at(plugin: &ResonanceDrums, pad: usize, width: f32) -> usize {
                 );
             });
     });
+    // Headless: no painter takes the texture uploads, and egui
+    // (0.36+) asserts a dropped TexturesDelta was handled.
+    output.textures_delta.clear();
     ctx.tessellate(output.shapes, output.pixels_per_point).len()
 }
 

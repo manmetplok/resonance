@@ -127,7 +127,7 @@ impl EditorApp for MasteringEditorApp {
 
         egui::Panel::top("mastering_header")
             .exact_size(40.0)
-                        .show_inside(ui, |ui| {
+                        .show(ui, |ui| {
                 header::draw(
                     ui,
                     &self.params,
@@ -140,16 +140,16 @@ impl EditorApp for MasteringEditorApp {
 
         egui::Panel::top("mastering_tabs")
             .exact_size(32.0)
-            .show_inside(ui, |ui| controls::draw_tab_bar(ui, &mut self.current_stage));
+            .show(ui, |ui| controls::draw_tab_bar(ui, &mut self.current_stage));
 
         egui::Panel::bottom("mastering_histories")
             .exact_size(150.0)
-            .show_inside(ui, |ui| draw_histories(ui, self));
+            .show(ui, |ui| draw_histories(ui, self));
 
         let controls_h = controls::stage_panel_height(self.current_stage);
         egui::Panel::bottom("mastering_controls")
             .exact_size(controls_h)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 controls::draw_stage_panel(
                     ui,
                     self.current_stage,
@@ -160,9 +160,9 @@ impl EditorApp for MasteringEditorApp {
 
         egui::Panel::right("mastering_right")
             .exact_size(320.0)
-            .show_inside(ui, |ui| draw_right_panel(ui, self));
+            .show(ui, |ui| draw_right_panel(ui, self));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_spectrum(ui, self));
+        egui::CentralPanel::default().show(ui, |ui| draw_spectrum(ui, self));
     }
 }
 

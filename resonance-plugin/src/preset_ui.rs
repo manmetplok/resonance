@@ -377,12 +377,12 @@ mod picker {
 
 #[cfg(not(target_os = "macos"))]
 fn import_picker_id() -> egui::Id {
-    egui::Id::new("resonance_preset_import_picker")
+    egui::Id::unique("resonance_preset_import_picker")
 }
 
 #[cfg(not(target_os = "macos"))]
 fn export_picker_id() -> egui::Id {
-    egui::Id::new("resonance_preset_export_picker")
+    egui::Id::unique("resonance_preset_export_picker")
 }
 
 /// The browser: an `egui::Area` over the editor body, the plugin's
@@ -413,7 +413,7 @@ fn browser_overlay(
         .map(|c| crate::presets::mark_key(bank.plugin_id(), &c.id));
 
     let mut close: Option<bool> = None;
-    let area = egui::Area::new(egui::Id::new((id_salt, "preset_browser")))
+    let area = egui::Area::new(egui::Id::unique((id_salt, "preset_browser")))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
         .show(ctx, |ui| {
@@ -858,7 +858,7 @@ fn facet_suggestions(
 
 fn tag_field(
     ui: &mut egui::Ui,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     bank: &PresetBank,
     label: &str,
     facet: &str,
@@ -900,7 +900,7 @@ fn form_overlay(
     let Some(form) = editor.browser.form.as_mut() else {
         return event;
     };
-    egui::Area::new(egui::Id::new((id_salt, "preset_form")))
+    egui::Area::new(egui::Id::unique((id_salt, "preset_form")))
         .order(egui::Order::Foreground)
         .fixed_pos(pos)
         .show(ctx, |ui| {

@@ -44,7 +44,7 @@ pub fn interact(
 ) {
     let response = ui.interact(
         layout.plot,
-        ui.id().with("hero_canvas"),
+        ui.scope_id().with("hero_canvas"),
         egui::Sense::click_and_drag(),
     );
     let pointer = response
@@ -146,7 +146,7 @@ pub fn interact(
     // in params.rs (its DSP is a declared TODO), so the free-run
     // density param is the single scroll target in both modes. One
     // scroll is one gesture, announced once the wheel stops.
-    let scrolling_id = egui::Id::new("granular_hero_density_scroll");
+    let scrolling_id = egui::Id::unique("granular_hero_density_scroll");
     let was_scrolling = ctx.data(|d| d.get_temp::<bool>(scrolling_id)).unwrap_or(false);
     let mut scrolled = false;
     if response.hovered() {

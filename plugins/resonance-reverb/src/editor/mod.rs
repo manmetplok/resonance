@@ -139,13 +139,13 @@ impl EditorApp for ReverbEditorApp {
 
         egui::Panel::top("reverb_header")
             .exact_size(42.0)
-            .show_inside(ui, |ui| draw_header(ui, self));
+            .show(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("reverb_strip")
             .exact_size(356.0)
-            .show_inside(ui, |ui| controls::draw(ui, &self.params, &self.viz));
+            .show(ui, |ui| controls::draw(ui, &self.params, &self.viz));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| center::draw(ui, self));
+        egui::CentralPanel::default().show(ui, |ui| center::draw(ui, self));
     }
 }
 

@@ -468,7 +468,7 @@ fn draw_tone_row(
         });
     });
 
-    let click_id = ui.id().with(("tone3000_tone_row", tone.id));
+    let click_id = ui.scope_id().with(("tone3000_tone_row", tone.id));
     let click = ui.interact(frame_resp.response.rect, click_id, egui::Sense::click());
     if click.clicked() {
         worker.send(Command::ListModels(tone.id));

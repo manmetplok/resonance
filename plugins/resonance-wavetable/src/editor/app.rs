@@ -103,7 +103,7 @@ impl EditorApp for WavetableEditorApp {
                     .inner_margin(egui::Margin::symmetric(14, 6))
                     .stroke(egui::Stroke::new(1.0, theme::LINE_2)),
             )
-            .show_inside(ui, |ui| chrome::draw_chrome(ui, self));
+            .show(ui, |ui| chrome::draw_chrome(ui, self));
 
         // Tab bar (module nav + preset pill + voices badge).
         egui::Panel::top("wt_tabs")
@@ -114,7 +114,7 @@ impl EditorApp for WavetableEditorApp {
                     .inner_margin(egui::Margin::symmetric(14, 6))
                     .stroke(egui::Stroke::new(1.0, theme::LINE_2)),
             )
-            .show_inside(ui, |ui| chrome::draw_tab_bar(ui, self));
+            .show(ui, |ui| chrome::draw_tab_bar(ui, self));
 
         // Status bar.
         egui::Panel::bottom("wt_status")
@@ -125,7 +125,7 @@ impl EditorApp for WavetableEditorApp {
                     .inner_margin(egui::Margin::symmetric(16, 6))
                     .stroke(egui::Stroke::new(1.0, theme::LINE_2)),
             )
-            .show_inside(ui, |ui| chrome::draw_status_bar(ui, self));
+            .show(ui, |ui| chrome::draw_status_bar(ui, self));
 
         // Body.
         egui::CentralPanel::default()
@@ -134,7 +134,7 @@ impl EditorApp for WavetableEditorApp {
                     .fill(theme::BG_0)
                     .inner_margin(egui::Margin::same(12)),
             )
-            .show_inside(ui, |ui| match self.selected_tab {
+            .show(ui, |ui| match self.selected_tab {
                 WtTab::Osc => tabs::osc::draw(ui, self),
                 WtTab::EnvFilter => tabs::env_filter::draw(ui, self),
                 WtTab::Lfo => tabs::lfo::draw(ui, self),

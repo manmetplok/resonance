@@ -1,6 +1,6 @@
 # Plugin editor runtimes
 
-> Verified against master @ `5d6a2993` on 2026-10-15.
+> Verified against master @ `6cea87c2` on 2026-10-15 (egui 0.37 / SCTK 0.21 upgrade).
 > Spec history: `docs/history/macos/macos-editor-plan.md`,
 > `docs/history/macos/macos-linux-verification.md`.
 
@@ -105,6 +105,43 @@ Linux only.
   an `NSTimer` in common run-loop modes.
 - Plan item 3g (embedded mode and hosting third-party Cocoa editors from the
   main thread) was deferred and is not built.
+- **egui 0.37 / egui_glow 0.37, glow 0.17.** glow stays on 0.17 because
+  `egui_glow::Painter` takes the runtime's `glow::Context`, and egui_glow
+  0.37 still links glow 0.17. What the 0.34 → 0.37 upgrade changed for us:
+  - Held modifiers reach egui as `Event::ModifiersChanged` (the
+    `RawInput::modifiers` field is gone). Wayland sends one on every
+    `wl_keyboard.modifiers`; Cocoa and the headless harnesses state them
+    at the start of every frame. Wheel events carry
+    `MouseWheelSource::Unknown`.
+  - A dropped `TexturesDelta` is a debug assertion: the runtimes hand it to
+    the painter by `&mut`, every headless harness `clear()`s it, and the
+    Cocoa paint clears it when the view was torn down mid-frame.
+  - `theme::apply` pins what egui 0.37 restyled — button padding 4×1 and
+    row height 18 (0.37: 8×2 and 20), widget corner radii 2–3 (0.37: 4–6)
+    and the hovered/active button fills — so every editor keeps its
+    measured layout and look. Because spacing is read when a pass starts,
+    `apply_once` asks egui to discard and re-run the first frame; layout
+    probes skip a pass that will be discarded.
+  - `Panel::exact_size` is now the outer size including the frame stroke
+    and a 1 px separator line (0.34 added the stroke on top), so fixed
+    header/status bars are 2 px shorter outside and 3 px inside.
+  - `Visuals::clip_rect_margin` no longer does anything: clips are exact.
+    That exposed the drums pad grid running 2 px past its scroll area at
+    the minimum width (its card stroke was not budgeted), now fixed.
+  - Text is shaped with harfrust (kerning), so some labels are a few px
+    narrower.
+  - The emoji/icon fallback fonts (NotoEmoji, emoji-icon-font) are behind
+    egui's `monochrome_emoji_fonts` feature now; the workspace enables it,
+    or the editors' ◀ ▶ preset/kit steppers and the drums ▶ audition
+    button draw as missing-glyph boxes.
+- **SCTK 0.21** (wayland-client 0.31 unchanged). The per-protocol
+  `delegate_*!` macros are gone: `delegate_dispatch2!(State)` is one
+  blanket `Dispatch` impl routing each object to its SCTK user data, and
+  frame callbacks carry `FrameCallbackData(surface)` instead of the bare
+  surface. The runtime's own `Dispatch<WlCallback, RemapSync>` stays.
+- `editor_size`'s compositor resize drives Hyprland ≥ 0.56 through its Lua
+  dispatchers (`hl.dsp.window.float` / `resize`), falling back to the old
+  `setfloating` / `resizewindowpixel` syntax.
 
 ## Known gaps
 

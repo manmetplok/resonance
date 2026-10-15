@@ -146,13 +146,15 @@ fn click_at<R>(pos: egui::Pos2, mut contents: impl FnMut(&mut egui::Ui) -> R) ->
             events,
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        ctx.run_ui(input, |ui| {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
-                .show_inside(ui, |ui| {
+                .show(ui, |ui| {
                     result = Some(contents(ui));
                 });
-        });
+        })
+        .textures_delta
+        .clear();
     }
     result.expect("the panel body always runs")
 }
@@ -221,11 +223,13 @@ fn drive<R>(
             events: events.clone(),
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        ctx.run_ui(input, |ui| {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
-                .show_inside(ui, |ui| out.push(contents(ui)));
-        });
+                .show(ui, |ui| out.push(contents(ui)));
+        })
+        .textures_delta
+        .clear();
     }
     out
 }

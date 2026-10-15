@@ -110,6 +110,11 @@ impl InputState {
                 unit: egui::MouseWheelUnit::Point,
                 delta,
                 phase: egui::TouchPhase::Move,
+                // NSEvent could say wheel vs trackpad vs momentum, but we
+                // send no Start/End phases, and egui's trackpad
+                // rubber-banding keys off those; Unknown keeps the old
+                // behaviour.
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: self.modifiers,
             });
         }

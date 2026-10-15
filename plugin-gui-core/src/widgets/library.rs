@@ -52,7 +52,7 @@ pub fn paint_star(painter: &egui::Painter, center: Pos2, r: f32, on: bool, idle:
 pub fn star_toggle_sized(ui: &mut egui::Ui, on: bool, size: f32) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, "Favourite")
+        egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, "Favourite")
     });
     if ui.is_rect_visible(rect) {
         let idle = if response.hovered() {
@@ -98,16 +98,16 @@ pub fn tag_pill(ui: &mut egui::Ui, label: &str, active: bool, removable: bool) -
     );
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let label_rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x - x_w, rect.max.y));
-    let id = ui.id().with(("tag_pill", label));
+    let id = ui.scope_id().with(("tag_pill", label));
     let label_resp = ui.interact(label_rect, id, Sense::click());
     label_resp.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label)
+        egui::WidgetInfo::selected(egui::Role::Button, true, active, label)
     });
     let x_resp = removable.then(|| {
         let x_rect = egui::Rect::from_min_max(egui::pos2(rect.max.x - x_w, rect.min.y), rect.max);
         let r = ui.interact(x_rect, id.with("x"), Sense::click());
         r.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Remove tag {label}"))
+            egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Remove tag {label}"))
         });
         (x_rect, r)
     });

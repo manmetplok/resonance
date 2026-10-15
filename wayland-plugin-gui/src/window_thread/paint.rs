@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use plugin_gui_core::repaint::{plan_repaint, RepaintPlan};
+use smithay_client_toolkit::compositor::FrameCallbackData;
 use smithay_client_toolkit::shell::WaylandSurface;
 use wayland_client::QueueHandle;
 
@@ -73,7 +74,7 @@ fn draw_csd_frame(
     // existing pointer event pipeline (no manual hit-testing here); the rect
     // is identical to `FrameLayout::close_button_rect`, the same geometry the
     // unit test drives.
-    let resp = ui.interact(close_rect, egui::Id::new("wpg_csd_close"), Sense::click());
+    let resp = ui.interact(close_rect, egui::Id::unique("wpg_csd_close"), Sense::click());
     if resp.hovered() {
         painter.rect_filled(close_rect, 0.0, CLOSE_HOVER);
     }
@@ -212,7 +213,6 @@ pub(super) fn paint_frame(
             egui::vec2(w as f32, h as f32),
         )),
         events,
-        modifiers: state.input.modifiers(),
         time: Some(start_time.elapsed().as_secs_f64()),
         // PUX-10: tracked from the keyboard enter/leave events instead
         // of hardcoded, so alt-tabbing away is reflected here too.
@@ -225,7 +225,7 @@ pub(super) fn paint_frame(
     // The close button feeds the same `close_requested` path as the SSD
     // `xdg_toplevel.close` event (drained in the event loop).
     let mut csd_close = false;
-    let full_output = state.egui_ctx.run_ui(raw_input, |ui| {
+    let mut full_output = state.egui_ctx.run_ui(raw_input, |ui| {
         if csd {
             if draw_csd_frame(ui, title, layout, app) {
                 csd_close = true;
@@ -259,7 +259,7 @@ pub(super) fn paint_frame(
         [pw as u32, ph as u32],
         pixels_per_point,
         &clipped_primitives,
-        &full_output.textures_delta,
+        &mut full_output.textures_delta,
     );
 
     // Optional framebuffer dump via env var — kept for dev
@@ -292,13 +292,13 @@ pub(super) fn paint_frame(
     // Ask the compositor to tell us when it wants the next frame for
     // this surface. Requested *before* the swap because `eglSwapBuffers`
     // is what commits the surface, and a frame request only rides on the
-    // commit that follows it. SCTK's `delegate_compositor!` routes the
-    // callback (userdata = the surface) to `CompositorHandler::frame`,
+    // commit that follows it. SCTK routes the callback (userdata
+    // `FrameCallbackData`, the surface) to `CompositorHandler::frame`,
     // which clears this gate. The swap itself never blocks: the event
     // loop set eglSwapInterval(0), so pacing happens here, visibly to
     // input handling, instead of inside the GL driver.
     let surface = state.window.wl_surface();
-    surface.frame(qh, surface.clone());
+    surface.frame(qh, FrameCallbackData(surface.clone()));
     state.frame_callback_pending = Some(Instant::now());
 
     egl_ctx.swap_buffers()?;

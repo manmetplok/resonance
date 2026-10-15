@@ -179,7 +179,7 @@ struct ProbeSink(Arc<Mutex<Vec<ProbedRect>>>);
 
 #[cfg(feature = "test-hooks")]
 fn probe_id() -> egui::Id {
-    egui::Id::new("resonance_drums_layout_probe")
+    egui::Id::unique("resonance_drums_layout_probe")
 }
 
 /// A probed widget's name: a `&str`, a `String`, or — for a name built
@@ -212,7 +212,8 @@ impl ProbeName for std::fmt::Arguments<'_> {
 /// frame's probe sink.
 #[cfg(feature = "test-hooks")]
 pub(crate) fn probe(ui: &egui::Ui, name: impl ProbeName, rect: egui::Rect) {
-    let sink = ui.ctx().data(|d| d.get_temp::<ProbeSink>(probe_id()));
+    // Not from a pass egui will re-run (the first frame, see theme::apply_once).
+    let sink = ui.ctx().data(|d| d.get_temp::<ProbeSink>(probe_id())).filter(|_| !ui.ctx().will_discard());
     if let Some(sink) = sink {
         sink.0.lock().push(ProbedRect {
             name: name.into_name(),
@@ -366,13 +367,11 @@ impl TestEditor {
             ..Default::default()
         };
         self.sink.0.lock().clear();
-        let app = &mut self.app;
-        let output = self.ctx.run_ui(input, |ui| app.ui(ui));
+        let mut output = self.ctx.run_ui(input, |ui| self.app.ui(ui));
+        output.textures_delta.clear(); // headless: nothing uploads them
         let widgets = std::mem::take(&mut *self.sink.0.lock());
-        let repaint_after = output
-            .viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .map_or(std::time::Duration::MAX, |v| v.repaint_delay);
+        let root = output.viewport_output.get(&egui::ViewportId::ROOT);
+        let repaint_after = root.map_or(std::time::Duration::MAX, |v| v.repaint_delay);
         EditorFrameProbe {
             screen: self.screen,
             texts: collect_texts(&output.shapes),
@@ -438,6 +437,7 @@ impl TestEditor {
                 unit: egui::MouseWheelUnit::Point,
                 delta,
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: egui::Modifiers::NONE,
             },
         ]);

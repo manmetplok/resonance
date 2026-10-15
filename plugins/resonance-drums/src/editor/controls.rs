@@ -178,7 +178,7 @@ pub(crate) fn announce_closed(bridge: &KitBridge, params: &DrumParams, closed: V
 }
 
 fn gestures_id() -> egui::Id {
-    egui::Id::new("resonance_drums_gestures")
+    egui::Id::unique("resonance_drums_gestures")
 }
 
 /// The ledger the app lent this frame's context — or, for a control

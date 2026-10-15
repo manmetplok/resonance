@@ -1,4 +1,5 @@
-//! SCTK delegate trait impls for [`State`] and the `delegate_*!` macro wiring.
+//! SCTK delegate trait impls for [`State`] and the `delegate_*!` macro wiring
+//! (`delegate_dispatch2!` since SCTK 0.21).
 
 use std::num::NonZeroU32;
 
@@ -13,10 +14,7 @@ use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::xdg::window::{
     DecorationMode, Window, WindowConfigure, WindowHandler,
 };
-use smithay_client_toolkit::{
-    delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_xdg_shell, delegate_xdg_window, registry_handlers,
-};
+use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
 use wayland_client::protocol::wl_output::WlOutput;
@@ -262,7 +260,7 @@ impl KeyboardHandler for State {
         _raw_modifiers: RawModifiers,
         _layout: u32,
     ) {
-        self.input.set_modifiers(modifiers);
+        self.input.set_modifiers(modifiers, &mut self.pending_events);
     }
 }
 
@@ -365,11 +363,7 @@ impl ProvidesRegistryState for State {
 }
 
 // SCTK delegate wiring
-delegate_compositor!(State);
-delegate_output!(State);
-delegate_seat!(State);
-delegate_keyboard!(State);
-delegate_pointer!(State);
-delegate_xdg_shell!(State);
-delegate_xdg_window!(State);
+// SCTK 0.21 replaced the per-protocol `delegate_*!` macros with one
+// blanket `Dispatch` impl that routes every object to its SCTK user data.
+delegate_dispatch2!(State);
 delegate_registry!(State);

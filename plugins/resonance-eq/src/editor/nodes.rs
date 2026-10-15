@@ -35,7 +35,7 @@ pub fn draw_and_interact(
     // Allocate an interactive response over the plot area.
     let response = ui.interact(
         plot,
-        egui::Id::new("eq_response_area"),
+        egui::Id::unique("eq_response_area"),
         egui::Sense::click_and_drag(),
     );
 

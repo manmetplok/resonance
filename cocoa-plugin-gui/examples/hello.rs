@@ -28,7 +28,7 @@ fn main() {
         }
 
         fn ui(&mut self, ui: &mut egui::Ui) {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.heading("cocoa-plugin-gui :: hello");
                 ui.separator();
 

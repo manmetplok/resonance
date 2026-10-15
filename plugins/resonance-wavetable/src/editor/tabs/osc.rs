@@ -267,7 +267,7 @@ fn poll_load(ctx: &egui::Context, app: &mut WavetableEditorApp, osc: usize) {
 
 #[cfg(not(target_os = "macos"))]
 fn load_picker_id(osc: usize) -> egui::Id {
-    egui::Id::new(("resonance_wavetable_load_osc", osc))
+    egui::Id::unique(("resonance_wavetable_load_osc", osc))
 }
 
 fn apply_load(app: &mut WavetableEditorApp, osc: usize, path: std::path::PathBuf) {

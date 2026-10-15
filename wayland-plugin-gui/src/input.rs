@@ -121,6 +121,10 @@ impl InputState {
                         unit: egui::MouseWheelUnit::Point,
                         delta,
                         phase: egui::TouchPhase::Move,
+                        // Wayland's wl_pointer.axis_source could tell a
+                        // wheel from a finger, but egui only acts on it
+                        // for rubber-banding; Unknown is what winit sends.
+                        source: egui::MouseWheelSource::Unknown,
                         modifiers: self.modifiers,
                     });
                 }
@@ -128,7 +132,13 @@ impl InputState {
         }
     }
 
-    pub fn set_modifiers(&mut self, modifiers: SctkModifiers) {
+    /// The held modifiers changed. egui (since 0.36) keeps the modifier
+    /// state itself and learns of changes only through
+    /// `Event::ModifiersChanged`, no longer through a `RawInput` field.
+    /// Sent on every update, not only on a change: egui clears its copy
+    /// on `WindowFocused(false)`, and the compositor's re-send on focus
+    /// `enter` is what restores it.
+    pub fn set_modifiers(&mut self, modifiers: SctkModifiers, out: &mut Vec<egui::Event>) {
         self.modifiers = Modifiers {
             alt: modifiers.alt,
             ctrl: modifiers.ctrl,
@@ -136,10 +146,7 @@ impl InputState {
             mac_cmd: false,
             command: modifiers.ctrl,
         };
-    }
-
-    pub fn modifiers(&self) -> Modifiers {
-        self.modifiers
+        out.push(egui::Event::ModifiersChanged(self.modifiers));
     }
 
     /// `repeat` is true for a repeated key-down from client-side repeat

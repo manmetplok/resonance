@@ -131,9 +131,12 @@ fn frame(
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
         ..Default::default()
     };
-    let out = ctx.run_ui(input, |ui| {
+    let mut out = ctx.run_ui(input, |ui| {
         preset_bar(ui, "test_presets", editor, bank, session, params, "— preset —");
     });
+    // Headless: no painter takes the texture uploads, and egui
+    // (0.36+) asserts a dropped TexturesDelta was handled.
+    out.textures_delta.clear();
     texts(&out.shapes)
 }
 
@@ -225,10 +228,11 @@ fn frame_with(
         events,
         ..Default::default()
     };
-    ctx.run_ui(input, |ui| {
+    let mut out = ctx.run_ui(input, |ui| {
         preset_bar(ui, "test_presets", editor, bank, session, params, "— preset —");
-    })
-    .shapes
+    });
+    out.textures_delta.clear();
+    out.shapes
 }
 
 /// Every painted text whose rect leaves its clip rect (or the window).

@@ -36,7 +36,6 @@ None known.
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
 | BUG-76 | plugins-instruments | The shared slider widget clips its thumb to its own rect (`painter_at(rect)`), so the thumb is half cut off at either end of its travel in every plugin editor. | `plugin-gui-core/src/widgets/slider.rs` | BUG-41 fix 2026-10-15 |
-| BUG-77 | plugins-instruments | Test infra: `wayland-plugin-gui --test editor_size` `a_compositor_resize_is_reported_by_the_handle` fails with "could not drive the compositor": Hyprland 0.56 replaced `hyprctl dispatch resizewindowpixel` with Lua dispatch (`hl.dsp.window.resize({...})`). | `wayland-plugin-gui/tests/editor_size.rs` | BUG-41 fix 2026-10-15 |
 
 ## Compose and vocals
 

@@ -257,10 +257,10 @@ pub(crate) fn poll_nam_picker(
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn import_nam_picker_id() -> plugin_gui_core::egui::Id {
-    plugin_gui_core::egui::Id::new("amp_import_nam_picker")
+    plugin_gui_core::egui::Id::unique("amp_import_nam_picker")
 }
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn locate_nam_picker_id() -> plugin_gui_core::egui::Id {
-    plugin_gui_core::egui::Id::new("amp_locate_nam_picker")
+    plugin_gui_core::egui::Id::unique("amp_locate_nam_picker")
 }

@@ -91,7 +91,32 @@ pub mod lavender {
         visuals.widgets.open.bg_fill = BG_3;
         visuals.selection.bg_fill = ACCENT_DIM;
         visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
+        pin_egui_0_34_widget_look(&mut visuals);
         ctx.set_visuals(visuals);
+        ctx.all_styles_mut(|style| {
+            // egui 0.37 made buttons roomier (padding 4×1 → 8×2, row
+            // height 18 → 20). Every editor's layout — fixed panel
+            // heights, minimum window sizes, the headless layout tests —
+            // was measured against the old values, so they are kept.
+            style.spacing.button_padding = egui::vec2(4.0, 1.0);
+            style.spacing.interact_size = egui::vec2(40.0, 18.0);
+        });
+    }
+
+    /// The parts of egui's dark widget look that egui 0.37 changed and
+    /// the palette above does not already set: corner radii (2–3 → 4–6)
+    /// and the button fills and icon strokes. Kept at their 0.34 values
+    /// so the upgrade does not restyle every editor.
+    fn pin_egui_0_34_widget_look(visuals: &mut egui::Visuals) {
+        let w = &mut visuals.widgets;
+        w.noninteractive.corner_radius = egui::CornerRadius::same(2);
+        w.inactive.corner_radius = egui::CornerRadius::same(2);
+        w.hovered.corner_radius = egui::CornerRadius::same(3);
+        w.active.corner_radius = egui::CornerRadius::same(2);
+        w.open.corner_radius = egui::CornerRadius::same(2);
+        w.hovered.weak_bg_fill = egui::Color32::from_gray(70);
+        w.hovered.fg_stroke = egui::Stroke::new(1.5, egui::Color32::from_gray(240));
+        w.active.weak_bg_fill = egui::Color32::from_gray(55);
     }
 
     /// [`apply`], but only the first time it runs for this `Context` —
@@ -103,11 +128,17 @@ pub mod lavender {
     /// after the first call for a given `Context` (i.e. for the life of
     /// one editor window).
     pub fn apply_once(ctx: &egui::Context) {
-        let id = egui::Id::new("resonance_lavender_theme_applied");
+        let id = egui::Id::unique("resonance_lavender_theme_applied");
         let already = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
         if !already {
             apply(ctx);
             ctx.data_mut(|d| d.insert_temp(id, true));
+            // The pass already running laid out with egui's own spacing
+            // (the style is read when a pass starts), which `apply` pins
+            // to different values: run the first frame again rather than
+            // show — or let a test measure — a layout that jumps on the
+            // second.
+            ctx.request_discard("resonance theme applied");
         }
     }
 }

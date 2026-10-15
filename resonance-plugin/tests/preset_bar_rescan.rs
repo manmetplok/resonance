@@ -77,9 +77,12 @@ fn stepping_through_the_bar_rescans_the_host_mirror_but_announces_nothing() {
             ..Default::default()
         };
         let mut event = PresetEvent::None;
-        let out = ctx.run_ui(input, |ui| {
+        let mut out = ctx.run_ui(input, |ui| {
             event = preset_bar(ui, "test_presets", editor, &bank, &session, &params, "— preset —");
         });
+        // Headless: no painter takes the texture uploads, and egui
+        // (0.36+) asserts a dropped TexturesDelta was handled.
+        out.textures_delta.clear();
         (event, out.shapes)
     };
 
@@ -151,9 +154,11 @@ fn no_recall_means_no_rescan() {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        ctx.run_ui(input, |ui| {
             preset_bar(ui, "test_presets", &mut editor, &bank, &session, &params, "— preset —");
-        });
+        })
+        .textures_delta
+        .clear();
     }
     assert_eq!(announcer.rescans_requested(), 0);
     let _ = std::fs::remove_dir_all(&root);

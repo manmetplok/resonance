@@ -46,13 +46,13 @@ impl EditorApp for ColorEditorApp {
 
         egui::Panel::top("color_header")
             .exact_size(40.0)
-            .show_inside(ui, |ui| draw_header(ui, self));
+            .show(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("color_strip")
             .exact_size(150.0)
-            .show_inside(ui, |ui| controls::draw_control_strip(ui, &self.params));
+            .show(ui, |ui| controls::draw_control_strip(ui, &self.params));
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
+        egui::CentralPanel::default().show(ui, |ui| draw_center(ui, self));
     }
 }
 
