@@ -150,15 +150,7 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             return reject(request, RpcError::invalid_params("bus name must not be empty"))
         }
         Some(name) => name,
-        // Smallest free "Bus N": len()+1 collides after a deletion (delete
-        // "Bus 1" of two, create → a second "Bus 2").
-        None => {
-            let taken: Vec<&str> = app.registry.busses.iter().map(|b| b.name.as_str()).collect();
-            (1..)
-                .map(|n| format!("Bus {n}"))
-                .find(|candidate| !taken.iter().any(|t| t == candidate))
-                .expect("unbounded counter always finds a free name")
-        }
+        None => crate::update::bus::default_bus_name(&app.registry.busses),
     };
 
     // App-side id so the reply can return it immediately (ARCH-04 D-3: the

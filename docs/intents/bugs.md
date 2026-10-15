@@ -16,7 +16,6 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-01 | mixer | Every bus made with the GUI "+ Bus" button is named "Bus 2000000000", "Bus 2000000001", … (its raw id). | `app/update/bus.rs:96` sends `name: None`; `audio/engine/busses.rs:38` formats `Bus {id}`; ids start at `BUS_ID_BASE` (`app/state/ids.rs:131`); `app/engine_events/tracks.rs:371-382` stores the name as-is | area docs 2026-10-07 |
 | BUG-02 | mixer | The S button on a sub-track strip lights up, saves and undoes, but changes nothing audible. | `app/view/mixer/track_strip.rs:662-666`; `audio/mixer/render/strategy.rs:56` (`sub_track_silenced` ignores solo); `audio/types/track.rs:611` (`any_top_level_solo` skips sub-tracks) | intent [mixer/sub-track-solo.md](mixer/sub-track-solo.md) |
 | BUG-03 | mixer | The reference loudness-match toggle has no audible effect; its readout is always +0.0 dB. | `audio/engine/reference.rs:73` (`offset_db`), only ever set to 0.0 at `:88` | intent [mixer/reference-loudness-match.md](mixer/reference-loudness-match.md) |
 | BUG-04 | mixer | A bus→bus send into a lower-indexed (older) bus passes validation and is saved, but is silent. | `audio/mixer/render/bus_pass.rs:152` (`dst_idx > src_idx`); `audio/mixer/render/routing.rs:123-133` | intent [mixer/bus-to-bus-routing.md](mixer/bus-to-bus-routing.md) |

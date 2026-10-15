@@ -1,6 +1,6 @@
 # Busses and track output routing
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: none as a spec; control-API side came from ba doc #273 (todos #1221, #1226–#1228, #1237, #1238).
 
 A bus is a summing point between tracks and the master with its own fader,
@@ -109,11 +109,6 @@ Not covered: the name a GUI `+ Bus` gives a new bus (see Known gaps).
 
 ## Known gaps
 
-- `+ Bus` in the GUI sends `AddBus { name: None }`, and the engine then
-  names the bus `Bus {id}` — with ids starting at 2 000 000 000 that reads
-  `Bus 2000000000`. `bus.create` picks "Bus N" app-side and is fine.
-  (Found by reading `update/bus.rs` and `engine/busses.rs::handle_add_bus`;
-  not confirmed in a running app.)
 - No bus → bus output route, and a send into a lower-indexed bus is
   inaudible —
   [`../../intents/mixer/bus-to-bus-routing.md`](../../intents/mixer/bus-to-bus-routing.md).

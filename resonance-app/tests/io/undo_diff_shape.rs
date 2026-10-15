@@ -1255,7 +1255,7 @@ fn adding_and_removing_a_bus_with_routing_undoes_through_the_diff_path() {
         [
             "PersistClipWavs".to_owned(),
             TEMPO.to_owned(),
-            format!("AddBus {{ id: {bus}, name: Some(\"Bus {bus}\") }}"),
+            format!("AddBus {{ id: {bus}, name: Some(\"Bus 1\") }}"),
             format!("SetBusVolume {{ bus_id: {bus}, volume: 1.0 }}"),
             format!("SetBusPan {{ bus_id: {bus}, pan: 0.0 }}"),
             format!("SetBusMute {{ bus_id: {bus}, muted: false }}"),

@@ -86,6 +86,17 @@ impl BusMessage {
     }
 }
 
+/// The default name for a new bus: the smallest free "Bus N". `len()+1`
+/// collides after a deletion (delete "Bus 1" of two, add → a second
+/// "Bus 2"). Shared by the GUI add and `bus.create` without a name; the
+/// engine's own `Bus {id}` fallback would print the raw id.
+pub(crate) fn default_bus_name(busses: &[crate::state::BusState]) -> String {
+    (1..)
+        .map(|n| format!("Bus {n}"))
+        .find(|candidate| !busses.iter().any(|b| &b.name == candidate))
+        .expect("unbounded counter always finds a free name")
+}
+
 pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
     match m {
         BusMessage::AddBus => {
@@ -93,7 +104,11 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
             // the plain plugin/send GUI adds — the mixer waits for
             // `BusAdded`.
             let id = r.registry.allocate_bus_id();
-            let _ = r.engine.send(AudioCommand::AddBus { id, name: None });
+            let name = default_bus_name(&r.registry.busses);
+            let _ = r.engine.send(AudioCommand::AddBus {
+                id,
+                name: Some(name),
+            });
         }
         BusMessage::AddBusWithId { id, name } => {
             let _ = r.engine.send(AudioCommand::AddBus {
