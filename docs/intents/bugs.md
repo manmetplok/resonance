@@ -21,8 +21,6 @@ fix the ones below. The engine-path defects it judged to be design work
 
 | ID | Decided fix |
 |---|---|
-| BUG-02 | Build it the way [mixer/sub-track-solo.md](mixer/sub-track-solo.md) describes: sub-track solo counts in the total, and the parent becomes a fan-out driver. |
-| BUG-04 | Bus levels are longest-path levels over the send graph, and sends are pulled by level instead of index. Keep the source-index summing order. |
 | BUG-39, BUG-61 | Request ids on `SavePluginState` / `SaveAllPluginStates` / `SaveClipsToProjectDir` and their replies; collectors ignore replies whose id doesn't match. |
 | BUG-41 | Taller strip (about 440 px) and window, a horizontal scroll over the bands, and a header that wraps. |
 | BUG-42 | A phase-matched dry path (complementary split) for Transformer saturation; re-bless the mastering goldens. |
@@ -36,8 +34,6 @@ fix the ones below. The engine-path defects it judged to be design work
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-02 | mixer | The S button on a sub-track strip lights up, saves and undoes, but changes nothing audible. | `app/view/mixer/track_strip.rs:662-666`; `audio/mixer/render/strategy.rs:56` (`sub_track_silenced` ignores solo); `audio/types/track.rs:611` (`any_top_level_solo` skips sub-tracks) | intent [mixer/sub-track-solo.md](mixer/sub-track-solo.md) |
-| BUG-04 | mixer | A bus→bus send into a lower-indexed (older) bus passes validation and is saved, but is silent. | `audio/mixer/render/bus_pass.rs:152` (`dst_idx > src_idx`); `audio/mixer/render/routing.rs:123-133` | intent [mixer/bus-to-bus-routing.md](mixer/bus-to-bus-routing.md) |
 
 ## Timeline and clips
 
