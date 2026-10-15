@@ -53,14 +53,18 @@ pub enum ExportBitDepth {
 }
 
 /// What to do when a target filename already exists on disk.
+///
+/// A per-collision prompt ("Ask each") is intent, not yet built — see
+/// [`stem-export-options.md`](../../../docs/intents/audio-engine/stem-export-options.md).
+/// It is meant to ship together with the overwrite selector this enum
+/// backs, so there is deliberately no dead `Ask` variant sitting here
+/// unwired in the meantime (BUG-64).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportOverwrite {
     /// Append `_1`, `_2`, … so nothing is clobbered.
     Suffix,
     /// Overwrite the existing file in place.
     Overwrite,
-    /// Prompt per collision at write time.
-    Ask,
 }
 
 /// MIDI file layout for the MIDI tab.

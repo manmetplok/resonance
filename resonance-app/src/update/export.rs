@@ -261,8 +261,8 @@ pub fn stem_targets(r: &Resonance, dialog: &ExportDialogState, dir: &Path) -> Ve
 /// One target per source, in the set's (deterministic) order:
 /// `NN-<name>.wav` in `dir`, where `NN` is the 1-based queue position,
 /// so two tracks with the same name never share a file. Under
-/// [`ExportOverwrite::Suffix`] (and `Ask`, which has no prompt yet) a
-/// name already on disk gets `_1`, `_2`, …; `Overwrite` replaces it.
+/// [`ExportOverwrite::Suffix`] a name already on disk gets `_1`, `_2`,
+/// …; `Overwrite` replaces it.
 ///
 /// The one definition of stem file names: the Export modal and the
 /// control API's `render.stems` both build their queue here.

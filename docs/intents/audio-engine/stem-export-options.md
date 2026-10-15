@@ -9,17 +9,21 @@
 The Audio stems tab of the export dialog works (track / bus / master
 checklist, whole project or loop range, destination, progress, cancel,
 partial-failure report), but the prototype's option row never got a
-surface. Stems always export at the engine defaults, the "Ask each"
-overwrite mode silently behaves like "Add suffix" (BUG-64 in
-[`../bugs.md`](../bugs.md)), and after a partial failure the only way to
-get the missing stems is to export everything again.
+surface. Stems always export at the engine defaults, there is no
+"Ask each" overwrite mode yet — `ExportOverwrite` only has `Suffix` and
+`Overwrite`; the dead unwired `Ask` variant was removed rather than left
+to silently behave like `Suffix` (BUG-64 in [`../bugs.md`](../bugs.md)) —
+and after a partial failure the only way to get the missing stems is to
+export everything again.
 
 ## What it would do
 
 - An options row on the stems tab: bit depth, sample rate and "Include FX
   tail", applied by the stem render.
-- Filename conflicts: Add suffix `_1` / Overwrite / Ask each, where Ask
-  really prompts per file (overwrite, skip, rename).
+- Filename conflicts: Add suffix `_1` / Overwrite / Ask each, built
+  together with the overwrite selector itself — `ExportOverwrite` grows
+  a third variant only once there is a real per-file prompt (overwrite,
+  skip, rename) behind it, never unwired ahead of it.
 - "Retry remaining (N)" after a partial failure, re-rendering only the
   stems that failed.
 - Settings remembered per project like the mixdown's.
@@ -29,9 +33,11 @@ Done when each option changes the written files and a test pins it.
 ## What exists to build on
 
 - `resonance-app/src/state/export.rs` already holds the stem format and
-  `ExportOverwrite` fields; no message or view sets them.
-- `resonance-app/src/update/export.rs:205,234` — where `Ask` falls through
-  to suffix.
+  `ExportOverwrite` (`Suffix` / `Overwrite`) fields; no message or view
+  sets them.
+- `resonance-app/src/update/export.rs::stem_targets_for` — where `Suffix`
+  vs `Overwrite` is applied; a real `Ask` needs its own branch here, not
+  a fallback.
 - Engine stem render: `resonance-audio/src/engine/bounce/stem.rs`.
 - Feature doc: [`../../features/audio-engine/stem-export.md`](../../features/audio-engine/stem-export.md).
 - MIDI tab: [`midi-project-export.md`](midi-project-export.md); control
