@@ -501,6 +501,13 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     ctx.shared.playhead.store(0, Ordering::SeqCst);
     state.rec.input_stream = None;
     state.rec.buffers.clear();
+    // End any live MIDI capture with the project it belonged to (BUG-66):
+    // its per-track state names a clip cleared below, and a note on a
+    // same-id track of the next project would be routed into that dead
+    // clip and lost. Stop also clears it, but ClearAll must not rely on a
+    // Stop arriving first. A new run reports its own out-of-ids error.
+    state.midi_recording.clear();
+    state.live_midi_no_id_reported = false;
 
     // Unpublish every plugin instance. The retire sweep destroys them
     // once no block pins them (B-4) — after `state.bundles` is cleared

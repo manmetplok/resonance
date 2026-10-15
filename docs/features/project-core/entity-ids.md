@@ -1,6 +1,6 @@
 # Entity ids
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: `docs/history/refactor/D-6-engine-created-ids.md` (design,
 > §7a holds the human decisions), `docs/history/refactor/refactor-intent.md`
 > (Epic D), `docs/history/refactor/arch-migration-plan.md` → ARCH-04, "D-7b
@@ -106,5 +106,3 @@ the engine holds no id counter.
 - Take-group ids are still engine-allocated, and the engine's clip counter,
   `reserve_clip_id`, the `SetProjectDir` WAV scan and the partition test are
   still there. See [finish-app-owned-ids](../../intents/project-core/finish-app-owned-ids.md).
-- `ClearAll` does not clear the engine's `midi_recording` map (FU-D7d), so a
-  live MIDI capture open across a project load can target a clip that is gone.

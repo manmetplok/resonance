@@ -1,6 +1,6 @@
 # Engine command loop
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: `docs/history/refactor/refactor-intent.md` (epics B, C, D),
 > `docs/history/refactor/D-6-engine-created-ids.md`.
 
@@ -140,6 +140,7 @@ Invariants:
 | Clip-id grant | `tests/engine/clip_id_grant.rs`, `create_midi_clip_mandatory_id.rs`, `derived_clip_id_partition.rs` | same |
 | Disconnect path | `tests/engine_send_disconnected.rs` (standalone: process-global latch) | same |
 | Startup has no default track | `tests/engine/startup_no_default_track.rs` | same |
+| `ClearAll` ends a live-MIDI capture | `tests/midi_hw/live_record_stop.rs` | same |
 | App command capture | `Resonance::new_for_test_with_capture()`; `resonance-app/tests/io/id_allocation.rs`, `startup_default_track.rs` | `./scripts/run-tests.py -p resonance-app` |
 
 Not covered: the real `with_options` start-up (it needs an audio device),
@@ -157,10 +158,13 @@ the 16 ms idle cadence, and the shutdown watchdog timing.
   on a busy engine thread. ARCHITECTURE.md still says not to add getters.
 - `ClearAll` keeps clip ids monotonic across loads (code review STATE-08):
   it does not reset any clip counter.
+- `ClearAll` ends any open live-MIDI capture itself (`midi_recording`
+  cleared, the out-of-ids report re-armed) rather than relying on the app's
+  Stop arriving first. The open notes are discarded, not finalised: their
+  project is being replaced (FU-D7d / BUG-66).
 
 ## Known gaps
 
 - The engine still keeps `next_clip_id` (raised by reservations only) and
-  allocates take-group ids itself; `ClearAll` does not close an open live-MIDI
-  capture (FU-D7d). See
+  allocates take-group ids itself. See
   [engine-created-ids-completion](../../intents/project-core/finish-app-owned-ids.md).
