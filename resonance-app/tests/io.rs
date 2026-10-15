@@ -29,6 +29,8 @@ mod autosave_write;
 mod save_failure_recovery;
 #[path = "io/save_reply_tagging.rs"]
 mod save_reply_tagging;
+#[path = "io/save_as_history_clips.rs"]
+mod save_as_history_clips;
 #[path = "io/browser_handlers.rs"]
 mod browser_handlers;
 #[path = "io/chord_sheet_header.rs"]

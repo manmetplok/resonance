@@ -40,6 +40,28 @@ use iced_test::simulator::Snapshot;
 #[allow(dead_code)]
 pub mod plok_server;
 
+/// Run `task` to completion on this thread and return the messages it
+/// produced, for a test to feed back through `update` — what the iced
+/// runtime does with them. Only for tasks that are plain futures (a save's
+/// disk write, `Task::perform`); window and widget actions are dropped.
+#[allow(dead_code)]
+pub fn run_task(task: iced::Task<resonance_app::Message>) -> Vec<resonance_app::Message> {
+    use futures::StreamExt;
+    let Some(stream) = iced_runtime::task::into_stream(task) else {
+        return Vec::new();
+    };
+    futures::executor::block_on(
+        stream
+            .filter_map(|action| async move {
+                match action {
+                    iced_runtime::Action::Output(message) => Some(message),
+                    _ => None,
+                }
+            })
+            .collect(),
+    )
+}
+
 /// Returns `true` when golden-image pixel comparisons should be skipped in this
 /// environment.
 ///

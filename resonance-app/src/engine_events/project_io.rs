@@ -128,6 +128,9 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
 
     let clip_gc_keep = (!autosave)
         .then(|| r.clip_gc_keep(&project_file, save.clip_files.keys().copied()));
+    let carries = (!autosave)
+        .then(|| clip_wav_carries(r, &save.path, &project_file))
+        .unwrap_or_default();
 
     let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = r
         .midi_clips
@@ -141,6 +144,19 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
 
     Task::perform(
         async move {
+            // First, and whatever the write's outcome: the clips the undo
+            // history names that the engine did not write here (UX-03,
+            // BUG-60). Before the GC, which keeps what the history names.
+            for (from, only) in &carries {
+                let copied = crate::project::clip_gc::carry_clip_wavs(from, &path, only.as_ref());
+                if !copied.is_empty() {
+                    tracing::info!(
+                        "[save] carried {} clip WAV(s) from {}",
+                        copied.len(),
+                        from.display()
+                    );
+                }
+            }
             if autosave {
                 crate::project::save_autosave(&path, &project_file, &plugin_states, &midi_clips)?;
             } else {
@@ -171,7 +187,44 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
     )
 }
 
+/// Where a manual save to `path` must copy clip WAVs from before it
+/// writes, and which: an untitled project's scratch dir (all of them —
+/// code review UX-03), and the bundle a Save As left (those the project or
+/// its undo history names — BUG-60). The Save As source is handed over
+/// here, so a save that fails before its write keeps it for the retry.
+fn clip_wav_carries(
+    r: &mut Resonance,
+    path: &std::path::Path,
+    file: &crate::project::ProjectFile,
+) -> Vec<(std::path::PathBuf, Option<std::collections::BTreeSet<ClipId>>)> {
+    if r.io.project_path.as_deref() != Some(path) {
+        return Vec::new();
+    }
+    let mut carries = Vec::new();
+    if let Some(scratch) = crate::update::project_io::autosave_scratch_dir(r) {
+        carries.push((scratch, None));
+    }
+    if let Some(old) = r.io.carry_clip_wavs_from.take() {
+        carries.push((old, Some(r.history_clip_ids(file))));
+    }
+    carries
+}
+
 impl Resonance {
+    /// Every audio clip id `file` or an undo / redo snapshot names.
+    pub(crate) fn history_clip_ids(
+        &self,
+        file: &crate::project::ProjectFile,
+    ) -> std::collections::BTreeSet<ClipId> {
+        use crate::project::clip_gc::collect_clip_ids;
+        let mut ids = std::collections::BTreeSet::new();
+        collect_clip_ids(file, &mut ids);
+        for snapshot in self.session.undo.snapshots() {
+            collect_clip_ids(&snapshot.project.file, &mut ids);
+        }
+        ids
+    }
+
     /// The clip ids a manual save's WAV GC must keep (code review
     /// FU-V5a): the project being written, the engine's clip list the
     /// save collected, the app mirror and every undo/redo snapshot.
@@ -183,16 +236,12 @@ impl Resonance {
         file: &crate::project::ProjectFile,
         engine_clips: impl IntoIterator<Item = ClipId>,
     ) -> Option<std::collections::BTreeSet<ClipId>> {
-        use crate::project::clip_gc::collect_clip_ids;
         if self.transport.recording {
             return None;
         }
-        let mut keep: std::collections::BTreeSet<ClipId> = engine_clips.into_iter().collect();
-        collect_clip_ids(file, &mut keep);
+        let mut keep = self.history_clip_ids(file);
+        keep.extend(engine_clips);
         keep.extend(self.clips.iter().map(|c| c.id));
-        for snapshot in self.session.undo.snapshots() {
-            collect_clip_ids(&snapshot.project.file, &mut keep);
-        }
         Some(keep)
     }
 }

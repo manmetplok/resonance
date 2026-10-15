@@ -273,9 +273,23 @@ fn the_first_save_carries_the_scratch_clip_wavs_into_the_bundle() {
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&bundle);
-    std::fs::create_dir_all(&bundle).unwrap();
-    app.test_set_project_path(bundle.clone());
-    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectSaved(Ok(()), false)));
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::SavePathSelected(Some(
+        bundle.to_string_lossy().into_owned(),
+    ))));
+    // The engine answers; the save's write task (which does the carry,
+    // off the update loop) runs to completion.
+    let request = app.test_save_request();
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir {
+        request,
+        clip_files: Vec::new(),
+    });
+    let write = app.test_engine_event_task(AudioEvent::AllPluginStatesSaved {
+        request,
+        states: Vec::new(),
+    });
+    for message in crate::common::run_task(write) {
+        let _ = app.update(message);
+    }
 
     assert!(bundle.join("audio/clip_4242.wav").exists());
     assert!(!scratch.exists(), "the superseded scratch dir is removed");

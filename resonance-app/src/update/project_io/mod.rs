@@ -9,6 +9,7 @@ mod dialogs;
 mod instantiate;
 pub mod reconcile;
 pub(crate) mod recovery;
+mod save_as;
 pub(crate) mod replay;
 pub mod replay_diff;
 mod serialize;
@@ -268,29 +269,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::SavePathSelected(Some(path)) => {
-            // Case-insensitive: `Song.RPROJ` / `Song.Rproj` already carry
-            // the extension and must not be doubled into
-            // `Song.RPROJ.rproj`. Callers (the control `project.save` /
-            // `save_as` handlers included) may already have normalized
-            // this, but the check is repeated here so this handler stays
-            // correct standalone for its other caller, the rfd save
-            // dialog.
-            let has_rproj_ext = std::path::Path::new(&path)
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("rproj"));
-            let path = if has_rproj_ext {
-                std::path::PathBuf::from(path)
-            } else {
-                std::path::PathBuf::from(format!("{path}.rproj"))
-            };
-            // The session writes clip WAVs into this bundle from now on;
-            // one it already holds must not get its clip ids re-issued
-            // (FU-A6c), nor its asset ids (D-7a).
-            r.seed_clip_ids_on_disk(&path);
-            r.seed_asset_ids_on_disk(&path);
-            r.io.project_path = Some(path);
-            return start_save(r);
+            return save_as::save_as_to(r, save_as::with_rproj_extension(path));
         }
         ProjectIoMessage::SavePathSelected(None) => {
             // "Save" on the unsaved-changes dialog of an untitled project
@@ -457,6 +436,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.io.loading = true;
             r.io.pending_load = Some(loaded);
             r.session.undo.clear();
+            r.io.carry_clip_wavs_from = None;
             r.plugin_mirror.state_cache.clear();
             r.plugin_mirror.owed_blobs.clear();
             r.plugin_mirror.kit_info.clear();

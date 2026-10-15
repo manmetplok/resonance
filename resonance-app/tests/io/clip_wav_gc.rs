@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use resonance_app::message::{ClipMessage, Message};
-use resonance_app::project::clip_gc::reap_unreferenced_clip_wavs;
+use resonance_app::project::clip_gc::{carry_clip_wavs, reap_unreferenced_clip_wavs};
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioEvent, ClipId, TrackType};
 
@@ -160,4 +160,38 @@ fn no_gc_while_recording() {
     let (mut app, _task) = Resonance::new_for_test();
     app.test_set_transport_recording(true);
     assert!(app.test_clip_gc_keep(&[]).is_none());
+}
+
+// ---- carry_clip_wavs (UX-03, BUG-60) ----------------------------------
+
+#[test]
+fn a_carry_copies_only_missing_named_clip_wavs() {
+    let from = bundle();
+    let to = bundle();
+    touch(from.path(), "clip_1.wav");
+    touch(from.path(), "clip_2.wav");
+    touch(from.path(), "vocal_1.wav");
+    let kept = to.path().join("audio/clip_2.wav");
+    std::fs::write(&kept, b"already here").unwrap();
+
+    let copied = carry_clip_wavs(from.path(), to.path(), Some(&keep(&[1, 2])));
+
+    assert_eq!(copied, vec![to.path().join("audio/clip_1.wav")]);
+    assert_eq!(std::fs::read(&kept).unwrap(), b"already here", "never overwritten");
+    assert!(!to.path().join("audio/vocal_1.wav").exists());
+    assert!(from.path().join("audio/clip_1.wav").exists(), "copied, not moved");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_carry_onto_the_same_dir_through_a_symlink_copies_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real.rproj");
+    std::fs::create_dir_all(real.join("audio")).unwrap();
+    std::fs::write(real.join("audio/clip_1.wav"), b"RIFF").unwrap();
+    let link = root.path().join("link.rproj");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    assert!(carry_clip_wavs(&real, &link, None).is_empty());
+    assert!(carry_clip_wavs(&real, &real, None).is_empty());
 }

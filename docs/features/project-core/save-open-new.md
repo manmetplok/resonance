@@ -49,6 +49,9 @@ Every manual save also writes a timestamped backup.
 - Save As into an existing bundle first raises the clip-id and asset-id
   counters past every `clip_<id>.wav` / `asset_<id>.wav` already there, so
   no file is overwritten.
+- Save As copies the clip WAVs only the undo history names from the old
+  bundle into the new one, in the save's write task (BUG-60; see
+  [clip-storage-and-gc.md](clip-storage-and-gc.md)).
 
 ### Versioned backups
 
