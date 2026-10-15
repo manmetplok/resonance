@@ -341,6 +341,31 @@ impl RecordingState {
         self.start_latch_applied = true;
     }
 
+    /// Start the cycle-record cut over after a seek or a loop move landed
+    /// mid-run (BUG-20), once the interrupted pass has been rolled. The
+    /// next pass is cut like a punch-in: from the start the input
+    /// callback latches at its next push, to `loop_out` of `cycle_slot` —
+    /// the range the run cycles over now — and a loop length per pass
+    /// after that. Nothing is drained until that latch is applied. With
+    /// no valid range (the loop was switched off) or no audio to cut, the
+    /// rest of the run is one uncut pass. The next rolled pass is placed
+    /// at the latched start, like the punch-in one.
+    pub fn rearm_cycle(&mut self, cycle_slot: Option<(SamplePos, SamplePos)>) {
+        self.start_latch_applied = false;
+        self.skip_input_frames = 0;
+        self.input_frames_kept = 0;
+        self.audio_passes_rolled = 0;
+        self.cycle = match cycle_slot {
+            Some((loop_in, loop_out)) if loop_out > loop_in && !self.buffers.is_empty() => {
+                CycleCut::AwaitingLatch {
+                    loop_out,
+                    loop_len: loop_out - loop_in,
+                }
+            }
+            _ => CycleCut::Off,
+        };
+    }
+
     /// Whether the current cycle-record pass has all its frames: the
     /// drain stops at the cut, so the pass is ready to roll.
     pub fn pass_complete(&self) -> bool {

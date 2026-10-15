@@ -692,8 +692,63 @@ pub(crate) fn handle_seek_to(ctx: &HandlerCtx, state: &mut HandlerState, pos: u6
         panic_all_instrument_plugins(ctx, state);
         state.midi_hw.midi_outputs.all_notes_off_everywhere();
     }
-    ctx.shared.playhead.store(pos, Ordering::SeqCst);
+    let from = ctx.shared.playhead.swap(pos, Ordering::SeqCst);
+    restart_cycle_record_pass(ctx, state, from);
     super::midi::clock_send_song_position(ctx, state, pos);
+}
+
+/// The transport moved under a cycle-record run — a seek, a MIDI clock
+/// song-position relocate, or the loop range changed — while it was
+/// recording (BUG-20). The pass the move interrupted ends now: its audio
+/// is drained (after any complete passes, each at its own cut) and rolled,
+/// and its MIDI rolled with it, held notes closed at `interrupted_at` —
+/// so the two halves of the pass stay paired. Then the run starts over
+/// from where the playhead is: the cut re-arms against the loop range as
+/// it stands now (`RecordingState::rearm_cycle`), the start latch is
+/// re-armed so the input callback's next push latches the real post-move
+/// playhead, and the session's slot, and the MIDI pass's wrap count,
+/// move to the new range.
+///
+/// The session used to ignore all of it and keep cutting one loop length
+/// from the punch-in against the old range, so every later pass
+/// straddled the real seam. Frames the input pushed between the drain
+/// here and the re-armed latch (at most one push) land in the next pass.
+pub(crate) fn restart_cycle_record_pass(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    interrupted_at: SamplePos,
+) {
+    if state.loop_record_session.is_none()
+        || state.project_dir.is_none()
+        || !ctx.shared.recording.load(Ordering::SeqCst)
+    {
+        return;
+    }
+    // A move right after Record, before the engine loop applied the first
+    // latch: the pass must know where it started before it rolls.
+    apply_recording_start_latch(ctx, state);
+    loop {
+        state.rec.drain_ring_to_buffers();
+        if !state.rec.pass_complete() {
+            break;
+        }
+        roll_loop_record_audio_pass(ctx, state, true);
+    }
+    roll_loop_record_audio_pass(ctx, state, true);
+    roll_loop_record_midi_pass(ctx, state, true, Some(interrupted_at));
+
+    let rec = &state.rec;
+    let range = (rec.loop_enabled && rec.loop_out > rec.loop_in).then_some((rec.loop_in, rec.loop_out));
+    state.rec.rearm_cycle(range);
+    let wraps = ctx.shared.loop_wraps();
+    if let Some(session) = state.loop_record_session.as_mut() {
+        if let Some((loop_in, loop_out)) = range {
+            session.slot = TimelineRange::from_bounds(loop_in, loop_out);
+        }
+        session.first_wrap = wraps;
+        session.midi_wrap = wraps;
+    }
+    arm_start_latch(ctx, ctx.shared.playhead.load(Ordering::SeqCst));
 }
 
 /// Set the flat tempo. Goes through the one tempo-legality rule
@@ -741,12 +796,20 @@ pub(crate) fn handle_set_loop_range(
     loop_in: u64,
     loop_out: u64,
 ) {
+    let moved = (state.rec.loop_enabled, state.rec.loop_in, state.rec.loop_out)
+        != (enabled, loop_in, loop_out);
     state.rec.loop_enabled = enabled;
     state.rec.loop_in = loop_in;
     state.rec.loop_out = loop_out;
     // One publish for the whole range (code review RT-13).
     ctx.shared
         .set_loop_range(crate::engine::LoopRange::new(enabled, loop_in, loop_out));
+    // A cycle-record run recuts against the new range (BUG-20); the same
+    // range re-sent is not a move.
+    if moved {
+        let at = ctx.shared.playhead.load(Ordering::SeqCst);
+        restart_cycle_record_pass(ctx, state, at);
+    }
 }
 
 /// Toggle cycle-record (loop-record) mode. Stored on the recording state
@@ -843,7 +906,7 @@ fn advance_loop_record_midi_pass(ctx: &HandlerCtx, state: &mut HandlerState, wra
         return;
     }
     session.midi_wrap = wrap;
-    roll_loop_record_midi_pass(ctx, state, true);
+    roll_loop_record_midi_pass(ctx, state, true, None);
 }
 
 /// File a live note picked up under loop-wrap count `wrap` at
@@ -880,7 +943,7 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     }
     if reopen {
         roll_loop_record_audio_pass(ctx, state, true);
-        roll_loop_record_midi_pass(ctx, state, true);
+        roll_loop_record_midi_pass(ctx, state, true, None);
         return;
     }
     // Complete passes first, each cut where its frames end; the frames the
@@ -893,7 +956,7 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
         roll_loop_record_audio_pass(ctx, state, true);
     }
     roll_loop_record_audio_pass(ctx, state, false);
-    roll_loop_record_midi_pass(ctx, state, false);
+    roll_loop_record_midi_pass(ctx, state, false, None);
     state.loop_record_session = None;
 }
 
@@ -964,12 +1027,19 @@ fn roll_loop_record_audio_pass(ctx: &HandlerCtx, state: &mut HandlerState, reope
 }
 
 /// Roll the current cycle-record MIDI pass (instrument tracks) into one
-/// take per track and emit `AudioEvent::TakeCaptured` for each.
-fn roll_loop_record_midi_pass(ctx: &HandlerCtx, state: &mut HandlerState, reopen: bool) {
+/// take per track and emit `AudioEvent::TakeCaptured` for each. Held notes
+/// close at `close_at`, or at the loop end when the pass ran to it.
+fn roll_loop_record_midi_pass(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    reopen: bool,
+    close_at: Option<SamplePos>,
+) {
     let Some(slot) = state.loop_record_session.as_ref().map(|s| s.slot) else {
         return;
     };
-    let midi_takes = super::midi::capture_loop_record_midi_pass(ctx, state, slot.end());
+    let close_sample = close_at.unwrap_or(slot.end());
+    let midi_takes = super::midi::capture_loop_record_midi_pass(ctx, state, close_sample);
     let mut captured_any = false;
     for (track_id, notes) in midi_takes {
         let content = TakeContent::Midi { notes };

@@ -84,6 +84,20 @@ With the loop enabled and a real range set:
   lower than last time, so boundaries jittered by a tick, a note played
   just after the wrap could land in the old pass, and a backwards seek
   rolled a pass.
+- **Seek or loop move mid-run.** A seek, a MIDI-clock song-position
+  relocate, or a change to the loop range while a cycle-record run is
+  recording ends the current pass there (`restart_cycle_record_pass`): its
+  audio and MIDI halves roll together (held notes close at the pre-move
+  playhead), filed under the slot they were recorded against. The cut then
+  re-arms against the range as it stands (`RecordingState::rearm_cycle`)
+  and the start latch is re-armed, so the input callback's next push
+  latches the real post-move playhead: the next pass is placed and cut like
+  a punch-in pass, and every pass after it is a whole loop of the new
+  range. Re-sending the same range is not a move. With the loop switched
+  off the rest of the run is one uncut pass, filed under the old slot.
+  Frames pushed between the roll and the re-armed latch (at most one push)
+  land in the next pass. The session used to ignore all of this and keep
+  cutting one loop length from the punch-in against the old range (BUG-20).
 - **Off:** one clip, no take group. It is trimmed non-destructively to
   the loop range measured from the record start (`trim_start = loop_in −
   start`, `trim_end` at `loop_out − start`), so it shows only the first
@@ -129,7 +143,7 @@ With the loop enabled and a real range set:
 
 | Concern | Location | Key items |
 |---|---|---|
-| Record / count-in / session | `resonance-audio/src/engine/transport.rs` | `handle_record_with`, `open_recording_session`, `poll_precount`, `settle_count_in_arm`, `apply_recording_start_latch`, `poll_recording_capture` |
+| Record / count-in / session | `resonance-audio/src/engine/transport.rs` | `handle_record_with`, `open_recording_session`, `poll_precount`, `settle_count_in_arm`, `apply_recording_start_latch`, `poll_recording_capture`, `restart_cycle_record_pass` |
 | Take files, drain, finalize | `resonance-audio/src/recording.rs` | `RecordingState`, `create_track_buf`, `drain_ring_to_buffers`, `finalize_recording`, `roll_audio_pass`, `apply_take_shift` |
 | Ring size | `resonance-audio/src/engine/recording_ring.rs` | `recording_ring_len` |
 | Count-in clicks | `resonance-audio/src/mixer/click.rs` | `render_count_in_clicks` |
@@ -165,6 +179,7 @@ the app's grant.
 | Disk-full salvage (own binary, rlimit) | `resonance-audio/tests/recording_write_failure.rs` | same |
 | Live MIDI record / stop | `resonance-audio/tests/midi_hw/live_record_stop.rs`, `live_arrival_offset.rs` | same |
 | Cycle-record MIDI passes by wrap count and pickup stamp | `resonance-audio/tests/engine/loop_record_midi_seam.rs` | same |
+| Seek / loop move during cycle-record | `resonance-audio/tests/engine/recording_alignment.rs` (BUG-20 section) | same |
 | Undo + dirty per run | `resonance-app/tests/timeline/recording_undo.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Overflow banner | `resonance-app/tests/mixer/recording_overflow_banner.rs` | same |
 | Loop-record mode persistence | `resonance-app/tests/io/loop_record_mode_persistence.rs` | same |
