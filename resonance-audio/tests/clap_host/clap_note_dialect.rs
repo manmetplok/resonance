@@ -196,6 +196,70 @@ fn a_clap_only_instrument_gets_no_midi() {
     assert_eq!(*seen.lock().unwrap(), vec![(0, 'n', [60, 0, 0])]);
 }
 
+/// A transport panic (Stop / Pause / Seek) rests every channel's pitch
+/// bend, mod wheel and sustain on an instrument that takes MIDI, with
+/// its note-offs (BUG-24): a bend held at Stop used to bend the next
+/// note. The loop-seam panic (`all_notes_off`) leaves them alone — the
+/// performer may still be holding the wheel.
+#[test]
+fn a_transport_panic_rests_the_controllers_but_a_seam_panic_does_not() {
+    let (mut inst, seen) = instrument(CLAP_NOTE_DIALECT_MIDI, CLAP_NOTE_DIALECT_MIDI);
+    inst.queue_midi([0xE3, 0, 0x60], 0);
+    run(&mut inst);
+    seen.lock().unwrap().clear();
+
+    inst.all_notes_off();
+    run(&mut inst);
+    {
+        let seen = seen.lock().unwrap();
+        assert!(
+            seen.iter().all(|e| e.2[0] & 0xF0 == 0x80),
+            "a seam panic sends note-offs only: {seen:?}"
+        );
+    }
+    seen.lock().unwrap().clear();
+
+    inst.all_notes_off_and_drop_carried();
+    run(&mut inst);
+    let seen = seen.lock().unwrap();
+    let resets: Vec<[u8; 3]> = seen
+        .iter()
+        .filter(|e| e.2[0] & 0xF0 != 0x80)
+        .map(|e| e.2)
+        .collect();
+    for ch in 0u8..=15 {
+        for m in [[0xE0 | ch, 0x00, 0x40], [0xB0 | ch, 1, 0], [0xB0 | ch, 64, 0]] {
+            assert!(resets.contains(&m), "channel {ch}: {m:?} missing from {resets:?}");
+        }
+    }
+    assert_eq!(resets.len(), 16 * 3, "nothing else: {resets:?}");
+    assert_eq!(seen.len(), 128 + 16 * 3, "and every key's note-off");
+}
+
+/// Controllers still queued from before the panic are superseded by it,
+/// like its queued notes: they are dropped, so none re-bends the
+/// instrument after the reset, and the resets always fit the queue.
+#[test]
+fn a_transport_panic_supersedes_controllers_queued_before_it() {
+    let (mut inst, seen) = instrument(CLAP_NOTE_DIALECT_MIDI, CLAP_NOTE_DIALECT_MIDI);
+    for i in 0..1_000u32 {
+        inst.queue_midi([0xB0, 1, 99], i % 64);
+    }
+    inst.all_notes_off_and_drop_carried();
+    run(&mut inst);
+    let seen = seen.lock().unwrap();
+    assert!(
+        !seen.iter().any(|e| e.2 == [0xB0, 1, 99]),
+        "a stale mod wheel survived the panic"
+    );
+    for ch in 0u8..=15 {
+        assert!(
+            seen.iter().any(|e| e.2 == [0xE0 | ch, 0x00, 0x40]),
+            "channel {ch} bend reset"
+        );
+    }
+}
+
 /// The whole live path: controller bytes from a track's MIDI input reach
 /// its instrument through the audio callback, with the transport stopped.
 #[test]

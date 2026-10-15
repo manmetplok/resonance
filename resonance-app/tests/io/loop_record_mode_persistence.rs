@@ -67,6 +67,26 @@ fn clicking_the_recording_toggle_sends_the_message_and_flips_the_engine() {
         .any(|c| matches!(c, AudioCommand::SetLoopRecordMode(true))));
 }
 
+/// With distinct takes off the hint says what really happens — the
+/// single clip keeps only the first pass — not that the passes are merged
+/// (BUG-68).
+#[test]
+fn the_distinct_takes_off_hint_says_only_the_first_pass_is_kept() {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    let _ = app.update(Message::Ui(UiMessage::OpenSettings));
+    assert!(!app.test_loop_record_mode());
+
+    let mut ui = Simulator::with_size(sim_settings(), Size::new(WINDOW.0, WINDOW.1), app.view());
+    ui.find("Only the first pass of a cycle-recorded run is kept; turn this on to keep every pass.")
+        .expect("the honest hint is rendered");
+    assert!(
+        ui.find("A cycle-recorded run is merged into one clip for the whole loop, as before.")
+            .is_err(),
+        "the old hint promised a merge that never happens"
+    );
+}
+
 #[test]
 fn loop_record_mode_survives_a_serde_round_trip() {
     let file = ProjectFile {

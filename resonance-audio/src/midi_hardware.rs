@@ -817,25 +817,15 @@ impl MidiOutputRegistry {
         }
     }
 
-    /// Full MIDI panic for one device: explicit Note Off for every note
-    /// we know is held, then sustain pedal off (CC 64 = 0) and All Notes
-    /// Off (CC 123 = 0) on every channel.
-    ///
-    /// The explicit Note Offs are the load-bearing part — CC 123 is
-    /// ignored by some hardware synths and virtual MIDI bridges, and
-    /// CC 64 wouldn't release a sustained note even when CC 123 fires.
-    /// The CCs are belt-and-suspenders for any held note we missed.
+    /// Full MIDI panic for one device: [`panic_messages`] for the notes
+    /// we know are held.
     fn send_all_notes_off(&mut self, device_name: &str) {
         let Some(active) = self.connections.get_mut(device_name) else {
             return;
         };
         let held: Vec<(u8, u8)> = active.active_notes.drain().collect();
-        for (ch, note) in held {
-            let _ = active.conn.send(&[0x80 | ch, note, 0]);
-        }
-        for ch in 0u8..=15 {
-            let _ = active.conn.send(&[0xB0 | ch, 64, 0]);
-            let _ = active.conn.send(&[0xB0 | ch, 123, 0]);
+        for msg in panic_messages(held) {
+            let _ = active.conn.send(&msg);
         }
     }
 
@@ -864,6 +854,42 @@ const CC_NRPN_PARAM_LSB: u8 = 98;
 /// Data-entry controllers used to carry the NRPN value.
 const CC_DATA_ENTRY_MSB: u8 = 6;
 const CC_DATA_ENTRY_LSB: u8 = 38;
+
+/// The messages that return one channel's performance controllers to
+/// rest: pitch bend centred, mod wheel (CC 1) at 0, sustain pedal (CC 64)
+/// off. Part of every transport panic — hardware ([`panic_messages`]) and
+/// in-process instruments (`ClapInstance::all_notes_off_and_drop_carried`)
+/// — so a bend or a mod wheel left off-centre at Stop does not colour the
+/// next note played (BUG-24). Not CC 121 (Reset All Controllers): what it
+/// resets varies by device, and some reset volume and pan with it.
+pub(crate) fn controller_rest_messages(channel: u8) -> [[u8; 3]; 3] {
+    let ch = channel & 0x0F;
+    [
+        [0xE0 | ch, 0x00, 0x40],
+        encode_control_change(ch, 1, 0),
+        encode_control_change(ch, 64, 0),
+    ]
+}
+
+/// The full MIDI panic for a hardware device: an explicit Note Off for
+/// every `(channel, key)` known to be held, then on every channel the
+/// [`controller_rest_messages`] and All Notes Off (CC 123 = 0).
+///
+/// The explicit Note Offs are the load-bearing part — CC 123 is
+/// ignored by some hardware synths and virtual MIDI bridges, and
+/// CC 64 wouldn't release a sustained note even when CC 123 fires.
+/// CC 123 is belt-and-suspenders for any held note we missed.
+pub fn panic_messages(held: impl IntoIterator<Item = (u8, u8)>) -> Vec<[u8; 3]> {
+    let mut msgs: Vec<[u8; 3]> = held
+        .into_iter()
+        .map(|(ch, note)| [0x80 | (ch & 0x0F), note & 0x7F, 0])
+        .collect();
+    for ch in 0u8..=15 {
+        msgs.extend_from_slice(&controller_rest_messages(ch));
+        msgs.push(encode_control_change(ch, 123, 0));
+    }
+    msgs
+}
 
 /// Encode a single Control Change message `[status|channel, cc, value]`.
 /// Channel is masked to 0..=15 and the controller/value to 0..=127 so an

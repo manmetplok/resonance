@@ -365,6 +365,112 @@ fn stopping_during_the_count_in_discards_the_unstarted_take() {
 }
 
 // ---------------------------------------------------------------------------
+// Loop on, distinct takes off: the single clip's loop trim
+// ---------------------------------------------------------------------------
+
+/// Record pressed inside the loop, distinct takes off: nothing comes
+/// before the punch-in to trim, so the take must sit where it was played,
+/// not at `loop_in` (BUG-69). It used to be placed at `loop_in` with no
+/// start trim — early by `start − loop_in`.
+#[test]
+fn a_take_punched_in_mid_loop_lands_where_it_was_played() {
+    const PUNCH_IN: u64 = LOOP_IN + 6_000;
+    let (mut h, dir) = armed("loop-mid");
+    h.set_loop_range(true, LOOP_IN, LOOP_IN + LOOP_LEN);
+    h.shared().playhead.store(PUNCH_IN, Ordering::Relaxed);
+    let mut input = h.record_with_fake_input(0, 2).expect("session opened");
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, 0, 4_000);
+    h.recording_tick();
+    h.stop();
+
+    let takes = finished(&h.drain_events());
+    assert_eq!(takes.len(), 1, "one take");
+    let (id, start, duration) = takes[0];
+    assert_eq!(start, PUNCH_IN, "the take sits on the punch-in");
+    assert_eq!(duration, 4_000);
+    let c = clip(&h, id);
+    assert_eq!(c.start_sample, PUNCH_IN);
+    assert_eq!(c.trim_start_frames, 0, "nothing trimmed off the front");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Record pressed before the loop still trims to it: the take starts at
+/// `loop_in`, its pre-loop audio trimmed off.
+#[test]
+fn a_take_punched_in_before_the_loop_is_trimmed_to_loop_in() {
+    const PUNCH_IN: u64 = LOOP_IN - 2_000;
+    let (mut h, dir) = armed("loop-before");
+    h.set_loop_range(true, LOOP_IN, LOOP_IN + LOOP_LEN);
+    h.shared().playhead.store(PUNCH_IN, Ordering::Relaxed);
+    let mut input = h.record_with_fake_input(0, 2).expect("session opened");
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, 0, 4_000);
+    h.recording_tick();
+    h.stop();
+
+    let takes = finished(&h.drain_events());
+    assert_eq!(takes.len(), 1, "one take");
+    let (id, start, duration) = takes[0];
+    assert_eq!(start, LOOP_IN);
+    assert_eq!(duration, 2_000);
+    assert_eq!(clip(&h, id).trim_start_frames, 2_000);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Record pressed at or after `loop_out` with the loop on: the playhead
+/// never reaches the seam, so there is no loop pass to trim to and the
+/// take is kept whole (BUG-74). The trim used to compute an empty range
+/// and delete the take's file — the whole take silently lost.
+#[test]
+fn a_take_started_past_the_loop_is_kept_whole() {
+    for punch_in in [LOOP_IN + LOOP_LEN, LOOP_IN + LOOP_LEN + 10_000] {
+        let (mut h, dir) = armed("loop-past");
+        h.set_loop_range(true, LOOP_IN, LOOP_IN + LOOP_LEN);
+        h.shared().playhead.store(punch_in, Ordering::Relaxed);
+        let mut input = h.record_with_fake_input(0, 2).expect("session opened");
+        h.shared().latch_recording_start();
+        push_ramp(&mut input, 0, 4_000);
+        h.recording_tick();
+        h.stop();
+
+        let takes = finished(&h.drain_events());
+        assert_eq!(takes.len(), 1, "punch-in {punch_in}: the take must survive");
+        let (id, start, duration) = takes[0];
+        assert_eq!(start, punch_in);
+        assert_eq!(duration, 4_000);
+        let c = clip(&h, id);
+        assert_eq!((c.trim_start_frames, c.trim_end_frames), (0, 0));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// Latency compensation can place a take that was latched past
+/// `loop_out` back inside the loop; the raw playhead still never wraps,
+/// so it is kept whole too.
+#[test]
+fn a_take_latched_past_the_loop_but_compensated_into_it_is_kept_whole() {
+    const PDC: u64 = 2_000;
+    const PUNCH_IN: u64 = LOOP_IN + LOOP_LEN + 500;
+    let (mut h, dir) = armed("loop-past-pdc");
+    h.set_latency_comp(latent_plugin_comp(PDC));
+    h.set_loop_range(true, LOOP_IN, LOOP_IN + LOOP_LEN);
+    h.shared().playhead.store(PUNCH_IN, Ordering::Relaxed);
+    let mut input = h.record_with_fake_input(0, 2).expect("session opened");
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, 0, 4_000);
+    h.recording_tick();
+    h.stop();
+
+    let takes = finished(&h.drain_events());
+    assert_eq!(takes.len(), 1, "one take");
+    let (_, start, duration) = takes[0];
+    assert_eq!(start, PUNCH_IN - PDC);
+    assert_eq!(duration, 4_000, "nothing cut at loop_out");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---------------------------------------------------------------------------
 // RT-17: ring sized in frames
 // ---------------------------------------------------------------------------
 

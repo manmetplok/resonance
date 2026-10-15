@@ -3,10 +3,11 @@
 > Status: **partly built**
 > Area: project-core (`docs/features/project-core/entity-ids.md`)
 > Source: Epic D in `docs/history/refactor/refactor-intent.md`; steps D-7e and
-> D-7f in `docs/history/refactor/D-6-engine-created-ids.md` §6; FU-D7d in
-> `docs/history/refactor/arch-migration-plan.md` → "D-7d landed". Checked
-> open in code on 2026-10-07.
-> Register items covered: ARCH-04 (review 2026-09-26), D-7e, D-7f, FU-D7d.
+> D-7f in `docs/history/refactor/D-6-engine-created-ids.md` §6. Checked
+> open in code on 2026-10-07. FU-D7d (`ClearAll` ends a live-MIDI capture)
+> shipped 2026-10-15 as BUG-66; see
+> [engine-command-loop.md](../../features/audio-engine/engine-command-loop.md).
+> Register items covered: ARCH-04 (review 2026-09-26), D-7e, D-7f.
 
 ## Why
 
@@ -29,12 +30,6 @@ invents one. D-1…D-5 and D-7a…d landed. Two spaces are still not there:
 
 Two id authorities is how collisions happened before (ARCH-04).
 
-Related, found while landing D-7d and still open: `ClearAll`
-(`engine/tracks.rs::handle_clear_all`) stops the transport by storing the
-flags directly and does not clear the engine's `midi_recording` map
-(FU-D7d), so a live-MIDI capture open across a project load can target a
-clip that is gone.
-
 ## What it would do
 
 - Take-group ids come from an app counter (`EntityIds::take_groups`), handed
@@ -44,7 +39,6 @@ clip that is gone.
   an `arch-invariants` test (`engine_has_no_id_counters`) keeps it that way.
 - Every engine create handler refuses a colliding clip id with an error
   event; the first clip is untouched.
-- `ClearAll` drops any open live-MIDI capture.
 
 ## What exists to build on
 
@@ -71,22 +65,15 @@ clip that is gone.
 2. What a loop session does when it cannot pre-draw a group id for every
    audio-capturing track. Recommended: the design's all-or-nothing check —
    refuse to start the session, same as an empty clip grant at record start.
-3. Whether FU-D7d rides with D-7e or lands alone. Recommended: alone first;
-   it is a one-line engine fix with its own test, and it is a live bug.
-4. FU-D7d: finalise the open notes (as Stop does via
-   `close_open_recordings`) or discard them? Recommended: discard; the
-   project they belong to is being replaced.
 
 ## Slices
 
-1. **FU-D7d:** `handle_clear_all` clears `midi_recording`; engine test that a
-   capture open across `ClearAll` writes nothing to the next project.
-2. **D-7e:** `take_groups` in `IdGrantBlocks` + app counter seeded on
+1. **D-7e:** `take_groups` in `IdGrantBlocks` + app counter seeded on
    restore; delete `next_take_group_id`, `ClearAll`'s reset and the
    `RestoreTakeGroups` bumps. Guards: load → record → new lane id above every
    restored one (`tests/io/take_lanes_persistence.rs`); a same-slot re-run
    reuses its lane and draws no id.
-3. **D-7f:** delete `next_clip_id`, `reserve_clip_id`, the `SetProjectDir`
+2. **D-7f:** delete `next_clip_id`, `reserve_clip_id`, the `SetProjectDir`
    scan, `DERIVED_CLIP_ID_BASE` in resonance-audio and the partition test;
    add `reject_if_clip_id_in_use` to every create handler; add the
    `arch-invariants` test; rewrite the `state/ids.rs` module doc; per the

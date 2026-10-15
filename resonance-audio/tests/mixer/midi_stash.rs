@@ -306,3 +306,104 @@ fn restoring_into_an_exhausted_pool_drops_the_carry() {
     assert_eq!(carry.instance(), None);
     assert!(!stash.pending_instances().any(|id| id == 1000));
 }
+
+// ---------------------------------------------------------------------------
+// The engine thread's live-note stash across a transport panic (BUG-36)
+// ---------------------------------------------------------------------------
+
+mod live_stash_across_panic {
+    use std::sync::Arc;
+
+    use resonance_audio::test_support::{EngineHandlerHarness, PluginSlot};
+    use resonance_audio::types::*;
+
+    use crate::note_recorder::note_recorder;
+
+    const TRACK: TrackId = 1;
+    const INSTRUMENT: PluginInstanceId = 320;
+
+    /// A live note-on parked while the instrument's lock was contended,
+    /// then a Stop / Pause / Seek panic, then the engine loop's stash
+    /// flush: the note-on must not reach the plugin after the panic. It
+    /// used to — the panic released every key and the flush then started
+    /// the stashed one, which no note-off would ever follow (the key was
+    /// already let go before the panic).
+    fn stashed_note_on_then(panic: impl FnOnce(&mut EngineHandlerHarness)) {
+        let mut h = EngineHandlerHarness::new();
+        let track = Track::with_type(TRACK, "Synth".into(), TrackType::Instrument);
+        track.push_plugin(INSTRUMENT);
+        h.push_track(track);
+        let (slot, _rec) = note_recorder(48_000);
+        let slot: Arc<PluginSlot> = h.insert_plugin_slot(INSTRUMENT, slot);
+        h.play();
+
+        {
+            let _held = slot.try_lock_counted().expect("uncontended");
+            h.dispatch(AudioCommand::SendNoteOn {
+                track_id: TRACK,
+                note: 60,
+                velocity: 1.0,
+            });
+        }
+        panic(&mut h);
+        h.flush_live_note_stash();
+
+        let inst = slot.try_lock_counted().expect("uncontended");
+        let pending = inst.0.__pending_notes_for_test();
+        assert!(
+            !pending.iter().any(|&(on, key, _, _)| on && key == 60),
+            "the stashed note-on outlived the panic: {pending:?}"
+        );
+    }
+
+    /// The panic cannot take the lock either (the audio thread holds it,
+    /// and panics the instrument itself): the stash keeps the note-off it
+    /// still owes but drops the note-on.
+    #[test]
+    fn a_stop_that_cannot_take_the_lock_still_drops_the_stashed_note_on() {
+        let mut h = EngineHandlerHarness::new();
+        let track = Track::with_type(TRACK, "Synth".into(), TrackType::Instrument);
+        track.push_plugin(INSTRUMENT);
+        h.push_track(track);
+        let (slot, _rec) = note_recorder(48_000);
+        let slot: Arc<PluginSlot> = h.insert_plugin_slot(INSTRUMENT, slot);
+        h.play();
+        {
+            let _held = slot.try_lock_counted().expect("uncontended");
+            h.dispatch(AudioCommand::SendNoteOff { track_id: TRACK, note: 62 });
+            h.dispatch(AudioCommand::SendNoteOn {
+                track_id: TRACK,
+                note: 60,
+                velocity: 1.0,
+            });
+            h.stop();
+        }
+        h.flush_live_note_stash();
+
+        let inst = slot.try_lock_counted().expect("uncontended");
+        let pending = inst.0.__pending_notes_for_test();
+        assert!(
+            !pending.iter().any(|&(on, _, _, _)| on),
+            "the stashed note-on outlived the panic: {pending:?}"
+        );
+        assert!(
+            pending.iter().any(|&(on, key, _, _)| !on && key == 62),
+            "the owed note-off is still delivered: {pending:?}"
+        );
+    }
+
+    #[test]
+    fn stop_drops_a_stashed_live_note_on() {
+        stashed_note_on_then(|h| h.stop());
+    }
+
+    #[test]
+    fn pause_drops_a_stashed_live_note_on() {
+        stashed_note_on_then(|h| h.pause());
+    }
+
+    #[test]
+    fn a_seek_while_playing_drops_a_stashed_live_note_on() {
+        stashed_note_on_then(|h| h.dispatch(AudioCommand::SeekTo(96_000)));
+    }
+}

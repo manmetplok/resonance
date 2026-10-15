@@ -1,6 +1,6 @@
 # Hardware MIDI input, output and clock
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: none in `docs/history/specs/`. Leads: doc #260 finding #16 (audio-thread live-MIDI pickup), code review HOST-13, FU-D6a, commit `ea29dfb6` (long-lived enumeration clients).
 
 Instrument and vocal tracks can take notes from a hardware MIDI input and
@@ -63,7 +63,12 @@ CoreMIDI via `midir`.
   and are not delay-compensated.
 - **Thru:** live input notes on a MIDI-accepting track go out on that track's
   MIDI output and channel.
-- Stop, Pause and seeks send All Notes Off to every output.
+- Stop, Pause and seeks send a panic to every output (`panic_messages` in
+  `midi_hardware.rs`): a Note Off for each note known to be held, then on
+  every channel pitch bend centred, mod wheel (CC 1) 0, sustain (CC 64) off
+  and All Notes Off (CC 123). The controller resets are BUG-24; CC 121
+  (Reset All Controllers) is deliberately not sent, since devices disagree
+  on what it resets.
 
 ### MIDI clock
 

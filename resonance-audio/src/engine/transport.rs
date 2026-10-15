@@ -585,7 +585,7 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     if was_recording {
         finish_recording_session(ctx, state);
     }
-    panic_all_instrument_plugins(ctx);
+    panic_all_instrument_plugins(ctx, state);
     let pause_sample = ctx.shared.playhead.load(Ordering::SeqCst);
     super::midi::close_open_recordings(ctx, state, pause_sample);
     // A new run reports its own out-of-ids error (D-7d, C5).
@@ -617,7 +617,7 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
         finish_recording_session(ctx, state);
     }
 
-    panic_all_instrument_plugins(ctx);
+    panic_all_instrument_plugins(ctx, state);
     super::midi::close_open_recordings(ctx, state, stop_sample);
     // A new run reports its own out-of-ids error (D-7d, C5).
     state.live_midi_no_id_reported = false;
@@ -633,7 +633,9 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     let _ = ctx.event_tx.send(AudioEvent::Stopped);
 }
 
-/// Send all-notes-off to every instrument plugin's primary instance.
+/// Send all-notes-off to every instrument plugin's primary instance, with
+/// pitch bend, mod wheel and sustain rested on every channel
+/// (`all_notes_off_and_drop_carried`, BUG-24).
 /// Called from Pause, Stop and Seek so a hardware key still held when the
 /// user pauses doesn't leave the plugin sustaining indefinitely (no
 /// hardware NoteOff will arrive once the user lets go past Pause).
@@ -650,7 +652,14 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
 /// notices the playhead jump (or the stop) and issues its own
 /// all-notes-off, parked in its MIDI stash on contention rather than
 /// lost (code review MIX-06).
-fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
+///
+/// The engine thread's own live-note stash (`state.live_note_stash`,
+/// events parked while an instrument's lock was contended) predates the
+/// panic: an instrument that took it has the stash discarded, one that
+/// did not has its parked note-ons dropped (its note-offs are still
+/// owed). The stash flush used to replay a parked note-on after the
+/// panic, and nothing would ever release it (BUG-36).
+fn panic_all_instrument_plugins(ctx: &HandlerCtx, state: &mut HandlerState) {
     let tracks_guard = ctx.tracks();
     let plugins_guard = ctx.plugins();
     let mut silent_l = [0.0f32; 64];
@@ -662,6 +671,9 @@ fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
                     if let Some(mut inst) = mutex.try_lock() {
                         inst.0.all_notes_off_and_drop_carried();
                         inst.0.process(&mut silent_l, &mut silent_r, 64);
+                        state.live_note_stash.discard(inst_id);
+                    } else {
+                        state.live_note_stash.drop_note_ons(inst_id);
                     }
                 }
             }
@@ -674,7 +686,7 @@ pub(crate) fn handle_seek_to(ctx: &HandlerCtx, state: &mut HandlerState, pos: u6
     // seam — notes started before the seek would otherwise never see
     // their NoteOff and sustain forever.
     if ctx.shared.playing.load(Ordering::Relaxed) {
-        panic_all_instrument_plugins(ctx);
+        panic_all_instrument_plugins(ctx, state);
         state.midi_hw.midi_outputs.all_notes_off_everywhere();
     }
     ctx.shared.playhead.store(pos, Ordering::SeqCst);

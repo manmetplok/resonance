@@ -157,6 +157,12 @@ pub struct RecordingState {
     /// finding #2). Reset when a session opens; applied once the input
     /// callback clears `SharedState::recording_start_pending`.
     pub start_latch_applied: bool,
+    /// The raw playhead the take started on, before any latency
+    /// compensation: the session's opening playhead, then the input
+    /// callback's latch. The loop seam fires on the raw playhead, so this
+    /// — not the compensated `start_sample` — says whether a looped take
+    /// ever wraps (BUG-74).
+    raw_start_sample: SamplePos,
     /// The engine rate takes are written at; the cycle-record cut and the
     /// pre-zero skip are counted in input frames converted from it.
     engine_sample_rate: u32,
@@ -266,6 +272,7 @@ impl RecordingState {
             precount: None,
             take_shift_samples: 0,
             start_latch_applied: true,
+            raw_start_sample: 0,
             engine_sample_rate: sample_rate,
             record_pdc_samples: 0,
             skip_input_frames: 0,
@@ -290,6 +297,7 @@ impl RecordingState {
         cycle_slot: Option<(SamplePos, SamplePos)>,
     ) {
         self.start_sample = start_sample;
+        self.raw_start_sample = start_sample;
         self.start_latch_applied = false;
         self.skip_input_frames = 0;
         self.input_frames_kept = 0;
@@ -315,6 +323,7 @@ impl RecordingState {
     /// wrap), so the punch-in pass runs to timeline `loop_out` and every
     /// later pass covers exactly `[loop_in, loop_out)`.
     pub fn apply_start_latch(&mut self, latched: SamplePos, compensation: u64) {
+        self.raw_start_sample = latched;
         let start = latched as i128 - compensation as i128;
         self.start_sample = start.max(0) as SamplePos;
         let before_zero = (-start).max(0) as u64;
@@ -625,9 +634,19 @@ impl RecordingState {
             }
 
             // Apply loop-range trim via non-destructive trim fields
-            // on the clip so we don't have to rewrite the file.
+            // on the clip so we don't have to rewrite the file. The
+            // take starts at `loop_in` or at the punch-in, whichever is
+            // later: a take punched in mid-loop has nothing before it to
+            // trim and sits where it was played (BUG-69). A take started
+            // at or past `loop_out` never wraps — the seam only fires on
+            // a raw playhead before it — so there is no loop pass to trim
+            // to and it is kept whole; the trim range used to come out
+            // empty and the take was deleted (BUG-74).
             let (clip_start_sample, trim_start_frames, trim_end_frames) =
-                if self.loop_enabled && self.loop_out > self.loop_in {
+                if self.loop_enabled
+                    && self.loop_out > self.loop_in
+                    && self.raw_start_sample < self.loop_out
+                {
                     let total_frames = track_buf.frames_written;
                     let trim_start = self.loop_in.saturating_sub(self.start_sample);
                     let trim_end = self
@@ -639,7 +658,7 @@ impl RecordingState {
                         continue;
                     }
                     let end_skip = total_frames.saturating_sub(trim_end);
-                    (self.loop_in, trim_start, end_skip)
+                    (self.loop_in.max(self.start_sample), trim_start, end_skip)
                 } else {
                     (self.start_sample, 0, 0)
                 };
