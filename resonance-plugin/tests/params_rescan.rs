@@ -127,10 +127,10 @@ struct MainThread<'a> {
 impl<'a> MainThreadHandler<'a> for MainThread<'a> {}
 
 impl HostParamsImplMainThread for MainThread<'_> {
-    fn rescan(&mut self, flags: ParamRescanFlags) {
+    fn rescan(&self, flags: ParamRescanFlags) {
         self.rescans.fetch_or(flags.bits(), Ordering::SeqCst);
     }
-    fn clear(&mut self, _param_id: ClapId, _flags: ParamClearFlags) {}
+    fn clear(&self, _param_id: ClapId, _flags: ParamClearFlags) {}
 }
 
 struct Host;
@@ -167,7 +167,7 @@ fn gain(instance: &mut PluginInstance<Host>) -> f64 {
         .get_extension::<PluginParams>()
         .expect("params");
     ext.get_value(
-        &mut instance.plugin_handle(),
+        &instance.plugin_handle(),
         ClapId::new(stable_hash("gain")),
     )
     .expect("gain")

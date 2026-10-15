@@ -45,7 +45,7 @@ use std::time::{Duration, Instant};
 use resonance_gate::editor::GateEditorFactory;
 use resonance_gate::params::GateParams;
 use resonance_gate::viz::GateViz;
-use resonance_plugin::gui::{EditorFactory, PluginEditor};
+use resonance_plugin::gui::{EditorFactory, PluginEditor, SizeRefused};
 use resonance_plugin::presets::PresetSession;
 
 /// How long teardown may take before we call it a hang.
@@ -223,8 +223,8 @@ fn the_teardown_guard_catches_a_drop_that_never_returns() {
         fn size(&self) -> (u32, u32) {
             (0, 0)
         }
-        fn set_size(&mut self, _: u32, _: u32) -> bool {
-            false
+        fn set_size(&mut self, _: u32, _: u32) -> Result<(), SizeRefused> {
+            Err(SizeRefused("wedged".into()))
         }
         fn can_resize(&self) -> bool {
             false
@@ -304,10 +304,9 @@ fn the_editor_opens_resizes_and_closes() {
 
     // The size the plugin wants, asked for explicitly so the compositor's
     // opening geometry is not part of the assertion.
-    assert!(
-        editor.set_size(preferred.0, preferred.1),
-        "the runtime refused the plugin's own preferred size {preferred:?}"
-    );
+    editor.set_size(preferred.0, preferred.1).unwrap_or_else(|e| {
+        panic!("the runtime refused the plugin's own preferred size {preferred:?}: {e}")
+    });
     let at_preferred = wait_until(&*editor, |seen| seen == preferred);
     assert_eq!(
         at_preferred, preferred,
@@ -316,10 +315,9 @@ fn the_editor_opens_resizes_and_closes() {
 
     // And a second, different size, so the first result cannot be a
     // handle that simply never changed.
-    assert!(
-        editor.set_size(RESIZED.0, RESIZED.1),
-        "the runtime refused a resize to {RESIZED:?}"
-    );
+    editor.set_size(RESIZED.0, RESIZED.1).unwrap_or_else(|e| {
+        panic!("the runtime refused a resize to {RESIZED:?}: {e}")
+    });
     let at_resized = wait_until(&*editor, |seen| seen == RESIZED);
     assert_eq!(
         at_resized, RESIZED,
@@ -341,10 +339,9 @@ fn the_editor_opens_resizes_and_closes() {
     // resets the toplevel, so this is the re-map path — and still works.
     editor.show();
     assert_ne!(wait_mapped(true), Some(false), "show() after hide() did not re-map");
-    assert!(
-        editor.set_size(preferred.0, preferred.1),
-        "the editor stopped taking commands after a hide/show cycle"
-    );
+    editor.set_size(preferred.0, preferred.1).unwrap_or_else(|e| {
+        panic!("the editor stopped taking commands after a hide/show cycle: {e}")
+    });
     let reshown = wait_until(&*editor, |seen| seen == preferred);
     assert_eq!(reshown, preferred, "resize after a hide/show cycle was lost");
     editor.hide();

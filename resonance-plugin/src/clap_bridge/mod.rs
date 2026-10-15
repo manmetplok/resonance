@@ -310,16 +310,17 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         Ok(ClapMainThread {
             host,
             shared,
-            plugin: Some(plugin),
+            plugin: std::cell::RefCell::new(Some(plugin)),
             host_handle,
             editor_factory,
-            editor: None,
-            editor_serial: 0,
+            editor: std::cell::RefCell::new(None),
+            editor_destroy_pending: std::cell::Cell::new(false),
+            editor_serial: std::cell::Cell::new(0),
             extra_state_saver,
             param_text_source,
             kit_info_source,
-            last_preset_report: None,
-            last_preset_compare: None,
+            last_preset_report: std::cell::RefCell::new(None),
+            last_preset_compare: std::cell::Cell::new(None),
         })
     }
 }
@@ -329,8 +330,8 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
 // ---------------------------------------------------------------------------
 
 impl<'a, P: ResonancePlugin> PluginLatencyImpl for ClapMainThread<'a, P> {
-    fn get(&mut self) -> u32 {
-        if let Some(plugin) = &self.plugin {
+    fn get(&self) -> u32 {
+        if let Some(plugin) = self.plugin_ref() {
             // Inactive: the plugin lives on the main thread — ask it
             // directly. Note that before the first activation some plugins
             // report 0 here because their DSP chain is only built in
@@ -366,12 +367,11 @@ impl<'a, P: ResonancePlugin> PluginRenderImpl for ClapMainThread<'a, P> {
     /// `[main-thread]`. Inactive: the plugin is here, tell it now. Active:
     /// latch it for the audio processor, which tells the plugin at the top
     /// of its next block (`ResonancePlugin::set_render_mode`).
-    fn set(&mut self, mode: RenderMode) -> Result<(), PluginError> {
+    fn set(&self, mode: RenderMode) -> Result<(), PluginError> {
         let offline = matches!(mode, RenderMode::Offline);
-        self.shared
-            .render_offline
-            .store(offline, std::sync::atomic::Ordering::Release);
-        match &mut self.plugin {
+        let mut slot = self.plugin_mut()?;
+        self.shared.render_offline.store(offline, std::sync::atomic::Ordering::Release);
+        match slot.as_mut() {
             Some(plugin) => plugin.set_render_mode(offline),
             None => self
                 .shared

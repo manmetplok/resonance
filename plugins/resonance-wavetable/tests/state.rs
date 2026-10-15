@@ -400,14 +400,14 @@ fn state_ext(instance: &PluginInstance<TestHost>) -> PluginState {
 fn host_state(instance: &mut PluginInstance<TestHost>) -> Value {
     let ext = state_ext(instance);
     let mut bytes = Vec::new();
-    ext.save(&mut instance.plugin_handle(), &mut bytes)
+    ext.save(&instance.plugin_handle(), &mut bytes)
         .expect("state save");
     serde_json::from_slice(&bytes).expect("the bridge must save valid JSON")
 }
 
 fn host_load(instance: &mut PluginInstance<TestHost>, bytes: &[u8]) -> bool {
     let ext = state_ext(instance);
-    ext.load(&mut instance.plugin_handle(), &mut &bytes[..])
+    ext.load(&instance.plugin_handle(), &mut &bytes[..])
         .is_ok()
 }
 
@@ -418,7 +418,7 @@ fn host_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
         .plugin_shared_handle()
         .get_extension::<PluginParams>()
         .expect("the bridge must expose the params extension");
-    ext.get_value(&mut instance.plugin_handle(), ClapId::new(stable_hash(id)))
+    ext.get_value(&instance.plugin_handle(), ClapId::new(stable_hash(id)))
         .unwrap_or_else(|| panic!("param `{id}` is unknown to the bridge"))
 }
 

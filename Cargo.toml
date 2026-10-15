@@ -6,14 +6,14 @@ resolver = "2"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-clack-plugin = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18" }
-clack-extensions = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18", features = [
+clack-plugin = { git = "https://github.com/prokopyl/clack.git", rev = "27ca28391b57a61bad4bb5099288a7bf9247350d" }
+clack-extensions = { git = "https://github.com/prokopyl/clack.git", rev = "27ca28391b57a61bad4bb5099288a7bf9247350d", features = [
     "clack-plugin", "audio-ports", "params", "state", "note-ports", "latency", "gui", "render",
     "state-context", "preset-discovery"
 ] }
 # Host side of clack, used by resonance-plugin's tests to drive the CLAP
 # bridge through the real C ABI (instantiate → activate → latency query).
-clack-host = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18", default-features = false, features = ["clack-plugin"] }
+clack-host = { git = "https://github.com/prokopyl/clack.git", rev = "27ca28391b57a61bad4bb5099288a7bf9247350d", default-features = false, features = ["clack-plugin"] }
 thiserror = "2"
 # Logging facade (ARCH-05). Library crates depend on `tracing` only; the
 # subscriber is installed by the binaries (the app, and each CLAP bundle via

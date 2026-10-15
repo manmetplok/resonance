@@ -815,8 +815,8 @@ dependencies = [
 
 [[package]]
 name = "clack-common"
-version = "0.1.0"
-source = "git+https://github.com/prokopyl/clack.git?rev=4541f03792635dfdc6be9441a01b786e9b4ccf18#4541f03792635dfdc6be9441a01b786e9b4ccf18"
+version = "0.2.0"
+source = "git+https://github.com/prokopyl/clack.git?rev=27ca28391b57a61bad4bb5099288a7bf9247350d#27ca28391b57a61bad4bb5099288a7bf9247350d"
 dependencies = [
  "bitflags 2.13.2",
  "clap-sys",
@@ -824,8 +824,8 @@ dependencies = [
 
 [[package]]
 name = "clack-extensions"
-version = "0.1.0"
-source = "git+https://github.com/prokopyl/clack.git?rev=4541f03792635dfdc6be9441a01b786e9b4ccf18#4541f03792635dfdc6be9441a01b786e9b4ccf18"
+version = "0.2.0"
+source = "git+https://github.com/prokopyl/clack.git?rev=27ca28391b57a61bad4bb5099288a7bf9247350d#27ca28391b57a61bad4bb5099288a7bf9247350d"
 dependencies = [
  "bitflags 2.13.2",
  "clack-common",
@@ -836,8 +836,8 @@ dependencies = [
 
 [[package]]
 name = "clack-host"
-version = "0.1.0"
-source = "git+https://github.com/prokopyl/clack.git?rev=4541f03792635dfdc6be9441a01b786e9b4ccf18#4541f03792635dfdc6be9441a01b786e9b4ccf18"
+version = "0.2.0"
+source = "git+https://github.com/prokopyl/clack.git?rev=27ca28391b57a61bad4bb5099288a7bf9247350d#27ca28391b57a61bad4bb5099288a7bf9247350d"
 dependencies = [
  "clack-common",
  "clack-plugin",
@@ -846,8 +846,8 @@ dependencies = [
 
 [[package]]
 name = "clack-plugin"
-version = "0.1.0"
-source = "git+https://github.com/prokopyl/clack.git?rev=4541f03792635dfdc6be9441a01b786e9b4ccf18#4541f03792635dfdc6be9441a01b786e9b4ccf18"
+version = "0.2.0"
+source = "git+https://github.com/prokopyl/clack.git?rev=27ca28391b57a61bad4bb5099288a7bf9247350d#27ca28391b57a61bad4bb5099288a7bf9247350d"
 dependencies = [
  "clack-common",
  "clap-sys",
@@ -5035,6 +5035,7 @@ dependencies = [
  "clack-extensions",
  "clack-host",
  "clack-plugin",
+ "clap-sys",
  "cocoa-plugin-gui",
  "dirs",
  "parking_lot",

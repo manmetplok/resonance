@@ -49,7 +49,11 @@ cocoa-plugin-gui = { path = "../cocoa-plugin-gui", optional = true }
 [dev-dependencies]
 # Drive the CLAP bridge from the host side in tests (activate + latency query).
 clack-host = { workspace = true }
-clack-extensions = { workspace = true, features = ["clack-host"] }
+clack-extensions = { workspace = true, features = ["clack-host", "log"] }
+# Raw CLAP vtables, for host callbacks that call back into the plugin
+# (`tests/reentrancy.rs`): clack-host gives no main-thread plugin handle
+# to code running inside a host callback.
+clap-sys.workspace = true
 
 # Depending on ourselves as a dev-dependency turns `editor-widgets` on for the
 # test build only, leaving `default = []` alone so DSP-only consumers stay lean.

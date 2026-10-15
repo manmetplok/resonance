@@ -19,11 +19,11 @@ use crate::plugin::ResonancePlugin;
 // ---------------------------------------------------------------------------
 
 impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
-    fn count(&mut self) -> u32 {
+    fn count(&self) -> u32 {
         self.shared.visible_indices.len() as u32
     }
 
-    fn get_info(&mut self, param_index: u32, info: &mut ParamInfoWriter) {
+    fn get_info(&self, param_index: u32, info: &mut ParamInfoWriter) {
         let Some(&meta_idx) = self.shared.visible_indices.get(param_index as usize) else {
             return;
         };
@@ -59,19 +59,19 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
         });
     }
 
-    fn get_value(&mut self, param_id: ClapId) -> Option<f64> {
+    fn get_value(&self, param_id: ClapId) -> Option<f64> {
         let slot = self.shared.find_slot(param_id.get())?;
         Some(self.current_value(slot))
     }
 
     fn value_to_text(
-        &mut self,
+        &self,
         param_id: ClapId,
         value: f64,
         writer: &mut ParamDisplayWriter,
     ) -> core::fmt::Result {
         if let Some(slot) = self.shared.find_slot(param_id.get()) {
-            if let Some(plugin) = &self.plugin {
+            if let Some(plugin) = self.plugin_ref() {
                 if slot < plugin.param_count() {
                     let text = plugin.param(slot).display(value);
                     return write!(writer, "{}", text);
@@ -92,10 +92,10 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
         }
     }
 
-    fn text_to_value(&mut self, param_id: ClapId, text: &std::ffi::CStr) -> Option<f64> {
+    fn text_to_value(&self, param_id: ClapId, text: &std::ffi::CStr) -> Option<f64> {
         let slot = self.shared.find_slot(param_id.get())?;
         let text = text.to_str().ok()?;
-        if let Some(plugin) = &self.plugin {
+        if let Some(plugin) = self.plugin_ref() {
             if slot < plugin.param_count() {
                 return plugin.param(slot).parse(text);
             }
@@ -104,14 +104,15 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
     }
 
     fn flush(
-        &mut self,
+        &self,
         input_parameter_changes: &InputEvents,
         output_parameter_changes: &mut OutputEvents,
     ) {
         // Inactive: the plugin is here. Report what it announced
         // (`HostHandle::announce_param_change`) — this is the flush it
         // asked the host for — before applying the host's own writes.
-        if let Some(plugin) = &self.plugin {
+        let plugin = self.plugin_ref();
+        if let Some(plugin) = &plugin {
             super::param_output::report_announced(
                 &self.host_handle,
                 self.shared,
@@ -140,7 +141,7 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
                             // value. Same divergence `state.rs` closes on
                             // the load path.
                             let mut landed = e.value();
-                            if let Some(plugin) = &self.plugin {
+                            if let Some(plugin) = &plugin {
                                 if slot < plugin.param_count() {
                                     let param = plugin.param(slot);
                                     param.set_plain(e.value());

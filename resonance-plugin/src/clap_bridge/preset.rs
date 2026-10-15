@@ -73,7 +73,7 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
 
     /// Lay a preset document (bare state or a whole preset file) over the
     /// current state and load the result.
-    pub(super) fn load_preset_bytes(&mut self, data: &[u8]) -> Result<(), PluginError> {
+    pub(super) fn load_preset_bytes(&self, data: &[u8]) -> Result<(), PluginError> {
         let mut doc: serde_json::Value = serde_json::from_slice(data)
             .map_err(|_| PluginError::Message("Preset is not JSON"))?;
         let identity = doc.get(PRESET_STATE_KEY).cloned();
@@ -175,7 +175,7 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
 
 impl<'a, P: ResonancePlugin> PluginStateContextImpl for ClapMainThread<'a, P> {
     fn save(
-        &mut self,
+        &self,
         output: &mut OutputStream,
         context_type: StateContextType,
     ) -> Result<(), PluginError> {
@@ -189,7 +189,7 @@ impl<'a, P: ResonancePlugin> PluginStateContextImpl for ClapMainThread<'a, P> {
     }
 
     fn load(
-        &mut self,
+        &self,
         input: &mut InputStream,
         context_type: StateContextType,
     ) -> Result<(), PluginError> {
@@ -206,7 +206,7 @@ impl<'a, P: ResonancePlugin> PluginStateContextImpl for ClapMainThread<'a, P> {
 
 impl<'a, P: ResonancePlugin> PluginPresetLoadImpl for ClapMainThread<'a, P> {
     fn load_from_location(
-        &mut self,
+        &self,
         location: Location,
         load_key: Option<&CStr>,
     ) -> Result<(), PluginError> {
@@ -225,7 +225,7 @@ impl<'a, P: ResonancePlugin> PluginPresetLoadImpl for ClapMainThread<'a, P> {
                 // file location is announced here as CLAP asks.
                 self.report_preset_identity();
                 if let (Location::File { .. }, Some(ext)) = (location, host_ext) {
-                    ext.loaded(&mut self.host, location, load_key);
+                    ext.loaded(&self.host, location, load_key);
                 }
                 Ok(())
             }
@@ -233,7 +233,7 @@ impl<'a, P: ResonancePlugin> PluginPresetLoadImpl for ClapMainThread<'a, P> {
                 tracing::warn!("{}: preset load failed: {message}", P::CLAP_ID);
                 if let Some(ext) = host_ext {
                     let text = std::ffi::CString::new(message).ok();
-                    ext.on_error(&mut self.host, location, load_key, 0, text.as_deref());
+                    ext.on_error(&self.host, location, load_key, 0, text.as_deref());
                 }
                 Err(PluginError::Message("Preset load failed"))
             }

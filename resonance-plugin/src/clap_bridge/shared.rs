@@ -4,6 +4,7 @@
 //! - `ClapMainThread`: holds the plugin (when not active) plus editor/state helpers.
 //! - `ClapAudioProcessor`: holds the plugin (when active) plus scratch buffers.
 
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use clack_extensions::gui::HostGui;
@@ -277,12 +278,36 @@ impl<'a> PluginShared<'a> for ClapShared<'a> {}
 // MainThreadState
 // ---------------------------------------------------------------------------
 
+/// The plugin's main-thread half.
+///
+/// Every CLAP main-thread entry point reaches this through a shared
+/// reference (clack 0.2, "Embrace reentrancy"): CLAP lets a host call back
+/// into the plugin from inside a host function the plugin called —
+/// `latency.changed()` during `activate` answered by a `latency.get()`,
+/// `params.rescan()` answered by `get_value`, `gui.closed()` answered by
+/// `gui.destroy()`. clack 0.1 handed every call a `&mut` to this struct,
+/// so such a callback aliased a live `&mut`, which is undefined behaviour.
+/// The fields that change are therefore `Cell`/`RefCell`, under one rule:
+/// **no borrow is held across a call that can re-enter the plugin** — a
+/// `[main-thread]` host function, or editor code. (The `[thread-safe]`
+/// requests — `request_callback`, `request_flush`, `request_restart` —
+/// only schedule work, so a param event noted under a borrow is fine.)
+/// Where a borrow cannot be had because the call *is* a re-entry, readers
+/// take the path they take while the plugin is active (the shared mirror)
+/// and writers report an error; nothing panics.
+///
+/// All of it is `[main-thread]` state. The audio processor owns its own
+/// plugin object and never touches these cells, so no lock or borrow flag
+/// is on the audio path.
 pub struct ClapMainThread<'a, P: ResonancePlugin> {
     /// Main-thread host handle. Used to call `clap_host_latency.changed()`,
     /// which the CLAP spec restricts to this thread.
     pub(super) host: HostMainThreadHandle<'a>,
     pub(crate) shared: &'a ClapShared<'a>,
-    pub(crate) plugin: Option<P>,
+    /// The plugin while it is inactive; `None` while the audio processor
+    /// owns it. Reached through [`Self::plugin_ref`] and
+    /// [`Self::plugin_mut`].
+    pub(crate) plugin: RefCell<Option<P>>,
     /// The plugin-facing host handle, also held by the plugin itself (it is
     /// handed over in `ResonancePlugin::set_host`). Carries the latency the
     /// plugin last reported: captured from the plugin after `initialize()`
@@ -298,11 +323,16 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     pub(crate) editor_factory: Option<std::sync::Arc<dyn EditorFactory>>,
     /// The currently-open editor, if any. Created by `gui_create`, dropped
     /// by `gui_destroy`.
-    pub(crate) editor: Option<Box<dyn PluginEditor>>,
+    pub(crate) editor: RefCell<Option<Box<dyn PluginEditor>>>,
+    /// A `gui.destroy` arrived while a call into the editor was still on
+    /// the stack (the host destroyed the editor from inside a callback the
+    /// editor call triggered). The editor cannot be dropped under its own
+    /// borrow, so [`Self::with_editor`] drops it once that call returns.
+    pub(crate) editor_destroy_pending: Cell<bool>,
     /// Serial of the editor in `editor`, bumped on every `gui_create` so a
     /// self-close report can be matched to the window it came from
     /// (`HostHandle::report_gui_closed`). Starts at 0, which no editor has.
-    pub(crate) editor_serial: u64,
+    pub(crate) editor_serial: Cell<u64>,
     /// Extra-state saver harvested from the plugin at construction time.
     /// `None` if the plugin has no extra state. Kept alive across
     /// activate/deactivate so the host can save/load project state while
@@ -316,10 +346,70 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     pub(crate) kit_info_source: Option<std::sync::Arc<dyn crate::plugin::KitInfoSource>>,
     /// The last identity report sent to the host
     /// (`com.resonance.preset-session`), for deduplication.
-    pub(crate) last_preset_report: Option<String>,
+    pub(crate) last_preset_report: RefCell<Option<String>>,
     /// When the main-thread modified comparison last ran; it runs at most
     /// once per `MODIFIED_COMPARE_INTERVAL`.
-    pub(crate) last_preset_compare: Option<std::time::Instant>,
+    pub(crate) last_preset_compare: Cell<Option<std::time::Instant>>,
+}
+
+impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
+    /// The plugin, if it is here (inactive) and not being mutated further
+    /// up this thread's stack. `None` sends the caller down its "active"
+    /// path, which serves the shared mirror — the right answer for a
+    /// re-entrant query made while, say, `load_state` is mid-flight.
+    pub(crate) fn plugin_ref(&self) -> Option<Ref<'_, P>> {
+        let slot = self.plugin.try_borrow().ok()?;
+        Ref::filter_map(slot, Option::as_ref).ok()
+    }
+
+    /// The plugin slot for a mutation, or an error when a borrow of it is
+    /// live further up this thread's stack (a re-entrant call).
+    pub(crate) fn plugin_mut(&self) -> Result<RefMut<'_, Option<P>>, PluginError> {
+        self.plugin
+            .try_borrow_mut()
+            .map_err(|_| PluginError::Message("re-entrant call while the plugin is in use"))
+    }
+
+    /// Run `f` on the open editor. `None` when there is no editor, or when
+    /// the call is a re-entry from inside another editor call.
+    ///
+    /// The borrow ends before this returns; a `gui.destroy` that landed
+    /// during `f` (and could not take the editor then) is carried out
+    /// here, after it.
+    pub(crate) fn with_editor<R>(&self, f: impl FnOnce(&mut dyn PluginEditor) -> R) -> Option<R> {
+        let result = {
+            let mut slot = self.editor.try_borrow_mut().ok()?;
+            slot.as_mut().map(|editor| f(editor.as_mut()))
+        };
+        if self.editor_destroy_pending.take() {
+            self.destroy_editor();
+        }
+        result
+    }
+
+    /// Drop the open editor, outside any borrow of the slot: the drop runs
+    /// the GUI runtime's teardown. Deferred to [`Self::with_editor`] when
+    /// an editor call is on the stack.
+    pub(crate) fn destroy_editor(&self) {
+        match self.editor.try_borrow_mut() {
+            Ok(mut slot) => {
+                let editor = slot.take();
+                drop(slot);
+                drop(editor);
+            }
+            Err(_) => self.editor_destroy_pending.set(true),
+        }
+    }
+
+    /// Whether an editor is open. A re-entrant query made from inside an
+    /// editor call sees the editor that call is using.
+    pub(crate) fn has_editor(&self) -> bool {
+        self.editor
+            .try_borrow()
+            .map(|slot| slot.is_some())
+            .unwrap_or(true)
+            && !self.editor_destroy_pending.get()
+    }
 }
 
 impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainThread<'a, P> {
@@ -344,20 +434,25 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
     ///   read-only progress output, a selection it derived from its state)
     ///   asks through `HostHandle::request_params_rescan`, and here the
     ///   host is told to re-read them (`clap_host_params.rescan`).
-    fn on_main_thread(&mut self) {
+    ///
+    /// Each host call below is made with no borrow of this struct's cells
+    /// live, so a host that answers it by calling straight back in (a
+    /// `get_value` during `rescan`, a `gui.destroy` during `closed`) is
+    /// served normally.
+    fn on_main_thread(&self) {
         if self.host_handle.take_latency_dirty() {
             if let Some(latency) = self.host.shared().get_extension::<HostLatency>() {
-                latency.changed(&mut self.host);
+                latency.changed(&self.host);
             }
         }
         if self.shared.preset_compare_due.swap(false, Ordering::AcqRel) {
             let interval = crate::presets::MODIFIED_COMPARE_INTERVAL;
-            if self.last_preset_compare.is_some_and(|t| t.elapsed() < interval) {
+            if self.last_preset_compare.get().is_some_and(|t| t.elapsed() < interval) {
                 // Too soon: stay armed, and come back at a later callback.
                 self.shared.preset_compare_due.store(true, Ordering::Release);
                 self.host_handle.request_callback();
             } else {
-                self.last_preset_compare = Some(std::time::Instant::now());
+                self.last_preset_compare.set(Some(std::time::Instant::now()));
                 self.compare_preset_sound();
             }
         }
@@ -371,18 +466,18 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
             // mirror `get_value` serves ordinary params from): publish it
             // before the host re-reads. Active, the audio thread published
             // them (`HostHandle::request_params_rescan`'s ordering note).
-            if let Some(plugin) = &self.plugin {
+            if let Some(plugin) = self.plugin_ref() {
                 let count = plugin.param_count().min(self.shared.param_values.len());
                 for i in 0..count {
                     self.shared.set_value(i, plugin.param(i).get_plain());
                 }
             }
             if let Some(params) = self.host.shared().get_extension::<HostParams>() {
-                params.rescan(&mut self.host, rescan);
+                params.rescan(&self.host, rescan);
             }
         }
         if let Some(serial) = self.host_handle.take_gui_closed() {
-            if serial == self.editor_serial && self.editor.is_some() {
+            if serial == self.editor_serial.get() && self.has_editor() {
                 if let Some(gui) = self.host.shared().get_extension::<HostGui>() {
                     gui.closed(&self.host.shared(), true);
                 }
