@@ -57,6 +57,9 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // loading a project on top of an existing one keeps stale lyrics
     // for clips that no longer exist.
     r.compose.vocal_audio.clear();
+    // `clear` keeps the take layouts for an undo; another project's are
+    // no use (a placed-again section reads its take off the clips).
+    r.compose.vocal_audio.takes.clear();
     // Nothing of the previous project's render state applies: the first
     // settle after the load sees no edits (no debounced re-render).
     r.compose.vocal_audio.status.reset();

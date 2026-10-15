@@ -461,30 +461,47 @@ fn a_reopened_project_reads_rendered() {
     assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Stale);
 }
 
-/// BUG-73 (status half): a section placed again after its lane rendered
-/// has no take on the new placement, so the lane is not `rendered` — it
-/// reads `stale` (the old take plays where it is, nothing sings on the
-/// new placement) until a render fans out to every placement.
-#[test]
-fn a_placement_without_a_take_keeps_the_lane_from_reading_rendered() {
-    let mut app = app_with_project();
-    let verse = rendered_lane(&mut app, "Verse", 1);
-    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
+fn add_tempo(app: &mut Resonance, bar: u32, bpm: f32) {
+    call(app, "global.add_tempo_event", &json!({ "bar": bar, "bpm": bpm }))
+        .result::<serde_json::Value>()
+        .expect("tempo event adds");
+}
 
+fn place(app: &mut Resonance, def: u64, start_bar: u32) -> u64 {
     call(
-        &mut app,
+        app,
         "section.place",
         &section_proto::PlaceParams {
-            definition_id: SectionDefinitionId(verse),
-            start_bar: 9,
+            definition_id: SectionDefinitionId(def),
+            start_bar,
         },
     )
     .result::<section_proto::PlaceResult>()
-    .expect("section.place succeeds");
+    .expect("section.place succeeds")
+    .placement_id
+    .into()
+}
+
+/// BUG-73 (status half): a placement the lane's take cannot be laid at —
+/// here it plays in another tempo region than the take was sung at — gets
+/// no take, so the lane is not `rendered`: it reads `stale` (the old take
+/// plays where it is, nothing sings on the new placement) until a render
+/// fans out to every placement.
+#[test]
+fn a_placement_without_a_take_keeps_the_lane_from_reading_rendered() {
+    let mut app = app_with_project();
+    // 120 BPM up to bar 8, 140 from bar 9 on.
+    add_tempo(&mut app, 1, 120.0);
+    add_tempo(&mut app, 8, 120.0);
+    add_tempo(&mut app, 9, 140.0);
+    let verse = rendered_lane(&mut app, "Verse", 1);
+    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
+
+    place(&mut app, verse, 9);
     assert_eq!(
         app.test_vocal_audio_clips(TRACK).len(),
         1,
-        "placing installs no take (that is the other half of BUG-73)"
+        "a take sung at 120 BPM is not laid at a 140 BPM placement"
     );
 
     let view = vocal_view(&mut app);
@@ -505,6 +522,116 @@ fn a_placement_without_a_take_keeps_the_lane_from_reading_rendered() {
     );
     assert!(app.test_finish_vocal_render(verse, TRACK), "vocal.render queued a render");
     assert_eq!(app.test_vocal_audio_clips(TRACK).len(), 2);
+    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
+}
+
+/// The MIDI clips on `track`, `(start_sample, notes)`, in timeline order.
+fn clips_on(app: &Resonance, track: u64) -> Vec<(u64, Vec<(u8, u64, u64)>)> {
+    let mut clips: Vec<_> = app
+        .test_midi_clips()
+        .iter()
+        .filter(|c| c.track_id == track)
+        .map(|c| {
+            let notes = c.notes.iter().map(|n| (n.note, n.start_tick, n.duration_ticks));
+            (c.start_sample, notes.collect())
+        })
+        .collect();
+    clips.sort();
+    clips
+}
+
+/// Where each of the lane's installed takes starts, in timeline order.
+fn take_starts(app: &Resonance) -> Vec<u64> {
+    let ids: Vec<u64> = app.test_vocal_audio_clips(TRACK).into_iter().map(|(_, c)| c).collect();
+    let mut starts: Vec<u64> = app
+        .test_clips()
+        .iter()
+        .filter(|c| ids.contains(&c.id))
+        .map(|c| c.start_sample)
+        .collect();
+    starts.sort_unstable();
+    starts
+}
+
+/// BUG-73 (install half): placing a section that already has generated
+/// parts and a rendered vocal gives the new placement the same parts and
+/// lays the existing take there — no render needed, `song.vocal` reads
+/// `rendered` — and one undo takes back the placement with its clips.
+#[test]
+fn placing_a_section_again_installs_its_parts_and_its_take() {
+    const BASS: u64 = 71;
+    let mut app = app_with_project();
+    app.test_set_sample_rate(48_000);
+    app.test_set_flat_tempo(120.0);
+    // Off bar 1, so neither take's pre-roll is cut at sample 0.
+    let verse = rendered_lane(&mut app, "Verse", 2);
+    app.test_add_track(BASS, TrackType::Instrument);
+    call(
+        &mut app,
+        "generate.part",
+        &json!({ "section_id": verse, "track_id": BASS, "role": "bass", "seed": 3 }),
+    )
+    .result::<serde_json::Value>()
+    .expect("generate.part succeeds");
+    // A take shaped like a real one: a lead-in and onset pre-roll.
+    call(
+        &mut app,
+        "vocal.render",
+        &json!({ "track_id": TRACK, "section_id": verse }),
+    );
+    assert!(app.test_finish_vocal_render_take(verse, TRACK, 2_400));
+    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
+    let bass_before = clips_on(&app, BASS);
+    let vocal_before = clips_on(&app, TRACK);
+    let take_before = take_starts(&app);
+    assert_eq!((bass_before.len(), vocal_before.len(), take_before.len()), (1, 1, 1));
+
+    place(&mut app, verse, 10);
+
+    let bass = clips_on(&app, BASS);
+    assert_eq!(bass.len(), 2, "the new placement has its bass part");
+    assert_eq!(bass[0], bass_before[0], "the first placement's part is untouched");
+    assert_eq!(bass[1].1, bass_before[0].1, "same notes at the new placement");
+    let vocal = clips_on(&app, TRACK);
+    assert_eq!(vocal.len(), 2, "the new placement has its vocal line");
+    assert_eq!(vocal[1].1, vocal_before[0].1);
+    // Eight bars at 120 BPM in 4/4 = 16 s later.
+    let eight_bars = 16 * 48_000;
+    assert_eq!(vocal[1].0, vocal[0].0 + eight_bars);
+
+    let takes = take_starts(&app);
+    assert_eq!(takes.len(), 2, "the take is laid at the new placement too");
+    assert_eq!(takes[1], takes[0] + eight_bars, "at the same offset from its section start");
+    let view = vocal_view(&mut app);
+    assert_eq!(lane_state(&view, verse), VocalRenderState::Rendered, "no render needed");
+    assert_eq!(view.render_state, VocalRenderState::Rendered);
+
+    // One undo step: the placement and everything it brought go together.
+    crate::common::roundtrip(&mut app, Request::without_params(98, "edit.undo"))
+        .result::<serde_json::Value>()
+        .expect("edit.undo succeeds");
+    assert_eq!(clips_on(&app, BASS), bass_before);
+    assert_eq!(clips_on(&app, TRACK), vocal_before);
+    assert_eq!(take_starts(&app), take_before);
+    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
+
+    // Reopened, the take's layout is read back off its clip.
+    let file = app.test_build_project_file();
+    let midi_notes = app
+        .test_midi_clips()
+        .iter()
+        .map(|c| (c.id, c.notes.clone()))
+        .collect();
+    app.test_replay_loaded_project_from(resonance_app::project::LoadedProject {
+        file,
+        project_dir: std::path::PathBuf::from("/tmp/control-vocal-render-state.rprj"),
+        midi_notes,
+        plugin_states: std::collections::HashMap::new(),
+    });
+    assert_eq!(take_starts(&app), take_before);
+    assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
+    place(&mut app, verse, 10);
+    assert_eq!(take_starts(&app), [take_before[0], take_before[0] + eight_bars]);
     assert_eq!(lane_state(&vocal_view(&mut app), verse), VocalRenderState::Rendered);
 }
 

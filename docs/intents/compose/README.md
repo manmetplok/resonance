@@ -17,7 +17,7 @@ Each intent follows [`../_template.md`](../_template.md).
 | [Make motif augmentation audible (or drop it)](motif-augment-washout.md) | idea | `Augment` sounds the same as `Identity` because durations are normalised to fill each chord. |
 | [Pop/jazz cadence colour](pop-jazz-cadence-color.md) | idea | Generated endings are always classical cadences, whatever the style. |
 | [Pronunciation editing, dictionary and persistence](pronunciation-editing.md) | partly built | Pronunciation fixes exist only over the control API and are lost on reload and undo. |
-| [Section placement editing (fill on place, move, place-again)](section-placement-editing.md) | partly built | Placing a section with generated parts gives a silent, empty placement. |
+| [Section placement editing (move, place-again target, clip ids on place)](section-placement-editing.md) | partly built | No way to move a placement; "Place again" targets bar 0; `section.place` reports no clip ids. |
 | [Vocals: what is left after the MCP-control and quality work](vocal-followups.md) | partly built | The vocal spec is built; which banks join the plok.org index (blind listen), publishing the index, a live MCP session, Lilia's licence and a few small gaps are not. |
 | [Vocal harmony and doubling generator](vocal-harmony-doubling.md) | designed | A single synthesized lead sounds thin; there is no harmony or double generator. |
 | [Vocal pitch editor (graphical tuning of recorded vocals)](vocal-pitch-editor.md) | partly built | Pitch detection and retune render exist, but no editor view opens, so tuning is unreachable. |

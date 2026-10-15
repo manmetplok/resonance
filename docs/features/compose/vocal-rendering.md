@@ -1,7 +1,7 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `ef215b08` + the per-placement render state (BUG-73)
-> on 2026-10-15; the rest @ `f9438e38` + the `singing` skill and the
+> Verified against master @ `acac5ea3` + the per-placement render state and the
+> take laid at a new placement (BUG-73) on 2026-10-15; the rest @ `f9438e38` + the `singing` skill and the
 > chord-change vocal melody flow (BUG-70) on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
@@ -327,10 +327,12 @@ only marks the lane stale.
     `rendered`, otherwise `stale` with `stale_units` = planned units not
     in the take. A take with no recorded keys (saved before this existed)
     reads `stale`; so does a lane whose plan cannot be built any more,
-    and a lane with a placement that has no installed take (the section
-    was placed again after the render — placing installs nothing yet):
-    `stale` with `stale_units` 0 until a render fans out to every
-    placement (BUG-73).
+    and a lane with a placement that has no installed take: `stale` with
+    `stale_units` 0 until a render fans out to every placement (BUG-73).
+    Placing the section again lays a `rendered` lane's take at the new
+    placement, so this happens only when it cannot — the take was not
+    current, or the placement plays at another tempo
+    ([sections and placements](sections-and-placements.md)).
   - *Memo.* Planning builds every segment, so the expected keys are
     memoised per lane by a **fingerprint** of what the plan reads (clip
     notes and lyrics, params (expression curves included), overrides,

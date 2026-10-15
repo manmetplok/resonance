@@ -678,15 +678,19 @@ pub(super) fn handle_delete_definition(r: &mut crate::Resonance, definition_id: 
 // Placement CRUD + selection
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_place(r: &mut crate::Resonance, definition_id: u64, start_bar: u32) {
+pub(super) fn handle_place(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    start_bar: u32,
+) -> Task<Message> {
     let length_bars = match r.compose.find_definition(definition_id) {
         Some(d) => d.length_bars,
-        None => return,
+        None => return Task::none(),
     };
     if !section_span_in_bounds(start_bar, length_bars) {
         r.compose.last_error =
             Some(format!("A placement must end by bar {MAX_SECTION_BARS}"));
-        return;
+        return Task::none();
     }
     if placement_overlaps(
         &r.compose.placements,
@@ -696,8 +700,19 @@ pub(super) fn handle_place(r: &mut crate::Resonance, definition_id: u64, start_b
         None,
     ) {
         r.compose.last_error = Some("Placement would overlap an existing section".into());
-        return;
+        return Task::none();
     }
+    // Which vocal lanes sing a current take before the new placement
+    // exists: only those can lend it to the new placement.
+    let rendered_vocal: Vec<resonance_audio::types::TrackId> = vocal_lane_tracks(r, definition_id)
+        .into_iter()
+        .filter(|&t| {
+            super::vocal_render_state::lane_render_status(r, (definition_id, t)).state
+                == crate::compose::VocalLaneRenderState::Rendered
+        })
+        .collect();
+    let sung_bpm = super::section_meter(r, definition_id).bpm;
+
     let id = r.compose.fresh_id();
     r.compose.placements.push(SectionPlacementState {
         id,
@@ -707,6 +722,83 @@ pub(super) fn handle_place(r: &mut crate::Resonance, definition_id: u64, start_b
     r.compose.placements.sort_by_key(|p| p.start_bar);
     r.compose.selected_placement_id = Some(id);
     r.compose.last_error = None;
+    let task = fill_new_placement(r, definition_id, id);
+
+    // The take was sung at the section's tempo; it fits the new placement
+    // only if every placed bar still plays at that tempo. Otherwise the
+    // placement stays without a take and the lane reads stale.
+    let tempo_fits = super::vocal_tempo_mismatch(r, definition_id).is_none()
+        && (super::section_meter(r, definition_id).bpm - sung_bpm).abs() < 0.01;
+    if tempo_fits {
+        for track_id in rendered_vocal {
+            super::vocal_audio_install::lay_take_at_new_placement(r, definition_id, track_id, id);
+        }
+    }
+    task
+}
+
+/// The tracks of the section's vocal lanes.
+fn vocal_lane_tracks(r: &crate::Resonance, definition_id: u64) -> Vec<resonance_audio::types::TrackId> {
+    let mut tracks: Vec<_> = r
+        .compose
+        .find_definition(definition_id)
+        .map(|def| {
+            def.lane_generators
+                .iter()
+                .filter(|(_, cfg)| matches!(cfg.kind, crate::compose::LaneGeneratorKind::Vocal(_)))
+                .map(|(t, _)| *t)
+                .collect()
+        })
+        .unwrap_or_default();
+    tracks.sort_unstable();
+    tracks
+}
+
+/// A new placement of a section gets the material its other placements
+/// have (BUG-73): every lane that has clips is re-derived — material is a
+/// pure function of the definition, so the existing placements' clips
+/// come back unchanged under the same ids — drums are re-materialized,
+/// and each vocal lane's line is copied rather than re-derived, so no
+/// melody is re-fitted or flagged by a placement. Lanes that never
+/// produced a clip stay empty, as they are elsewhere.
+fn fill_new_placement(r: &mut crate::Resonance, definition_id: u64, placement_id: u64) -> Task<Message> {
+    let vocal = vocal_lane_tracks(r, definition_id);
+    let mut tracks: Vec<resonance_audio::types::TrackId> = r
+        .compose
+        .derived_clips
+        .keys()
+        .filter(|(d, _, t)| *d == definition_id && !vocal.contains(t))
+        .map(|(_, _, t)| *t)
+        .collect();
+    tracks.sort_unstable();
+    tracks.dedup();
+    let is_drum = |r: &crate::Resonance, t: resonance_audio::types::TrackId| {
+        r.registry
+            .tracks
+            .iter()
+            .any(|tr| tr.id == t && tr.instrument_type == crate::state::InstrumentType::Drum)
+    };
+    let has_drums = tracks.iter().any(|&t| is_drum(r, t));
+    if has_drums {
+        super::drum_groups::materialize_drum_clips_for(
+            r,
+            Some(definition_id),
+            super::ClipVisibility::Immediate,
+        );
+    }
+    let pitched: Vec<_> = tracks.into_iter().filter(|&t| !is_drum(r, t)).collect();
+    let tasks: Vec<Task<Message>> = pitched
+        .into_iter()
+        .map(|t| super::regenerate::regenerate_lane(r, definition_id, t))
+        .collect();
+    if has_drums {
+        // Materializing replaced any Motif-mode drum voices; lay them back.
+        super::regenerate::propagate_motif_change(r, definition_id);
+    }
+    for track_id in vocal {
+        super::vocal_melody::copy_line_to_placement(r, definition_id, track_id, placement_id);
+    }
+    Task::batch(tasks)
 }
 
 pub(super) fn handle_delete_placement(r: &mut crate::Resonance, placement_id: u64) {

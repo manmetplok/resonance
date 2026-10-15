@@ -25,7 +25,10 @@ pub const RESIZE: &str = "section.resize";
 /// destructive, requires `"confirm": true` ([`DeleteParams`] -> `MutationAck`).
 pub const DELETE: &str = "section.delete";
 /// `section.place` — place a definition in the arrangement
-/// ([`PlaceParams`] -> [`PlaceResult`]).
+/// ([`PlaceParams`] -> [`PlaceResult`]). The new placement gets the
+/// section's material in the same undo step: every lane that has clips
+/// elsewhere (generated parts, drums, the vocal line), plus the vocal
+/// take when it is current and the placement plays at its tempo.
 pub const PLACE: &str = "section.place";
 /// `section.remove_placement` — remove one placement (the definition
 /// survives) ([`RemovePlacementParams`] -> `MutationAck`).

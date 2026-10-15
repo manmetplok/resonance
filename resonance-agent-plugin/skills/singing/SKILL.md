@@ -239,10 +239,12 @@ pre-flight it, then render once:
 - **Re-render after arrangement edits.** A take starts a little before its
   section (the singer's pre-roll), so `arrangement_insert_bars` /
   `arrangement_remove_bars` at a section boundary can cut it or leave it
-  behind, and a section placed again (`section_place`) gets no take until
-  the lane renders again (`song_vocal` reads it `stale` with `stale_units`
-  0). After any of these, `vocal_render {track_id}` and confirm in
-  `song_tracks` that every placement has its audio clip.
+  behind. A section placed again (`section_place`) gets the current take
+  laid at the new placement, but not when the take was stale or the new
+  placement plays at another tempo (`song_vocal` then reads `stale` with
+  `stale_units` 0). After any of these, check `song_vocal`; if it is not
+  `rendered`, `vocal_render {track_id}` and confirm in `song_tracks` that
+  every placement has its audio clip.
 
 ## 7. Expression
 

@@ -1,6 +1,6 @@
 # Sections and placements
 
-> Verified against master @ `f9438e38` + the chord-change vocal melody flow (BUG-70) on 2026-10-13.
+> Verified against master @ `acac5ea3` + fill on place (BUG-73) on 2026-10-15.
 > Spec history: none in `docs/history/specs/`; leads in `docs/history/refactor/A-6-derived-clips.md` and `docs/history/reviews/code-review-2026-10-02.md` (VIEW-04/05/12/13/17).
 
 A song in the Compose tab is built from **section definitions** (Intro,
@@ -47,13 +47,34 @@ creates, renames, resizes, recolours, places and deletes sections here.
   placement tears down its derived MIDI clips and installed vocal audio
   (`purge_placement_outputs`); the vocal WAV stays on disk so undo can
   restore it.
-- **Placing does not derive.** `handle_place` only records the placement.
-  The new placement gets clips the next time each lane is regenerated
-  (generate, a chord edit, a resize). See
-  [placement editing](../../intents/compose/section-placement-editing.md).
+- **Placing fills the placement (BUG-73).** `handle_place` records the
+  placement and gives it the material the section already has elsewhere,
+  in the same undo step (`fill_new_placement`): every lane that has clips
+  is re-derived (`regenerate_lane` — material is a pure function of the
+  definition, so the other placements' clips come back unchanged under
+  their ids; a hand edit to a derived clip is overwritten, as any
+  regenerate does), drums are re-materialized
+  (`materialize_drum_clips_for(Some(def))`), and each vocal lane's line —
+  notes, lyric side table, clip length and name of its first clip — is
+  copied, not re-derived, so placing never re-fits or flags a melody
+  (`vocal_melody::copy_line_to_placement`). Lanes that never produced a
+  clip stay empty. A vocal lane that read `rendered` before the place gets
+  its take laid at the new placement too
+  (`vocal_audio_install::lay_take_at_new_placement`, the same per-placement
+  install a render runs), provided every placed bar still plays at the tempo
+  the take was sung at (`vocal_tempo_mismatch`); otherwise — a take that is
+  stale, rendering or failed, another tempo region — the new placement has
+  no take and the lane reads `stale` until a render
+  ([vocal rendering](vocal-rendering.md#render-state)). The take's layout
+  (trims, pre-roll, lead-in) is remembered per lane at install
+  (`VocalAudioRegistry::takes`, not saved); after a reload it is read back
+  off an installed clip that does not start at sample 0, and when none
+  qualifies (the only take sits at the song's very start with its pre-roll
+  cut) the new placement waits for a render.
 - **Moving.** There is no move for a placement in the GUI or the control
-  API. Placements only move through `arrangement.insert_bars` /
-  `remove_bars` (timeline area), which shift them by whole bars.
+  API ([placement editing](../../intents/compose/section-placement-editing.md)).
+  Placements only move through `arrangement.insert_bars` / `remove_bars`
+  (timeline area), which shift them by whole bars.
 - **Deleting a track** removes its lane generator from every section and
   its derived and vocal clips (`forget_track`).
 - **Undo.** Every section mutation is `UndoAction::Record`; one control call
@@ -65,7 +86,8 @@ creates, renames, resizes, recolours, places and deletes sections here.
 |---|---|---|
 | Runtime model | `resonance-app/src/compose/section.rs`, `compose/state.rs` | `SectionDefinitionState`, `SectionPlacementState`, `ComposeState::{definitions, placements, fresh_id}` |
 | Invariants | `resonance-app/src/compose/invariants.rs` | `MAX_SECTION_BARS`, `section_span_in_bounds`, `placement_overlaps`, `chord_fits_in_section` |
-| Update handlers | `resonance-app/src/update/compose/section.rs` | `handle_create`, `handle_resize`, `handle_place`, `handle_delete_with_placements`, `purge_placement_outputs`, `rederive_section_clips` |
+| Update handlers | `resonance-app/src/update/compose/section.rs` | `handle_create`, `handle_resize`, `handle_place`, `fill_new_placement`, `handle_delete_with_placements`, `purge_placement_outputs`, `rederive_section_clips` |
+| Fill on place (vocal) | `update/compose/vocal_melody.rs`, `vocal_audio_install.rs` | `copy_line_to_placement`, `lay_take_at_new_placement`, `install_take_at`, `take_from_installed_clip` |
 | Dispatcher + meter | `resonance-app/src/update/compose/mod.rs` | `handle`, `section_meter`, `meter_at_bar`, `forget_track` |
 | Persistence | `resonance-app/src/project/sections.rs` | `ProjectSectionDefinition`, `ProjectSectionPlacement`; `ComposeState::to_project_definitions` / `load_from_project` |
 | View | `resonance-app/src/view/compose/strip.rs`, `page.rs`, `layout.rs`, `global_tracks.rs` | section chips, create/edit forms |
@@ -102,12 +124,13 @@ control layer drains it into a JSON-RPC error.
 | Resize re-derive | `tests/compose/section_resize_rederive.rs` | same |
 | Meter from tempo map | `tests/compose/section_meter_from_tempo_map.rs`, `compose_bar_sample_tempo_map.rs`, `chords_after_meter_change.rs` | same |
 | Control methods | `tests/control/control_section_harmony.rs`, `tests/e2e_compose_via_control.rs` | same |
+| Fill on place: parts, vocal line and take at the new placement, `rendered` without a render, one undo, the take read back after a reopen; another tempo region leaves it stale | `tests/control/control_vocal_render_state.rs` (`placing_a_section_again_installs_its_parts_and_its_take`, `a_placement_without_a_take_keeps_the_lane_from_reading_rendered`) | same |
 | Inline round-trips | `resonance-app/src/compose/tests.rs`, `compose/invariants.rs` (`#[cfg(test)]`, documented exception) | same |
 | Goldens | `tests/snapshots/compose_section_banner_collapsed-wgpu.png`, `compose_both_banners_collapsed-wgpu.png` | `RESONANCE_BLESS=1` |
 
 Not covered: the "Place again" button (it places at bar 0, which overlaps
-whenever bar 0 is taken), and placing an already-generated section (no
-test asserts the new placement stays empty until a regenerate).
+whenever bar 0 is taken); fill on place for drums (it runs the same
+`materialize_drum_clips_for` the resize test covers).
 
 ## Decisions and deviations
 
@@ -121,6 +144,5 @@ test asserts the new placement stays empty until a regenerate).
 
 ## Known gaps
 
-- New placements are not filled until a regenerate; no placement move; the
-  "Place again" button targets bar 0 —
+- No placement move; the "Place again" button targets bar 0 —
   [section-placement-editing](../../intents/compose/section-placement-editing.md).

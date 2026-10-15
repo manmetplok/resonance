@@ -90,7 +90,11 @@ impl ResonanceMcp {
     #[tool(
         description = "Place a section definition in the arrangement at a 1-based start bar. \
                        Returns placement_id. The same definition can be placed multiple times \
-                       (verse 1, verse 2, ...).",
+                       (verse 1, verse 2, ...). The new placement gets the material the \
+                       section already has elsewhere — its generated parts, drums and vocal \
+                       line — and its rendered vocal take when that take is current and the \
+                       new placement plays at the tempo it was sung at; otherwise song_vocal \
+                       reads stale until vocal_render.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<section::PlaceResult>()
     )]
