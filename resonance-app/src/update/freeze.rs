@@ -392,16 +392,16 @@ pub(crate) fn freezable_tracks(r: &Resonance) -> Vec<TrackId> {
         .collect()
 }
 
-/// The selected track(s) that are freezable. The app currently models a
-/// single track selection, so this yields at most one id; the batch path
-/// still works unchanged once multi-select lands.
+/// The selected tracks that are freezable, in display order: the
+/// multi-selection, plus the primary in case a path set only that.
 pub(crate) fn selected_freezable_tracks(r: &Resonance) -> Vec<TrackId> {
-    r.ui.interaction
-        .selected_track
-        .and_then(|id| r.registry.tracks.iter().find(|t| t.id == id))
+    let i = &r.ui.interaction;
+    r.sorted_tracks()
+        .iter()
+        .filter(|t| i.selected_tracks.contains(&t.id) || i.selected_track == Some(t.id))
         .filter(|t| freezable(t).is_ok())
-        .map(|t| vec![t.id])
-        .unwrap_or_default()
+        .map(|t| t.id)
+        .collect()
 }
 
 impl Resonance {

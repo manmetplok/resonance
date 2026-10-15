@@ -19,6 +19,8 @@ mod aux_send_handlers;
 mod aux_send_mirror;
 #[path = "mixer/aux_send_persistence.rs"]
 mod aux_send_persistence;
+#[path = "mixer/bus_add_naming.rs"]
+mod bus_add_naming;
 #[path = "mixer/frost_treatment_swatch.rs"]
 mod frost_treatment_swatch;
 #[path = "mixer/group_creation_from_selection.rs"]

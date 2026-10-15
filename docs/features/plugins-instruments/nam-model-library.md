@@ -1,6 +1,6 @@
 # NAM model library and Tone3000 downloads
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: `docs/history/specs/nam-model-library.md` (merged as
 > `e28ca519`; its status line still says "unmerged").
 
@@ -101,9 +101,6 @@ Not covered: the live tone3000.com API and the browser sign-in.
 
 ## Known gaps
 
-- `tone3000/auth.rs` still has the "temporary" `debug_log` that appends the
-  OAuth redirect, PKCE verifier and returned code to
-  `/tmp/tone3000-auth.log` on every sign-in.
 - Doc comments disagree with the code: `tone3000/mod.rs` says the client id
   is "left empty on purpose" (it is set) and the redirect is `127.0.0.1`
   (the code sends `localhost`, binding 127.0.0.1).

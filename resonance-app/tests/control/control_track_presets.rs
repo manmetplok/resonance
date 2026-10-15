@@ -352,3 +352,28 @@ fn saving_a_preset_is_not_an_undo_step() {
     deliver_plugin_states(&mut app);
     assert_eq!(app.revision(), before, "no project edit, no revision bump");
 }
+
+/// The GUI path's refusal of a colliding name reads as one sentence: no
+/// run of spaces from a string-continuation slip in the literal (BUG-63).
+#[test]
+fn gui_overwrite_refusal_reads_as_one_sentence() {
+    let mut app = app();
+    with_instrument(&mut app);
+    let _: MutationAck = call(
+        &mut app,
+        "track.save_preset",
+        serde_json::json!({ "track_id": TRACK, "name": "Banner Spacing", "overwrite": false }),
+    )
+    .result()
+    .expect("first save succeeds");
+    deliver_plugin_states(&mut app);
+
+    let _ = app.update(Message::Track(TrackMessage::SaveTrackAsPreset {
+        track_id: TRACK,
+        name: "Banner Spacing".into(),
+        overwrite: false,
+    }));
+    let banner = app.test_error_message().expect("a colliding name is refused");
+    assert!(banner.contains("already exists"), "{banner:?}");
+    assert!(!banner.contains("  "), "double space in the banner: {banner:?}");
+}

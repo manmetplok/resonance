@@ -82,31 +82,15 @@ pub fn run_authorization_flow(timeout: Duration) -> Result<StoredTokens, String>
     let (verifier, challenge) = pkce_pair();
     let state = random_state();
 
-    debug_log(&format!(
-        "=== tone3000 oauth flow ===\n\
-         redirect_uri: {redirect_uri}\n\
-         client_id: {TONE3000_CLIENT_ID}\n\
-         verifier ({} chars): {verifier}\n\
-         challenge ({} chars): {challenge}\n\
-         state: {state}\n",
-        verifier.len(),
-        challenge.len()
-    ));
-
     // Bind the loopback listener *before* opening the browser so the
     // redirect can never race us.
     let server = tiny_http::Server::http(format!("127.0.0.1:{REDIRECT_PORT}"))
         .map_err(|e| format!("bind 127.0.0.1:{REDIRECT_PORT}: {e}"))?;
 
     let authorize_url = build_authorize_url(&redirect_uri, &challenge, &state);
-    debug_log(&format!("authorize_url: {authorize_url}\n"));
     webbrowser::open(&authorize_url).map_err(|e| format!("open browser: {e}"))?;
 
     let (code, returned_state) = wait_for_redirect(&server, timeout)?;
-    debug_log(&format!(
-        "callback code ({} chars): {code}\nreturned_state: {returned_state}\n",
-        code.len()
-    ));
     if returned_state != state {
         return Err("OAuth state mismatch — possible CSRF".to_string());
     }
@@ -115,19 +99,6 @@ pub fn run_authorization_flow(timeout: Duration) -> Result<StoredTokens, String>
     let stored = StoredTokens::from_response(token);
     save_tokens(&stored)?;
     Ok(stored)
-}
-
-/// Append to `/tmp/tone3000-auth.log` for debugging the OAuth flow.
-/// Temporary — remove once the flow is working reliably.
-fn debug_log(msg: &str) {
-    use std::io::Write as _;
-    if let Ok(mut f) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/tone3000-auth.log")
-    {
-        let _ = f.write_all(msg.as_bytes());
-    }
 }
 
 /// Build the authorize URL for the standard authorization-code flow.
@@ -278,14 +249,6 @@ fn exchange_code_for_token(
     verifier: &str,
     redirect_uri: &str,
 ) -> Result<TokenResponse, String> {
-    debug_log(&format!(
-        "POST /oauth/token form fields:\n  \
-         grant_type=authorization_code\n  \
-         code={code}\n  \
-         code_verifier={verifier}\n  \
-         redirect_uri={redirect_uri}\n  \
-         client_id={TONE3000_CLIENT_ID}\n"
-    ));
     // `send_form` sets Content-Type itself; don't pre-set it or ureq
     // may double up the header. Error body is explicitly surfaced so
     // a 400 from the server tells us *why* instead of just the status.
@@ -303,7 +266,6 @@ fn exchange_code_for_token(
         Ok(mut resp) => {
             let code = resp.status().as_u16();
             let body = resp.body_mut().read_to_string().unwrap_or_default();
-            debug_log(&format!("token response body: {body}\n"));
             if !(200..300).contains(&code) {
                 let trimmed: String = body.chars().take(400).collect();
                 return Err(format!("HTTP {code}: {trimmed}"));
@@ -313,7 +275,6 @@ fn exchange_code_for_token(
         }
         Err(e) => {
             let msg = format!("transport: {e}");
-            debug_log(&format!("token exchange error: {msg}\n"));
             Err(msg)
         }
     }

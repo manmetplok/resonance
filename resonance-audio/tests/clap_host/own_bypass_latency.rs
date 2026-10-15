@@ -382,3 +382,37 @@ fn mastering_declares_its_bypass_and_keeps_its_latency() {
     assert_eq!(delays(&slot), engaged);
     assert_eq!(engaged.1, vec![(1, 0), (2, latency)]);
 }
+
+/// BUG-31: a plugin whose own state says "bypassed" — Mastering saved
+/// bypassed from its own header, then loaded — stays bypassed while the
+/// host's slot is running. The host pushes its bypass into the plugin's
+/// parameter only when the host's bypass CHANGES; it used to assert
+/// "engaged" on the first block and so un-bypassed every such load.
+#[test]
+fn a_plugin_loaded_bypassed_is_not_reengaged_by_the_first_block() {
+    let (mut h, slot, state) = harness();
+    unsafe {
+        (*state).bypassed = true;
+        (*state).gain = 1.0;
+        (*state).target = 1.0;
+    }
+    for _ in 0..4 {
+        left(&mut h);
+    }
+    assert!(
+        unsafe { (*state).bypassed },
+        "the first block re-engaged a plugin whose own state is bypassed"
+    );
+
+    // A host toggle still reaches it, both ways.
+    slot.bypass.set_bypassed(true);
+    for _ in 0..4 {
+        left(&mut h);
+    }
+    assert!(unsafe { (*state).bypassed });
+    slot.bypass.set_bypassed(false);
+    for _ in 0..4 {
+        left(&mut h);
+    }
+    assert!(!unsafe { (*state).bypassed }, "a host un-bypass re-engages it");
+}

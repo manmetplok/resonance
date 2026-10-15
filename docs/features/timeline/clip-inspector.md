@@ -1,6 +1,6 @@
 # Clip inspector
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: epic #18, design doc #153, arch doc #156 (todo #319);
 > the WARP section came with the warp UI (review batch W2, de2625d3).
 
@@ -22,7 +22,9 @@ fields directly.
   converted to frames at the project rate and clamped to the clip's audible
   length.
 - **GAIN.** `−0.5` / `+0.5` steppers around a dB field (one decimal). Field
-  and steppers are limited to −60…+12 dB (`GAIN_MIN_DB`, `GAIN_MAX_DB`); the
+  and steppers are limited to −60…+24 dB (`GAIN_MIN_DB`, `GAIN_MAX_DB`, the
+  engine's `MIN_CLIP_GAIN_DB` / `MAX_CLIP_GAIN_DB`, as for the drag and
+  `clip.set_gain`); the
   steppers exist because a controlled text field cannot start typing a minus
   sign on its own.
 - **Reset to default.** Fades to 0, both curves to equal-power, gain to 0 dB
@@ -84,8 +86,5 @@ typing into the ms / dB fields.
 
 ## Known gaps
 
-- Inspector gain stops at +12 dB while the drag and `clip.set_gain` reach
-  +24 dB; a clip set above +12 dB elsewhere snaps down to +12 on the next
-  stepper press.
 - Each keystroke in the ms and dB fields is a separate undo step.
 - No inspector for MIDI clips, and no clip rename.

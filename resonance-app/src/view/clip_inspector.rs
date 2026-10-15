@@ -37,10 +37,11 @@ mod warp;
 /// the curve segmented control without wrapping.
 const FLYOUT_WIDTH: f32 = 248.0;
 
-/// Gain limits (dB) for the steppers / numeric field. Matches the
-/// on-canvas gain drag range so the flyout and the bead can't disagree.
-const GAIN_MIN_DB: f32 = -60.0;
-const GAIN_MAX_DB: f32 = 12.0;
+/// Gain limits (dB) for the steppers / numeric field: the engine's own,
+/// which the on-canvas gain drag and `clip.set_gain` clamp to as well, so
+/// the flyout can't pull a +20 dB clip down to a narrower ceiling.
+const GAIN_MIN_DB: f32 = resonance_audio::MIN_CLIP_GAIN_DB;
+const GAIN_MAX_DB: f32 = resonance_audio::MAX_CLIP_GAIN_DB;
 /// One stepper press nudges the gain by this many dB.
 const GAIN_STEP_DB: f32 = 0.5;
 

@@ -113,9 +113,17 @@ impl BandKind {
     }
 
     /// Whether the band's Q parameter shapes this kind. The one-knob
-    /// kinds fix their own shape.
+    /// kinds fix their own shape, and the cuts take their stage Qs from
+    /// the slope (a Butterworth cascade), so none of these read Q.
     pub fn uses_q(self) -> bool {
-        !matches!(self, BandKind::Tilt | BandKind::LfLiftDip | BandKind::Air)
+        !matches!(
+            self,
+            BandKind::LowCut
+                | BandKind::HighCut
+                | BandKind::Tilt
+                | BandKind::LfLiftDip
+                | BandKind::Air
+        )
     }
 
     /// Whether a dynamic band (`dyn_on`) acts on this kind: the bell, the

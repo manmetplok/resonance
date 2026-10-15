@@ -548,8 +548,11 @@ pub struct PluginSlot {
     /// without changing the chain's latency.
     pub bypass_param: Option<u32>,
     /// The bypass value last handed to `bypass_param`: `0` = engaged,
-    /// `1` = bypassed, `-1` = never sent. Keeps the render path from
-    /// re-queuing an unchanged parameter every single block.
+    /// `1` = bypassed. Keeps the render path from re-queuing an unchanged
+    /// parameter every single block. Starts at `0`, the host's own
+    /// starting state, so only a host bypass *change* is pushed: the
+    /// plugin's own state (Mastering saved bypassed from its header, then
+    /// loaded) is left alone until the host actually toggles (BUG-31).
     own_bypass_sent: AtomicI8,
     /// The render pool must process this plugin on the audio thread
     /// only (realtime-multithreading.md §4.6): a hand-maintained escape
@@ -630,7 +633,7 @@ impl PluginSlot {
             instance: Mutex::new(SyncClapInstance(instance)),
             bypass: BypassFade::new(),
             bypass_param,
-            own_bypass_sent: AtomicI8::new(-1),
+            own_bypass_sent: AtomicI8::new(0),
             serial_only,
             poll_pending,
             lock_misses: AtomicU64::new(0),

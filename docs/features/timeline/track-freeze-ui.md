@@ -1,6 +1,6 @@
 # Track freeze (UI and app state)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: `docs/history/prototypes/track-freeze-bounce-in-place/index.html` (design doc #181); ba todos #571–#583 and code review UPD-05, cited in code comments.
 
 Freezing renders an instrument or vocal track's post-FX output to a cache
@@ -135,9 +135,5 @@ cache" opening a file manager.
 
 ## Known gaps
 
-- "Freeze selected" freezes only the primary selection
-  (`selected_freezable_tracks` reads `interaction.selected_track`), although the
-  Arrange view has multi-select (`interaction.selected_tracks`) and other
-  `…Selected` commands use it.
 - No control API to freeze / unfreeze —
   [freeze-control-api](../../intents/timeline/freeze-control-api.md).

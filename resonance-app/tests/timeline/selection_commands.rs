@@ -215,3 +215,45 @@ fn duplicate_places_the_selected_section_right_after_it() {
     bars.sort();
     assert_eq!(bars, [2, 6]);
 }
+
+/// Selecting an audio clip after a MIDI clip moves the selection: Delete
+/// then removes the audio clip, not the MIDI clip pressed earlier
+/// (BUG-10). The MIDI press already cleared the audio selection; the
+/// audio press did not clear the MIDI one, and Delete checks MIDI first.
+#[test]
+fn delete_after_pressing_an_audio_clip_removes_that_clip_not_an_earlier_midi_clip() {
+    use resonance_app::message::{ClipMessage, MidiClipMessage};
+    use resonance_app::state::MidiClipState;
+
+    let mut app = app();
+    app.test_add_track(1, TrackType::Audio);
+    app.test_add_track(2, TrackType::Instrument);
+    app.test_push_clip(clip(7, 0, 48_000));
+    app.test_push_midi_clip(MidiClipState {
+        id: 8,
+        track_id: 2,
+        start_sample: 0,
+        duration_ticks: 3840,
+        name: "midi".to_owned(),
+        notes: Vec::new().into(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+
+    app.test_dispatch(Message::MidiClip(MidiClipMessage::StartMidiClipDrag {
+        clip_id: 8,
+        grab_offset_x: 0.0,
+        start_x: 0.0,
+        start_y: 0.0,
+    }));
+    app.test_dispatch(Message::MidiClip(MidiClipMessage::EndMidiClipDrag));
+    app.test_dispatch(Message::Clip(ClipMessage::StartClipGainDrag {
+        clip_id: 7,
+        anchor_y: 0.0,
+    }));
+    app.test_dispatch(Message::Clip(ClipMessage::EndClipGainDrag));
+
+    run(&mut app, CommandId::TimelineDeleteSelection);
+    assert!(app.test_clips().is_empty(), "the pressed audio clip is deleted");
+    assert_eq!(app.test_midi_clips().len(), 1, "the earlier MIDI clip survives");
+}

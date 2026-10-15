@@ -451,3 +451,18 @@ fn an_installed_model_row_offers_load_instead_of_download() {
     assert_eq!(model_row_action(&one_model(1, 1934), &lib), ModelRowAction::Download);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The OAuth flow handles the PKCE verifier, the auth code and the
+/// token response; none of it may be written anywhere but the token
+/// store. A "temporary" debug log once appended all of it to the
+/// world-readable `/tmp/tone3000-auth.log` (BUG-43).
+#[test]
+fn oauth_flow_writes_no_debug_log() {
+    let src = include_str!("../src/tone3000/auth.rs");
+    for needle in ["/tmp", "temp_dir", "debug_log", "OpenOptions"] {
+        assert!(
+            !src.contains(needle),
+            "tone3000/auth.rs mentions `{needle}` — OAuth secrets must not be logged to a file"
+        );
+    }
+}

@@ -1,6 +1,6 @@
 # CLAP plugin hosting
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: `docs/history/reviews/plugin-audit.md`,
 > `docs/history/reviews/plugin-audit-plan.md` (doc #275),
 > `docs/history/specs/realtime-multithreading.md` §4.6 / §11.2,
@@ -107,7 +107,10 @@ Whole-chain (`SetFxBypass`) and per-slot (`SetPluginBypass`) bypass are
 against the chain's own input over `BYPASS_FADE_MS`. A plugin with its own
 bypass parameter is bypassed through that parameter (it keeps running and
 keeps its latency); otherwise the host stops calling it ("host bypass") and
-its latency drops out of PDC. While nothing renders, the change lands
+its latency drops out of PDC. The host pushes its bypass into the plugin's
+own parameter only when the host's bypass *changes*
+(`PluginSlot::sync_own_bypass`), so a plugin whose loaded state is
+self-bypassed (Mastering bypassed from its own header) stays bypassed. While nothing renders, the change lands
 immediately (`apply_bypass_request`), which is what makes project load
 restore bypass states exactly.
 

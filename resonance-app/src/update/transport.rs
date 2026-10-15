@@ -277,11 +277,17 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                 // fresh project gets its first bar table.
                 let anchors = (bpm != r.transport.bpm).then(|| musical_anchors(r));
                 r.transport.bpm = bpm;
-                let _ = r.engine.send(AudioCommand::SetBpm { bpm });
-                if let Some(first) = r.tempo_events.first_mut() {
-                    if first.bar == 0 {
-                        first.bpm = bpm;
-                    }
+                // The field shows the tempo under the playhead, so the
+                // edit goes to the event governing it — the last one at or
+                // before the playhead's bar — not always the bar-0 one.
+                let (playhead_bar, _) =
+                    r.tempo_map.sample_to_bar(r.transport.playhead, r.sample_rate);
+                let governing = r.tempo_events.iter().rposition(|e| e.bar <= playhead_bar);
+                if governing.is_none_or(|i| i == 0) {
+                    let _ = r.engine.send(AudioCommand::SetBpm { bpm });
+                }
+                if let Some(event) = governing.and_then(|i| r.tempo_events.get_mut(i)) {
+                    event.bpm = bpm;
                 }
                 r.rebuild_and_send_tempo();
                 if let Some(anchors) = anchors {

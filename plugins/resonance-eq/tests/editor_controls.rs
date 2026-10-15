@@ -73,3 +73,20 @@ fn a_typed_freq_lands_exactly() {
     assert_eq!(plugin.params.bands[2].freq.value(), 440.0);
     assert_eq!(editor.announced(), ["band2_freq"]);
 }
+
+/// A cut band's stage Qs come from its slope (a Butterworth cascade), so
+/// the strip draws no Q slider there — one would move nothing (BUG-40).
+/// A bell still gets one.
+#[test]
+fn cut_bands_draw_no_q_slider() {
+    let plugin = ResonanceEq::new();
+    plugin.params.bands[1].kind.set_value(0); // Bell
+    plugin.params.bands[2].kind.set_value(3); // LowCut
+    plugin.params.bands[3].kind.set_value(4); // HighCut
+    let mut editor = headless_editor(&plugin, SIZE);
+    let frame = editor.settled();
+    let drawn = |name: &str| frame.widgets.iter().any(|w| w.name == name);
+    assert!(drawn("band1_q"), "a bell shows its Q");
+    assert!(!drawn("band2_q"), "a low cut shows a Q that does nothing");
+    assert!(!drawn("band3_q"), "a high cut shows a Q that does nothing");
+}
