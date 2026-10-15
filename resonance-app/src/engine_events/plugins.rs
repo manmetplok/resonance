@@ -930,18 +930,42 @@ pub(super) fn presets_discovered(
     crate::update::plugin_preset_ui::rebuild_caches(r);
 }
 
+/// The params of `instance_id` an enabled automation lane drives. A
+/// re-read of the plugin finds such a param at the value its lane put
+/// there under the playhead, not at the param's own setting, so the
+/// mirror — which the project file saves — must not take it (BUG-38). The
+/// lane already shows that value while it plays (`AutomatedValue`).
+fn automated_params(r: &Resonance, instance_id: PluginInstanceId) -> Vec<u32> {
+    r.automation
+        .lanes
+        .values()
+        .filter(|lane| lane.enabled)
+        .filter_map(|lane| match lane.target {
+            resonance_common::AutomationTarget::PluginParam { instance, param_id }
+                if instance == instance_id =>
+            {
+                Some(param_id)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// The plugin's params after a preset state load: the mirror takes every
 /// value and its text (a third-party preset's values are only known to the
-/// plugin, slice P7). Ids the mirror does not have are ignored.
+/// plugin, slice P7), except a param an automation lane drives (BUG-38;
+/// a preset load leaves those alone anyway, `SetPluginPresetIgnoredParams`).
+/// Ids the mirror does not have are ignored.
 pub(super) fn params_refreshed(
     r: &mut Resonance,
     instance_id: PluginInstanceId,
     params: Vec<ParamInfo>,
 ) {
+    let automated = automated_params(r, instance_id);
     let (drums, to_multi) = r
         .with_plugin_mut(instance_id, |slot| {
             let was = crate::drums_mirror::routes_to_ports(slot);
-            for fresh in &params {
+            for fresh in params.iter().filter(|p| !automated.contains(&p.id)) {
                 if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
                     p.current_value = fresh.current_value;
                     p.text = fresh.text.clone();
@@ -965,7 +989,9 @@ pub(super) fn params_refreshed(
 
 /// A plugin's values rescan: the params that moved, with their text (a
 /// load progress, a selection the plugin derived itself). The mirror takes
-/// them; ids it does not have are ignored.
+/// them, except a param an automation lane drives: the rescan (a save's,
+/// say) read it at its automated value under the playhead (BUG-38). Ids
+/// it does not have are ignored.
 pub(super) fn param_values_changed(
     r: &mut Resonance,
     instance_id: PluginInstanceId,
@@ -981,10 +1007,11 @@ pub(super) fn param_values_changed(
     let frozen_params = editor_open
         .then(|| r.watch_frozen_params(instance_id))
         .flatten();
+    let automated = automated_params(r, instance_id);
     let (drums, to_multi) = r
         .with_plugin_mut(instance_id, |slot| {
             let was = crate::drums_mirror::routes_to_ports(slot);
-            for fresh in values {
+            for fresh in values.into_iter().filter(|v| !automated.contains(&v.id)) {
                 if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
                     p.current_value = fresh.value;
                     p.text = fresh.text;

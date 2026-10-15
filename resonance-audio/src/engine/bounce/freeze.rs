@@ -244,6 +244,7 @@ pub fn to_freeze_cache(
     let comp_latency = latency_comp.max_latency();
     let render_stop = render_end + comp_latency;
     let mut skip_frames = comp_latency as usize;
+    let in_filter = move |id: TrackId| filter_set.contains(&id);
     let ctx = ChunkCtx {
         shared,
         tuning: &tuning,
@@ -252,7 +253,13 @@ pub fn to_freeze_cache(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
-        send_filter: None,
+        // The cache holds the frozen tracks' own signal and nothing of
+        // their aux sends: playback taps the sends live from the cache,
+        // so a send tapped here as well would be heard twice (BUG-67).
+        // The return busses do not render under `freeze_raw` at all (see
+        // `RenderStrategy::bus_disposition`), so no return output lands
+        // in the cache either.
+        send_filter: Some((&in_filter, crate::mixer::SendFilter::Dry)),
         hard_clip: true,
     };
     let mut scratch = ChunkScratch::new();
@@ -260,7 +267,6 @@ pub fn to_freeze_cache(
     // 0% up front so a UI modal shows populated before the first chunk.
     progress(0.0);
 
-    let in_filter = move |id: TrackId| filter_set.contains(&id);
     let mut pos = render_start;
     let mut last_emitted_pct: i32 = 0;
     while pos < render_stop {

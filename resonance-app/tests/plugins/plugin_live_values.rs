@@ -347,3 +347,63 @@ fn setting_a_read_only_param_records_nothing() {
     assert_eq!(app.is_dirty(), dirty);
     assert_eq!(app.test_undo_history().undo_len(), undo_len);
 }
+
+/// An automation lane on Gain, enabled or not.
+fn automate_gain(app: &mut Resonance, enabled: bool) {
+    use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind};
+    let mut lane = AutomationLane::new(
+        90,
+        AutomationTarget::PluginParam {
+            instance: PLUGIN,
+            param_id: GAIN,
+        },
+        vec![
+            Breakpoint::new(0, 0.0, CurveKind::Linear),
+            Breakpoint::new(48_000, 1.0, CurveKind::Linear),
+        ],
+    );
+    lane.enabled = enabled;
+    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane });
+}
+
+/// BUG-38: the save-time rescan reads an automated param at the value its
+/// lane put there under the playhead. That is not an edit — the mirror
+/// keeps the param's own value, and the file does not save the automated
+/// one as the param's setting.
+#[test]
+fn a_save_does_not_take_an_automated_params_value_under_the_playhead() {
+    let (mut app, _rx) = app("automated_save");
+    let _ = app.update(Message::Plugin(PluginMessage::SetPluginParam(PLUGIN, GAIN, 2.0)));
+    automate_gain(&mut app, true);
+
+    // The lane holds Gain at 7 under the playhead when the save rescans.
+    let file = save_with_engine_report(&mut app, vec![gain(7.0)]);
+    assert_eq!(app.test_plugin_param(PLUGIN, GAIN), Some(2.0), "the mirror keeps the base");
+    let saved: Vec<(u32, f64)> = file.tracks[0].plugins[0]
+        .params
+        .iter()
+        .map(|p| (p.id, p.value))
+        .collect();
+    assert_eq!(saved, vec![(GAIN, 2.0)]);
+
+    // A full re-read (a rescan the plugin asked for mid-playback) is the
+    // same reading of the same lane.
+    app.test_apply_engine_event(AudioEvent::PluginParamsRefreshed {
+        instance_id: PLUGIN,
+        params: vec![ParamInfo {
+            current_value: 9.0,
+            ..params()[0].clone()
+        }],
+    });
+    assert_eq!(app.test_plugin_param(PLUGIN, GAIN), Some(2.0));
+}
+
+/// With the lane's Read off nothing drives the param, so a value the
+/// rescan finds is the plugin's own and the mirror takes it.
+#[test]
+fn a_disabled_lane_does_not_shield_a_param_from_the_rescan() {
+    let (mut app, _rx) = app("automated_off");
+    automate_gain(&mut app, false);
+    let _ = save_with_engine_report(&mut app, vec![gain(7.0)]);
+    assert_eq!(app.test_plugin_param(PLUGIN, GAIN), Some(7.0));
+}

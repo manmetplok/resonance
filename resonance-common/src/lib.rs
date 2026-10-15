@@ -102,5 +102,5 @@ pub use wav::{
 #[cfg(feature = "model")]
 pub use freeze::{
     compute_fingerprint, FreezeCacheRef, FreezeCacheStatus, FreezeFingerprintBuilder,
-    FreezeFingerprintInputs, TrackFreezeState,
+    FreezeFingerprintInputs, TrackFreezeState, FREEZE_CACHE_FORMAT_VERSION,
 };

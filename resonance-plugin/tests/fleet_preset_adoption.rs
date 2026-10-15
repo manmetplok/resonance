@@ -11,7 +11,7 @@
 //! guard is compiled from the same tree it checks and cannot drift from
 //! what actually builds. It is a source-text check, which is a blunt
 //! instrument — but the alternative is a dependency from this crate onto
-//! all eleven plugins that depend on it, which is a cycle.
+//! every plugin that depends on it, which is a cycle.
 //!
 //! **Adding a plugin crate means adding it to [`FLEET`].** A new plugin
 //! that skips the preset surface is exactly the regression this exists to
@@ -24,6 +24,11 @@ const FLEET: &[(&str, &str, &str)] = &[
         "resonance-amp",
         include_str!("../../plugins/resonance-amp/src/lib.rs"),
         include_str!("../../plugins/resonance-amp/src/editor/header.rs"),
+    ),
+    (
+        "resonance-color",
+        include_str!("../../plugins/resonance-color/src/lib.rs"),
+        include_str!("../../plugins/resonance-color/src/editor/app.rs"),
     ),
     (
         "resonance-compressor",
@@ -71,22 +76,27 @@ const FLEET: &[(&str, &str, &str)] = &[
         include_str!("../../plugins/resonance-reverb/src/editor/mod.rs"),
     ),
     (
+        "resonance-stereo",
+        include_str!("../../plugins/resonance-stereo/src/lib.rs"),
+        include_str!("../../plugins/resonance-stereo/src/editor/mod.rs"),
+    ),
+    (
         "resonance-wavetable",
         include_str!("../../plugins/resonance-wavetable/src/lib.rs"),
         include_str!("../../plugins/resonance-wavetable/src/editor/chrome.rs"),
     ),
 ];
 
-/// The audit counted eleven plugins. If that number moves, the list above
-/// has to move with it — otherwise this file silently stops covering the
-/// newcomer.
+/// The audit counted eleven plugins; color and stereo came after it
+/// (BUG-44). If that number moves, the list above has to move with it —
+/// otherwise this file silently stops covering the newcomer. It is pinned
+/// to [`ALL_PLUGINS`], the list of every plugin crate, too.
 #[test]
-fn the_fleet_is_the_size_the_audit_counted() {
-    assert_eq!(
-        FLEET.len(),
-        11,
-        "the audit's X1 finding is about 11 plugins; add the new crate to FLEET"
-    );
+fn the_fleet_is_every_plugin_crate() {
+    assert_eq!(FLEET.len(), 13, "a plugin crate was added; add it to FLEET");
+    let fleet: Vec<&str> = FLEET.iter().map(|(name, _, _)| *name).collect();
+    let all: Vec<&str> = ALL_PLUGINS.iter().map(|(name, _)| *name).collect();
+    assert_eq!(fleet, all, "FLEET and ALL_PLUGINS must name the same crates");
 }
 
 /// Every plugin hands its `PresetSession` to the bridge, which is what
@@ -157,8 +167,7 @@ fn no_editor_tracks_the_loaded_preset_itself() {
 use resonance_plugin::library_marks::vocab;
 use resonance_plugin::presets::{FactoryEntry, PresetFile, PresetLibrary, PresetMeta, Query};
 
-/// Every plugin crate (the audit's eleven plus color and stereo), with its
-/// `lib.rs` for the CLAP id.
+/// Every plugin crate, with its `lib.rs` for the CLAP id.
 const ALL_PLUGINS: &[(&str, &str)] = &[
     ("resonance-amp", include_str!("../../plugins/resonance-amp/src/lib.rs")),
     ("resonance-color", include_str!("../../plugins/resonance-color/src/lib.rs")),

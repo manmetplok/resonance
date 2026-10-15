@@ -1,6 +1,6 @@
 # Mixer render core
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: `docs/history/specs/realtime-multithreading.md` §4, §11;
 > `docs/history/reviews/field-report-2026-10-06.md` §3.
 
@@ -146,7 +146,5 @@ plugins, not the real drums plugin.
 
 ## Known gaps
 
-- A frozen track's aux sends are applied on playback *and* baked into its
-  cache: see [freeze-aux-send-double-apply](../../intents/audio-engine/freeze-aux-send-double-apply.md).
 - Clip warp settings are stored but not rendered: see
   [clip-warp-render](../../intents/audio-engine/clip-warp-render.md).

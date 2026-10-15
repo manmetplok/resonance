@@ -331,6 +331,7 @@ fn edit_every_domain(f: &mut Fixture, h: &Handles, variant: u8) {
                         sample_rate: 48_000,
                         bit_depth: 24,
                         render_fingerprint: 7,
+                        format_version: resonance_common::FREEZE_CACHE_FORMAT_VERSION,
                         status: FreezeCacheStatus::Frozen,
                     },
                 },
@@ -1051,6 +1052,7 @@ fn a_lyric_normalising_restore_leaves_a_frozen_vocal_track_frozen() {
                 sample_rate: 48_000,
                 bit_depth: 24,
                 render_fingerprint: 7,
+                format_version: resonance_common::FREEZE_CACHE_FORMAT_VERSION,
                 status: FreezeCacheStatus::Frozen,
             },
         },
@@ -1395,6 +1397,7 @@ fn freeze_ref(t: TrackId, status: FreezeCacheStatus) -> FreezeCacheRef {
         sample_rate: 48_000,
         bit_depth: 24,
         render_fingerprint: 7,
+        format_version: resonance_common::FREEZE_CACHE_FORMAT_VERSION,
         status,
     }
 }

@@ -252,6 +252,49 @@ fn rehydrate_attaches_present_cache_as_frozen() {
     );
 }
 
+/// A cache rendered before freeze stopped baking aux sends and return
+/// busses into it (BUG-67) carries no format version. It still plays —
+/// the decoded buffer is attached — but it loads `Stale`, so the banner
+/// offers the refreeze that renders it without the doubled sends.
+#[test]
+fn rehydrate_marks_a_pre_bug67_cache_stale_but_attaches_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut app, rx) = capturing_app(tmp.path());
+    app.test_add_track(1, TrackType::Instrument);
+    let cache_wav = tmp.path().join("project.freeze").join("freeze_1.wav");
+    write_cache_wav(&cache_wav, 48_000, 128);
+
+    // The file form a pre-fix project saved: no `format_version`.
+    let legacy: FreezeCacheRef = serde_json::from_str(
+        r#"{"cache_filename":"freeze_1.wav","sample_rate":48000,"bit_depth":32,
+            "render_fingerprint":42,"status":"Frozen"}"#,
+    )
+    .expect("a pre-version cache ref still deserializes");
+    let project_dir = tmp.path().join("project.rproj");
+    app.test_rehydrate_frozen_tracks(&project_dir, &[(1, TrackFreezeState::frozen(legacy))]);
+
+    assert!(
+        matches!(app.test_freeze_status(1), FreezeStatus::Stale { .. }),
+        "a cache from before the format bump must load stale, got {:?}",
+        app.test_freeze_status(1)
+    );
+    assert!(
+        drain(&rx).iter().any(|c| matches!(
+            c,
+            AudioCommand::SetTrackFrozenSource {
+                track_id: 1,
+                source: Some(_)
+            }
+        )),
+        "the stale cache still plays until the refreeze",
+    );
+
+    // A cache rendered now is current and loads Frozen.
+    let current = frozen_ref("freeze_1.wav", 42, FreezeCacheStatus::Frozen);
+    app.test_rehydrate_frozen_tracks(&project_dir, &[(1, TrackFreezeState::frozen(current))]);
+    assert!(matches!(app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
+}
+
 /// The full disk-load pipeline — `ProjectLoaded` → `ClearAll` →
 /// `AllCleared` → `replay_loaded_project` — re-attaches a frozen track's
 /// cache, keeps a saved-stale track stale, and records the UPD-05 content
