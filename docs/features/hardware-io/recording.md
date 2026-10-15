@@ -73,8 +73,8 @@ With the loop enabled and a real range set:
   start`, `trim_end` at `loop_out − start`), so it shows only the first
   pass through the range; any pre-roll before `loop_in` and all audio from
   later passes stay in the file outside the trim (`finalize_recording` in
-  `recording.rs`). The Settings hint says the run "is merged into one clip
-  for the whole loop", which overstates it.
+  `recording.rs`). The Settings hint says only the first pass is kept
+  (it used to promise a merge, BUG-68).
 - The clip is placed at `max(loop_in, start)`: Record pressed *inside* the
   loop has nothing before it to trim and lands on the punch-in (BUG-69; it
   used to be placed at `loop_in`, early by `start − loop_in`).
@@ -168,7 +168,7 @@ count-in click sound, and the two-bar count-in default.
 ## Known gaps
 
 - With "Distinct takes" off, a looped recording keeps only the first pass
-  (see Loop and cycle record above); the Settings hint promises a merge.
+  (see Loop and cycle record above).
 - Fixed two-bar count-in, no punch without cycling:
   [count-in-and-punch](../../intents/hardware-io/count-in-and-punch.md).
 - No control-API recording: [record-control-api](../../intents/hardware-io/record-control-api.md).

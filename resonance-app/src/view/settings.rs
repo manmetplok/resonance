@@ -209,7 +209,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     let loop_record_hint = text(if r.transport.loop_record_mode {
         "Each pass of a cycle-recorded run becomes its own take; comp or solo them afterwards."
     } else {
-        "A cycle-recorded run is merged into one clip for the whole loop, as before."
+        "Only the first pass of a cycle-recorded run is kept; turn this on to keep every pass."
     })
     .size(10)
     .color(theme::TEXT_3);

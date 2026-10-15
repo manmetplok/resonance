@@ -1,6 +1,6 @@
 # Takes and comping (app side)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: none in `docs/history/specs/`; epic #15 / design doc #165 and todos #409–#414, #1392–#1401, ba doc #292, cited in code comments.
 
 When cycle-record mode is on, every loop pass recorded on an armed track
@@ -23,8 +23,9 @@ clip is **not** a merge of the passes: `finalize_recording` trims it
 non-destructively to `[loop_in, loop_out]` measured from the record start,
 so only the first pass is heard and later passes sit unused in the WAV
 past the trim end (see [recording.md](../hardware-io/recording.md#loop-and-cycle-record)).
-The Settings hint ("merged into one clip for the whole loop") overstates
-this.
+The Settings hint says so: "Only the first pass of a cycle-recorded run is
+kept; turn this on to keep every pass." (It used to promise the
+run was "merged into one clip for the whole loop", BUG-68.)
 
 **The mirror.** The app never reads take groups from the engine. It rebuilds
 them from engine events (`engine_events/takes.rs`):
@@ -123,6 +124,7 @@ second definition of "what the slot plays" or "what a removal does".
 | Persistence + missing media | `resonance-app/tests/io/take_lanes_persistence.rs` | same |
 | Engine capture / comp render / removal | `resonance-audio/tests/engine/loop_record_takes.rs`, `tests/mixer/take_comp_render.rs`, `tests/engine/take_removal.rs` | `./scripts/run-tests.py -p resonance-audio` |
 | Loop-record mode over the wire | `resonance-app/tests/control/control_transport.rs` | `./scripts/run-tests.py -p resonance-app` |
+| Loop-record mode toggle and its Settings hint | `resonance-app/tests/io/loop_record_mode_persistence.rs` | same |
 
 Not covered: a live cycle-record session on real hardware; comping across a
 tempo change or a bar shift.
