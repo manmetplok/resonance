@@ -2212,7 +2212,7 @@ const MOD_RS_ALLOWANCE: &[(&str, usize)] = &[
     ("resonance-app/src/view/performance/mod.rs", 903),
     ("resonance-app/src/update/project_io/mod.rs", 891),
     ("resonance-music-theory/src/derive/vocal/style/mod.rs", 854),
-    ("resonance-audio/src/engine/thread/mod.rs", 846),
+    ("resonance-audio/src/engine/thread/mod.rs", 829),
     ("plugins/resonance-color/src/dsp/mod.rs", 811),
     ("resonance-app/src/update/compose/mod.rs", 682),
     ("resonance-audio/src/clap_host/mod.rs", 766),

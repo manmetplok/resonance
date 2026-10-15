@@ -15,6 +15,8 @@
 
 mod dispatch;
 mod load_report;
+mod loop_record_session;
+pub(crate) use loop_record_session::LoopRecordSession;
 #[cfg(feature = "test-internals")]
 pub(crate) mod test_support;
 
@@ -35,7 +37,7 @@ use crate::midi_hardware::{ForwardedLiveMidi, LiveControlEvent, LiveMidiEvent};
 use crate::mixer::MidiStash;
 use crate::recording::RecordingState;
 use crate::types::*;
-use resonance_common::{TakeGroup, TakeGroupId, TimelineRange};
+use resonance_common::{TakeGroup, TakeGroupId};
 
 use super::import_queue::ImportQueue;
 use super::midi::MidiHardwareState;
@@ -101,29 +103,6 @@ pub(crate) struct RecordingMidiState {
     /// On NoteOff we look the note up here, set its `duration_ticks`,
     /// and remove the entry. Stuck NoteOns get closed at transport stop.
     pub open_notes: HashMap<u8, usize>,
-}
-
-/// Bookkeeping for an in-flight cycle-record (loop-record) run. Created
-/// in [`transport::open_recording_session`] when loop-record mode and a
-/// loop range are both active, advanced at each loop seam, and torn down
-/// when recording stops. Lives on the engine control thread so it never
-/// touches the audio callback.
-pub(crate) struct LoopRecordSession {
-    /// The loop region being cycled over, in sample frames. Reported on
-    /// every `AudioEvent::TakeCaptured` as the take's slot.
-    pub slot: TimelineRange,
-    /// Zero-based index of the MIDI pass currently being captured, bumped
-    /// at each MIDI pass roll. Audio passes are cut by sample count and
-    /// counted by `RecordingState::audio_passes_rolled` (code review
-    /// RT-02).
-    pub pass_index: u32,
-    /// `SharedState::loop_wrap_count` when the session opened: a note
-    /// stamped with it was played in the punch-in pass (BUG-22).
-    pub first_wrap: u64,
-    /// The loop-wrap count the open MIDI pass belongs to. A live note
-    /// stamped with a later count, or the engine loop seeing the shared
-    /// count move past it, rolls the pass (BUG-22).
-    pub midi_wrap: u64,
 }
 
 /// Mutable engine-thread-local state that persists across command
@@ -593,12 +572,7 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         // on the audio thread (within one quantum — doc #260 finding
         // #16); this pass only does the non-realtime bookkeeping:
         // record-into-clip and Thru-to-output.
-        //
-        // The loop-wrap count is read first: every event the callback
-        // stamped with an older count was forwarded before that wrap was
-        // published, so it is in this drain, and the seam poll below can
-        // roll the cycle-record MIDI pass to this count without leaving
-        // one of the old pass's notes behind (BUG-22).
+        // The wrap count is read first (`poll_loop_record_seam`, BUG-22).
         let wraps_seen = ctx.shared.loop_wraps();
         for ev in live_midi_fwd_rx.try_iter() {
             midi::handle_live_midi_event(&ctx, &mut state, ev);
@@ -755,8 +729,7 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         // AuditionPosition events that drive the preview scrub playhead.
         audition::poll_audition(&ctx, &mut last_audition_report);
         // Cycle-record: once the audio thread has wrapped the loop
-        // mid-record, roll the just-completed MIDI pass into a take and
-        // start a fresh one.
+        // mid-record, roll the finished MIDI pass into a take.
         transport::poll_loop_record_seam(&ctx, &mut state, wraps_seen);
 
         // Report playhead position at ~60Hz using wall-clock time
