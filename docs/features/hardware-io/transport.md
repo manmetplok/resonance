@@ -26,6 +26,12 @@ tracks; see [../timeline/tempo-and-signature-map.md](../timeline/tempo-and-signa
   note release leaves controllers alone), close open MIDI
   recordings and send MIDI clock Stop (Stop also sends Song Position 0).
 - Seeking while playing releases held notes the same way.
+- Live notes the engine thread parked while an instrument's lock was busy
+  (`HandlerState::live_note_stash`) predate that release: a released
+  instrument has them discarded, one whose lock was still busy keeps only
+  its owed note-offs. A parked note-on used to be replayed after the
+  release and hang (BUG-36, `panic_all_instrument_plugins` in
+  `engine/transport.rs`).
 - Skip back/forward buttons move ±5 s. Bar and beat nudges, marker and
   section jumps, Home/End and loop-point keys are listed below.
 - Play and Record are refused while an offline render owns the plugins.
@@ -117,6 +123,7 @@ Send and receive are set in Settings → General → MIDI Clock; see
 | Control methods, position resolution | `resonance-app/tests/control/control_transport.rs`, `control_position_beats.rs` | same |
 | Engine tempo, seek race, loop snapshot and seam | `resonance-audio/tests/engine/tempo_handlers.rs`, `playhead_seek_race.rs`, `resonance-audio/tests/mixer/loop_range_snapshot.rs`, `loop_seam_edges.rs` | `./scripts/run-tests.py -p resonance-audio` |
 | Beat position math | `resonance-audio/tests/types/transport_pos_beats.rs` | same |
+| Live-note stash across Stop / Pause / Seek | `resonance-audio/tests/mixer/midi_stash.rs` (`live_stash_across_panic`) | same |
 | Panic controller resets (plugin, hardware) | `resonance-audio/tests/clap_host/clap_note_dialect.rs`, `tests/midi_hw/midi_hardware_emit.rs` | same |
 
 Not covered: the click synthesis and its timing have no direct test.

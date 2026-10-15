@@ -268,6 +268,20 @@ impl MidiStash {
         }
     }
 
+    /// Drop the note-ons parked for `id`, keeping its note-offs (and any
+    /// parked panic). For a transport panic that could not take `id`'s
+    /// lock: a note-on parked before it would be replayed after it and
+    /// hang (BUG-36), while a parked note-off is still owed. Frees the
+    /// slot when nothing is left. Allocation-free.
+    pub fn drop_note_ons(&mut self, id: PluginInstanceId) {
+        if let Some(slot) = self.slots.iter_mut().find(|s| s.instance == Some(id)) {
+            slot.events.retain(|e| !e.is_note_on);
+            if slot.events.is_empty() && !slot.panic {
+                slot.clear();
+            }
+        }
+    }
+
     /// Request an all-notes-off on the next successful lock for `id`
     /// (used when a Stop / relocate panic couldn't take the plugin
     /// lock). Clears any stashed events — they predate the panic — and

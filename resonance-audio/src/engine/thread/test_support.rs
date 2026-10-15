@@ -1347,6 +1347,12 @@ impl EngineHandlerHarness {
         self.dispatch(AudioCommand::SetLoopRecordMode(on));
     }
 
+    /// Run the engine loop's retry of live note events parked while an
+    /// instrument's lock was contended (`flush_live_note_stash`).
+    pub fn flush_live_note_stash(&mut self) {
+        self.with_ctx(|ctx, state| crate::engine::midi::flush_live_note_stash(ctx, state));
+    }
+
     /// Run the real `Pause` handler.
     pub fn pause(&mut self) {
         self.with_ctx(|ctx, state| transport::handle_pause(ctx, state));
