@@ -25,7 +25,6 @@ Paths: `app/` = `resonance-app/src/`, `audio/` = `resonance-audio/src/`.
 
 | ID | Area | Symptom | Where (file:line) | Source |
 |---|---|---|---|---|
-| BUG-10 | timeline | Select a MIDI clip, then press an audio clip and hit Delete: the MIDI clip is deleted, not the audio clip. | `app/update/clips.rs:407,473,587,653` set `selected_clip` without clearing `selected_midi_clip`; `app/commands/resolve.rs:541` and `app/view/timeline/input/keyboard.rs:44` check MIDI first | intent [timeline/clip-multi-select.md](timeline/clip-multi-select.md) (open decision 1) |
 | BUG-11 | timeline | "Freeze selected tracks" freezes only the primary track, not the multi-selection. | `app/update/freeze.rs:398-405` reads only `selected_track` (doc comment at 395-397 is stale) | area docs 2026-10-07 |
 | BUG-12 | timeline | An audio clip can be dragged onto an instrument or vocal lane, where it plays nothing. | `app/update/clips.rs:429,459-468` (no track-type filter); engine accepts it (`audio/engine/clips.rs:282-299`); instrument tracks never mix clips (`audio/mixer/render/track_pass.rs:570`) | area docs 2026-10-07 |
 | BUG-14 | timeline | A clip's fade handle can only be grabbed at the clip corner, not at the fade's real end, once a fade is set; frozen clips are treated as fadeable. | `app/view/timeline/input/hit_test.rs` (`clip_handles` passes fade length 0) | review 2026-10-02 FU-W2d |

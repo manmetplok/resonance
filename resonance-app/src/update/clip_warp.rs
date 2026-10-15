@@ -211,6 +211,7 @@ fn start_marker_drag(r: &mut Resonance, clip_id: ClipId, index: usize) {
     }
     let track_id = clip.track_id;
     r.ui.interaction.selected_clip = Some(clip_id);
+    r.ui.interaction.selected_midi_clip = None;
     r.ui.select_track(Some(track_id));
     r.ui.interaction.warp_marker_drag = Some(WarpMarkerDragState { clip_id, index });
 }

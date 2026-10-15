@@ -1,6 +1,6 @@
 # Selection on the Arrange view
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `6137b6fb` on 2026-10-15.
 > Spec history: `docs/history/specs/command-palette.md` (selection-scoped
 > commands, §3.4/§4.3); multi-track selection from epic #36 (todo #684).
 
@@ -112,11 +112,6 @@ Not covered: the audio-after-MIDI clip selection case below.
 
 ## Known gaps
 
-- **Bug:** pressing an audio clip does not clear `selected_midi_clip`
-  (`update/clips.rs` `start_clip_drag` and the trim/fade/gain starts set only
-  `selected_clip`). After clicking a MIDI clip and then an audio clip, Delete
-  removes the **MIDI** clip, because `timeline_delete` checks the MIDI clip
-  first.
 - No multi-clip selection, marquee, range selection, copy/paste or clip
   duplicate — see
   [../../intents/timeline/clip-multi-select.md](../../intents/timeline/clip-multi-select.md) and [../../intents/timeline/clip-copy-duplicate.md](../../intents/timeline/clip-copy-duplicate.md).
