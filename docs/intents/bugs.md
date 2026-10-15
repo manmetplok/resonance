@@ -22,11 +22,8 @@ fix the ones below. The engine-path defects it judged to be design work
 | ID | Decided fix |
 |---|---|
 | BUG-39, BUG-61 | Request ids on `SavePluginState` / `SaveAllPluginStates` / `SaveClipsToProjectDir` and their replies; collectors ignore replies whose id doesn't match. |
-| BUG-51 | Wire swing and humanize at render time, with jitter seeded from the group seed; the default humanize becomes 0. Fills stay in the intent. |
 | BUG-60 | Save As copies the WAVs that only the undo history names from the old `audio/` into the new one. |
 | BUG-62 | When Save As targets a different existing project, confirm first, then clear its `backups/`, autosave and old media. |
-| BUG-72 | Key-aware spelling: `Scale::prefers_flats`, `Chord::display_in(scale)` at the four display sites. |
-| BUG-73 | Placing a section installs its derived parts and the existing vocal take (the status half is fixed separately). |
 
 ## Mixer and routing
 
@@ -52,11 +49,7 @@ None known.
 
 ## Compose and vocals
 
-| ID | Area | Symptom | Where (file:line) | Source |
-|---|---|---|---|---|
-| BUG-72 | compose | Chord symbols are spelled with sharps regardless of key: `harmony_apply_progression` with "Bbmaj7" in D minor reads back as "A#maj7" in `song_sections` (and the chord track). | chord symbol formatting in `resonance-music-theory` | live MCP session 2026-10-13 |
-| BUG-73 | compose | Placing a section that already has a rendered vocal lane gives the new placement no vocal take (the lane now reads `stale` until a `vocal.render`). Same root as the empty generated parts on a new placement ([section-placement-editing](compose/section-placement-editing.md)). | `app/update/compose/section.rs` `handle_place` (installs nothing) | live MCP session 2026-10-13 (triphop.rproj) |
-| BUG-51 | compose | Drum group Swing, Humanize and "Fills (last bar)" sliders change nothing in the generated drums. | sliders `app/view/compose/lane_inspector/drums/rhythm.rs:44-97`; stored at `app/update/compose/drum_groups.rs:315-324`; never read | intent [compose/drum-groove-feel.md](compose/drum-groove-feel.md) |
+None known.
 
 ## Project, save and export
 
