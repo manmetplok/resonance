@@ -48,6 +48,14 @@ pub struct SharedState {
     /// (`RecordingState::poll_overflow`); a new take zeroes it
     /// (`RecordingState::begin_overflow_episode`).
     pub recording_overflow: AtomicU64,
+    /// Whole input frames the capture callbacks have discarded on a full
+    /// recording ring, ever — never reset, unlike `recording_overflow`,
+    /// which is a per-take report. The recording drain reads how far it
+    /// moved since the last drain and writes that many frames of silence
+    /// where they were lost, so a take and its cycle-record cuts stay on
+    /// wall-clock time across a drop (BUG-23). An `Arc` so the engine
+    /// thread's `RecordingState` can hold it without the whole state.
+    pub recording_dropped_total: Arc<AtomicU64>,
     /// How many times the audio callback has wrapped the playhead from
     /// `loop_out` back to `loop_in`, ever. Bumped by the callback at the
     /// seam ([`SharedState::note_loop_wrap`]); the callback stamps every
@@ -446,6 +454,20 @@ impl SharedState {
             > 0
     }
 
+    /// The capture callbacks could not push `frames` whole input frames
+    /// into a full recording ring. Counted for the take's overflow report
+    /// and, never reset, for the drain to fill the gap with silence
+    /// (BUG-23). Two atomic adds; safe on the audio thread. The release
+    /// add pairs with the drain's acquire load: the frames pushed before
+    /// the drop are in the ring by the time the drain sees it.
+    #[inline]
+    pub fn note_recording_dropped(&self, frames: u64) {
+        self.recording_overflow
+            .fetch_add(frames, std::sync::atomic::Ordering::Relaxed);
+        self.recording_dropped_total
+            .fetch_add(frames, std::sync::atomic::Ordering::Release);
+    }
+
     /// Count one loop wrap: the callback has rendered `loop_out` and goes
     /// on from `loop_in`. One release add, safe on the audio thread. The
     /// release pairs with the engine loop's acquire load, which it takes
@@ -507,6 +529,7 @@ impl Default for SharedState {
             master_fx_bypass: crate::bypass::BypassFade::new(),
             recording_overflow: AtomicU64::new(0),
             loop_wrap_count: AtomicU64::new(0),
+            recording_dropped_total: Arc::new(AtomicU64::new(0)),
             input_channels: AtomicU16::new(0),
             loop_range: arc_swap::ArcSwap::from_pointee(loop_range::LoopRange::default()),
             count_in_active: AtomicBool::new(false),

@@ -53,7 +53,15 @@ area's job ([../timeline/takes-and-comping.md](../timeline/takes-and-comping.md)
 - **Overflow.** If the ring overflows, whole frames are dropped and one
   `RecordingOverflow` per take raises the banner "Recording overflow: N
   input frames were dropped — this take is missing audio and may be out of
-  sync".
+  sync". The dropped frames are written back as silence where they were
+  lost — after the frames that were queued when the drain learned of the
+  drop — so the take keeps wall-clock time and every later cycle-record
+  cut stays on its seam. The producers add to a never-reset counter
+  (`SharedState::recording_dropped_total`, beside the per-take
+  `recording_overflow`); the drain reads how far it moved
+  (`RecordingState::track_dropped_frames`, `drain_ring_to_buffers`). The
+  drain used to count only popped frames, so after a drop the take came
+  up short and every later seam moved by the drop's length (BUG-23).
 - **Disk errors.** A failed write keeps what reached disk: the take is
   finalized up to the failure (or salvaged in memory) and reported, not
   dropped (code review ENG-03).
@@ -180,6 +188,7 @@ the app's grant.
 | Live MIDI record / stop | `resonance-audio/tests/midi_hw/live_record_stop.rs`, `live_arrival_offset.rs` | same |
 | Cycle-record MIDI passes by wrap count and pickup stamp | `resonance-audio/tests/engine/loop_record_midi_seam.rs` | same |
 | Seek / loop move during cycle-record | `resonance-audio/tests/engine/recording_alignment.rs` (BUG-20 section) | same |
+| Overflow gaps filled with silence, cuts kept | `resonance-audio/tests/engine/recording_alignment.rs` (BUG-23 section) | same |
 | Undo + dirty per run | `resonance-app/tests/timeline/recording_undo.rs` | `./scripts/run-tests.py -p resonance-app` |
 | Overflow banner | `resonance-app/tests/mixer/recording_overflow_banner.rs` | same |
 | Loop-record mode persistence | `resonance-app/tests/io/loop_record_mode_persistence.rs` | same |

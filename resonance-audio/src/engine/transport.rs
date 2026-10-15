@@ -485,6 +485,11 @@ pub(crate) fn open_recording_session(
     state
         .rec
         .begin_overflow_episode(&ctx.shared.recording_overflow);
+    // Frames the ring drops from here on are filled with silence where
+    // they were lost (BUG-23).
+    state
+        .rec
+        .track_dropped_frames(ctx.shared.recording_dropped_total.clone());
     state.rec.ring_consumer = Some(cons);
     state.rec.input_sample_rate = in_sr;
     state.rec.input_channels = in_ch;

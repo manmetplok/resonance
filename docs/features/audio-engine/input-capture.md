@@ -1,6 +1,6 @@
 # Audio input capture
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: no spec file; code cites "doc #260" findings #2, #3, #12,
 > #13 and code-review findings RT-01, RT-02, RT-08, RT-14, RT-17, MIX-09,
 > ENG-03.
@@ -62,6 +62,9 @@ details not repeated there:
 - The input callback latches the first pushed frame's position
   (`SharedState::latch_recording_start`) and pushes whole frames into a
   recording ring sized `max(rate × channels × 10 s, 96 kHz stereo × 10 s)`.
+  Frames a full ring drops are counted with
+  `SharedState::note_recording_dropped` (two atomic adds) and filled with
+  silence by the drain (BUG-23).
 - `poll_recording_capture` de-interleaves per armed track, resamples to the
   engine rate when the device rate differs (`StreamingLinearResampler`),
   and writes through a `hound::WavWriter` straight into

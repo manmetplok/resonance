@@ -651,3 +651,104 @@ fn a_seek_rolls_the_midi_pass_with_the_audio_pass() {
     assert_eq!(midi, vec![vec![64]], "the note after the seek is the next pass's");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// ---------------------------------------------------------------------------
+// BUG-23: ring-overflow drops are filled, not skipped
+// ---------------------------------------------------------------------------
+
+/// The input callback could not push `frames` whole frames: the ring was
+/// full. What the capture producers do on an overflow.
+fn overflow(h: &EngineHandlerHarness, frames: u64) {
+    h.shared().note_recording_dropped(frames);
+}
+
+/// Frames the ring had to drop are written as silence where they were
+/// lost, so the take keeps wall-clock time: the pass still ends on the
+/// loop boundary and the next pass starts on the input frame that really
+/// belongs at `loop_in`. The drain used to count only the frames it
+/// popped, so after a drop every later seam moved by the drop's length.
+#[test]
+fn dropped_frames_keep_their_place_in_the_take_and_the_cut() {
+    const KEPT: u64 = 5_000;
+    const DROPPED: u64 = 1_500;
+    let (mut h, dir, mut input) = cycle_session("overflow", 0);
+
+    push_ramp(&mut input, 0, KEPT);
+    overflow(&h, DROPPED);
+    h.recording_tick();
+    let events = h.drain_events();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            AudioEvent::RecordingOverflow { dropped_frames } if *dropped_frames == DROPPED
+        )),
+        "the overflow is still reported"
+    );
+    // The frames after the gap carry their own wall-clock index.
+    push_ramp(&mut input, KEPT + DROPPED, LOOP_LEN - KEPT - DROPPED + 1_000);
+    h.recording_tick();
+    let takes = audio_takes(&h.drain_events());
+    assert_eq!(takes.len(), 1, "pass 0 is complete at the loop boundary");
+    let (pass0, extent0) = takes[0];
+    assert_eq!(extent0, TimelineRange::new(LOOP_IN, LOOP_LEN));
+    let frames = clip(&h, pass0).source.as_frames().to_vec();
+    assert_eq!(frames.len() as u64, LOOP_LEN * 2);
+    let at = |f: u64| frames[f as usize * 2];
+    assert_eq!(at(KEPT - 1), (KEPT - 1) as f32);
+    assert_eq!(at(KEPT), 0.0, "the gap is silence");
+    assert_eq!(at(KEPT + DROPPED - 1), 0.0);
+    assert_eq!(at(KEPT + DROPPED), (KEPT + DROPPED) as f32, "the audio after it is in place");
+    assert_eq!(at(LOOP_LEN - 1), (LOOP_LEN - 1) as f32);
+
+    h.stop();
+    let trailing = audio_takes(&h.drain_events());
+    assert_eq!(trailing.len(), 1);
+    assert_eq!(
+        clip(&h, trailing[0].0).source.as_frames()[0],
+        LOOP_LEN as f32,
+        "pass 1 starts on the input frame that played at loop_in"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The gap goes after the frames that were already in the ring when the
+/// drop happened — they were pushed before it — even when the engine
+/// thread drains them only later.
+#[test]
+fn a_gap_lands_after_the_frames_queued_before_it() {
+    let (mut h, dir) = armed("overflow-place");
+    h.shared().playhead.store(10_000, Ordering::Relaxed);
+    let mut input = h.record_with_fake_input(0, 2).expect("session opened");
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, 0, 3_000);
+    overflow(&h, 500);
+    h.recording_tick();
+    push_ramp(&mut input, 3_500, 1_000);
+    h.recording_tick();
+    h.stop();
+    let takes = finished(&h.drain_events());
+    assert_eq!(takes.len(), 1);
+    let (id, _, duration) = takes[0];
+    assert_eq!(duration, 4_500, "the take is as long as the time it covered");
+    let frames = clip(&h, id).source.as_frames().to_vec();
+    assert_eq!(frames[2 * 2_999], 2_999.0);
+    assert_eq!(frames[2 * 3_000], 0.0);
+    assert_eq!(frames[2 * 3_500], 3_500.0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A drop counted before the session opened belongs to no take.
+#[test]
+fn drops_before_the_session_are_not_filled_into_it() {
+    let (mut h, dir) = armed("overflow-before");
+    overflow(&h, 9_999);
+    h.shared().playhead.store(10_000, Ordering::Relaxed);
+    let mut input = h.record_with_fake_input(0, 2).expect("session opened");
+    h.shared().latch_recording_start();
+    push_ramp(&mut input, 0, 2_000);
+    h.recording_tick();
+    h.stop();
+    let takes = finished(&h.drain_events());
+    assert_eq!(takes[0].2, 2_000);
+    let _ = std::fs::remove_dir_all(dir);
+}
