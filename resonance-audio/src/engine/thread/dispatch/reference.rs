@@ -27,6 +27,14 @@ pub(super) fn dispatch_reference(
             integrated_lufs,
         } => {
             reference::handle_reference_analyzed(&mut state.reference, id, pcm, integrated_lufs);
+            // The active reference's loudness is known now: match it.
+            if state.reference.active_id == Some(id) {
+                reference::handle_rematch_loudness(
+                    &mut state.reference,
+                    ctx.event_tx,
+                    mix_integrated_lufs(ctx),
+                );
+            }
             // Decoded PCM just arrived: republish (cursor synced so the
             // active reference starts from the top of its decoded buffer).
             state.reference.publish(ctx.shared, true);
@@ -38,6 +46,15 @@ pub(super) fn dispatch_reference(
         }
         AudioCommand::SetActiveReference { id } => {
             reference::handle_set_active_reference(&mut state.reference, ctx.event_tx, id);
+            // A new active reference gets its own match (unknown ids are
+            // ignored by the handler above, so leave the offset alone).
+            if state.reference.active_id == Some(id) {
+                reference::handle_rematch_loudness(
+                    &mut state.reference,
+                    ctx.event_tx,
+                    mix_integrated_lufs(ctx),
+                );
+            }
             // New active reference: swap PCM + restart from its cursor.
             state.reference.publish(ctx.shared, true);
         }
@@ -55,6 +72,7 @@ pub(super) fn dispatch_reference(
                 &mut state.reference,
                 ctx.event_tx,
                 enabled,
+                mix_integrated_lufs(ctx),
             );
             state.reference.publish(ctx.shared, false);
         }
@@ -108,4 +126,12 @@ pub(super) fn dispatch_reference(
         ),
         _ => unreachable!("dispatch_reference: unexpected command"),
     }
+}
+
+/// The processed mix's live integrated loudness, as the audio callback
+/// last published it (`master_pass` → `SharedState::mix_meter`, lock-free
+/// atomics). `-inf` until a mix has played since the last transport start
+/// or relocate.
+fn mix_integrated_lufs(ctx: &HandlerCtx) -> f32 {
+    ctx.shared.mix_meter.load().integrated_lufs
 }

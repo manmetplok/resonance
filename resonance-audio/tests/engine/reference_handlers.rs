@@ -7,17 +7,20 @@
 //! + event emission the dispatch path runs for every command variant.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver};
 
 use resonance_audio::types::{ABSource, AudioEvent, EngineErrorKind, ReferenceId};
 use resonance_audio::{
     handle_add_ref_marker, handle_clear_active_reference, handle_load_reference_track,
-    handle_poll_ab_meters, handle_remove_ref_marker,
+    handle_poll_ab_meters, handle_reference_analyzed, handle_rematch_loudness,
+    handle_remove_ref_marker,
     handle_remove_reference_track, handle_set_ab_source, handle_set_active_reference,
     handle_set_ref_loop_to_mix, handle_set_ref_loudness_match, handle_set_ref_position,
     handle_set_ref_trim, register_reference, ABMeterTap, ReferencePlayer,
 };
+use resonance_audio::test_support::SharedState;
 use resonance_metering::{LufsMeter, MeterSnapshot};
 
 /// Drain the single event the handler under test just emitted.
@@ -186,21 +189,172 @@ fn loudness_match_reports_active_offset() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
 
-    // With no active reference the offset is reported as 0.
-    handle_set_ref_loudness_match(&mut player, &tx, true);
+    // With no active reference there is nothing to match: offset 0 and no
+    // target loudness.
+    handle_set_ref_loudness_match(&mut player, &tx, true, -14.0);
     match next_event(&rx) {
-        AudioEvent::RefLoudnessMatchChanged { enabled, offset_db } => {
+        AudioEvent::RefLoudnessMatchChanged {
+            enabled,
+            offset_db,
+            mix_lufs,
+        } => {
             assert!(enabled);
             assert_eq!(offset_db, 0.0);
+            assert_eq!(mix_lufs, None);
         }
         other => panic!("expected RefLoudnessMatchChanged, got {other:?}"),
     }
 
-    handle_set_ref_loudness_match(&mut player, &tx, false);
+    handle_set_ref_loudness_match(&mut player, &tx, false, -14.0);
     assert!(matches!(
         next_event(&rx),
         AudioEvent::RefLoudnessMatchChanged { enabled: false, .. }
     ));
+}
+
+/// A registered, analysed and active reference measured at `ref_lufs`.
+fn player_with_analysed_active(ref_lufs: f32, pcm: Vec<f32>) -> ReferencePlayer {
+    let mut player = ReferencePlayer::new();
+    let (tx, _rx) = unbounded::<AudioEvent>();
+    let id = register_reference(&mut player, ReferenceId(1), PathBuf::from("/ref.wav"));
+    handle_reference_analyzed(&mut player, id, Arc::new(pcm), ref_lufs);
+    handle_set_active_reference(&mut player, &tx, id);
+    player
+}
+
+#[test]
+fn loudness_match_offsets_a_louder_reference_down_to_the_mix() {
+    let mut player = player_with_analysed_active(-9.0, vec![0.0; 8]);
+    let (tx, rx) = unbounded::<AudioEvent>();
+
+    handle_set_ref_loudness_match(&mut player, &tx, true, -14.0);
+    match next_event(&rx) {
+        AudioEvent::RefLoudnessMatchChanged {
+            enabled,
+            offset_db,
+            mix_lufs,
+        } => {
+            assert!(enabled);
+            assert!((offset_db - -5.0).abs() < 1e-4, "offset {offset_db}");
+            assert_eq!(mix_lufs, Some(-14.0));
+        }
+        other => panic!("expected RefLoudnessMatchChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn loudness_match_without_a_mix_measurement_falls_back_to_zero() {
+    // No mix has played yet: the live meter reads -inf.
+    let mut player = player_with_analysed_active(-9.0, vec![0.0; 8]);
+    let (tx, rx) = unbounded::<AudioEvent>();
+
+    handle_set_ref_loudness_match(&mut player, &tx, true, f32::NEG_INFINITY);
+    match next_event(&rx) {
+        AudioEvent::RefLoudnessMatchChanged {
+            offset_db, mix_lufs, ..
+        } => {
+            assert_eq!(offset_db, 0.0);
+            assert_eq!(mix_lufs, None, "no measurement must be reported as such");
+        }
+        other => panic!("expected RefLoudnessMatchChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn loudness_match_on_an_unanalysed_reference_falls_back_to_zero() {
+    let mut player = ReferencePlayer::new();
+    let (tx, rx) = unbounded::<AudioEvent>();
+    let id = register_reference(&mut player, ReferenceId(1), PathBuf::from("/ref.wav"));
+    handle_set_active_reference(&mut player, &tx, id);
+    let _ = next_event(&rx);
+
+    handle_set_ref_loudness_match(&mut player, &tx, true, -14.0);
+    match next_event(&rx) {
+        AudioEvent::RefLoudnessMatchChanged {
+            offset_db, mix_lufs, ..
+        } => {
+            assert_eq!(offset_db, 0.0);
+            assert_eq!(mix_lufs, None);
+        }
+        other => panic!("expected RefLoudnessMatchChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn rematch_recomputes_for_a_new_active_reference_only_while_matching() {
+    let mut player = ReferencePlayer::new();
+    let (tx, rx) = unbounded::<AudioEvent>();
+    let a = register_reference(&mut player, ReferenceId(1), PathBuf::from("/a.wav"));
+    let b = register_reference(&mut player, ReferenceId(2), PathBuf::from("/b.wav"));
+    handle_reference_analyzed(&mut player, a, Arc::new(vec![0.0; 8]), -9.0);
+    handle_reference_analyzed(&mut player, b, Arc::new(vec![0.0; 8]), -20.0);
+
+    // Matching off: a re-match is a silent no-op.
+    handle_set_active_reference(&mut player, &tx, a);
+    let _ = next_event(&rx);
+    handle_rematch_loudness(&mut player, &tx, -14.0);
+    assert!(rx.try_recv().is_err(), "no re-match while matching is off");
+
+    handle_set_ref_loudness_match(&mut player, &tx, true, -14.0);
+    let _ = next_event(&rx);
+
+    // Switching to the quieter reference re-matches it upward.
+    handle_set_active_reference(&mut player, &tx, b);
+    let _ = next_event(&rx);
+    handle_rematch_loudness(&mut player, &tx, -14.0);
+    match next_event(&rx) {
+        AudioEvent::RefLoudnessMatchChanged {
+            enabled,
+            offset_db,
+            mix_lufs,
+        } => {
+            assert!(enabled);
+            assert!((offset_db - 6.0).abs() < 1e-4, "offset {offset_db}");
+            assert_eq!(mix_lufs, Some(-14.0));
+        }
+        other => panic!("expected RefLoudnessMatchChanged, got {other:?}"),
+    }
+}
+
+/// The audible half: a reference measured at about -9 LUFS, matched
+/// against a -14 LUFS mix, comes out of the A/B monitor at about -14 LUFS
+/// (the bug: it came out unchanged, because the offset was always 0).
+#[test]
+fn matched_reference_meters_at_the_mix_loudness() {
+    let sr = 48_000u32;
+    let frames = sr as usize * 3;
+    let amp = 0.5_f32;
+    let pcm = interleaved_stereo(frames, |i| {
+        let s = amp * (std::f32::consts::TAU * 997.0 * i as f32 / sr as f32).sin();
+        (s, s)
+    });
+    let left: Vec<f32> = pcm.iter().step_by(2).copied().collect();
+    let right: Vec<f32> = pcm.iter().skip(1).step_by(2).copied().collect();
+    let ref_lufs = LufsMeter::analyze_offline(sr as f32, &left, &right).integrated;
+    assert!(ref_lufs > -10.0, "probe should be a loud reference, got {ref_lufs}");
+
+    let mut player = player_with_analysed_active(ref_lufs, pcm);
+    let (tx, _rx) = unbounded::<AudioEvent>();
+    handle_set_ab_source(&mut player, &tx, ABSource::Reference);
+    handle_set_ref_loudness_match(&mut player, &tx, true, -14.0);
+    let shared = SharedState::default();
+    player.publish(&shared, true);
+
+    let mut tap = ABMeterTap::new(sr as f32);
+    let block = 1024usize;
+    let mut buf = vec![0.0f32; block * 2];
+    let mut done = 0;
+    while done < frames {
+        let n = block.min(frames - done);
+        assert!(shared.reference.render(&mut buf, 2, n, 0));
+        tap.feed_interleaved(&buf[..n * 2], 2, n);
+        done += n;
+    }
+    let heard = tap.snapshot().integrated_lufs;
+    assert!(
+        (heard - -14.0).abs() < 0.2,
+        "matched reference should meter at about -14 LUFS, got {heard}"
+    );
 }
 
 #[test]

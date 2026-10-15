@@ -69,7 +69,11 @@ pub(crate) struct ReferenceEntry {
     /// Measured integrated loudness (LUFS); `NEG_INFINITY` until analysed.
     pub integrated_lufs: f32,
     /// Gain offset (dB) applied when loudness-matching this reference to
-    /// the mix; `0.0` until the offset is computed.
+    /// the mix: mix integrated LUFS − this reference's integrated LUFS,
+    /// computed on demand by [`ReferencePlayer::rematch`] (matching
+    /// switched on, or this reference became active / finished analysing
+    /// while matching is on). `0.0` until then, or when either loudness is
+    /// unmeasured.
     pub offset_db: f32,
     /// Comparison markers placed on this reference, under app-allocated
     /// ids.
@@ -160,6 +164,29 @@ impl ReferencePlayer {
     /// loaded, `Some(None)` while it is still decoding.
     pub(crate) fn entry_pcm(&self, id: ReferenceId) -> Option<Option<Arc<Vec<f32>>>> {
         self.entry(id).map(|e| e.pcm.clone())
+    }
+
+    /// Recompute the active reference's loudness-match offset against
+    /// `mix_lufs`, the processed mix's live integrated loudness
+    /// (`SharedState::mix_meter`). Returns the offset now stored on the
+    /// active entry and the mix loudness it was matched to — `None` (and an
+    /// offset of 0) when there is no active reference, it is not analysed
+    /// yet, or the mix has no measurement (`-inf` before anything played).
+    /// On-demand by design (`docs/features/mixer/reference-ab-monitoring.md`):
+    /// the offset does not follow the live meter, so the reference level
+    /// does not drift while the user listens.
+    fn rematch(&mut self, mix_lufs: f32) -> (f32, Option<f32>) {
+        let Some(entry) = self.active_id.and_then(|id| self.entry_mut(id)) else {
+            return (0.0, None);
+        };
+        let (offset_db, matched_to) =
+            if mix_lufs.is_finite() && entry.integrated_lufs.is_finite() {
+                (mix_lufs - entry.integrated_lufs, Some(mix_lufs))
+            } else {
+                (0.0, None)
+            };
+        entry.offset_db = offset_db;
+        (offset_db, matched_to)
     }
 
     /// Number of loaded entries. Test accessor for a refused-duplicate
@@ -572,9 +599,10 @@ pub fn register_reference(player: &mut ReferencePlayer, id: ReferenceId, path: P
 /// 3. `ReferenceAnalysisProgress { BuildingPeaks }` → ~[`REFERENCE_OVERVIEW_PEAKS`]
 ///    `(min, max)` overview pairs.
 /// 4. `ReferenceAnalysisProgress { ComputingOffset }` → the loudness-match
-///    offset is computed against the live mix loudness when the user
-///    enables matching (a later todo), so this stage only marks progress
-///    here; the entry's offset stays `0` until then.
+///    offset is computed on the engine thread against the live mix
+///    loudness ([`handle_rematch_loudness`], run when this result lands
+///    on the active reference with matching on), so this stage only marks
+///    progress here.
 /// 5. `ReferenceAnalyzed { id, pcm, integrated_lufs }` back to the engine
 ///    (fills the registered entry) **and** `ReferenceLoaded` to the GUI.
 ///
@@ -616,10 +644,10 @@ pub fn run_reference_analysis(
     });
     let waveform_peaks = reference_overview_peaks(&pcm);
 
-    // The loudness-match offset depends on the *mix's* current loudness,
-    // which is only available once the A/B metering tap exists (a later
-    // todo). Report the stage for the UI checklist, but leave the entry's
-    // offset at its `0` default until matching is actually enabled.
+    // The loudness-match offset depends on the *mix's* live loudness,
+    // which only the engine thread can read; it is computed there when
+    // `ReferenceAnalyzed` lands (see `handle_rematch_loudness`). Report the
+    // stage for the UI checklist.
     emit_event(AudioEvent::ReferenceAnalysisProgress {
         id,
         stage: ReferenceAnalysisStage::ComputingOffset,
@@ -798,21 +826,50 @@ pub fn handle_set_ab_source(
     let _ = event_tx.send(AudioEvent::ABSourceChanged { source });
 }
 
-/// `SetRefLoudnessMatch`: toggle loudness matching. Reports the offset
-/// the active reference would apply (its measured `offset_db`, or `0.0`
-/// when nothing is active).
+/// `SetRefLoudnessMatch`: toggle loudness matching. Switching it on
+/// matches the active reference to `mix_lufs` (the mix's live integrated
+/// loudness, read lock-free from `SharedState::mix_meter` by the caller)
+/// via [`ReferencePlayer::rematch`]; switching it off keeps the stored
+/// offset but no longer applies it. Reports the offset and the mix
+/// loudness it was matched to (`None` when nothing could be matched).
 pub fn handle_set_ref_loudness_match(
     player: &mut ReferencePlayer,
     event_tx: &Sender<AudioEvent>,
     enabled: bool,
+    mix_lufs: f32,
 ) {
     player.loudness_match = enabled;
-    let offset_db = player
-        .active_id
-        .and_then(|id| player.entry(id))
-        .map(|e| e.offset_db)
-        .unwrap_or(0.0);
-    let _ = event_tx.send(AudioEvent::RefLoudnessMatchChanged { enabled, offset_db });
+    let (offset_db, mix_lufs) = if enabled {
+        player.rematch(mix_lufs)
+    } else {
+        (0.0, None)
+    };
+    let _ = event_tx.send(AudioEvent::RefLoudnessMatchChanged {
+        enabled,
+        offset_db,
+        mix_lufs,
+    });
+}
+
+/// Re-match the active reference against `mix_lufs` when loudness
+/// matching is on, and report the new offset. Run by the dispatcher after
+/// the active reference changes and after the active reference finishes
+/// analysing (its loudness was unknown until then). A no-op, emitting
+/// nothing, while matching is off.
+pub fn handle_rematch_loudness(
+    player: &mut ReferencePlayer,
+    event_tx: &Sender<AudioEvent>,
+    mix_lufs: f32,
+) {
+    if !player.loudness_match {
+        return;
+    }
+    let (offset_db, mix_lufs) = player.rematch(mix_lufs);
+    let _ = event_tx.send(AudioEvent::RefLoudnessMatchChanged {
+        enabled: true,
+        offset_db,
+        mix_lufs,
+    });
 }
 
 /// `SetRefTrim`: set the manual reference level trim (dB).

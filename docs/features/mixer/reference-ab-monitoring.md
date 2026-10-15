@@ -1,7 +1,7 @@
 # Reference tracks and A/B monitoring
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
-> Spec history: design `docs/intents/prototypes/reference-track-ab-monitoring/DESIGN.md` (epic #43); `reference.load` from warmth-width-depth.md §7.5.
+> Verified against master @ `acac5ea3` on 2026-10-15.
+> Spec history: design `docs/intents/prototypes/reference-track-ab-monitoring/DESIGN.md` (epic #43); `reference.load` from warmth-width-depth.md §7.5; loudness match from the intent `mixer/reference-loudness-match.md` (BUG-03, folded in here).
 
 A user loads one or more finished, mastered tracks into a right-hand rail
 of the Mix view and flips the monitor between their own mix (A) and a
@@ -41,10 +41,24 @@ reference with `reference.load` and measures it with `meter.measure`.
   latency, so flipping A/B causes no timing jump. Otherwise the reference
   free-runs from its own cursor; the waveform scrubs it.
 - **Level.** Monitor gain = (loudness-match offset if enabled) + manual
-  trim. The trim slider works. **The loudness-match offset is never
-  computed**: `ReferenceEntry::offset_db` stays 0, so turning match on
-  changes nothing audible and the panel shows a 0 dB offset (see Known
-  gaps).
+  trim (±12 dB slider).
+- **Loudness match.** Offset = mix integrated LUFS − active reference
+  integrated LUFS, so the reference auditions at the mix's loudness. The
+  mix value is the live integrated reading of the A/B mix meter
+  (post-master, reset on transport start and on a relocate), which the
+  audio callback publishes lock-free into `SharedState::mix_meter`; the
+  engine thread reads it there. Matching is **on demand**: the offset is
+  computed when matching is switched on, when the active reference
+  changes while it is on, and when the active reference finishes
+  analysing while it is on — never continuously, so the reference level
+  does not drift while the user listens. To re-match after more playback,
+  switch it off and on again. With no mix measurement yet (`-inf`, nothing
+  played since the transport started) or an unanalysed reference, the
+  offset is 0. `RefLoudnessMatchChanged` carries the offset and the mix
+  loudness it was matched to (`mix_lufs`, `None` when nothing was matched);
+  the panel shows the offset beside the toggle and beneath it
+  "-9.4 → -16.1 LUFS", "Matches once analysis finishes", or "No mix
+  loudness yet — play, then re-toggle".
 - **Meters.** The mix is metered post-master; the reference is metered as
   monitored (after trim). The panel polls `PollABMeters` every tick while
   open with a reference loaded and shows integrated, short-term and
@@ -65,7 +79,8 @@ reference with `reference.load` and measures it with `meter.measure`.
 
 | Concern | Location | Key items |
 |---|---|---|
-| Engine state, analysis | `resonance-audio/src/engine/reference.rs` | `ReferencePlayer`, `run_reference_analysis`, `handle_set_ref_loudness_match`, `REFERENCE_OVERVIEW_PEAKS` |
+| Engine state, analysis | `resonance-audio/src/engine/reference.rs` | `ReferencePlayer` (`rematch`), `run_reference_analysis`, `handle_set_ref_loudness_match`, `handle_rematch_loudness`, `REFERENCE_OVERVIEW_PEAKS` |
+| Engine dispatch | `resonance-audio/src/engine/thread/dispatch/reference.rs` | `mix_integrated_lufs` (reads `SharedState::mix_meter`) |
 | Monitor tap | `resonance-audio/src/mixer/callback/reference.rs` | `monitor_reference` |
 | Mix meter | `resonance-audio/src/mixer/callback/master_pass.rs` | `ab_meters.mix` |
 | App state | `resonance-app/src/reference/state.rs` | `ReferenceState`, `ReferenceMonitorState`, `ReferenceEntry`, `AbMeters` |
@@ -73,7 +88,7 @@ reference with `reference.load` and measures it with `meter.measure`.
 | Key / drop subscriptions | `resonance-app/src/update.rs` | `MOMENTARY_AUDITION_KEY`, `reference_momentary_keys`, `reference_file_drop` |
 | Echoes | `resonance-app/src/engine_events/reference.rs` | `loudness_match_changed`, `ab_meter_snapshot` |
 | Persistence | `resonance-app/src/project/model.rs` | `ProjectReference`, `ProjectReferenceMarker`, `ProjectReferenceSettings` |
-| View | `resonance-app/src/view/mixer/reference_panel/` | `bodies.rs`, `ab_controls.rs`, `loudness_canvas.rs`, `waveform.rs` |
+| View | `resonance-app/src/view/mixer/reference_panel/` | `bodies.rs`, `ab_controls.rs` (`loudness_row`, `match_caption`), `loudness_canvas.rs`, `waveform.rs` |
 | Control | `resonance-app/src/update/control/reference_track.rs` | `reference.load` |
 
 ## Surfaces
@@ -98,9 +113,14 @@ reference with `reference.load` and measures it with `meter.measure`.
 | Goldens | `resonance-app/tests/snapshots/reference_panel_*-wgpu.png` | `RESONANCE_BLESS=1 cargo test -p resonance-app --test performance` |
 | Control | `resonance-app/tests/control/control_reference.rs` | same |
 
-Not covered: no test enables loudness match on a loaded reference and
-checks a non-zero offset — which is how the missing computation went
-unnoticed.
+Loudness match: `reference_handlers.rs` checks the offset (−9 LUFS
+reference against a −14 LUFS mix → −5 dB; a quieter reference is raised),
+the 0 dB fallbacks (no mix measurement, unanalysed reference), re-matching
+on an active-reference change only while matching is on, and that a
+matched reference rendered through the monitor meters at the mix's
+−14 LUFS. `reference_panel_loudness.rs` checks the readout text for a
+match and for no mix measurement; the `reference_panel_loudness_readout`
+golden shows matching on with a −6.7 dB offset.
 
 ## Decisions and deviations
 
@@ -114,7 +134,11 @@ unnoticed.
 
 ## Known gaps
 
-- Loudness match is wired end to end but the offset is never computed —
-  [`../../intents/mixer/reference-loudness-match.md`](../../intents/mixer/reference-loudness-match.md).
+- Loudness match uses only the live mix meter. There is no fallback to
+  an offline measurement of the whole mix when nothing has played, and no
+  automatic re-match on transport start (the meter resets there, so a
+  re-match would have to wait for playback); the user re-toggles. Neither
+  is exposed over the control API (an agent compares with
+  `meter.compare` / `meter.measure`).
 - Several engine doc comments in `engine/reference.rs` still describe the
   decode/playback path as "a later todo" although it is built.

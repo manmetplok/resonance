@@ -108,9 +108,45 @@ fn app_with_metered_reference() -> Resonance {
     app
 }
 
+/// Switch loudness matching on and fold in the engine's echo: the -9.4
+/// LUFS reference matched to a mix measured at `mix_lufs` (`None` = the
+/// mix had no measurement, so nothing was matched).
+fn match_loudness(app: &mut Resonance, mix_lufs: Option<f32>) {
+    let _ = app.update(Message::Reference(ReferenceMessage::ToggleLoudnessMatch));
+    app.test_handle_engine_event(AudioEvent::RefLoudnessMatchChanged {
+        enabled: true,
+        offset_db: mix_lufs.map(|m| m - -9.4).unwrap_or(0.0),
+        mix_lufs,
+    });
+}
+
+#[test]
+fn loudness_match_shows_source_and_target_loudness() {
+    let mut app = app_with_metered_reference();
+    match_loudness(&mut app, Some(-16.1));
+
+    let mut ui = simulator(&app);
+    ui.find("-6.7 dB").expect("the applied offset is shown");
+    ui.find("-9.4 \u{2192} -16.1 LUFS")
+        .expect("the readout names the reference and the mix loudness it was matched to");
+}
+
+#[test]
+fn loudness_match_without_a_mix_measurement_says_so() {
+    let mut app = app_with_metered_reference();
+    match_loudness(&mut app, None);
+
+    let mut ui = simulator(&app);
+    ui.find("+0.0 dB").expect("nothing is applied");
+    ui.find("No mix loudness yet \u{2014} play, then re-toggle")
+        .expect("the panel says why the offset is zero");
+}
+
 #[test]
 fn reference_panel_loudness_readout() {
-    let app = app_with_metered_reference();
+    let mut app = app_with_metered_reference();
+    // Matching on, so the golden shows a non-zero offset and its readout.
+    match_loudness(&mut app, Some(-16.1));
 
     let mut ui = simulator(&app);
     ui.find("LOUDNESS")
