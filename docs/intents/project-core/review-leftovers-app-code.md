@@ -50,7 +50,7 @@ Clean-ups:
       `PresetMetaInput`; `engine_events/pool.rs:117` matches on a wire
       method name. Keep wire types at the control boundary.
 - [ ] **DEP-02 remainder** — ort's `download-binaries` fetch is unhashed
-      and pinned `=2.0.0-rc.12`; only the `ORT_LIB_LOCATION` override is
+      and pinned `=2.0.0-rc.14`; only the `ORT_LIB_LOCATION` override is
       documented.
 
 ## What exists to build on

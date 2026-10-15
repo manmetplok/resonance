@@ -1,12 +1,27 @@
 use anyhow::Result;
-use ort::execution_providers::{
-    CPUExecutionProvider, CUDAExecutionProvider, ExecutionProviderDispatch,
-    MIGraphXExecutionProvider,
-};
+use ort::environment::Environment;
+use ort::ep::{ExecutionProviderDispatch, CPU};
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+
+/// The process's ONNX Runtime environment, built on first use and kept
+/// for the life of the process. Since ort 2.0.0-rc.14 every session is
+/// built against an explicit [`Environment`], and only one may ever be
+/// created per process (building another fails even after the first is
+/// dropped), so it lives here rather than with any session.
+pub fn ort_environment() -> Result<&'static Environment> {
+    static ENV: OnceLock<std::result::Result<Environment, String>> = OnceLock::new();
+    ENV.get_or_init(|| {
+        ort::init()
+            .with_name("resonance-svs")
+            .build()
+            .map_err(|e| e.to_string())
+    })
+    .as_ref()
+    .map_err(|e| anyhow::anyhow!("creating the ONNX Runtime environment: {e}"))
+}
 
 /// ONNX Runtime execution provider an SVS session runs on.
 ///
@@ -120,20 +135,10 @@ pub fn build_session_from(
     device_index: i32,
 ) -> Result<(Session, ExecutionProvider)> {
     let model_path = source.path();
-    let gpu: Option<ExecutionProviderDispatch> = match ep {
+    let gpu = match ep {
         ExecutionProvider::Cpu => None,
-        ExecutionProvider::Cuda => Some(
-            CUDAExecutionProvider::default()
-                .with_device_id(device_index)
-                .build()
-                .error_on_failure(),
-        ),
-        ExecutionProvider::MiGraphX => Some(
-            MIGraphXExecutionProvider::default()
-                .with_device_id(device_index)
-                .build()
-                .error_on_failure(),
-        ),
+        ExecutionProvider::Cuda => Some(cuda_provider(device_index)),
+        ExecutionProvider::MiGraphX => Some(migraphx_provider(device_index)),
     };
 
     // A provider that already failed in this process is not retried:
@@ -143,7 +148,8 @@ pub fn build_session_from(
     let gpu = gpu.filter(|_| !provider_failed(ep, device_index));
     let mut gpu_failed = false;
     if let Some(gpu) = gpu {
-        match commit_session(source, vec![gpu]) {
+        let committed = gpu.and_then(|gpu| commit_session(source, vec![gpu]));
+        match committed {
             Ok(session) => return Ok((session, ep)),
             Err(e) => {
                 tracing::warn!(
@@ -156,7 +162,7 @@ pub fn build_session_from(
             }
         }
     }
-    let session = commit_session(source, vec![CPUExecutionProvider::default().build()])?;
+    let session = commit_session(source, vec![CPU::default().build()])?;
     // Only blame the provider once the same model loads on CPU: a missing
     // or broken model file fails both, and must not turn the GPU off.
     if gpu_failed {
@@ -166,6 +172,37 @@ pub fn build_session_from(
             .push((ep, device_index));
     }
     Ok((session, ExecutionProvider::Cpu))
+}
+
+/// The CUDA provider on `device_index`, registered with
+/// `error_on_failure` so ort cannot quietly drop it. Since ort rc.14 the
+/// provider type only exists with ort's `cuda` feature; without ours, the
+/// request fails here and falls back to CPU as a missing provider would.
+#[cfg(feature = "cuda")]
+fn cuda_provider(device_index: i32) -> Result<ExecutionProviderDispatch> {
+    Ok(ort::ep::CUDA::default()
+        .with_device_id(device_index)
+        .build()
+        .error_on_failure())
+}
+
+#[cfg(not(feature = "cuda"))]
+fn cuda_provider(_device_index: i32) -> Result<ExecutionProviderDispatch> {
+    Err(anyhow::anyhow!("this build has no CUDA support (cargo feature `cuda`)"))
+}
+
+/// The MIGraphX provider on `device_index`; see [`cuda_provider`].
+#[cfg(feature = "migraphx")]
+fn migraphx_provider(device_index: i32) -> Result<ExecutionProviderDispatch> {
+    Ok(ort::ep::MIGraphX::default()
+        .with_device_id(device_index)
+        .build()
+        .error_on_failure())
+}
+
+#[cfg(not(feature = "migraphx"))]
+fn migraphx_provider(_device_index: i32) -> Result<ExecutionProviderDispatch> {
+    Err(anyhow::anyhow!("this build has no MIGraphX support (cargo feature `migraphx`)"))
 }
 
 /// GPU providers (with their device index) whose session creation failed
@@ -185,7 +222,7 @@ fn commit_session(
     source: ModelSource<'_>,
     providers: Vec<ExecutionProviderDispatch>,
 ) -> Result<Session> {
-    let mut builder = Session::builder()
+    let mut builder = Session::builder(ort_environment()?)
         .map_err(|e| anyhow::anyhow!("creating ORT SessionBuilder: {e}"))?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| anyhow::anyhow!("setting graph optimization level: {e}"))?

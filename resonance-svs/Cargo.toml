@@ -62,7 +62,7 @@ cli = ["dep:clap", "dep:tracing-subscriber"]
 # onnxruntime install/checkout instead of letting `download-binaries` fetch
 # one (see ort's `ort-sys` build script for the exact layout it expects).
 # `ndarray` enables interop with the ndarray crate for tensor I/O.
-ort = { version = "=2.0.0-rc.12", default-features = false, features = [
+ort = { version = "=2.0.0-rc.14", default-features = false, features = [
     "std", "ndarray", "tracing", "download-binaries", "copy-dylibs", "api-24", "tls-rustls",
 ] }
 ndarray = "0.17"

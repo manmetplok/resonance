@@ -85,13 +85,19 @@ across longer / more elaborate `.ds` files to build out a richer perf table.
   that the compiler diagnoses as "multiple different versions of crate
   `ndarray` in the dependency graph". The fix is to match the ort-internal
   ndarray version exactly; the exact pin makes future bumps explicit.
+  Now `=2.0.0-rc.14` (ONNX Runtime 1.31.0, was 1.24.2 under rc.12; still
+  ndarray 0.17). rc.14 needs an explicit `Environment` for every session
+  and allows only one per process, ever, so `stages::common::ort_environment`
+  builds it once and keeps it; and the `ep::CUDA` / `ep::MIGraphX` types
+  only exist with ort's matching feature, so without ours the request
+  fails in `cuda_provider` / `migraphx_provider` and falls back to CPU.
 - **`ort::Error` and `anyhow::Context`.** ort 2.x's `Error<C>` is generic in a
   context type and consequently does not implement the trait bounds anyhow's
   `Context` extension requires. The PoC converts via
   `.map_err(|e| anyhow::anyhow!("…: {e}"))` instead. Annoying boilerplate,
   but explicit.
 - **`Session::inputs` / `Session::outputs`.** Used to be public fields in
-  older ort; in 2.0.0-rc.12 they are methods returning `&[Outlet]`. Outlet's
+  older ort; since 2.0.0-rc.12 they are methods returning `&[Outlet]`. Outlet's
   `name` and `dtype` are also methods, not fields. The PoC adapts via small
   `input_names()` / `output_names()` helpers that turn them into
   `HashSet<String>` for "does this model declare input X?" feature-detection.
