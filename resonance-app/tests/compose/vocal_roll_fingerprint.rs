@@ -53,6 +53,7 @@ fn canvas<'a>(
             params.voicebank.as_str(),
         ),
         chords,
+        chord_spelling: Default::default(),
         section_beats: 16,
         scroll_y: 0.0,
         zoom_x: 1.0,

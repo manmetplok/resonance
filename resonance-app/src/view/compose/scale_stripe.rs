@@ -43,7 +43,7 @@ fn render_with_scale<'a>(scale: &Scale) -> Element<'a, Message> {
         .font(theme::UI_FONT_SEMIBOLD)
         .color(theme::TEXT_3);
 
-    let name_str = format!("{} {}", scale.root, mode_word(scale.mode));
+    let name_str = format!("{} {}", pretty_name(scale.root_name()), mode_word(scale.mode));
     let name = text(name_str)
         .size(22)
         .font(theme::SERIF_ITALIC_FONT)
@@ -97,7 +97,7 @@ fn scale_pills<'a>(scale: &Scale) -> Element<'a, Message> {
     for (i, &iv) in scale.mode.intervals().iter().enumerate() {
         let pc = PitchClass::from_semitone(((root_semi + iv as i32) % 12) as u8);
         let active = i == 0;
-        pills = pills.push(pill(&pretty_pitch(pc), active));
+        pills = pills.push(pill(&pretty_name(pc.name(scale.spelling())), active));
     }
     pills.into()
 }
@@ -125,9 +125,14 @@ fn pill<'a>(label: &str, active: bool) -> Element<'a, Message> {
     .into()
 }
 
-/// Convert PitchClass's "C#" display to "C♯" so it matches the design.
-fn pretty_pitch(pc: PitchClass) -> String {
-    pc.as_str().replace('#', "\u{266f}")
+/// Convert an ASCII pitch name ("C#", "Bb") to its typeset form ("C♯",
+/// "B♭") so it matches the design. Spelled in the scale's key (BUG-72).
+fn pretty_name(name: &str) -> String {
+    match name.as_bytes() {
+        [letter, b'#'] => format!("{}\u{266f}", *letter as char),
+        [letter, b'b'] => format!("{}\u{266d}", *letter as char),
+        _ => name.to_owned(),
+    }
 }
 
 fn mode_word(mode: Mode) -> &'static str {

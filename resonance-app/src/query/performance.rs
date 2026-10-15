@@ -22,7 +22,7 @@
 //! readout stays correct under tempo ramps and time-signature changes.
 
 use resonance_audio::types::TempoMap;
-use resonance_music_theory::Chord;
+use resonance_music_theory::{Chord, Spelling};
 
 use crate::compose::{SectionDefinitionState, SectionPlacementState};
 use crate::state::ArrangementMarker;
@@ -46,6 +46,9 @@ pub struct ChordSlot {
     pub chord_id: u64,
     /// The chord itself (root / quality / slash bass).
     pub chord: Chord,
+    /// Accidental the chord's symbol is spelled with — its section's key
+    /// (BUG-72).
+    pub spelling: Spelling,
     /// Absolute, 0-based project bar where the slot begins.
     pub start_bar: u32,
     /// Beat offset of the slot within its section, in grid beats.
@@ -160,6 +163,7 @@ fn resolve_slots(
             continue;
         };
         let section_base = bars_to_global_beats(tempo_map, placement.start_bar);
+        let spelling = def.chord_spelling();
         for chord in &def.chords {
             let global_start = section_base + chord.start_beat as u64;
             slots.push(ChordSlot {
@@ -167,6 +171,7 @@ fn resolve_slots(
                 definition_id: def.id,
                 chord_id: chord.id,
                 chord: chord.chord,
+                spelling,
                 start_bar: global_beat_to_bar(tempo_map, global_start),
                 start_beat_in_section: chord.start_beat,
                 duration_beats: chord.duration_beats,

@@ -82,6 +82,7 @@ fn vocal_roll_user_and_auto_holds_and_split_warning_golden() {
         params: &params,
         bank: resonance_app::compose::vocal_svs::BankProfile::not_installed("lilia"),
         chords: &chords,
+        chord_spelling: Default::default(),
         section_beats: 8,
         scroll_y: 0.0,
         zoom_x: 0.25,

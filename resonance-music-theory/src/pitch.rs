@@ -63,6 +63,36 @@ impl PitchClass {
             PitchClass::B => "B",
         }
     }
+
+    /// The flat spelling of this pitch class (`"Bb"`, `"Eb"`, ...);
+    /// naturals read as themselves.
+    pub fn as_flat_str(self) -> &'static str {
+        match self {
+            PitchClass::Cs => "Db",
+            PitchClass::Ds => "Eb",
+            PitchClass::Fs => "Gb",
+            PitchClass::Gs => "Ab",
+            PitchClass::As => "Bb",
+            natural => natural.as_str(),
+        }
+    }
+
+    /// This pitch class spelled with the given accidental preference.
+    pub fn name(self, spelling: Spelling) -> &'static str {
+        match spelling {
+            Spelling::Sharps => self.as_str(),
+            Spelling::Flats => self.as_flat_str(),
+        }
+    }
+}
+
+/// Which accidental a black-key pitch class is spelled with. A key picks
+/// one ([`crate::Scale::spelling`]); with no key, names use sharps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Spelling {
+    #[default]
+    Sharps,
+    Flats,
 }
 
 impl fmt::Display for PitchClass {

@@ -83,10 +83,13 @@ pub(super) fn note_name(note: u8) -> String {
     resonance_music_theory::midi_note_name(note)
 }
 
-/// Format the chord as a short label (e.g. "Bm", "F#7"). Uses the
-/// `Display` impls already published by `resonance-music-theory`.
-pub(super) fn chord_label(chord: &resonance_music_theory::Chord) -> String {
-    format!("{}{}", chord.root, chord.quality)
+/// Format the chord as a short label (e.g. "Bm", "F#7", "Bb" in a flat
+/// key) — root and quality only, root spelled with `spelling`.
+pub(super) fn chord_label(
+    chord: &resonance_music_theory::Chord,
+    spelling: resonance_music_theory::Spelling,
+) -> String {
+    format!("{}{}", chord.root.name(spelling), chord.quality)
 }
 
 /// Snapshot of everything the canvas needs to render and respond to
@@ -112,6 +115,9 @@ pub struct VocalRollCanvas<'a> {
     /// Section chords + total beats — used to draw the read-only chord
     /// context strip above the note grid.
     pub chords: &'a [ChordState],
+    /// Accidental the chord strip spells roots with — the section's key
+    /// (BUG-72).
+    pub chord_spelling: resonance_music_theory::Spelling,
     pub section_beats: u32,
     pub scroll_y: f32,
     pub zoom_x: f32,

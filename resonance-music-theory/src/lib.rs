@@ -10,7 +10,7 @@ pub mod satb;
 pub mod scale;
 pub mod voicing;
 
-pub use chord::{parse_chord, Chord, ChordParseError, ChordQuality};
+pub use chord::{parse_chord, Chord, ChordParseError, ChordQuality, SpelledChord};
 pub use derive::{
     count_syllables, derive_bass, derive_bass_motif, derive_melody,
     derive_motif_melody_with_section, derive_motif_rhythm, derive_pad, derive_vocal,
@@ -32,7 +32,7 @@ pub use generator::{
     Degree, GenContext, GenerateError, GeneratedChord, GeneratedMaterial, Generator, GeneratorSpec,
     HarmonicFunction, MarkovTable, PentatonicFlavour, SchemaKind, SplitChord, TableRegistry,
 };
-pub use pitch::{midi_note_name, midi_note_name_unicode, PitchClass};
+pub use pitch::{midi_note_name, midi_note_name_unicode, PitchClass, Spelling};
 pub use progression::{
     degree_function, diatonic_chord, diatonic_triads, walk_progression, Function,
     ProgressionParams, TRANSITIONS,

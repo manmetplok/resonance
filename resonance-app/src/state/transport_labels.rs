@@ -139,6 +139,7 @@ impl TransportLabels {
                 Some((root, mode)) => {
                     use std::fmt::Write;
                     let mode_label = mode_short_label(mode);
+                    let root = resonance_music_theory::Scale::new(root, mode).root_name();
                     let _ = write!(&mut self.key, "{} {}", root, mode_label);
                 }
             }

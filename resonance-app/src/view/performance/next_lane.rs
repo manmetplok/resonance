@@ -33,7 +33,7 @@ use iced::widget::text::{Alignment as TextAlignment, LineHeight};
 use iced::widget::{canvas, column, container, row, text, Space};
 use iced::{alignment, Element, Length, Point};
 
-use resonance_music_theory::{Chord, Tuning, WINDOW_FRETS};
+use resonance_music_theory::{Chord, SpelledChord, Spelling, Tuning, WINDOW_FRETS};
 
 use crate::chord_box::{self, Dims, Marker, Nut};
 use crate::message::Message;
@@ -97,8 +97,9 @@ pub enum Emphasis {
 /// this struct does not either.)
 #[derive(Clone)]
 pub struct NextCard {
-    /// The upcoming chord (root / quality / slash bass).
-    pub chord: Chord,
+    /// The upcoming chord (root / quality / slash bass) and the accidental
+    /// its symbol is spelled with — its section's key.
+    pub chord: SpelledChord,
     /// Instrument tuning the mini diagram is voiced for.
     pub tuning: &'static Tuning,
     /// Capo position in frets (`0` = none).
@@ -213,7 +214,7 @@ fn empty_state() -> Element<'static, Message> {
 /// One upcoming-chord card.
 fn card_view(card: NextCard) -> Element<'static, Message> {
     let NextCard {
-        chord,
+        chord: SpelledChord { chord, spelling },
         tuning,
         capo,
         bars_until,
@@ -221,7 +222,7 @@ fn card_view(card: NextCard) -> Element<'static, Message> {
     } = card;
 
     let inner = row![
-        card_symbol(chord, emphasis),
+        card_symbol(chord, spelling, emphasis),
         mini_diagram(chord, tuning, capo),
         text(bars_until_label(bars_until))
             .size(11)
@@ -242,14 +243,14 @@ fn card_view(card: NextCard) -> Element<'static, Message> {
 /// muted, scaled and tinted by the card's emphasis. Built from the same
 /// components `Chord::to_string` joins, so the symbol reads identically to
 /// the centre-stage hero (root · suffix · "/bass").
-fn card_symbol(chord: Chord, emphasis: Emphasis) -> Element<'static, Message> {
+fn card_symbol(chord: Chord, spelling: Spelling, emphasis: Emphasis) -> Element<'static, Message> {
     let (root_size, sub_size, root_c, suffix_c, bass_c) = match emphasis {
         Emphasis::First => (56.0, 28.0, theme::TEXT_1, theme::ACCENT_SOFT, theme::TEXT_3),
         Emphasis::Mid => (40.0, 20.0, theme::TEXT_2, theme::TEXT_3, theme::TEXT_3),
         Emphasis::Later => (40.0, 20.0, theme::TEXT_3, theme::TEXT_4, theme::TEXT_4),
     };
 
-    let mut sym = row![text(chord.root.to_string())
+    let mut sym = row![text(chord.root.name(spelling))
         .size(root_size)
         .font(theme::SERIF_ITALIC_FONT)
         .color(root_c)
@@ -269,7 +270,7 @@ fn card_symbol(chord: Chord, emphasis: Emphasis) -> Element<'static, Message> {
     }
     if let Some(bass) = chord.bass {
         sym = sym.push(
-            text(format!("/{bass}"))
+            text(format!("/{}", bass.name(spelling)))
                 .size(sub_size)
                 .font(theme::SERIF_ITALIC_FONT)
                 .color(bass_c)
@@ -409,6 +410,8 @@ impl MiniDiagram {
             &self.frets,
             self.start_fret,
             &self.chord,
+            // The mini box draws no name or dot labels.
+            Spelling::Sharps,
         );
 
         // Fret lines — a heavy nut bar in open position, an ordinary line in a

@@ -1,6 +1,6 @@
 # Music-theory library (`resonance-music-theory`)
 
-> Verified against master @ `8eac71b3` on 2026-10-07.
+> Verified against master @ `acac5ea3` + chord spelling (BUG-72) on 2026-10-15.
 > Spec history: `docs/history/specs/melody-generation-research.md`, `docs/history/specs/todo.md`.
 
 `resonance-music-theory` is the pure, headless crate behind everything
@@ -19,6 +19,13 @@ crate; the melody side is in
 - **Chords.** `Chord { root, quality, bass }` with 15 `ChordQuality`
   values; `parse_chord` accepts symbols like `Am7`, `F#m7b5`-style names,
   slash basses and unicode accidentals; `Chord::inverted`.
+- **Spelling.** `PitchClass` stores no accidental; `PitchClass::name(Spelling)`
+  spells it with sharps or flats. `Scale::prefers_flats` (major parent F,
+  Bb, Eb, Ab, Db or Gb), `Scale::spelling`, `Scale::root_name`;
+  `Chord::display_in(Option<&Scale>)` / `Chord::spelled(Spelling)` give a
+  `SpelledChord` whose text parses back to the same chord. Plain
+  `Display` for `Chord` and `PitchClass` stays on sharps; `Scale`'s
+  `Display` spells its own root (`Bb major`).
 - **Diatonic harmony.** `diatonic_chord(scale, degree, seventh)`,
   `diatonic_triads`, `degree_function` (`Function` T/PD/D),
   `walk_progression` (the older progression walker, kept for

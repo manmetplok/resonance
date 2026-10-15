@@ -1,4 +1,4 @@
-use crate::pitch::PitchClass;
+use crate::pitch::{PitchClass, Spelling};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -98,6 +98,44 @@ impl Scale {
         Self { root, mode }
     }
 
+    /// True when this key's signature has flats: its major (ionian)
+    /// parent is F, Bb, Eb, Ab, Db or Gb. So D minor (F's relative), G
+    /// dorian (F's) and every flat major key read flat; keys whose
+    /// parent is C, G, D, A, E or B — C major, A minor, D dorian — read
+    /// sharp, so a borrowed Bb in C major shows as A#. Harmonic and
+    /// melodic minor share the natural minor's signature; chromatic
+    /// counts as major. Gb is taken over F# for the six-accidental key.
+    pub fn prefers_flats(&self) -> bool {
+        // Semitones from the major parent's tonic up to this mode's root.
+        let from_parent: u8 = match self.mode {
+            Mode::Chromatic | Mode::Major => 0,
+            Mode::Dorian => 2,
+            Mode::Phrygian => 4,
+            Mode::Lydian => 5,
+            Mode::Mixolydian => 7,
+            Mode::Minor | Mode::HarmonicMinor | Mode::MelodicMinor => 9,
+            Mode::Locrian => 11,
+        };
+        let parent = (self.root.to_semitone() + 12 - from_parent) % 12;
+        // F, Bb, Eb, Ab, Db, Gb.
+        matches!(parent, 5 | 10 | 3 | 8 | 1 | 6)
+    }
+
+    /// The accidental this key spells black-key pitch classes with.
+    pub fn spelling(&self) -> Spelling {
+        if self.prefers_flats() {
+            Spelling::Flats
+        } else {
+            Spelling::Sharps
+        }
+    }
+
+    /// The tonic as this key spells it (`"Bb"` for Bb major, `"F#"` for
+    /// F# minor).
+    pub fn root_name(&self) -> &'static str {
+        self.root.name(self.spelling())
+    }
+
     /// True if the given MIDI note number belongs to the scale.
     pub fn contains(&self, midi_note: u8) -> bool {
         let semitone = midi_note % 12;
@@ -176,6 +214,6 @@ impl Scale {
 
 impl fmt::Display for Scale {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}", self.root, self.mode)
+        write!(f, "{} {}", self.root_name(), self.mode)
     }
 }

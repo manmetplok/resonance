@@ -23,7 +23,7 @@
 //! backend: this module only decides *what* goes *where* and which dot is
 //! the root.
 
-use resonance_music_theory::{Chord, PitchClass, Tuning};
+use resonance_music_theory::{Chord, PitchClass, Spelling, Tuning};
 
 /// Cell geometry, in the caller's own unit (mm for PDF, px for Canvas).
 ///
@@ -131,7 +131,8 @@ pub struct ChordBoxLayout {
 /// on string `i` (`Some(0)` = open, `None` = muted), as produced by
 /// `resonance_music_theory::fretboard_voicing`. `start_fret` is the voicing's
 /// window start (`0` = nut-anchored). The root/bass note of `chord` is
-/// highlighted as the accent dot.
+/// highlighted as the accent dot. The name and the dots' note labels are
+/// spelled with `spelling` — the key the chord sits in (BUG-72).
 ///
 /// The expression order mirrors the original PDF exporter so a PDF backend
 /// passing the page-space cell origin reproduces its output byte-for-byte.
@@ -142,6 +143,7 @@ pub fn layout(
     frets: &[Option<u8>],
     start_fret: u8,
     chord: &Chord,
+    spelling: Spelling,
 ) -> ChordBoxLayout {
     let (origin_x, origin_y) = origin;
     let n = tuning.string_count();
@@ -205,14 +207,14 @@ pub fn layout(
                 x,
                 y,
                 r: dims.dot_r,
-                note: PitchClass::from_semitone(note_pc).as_str(),
+                note: PitchClass::from_semitone(note_pc).name(spelling),
                 is_root: note_pc == root_pc,
             })
         })
         .collect();
 
     ChordBoxLayout {
-        name: chord.to_string(),
+        name: chord.spelled(spelling).to_string(),
         cell_center_x: origin_x + dims.cell_w / 2.0,
         name_y,
         header_y,
