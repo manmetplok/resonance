@@ -313,7 +313,7 @@ pub(super) fn copy_tree(
 #[cfg(feature = "drumkit-zip")]
 pub(super) use zip_impl::{extract, read_entry, zip_plan, ZipPlan};
 #[cfg(feature = "drumkit-zip")]
-pub(crate) use zip_impl::is_litter;
+pub(crate) use zip_impl::{entry_path, entry_read_err, is_litter};
 
 #[cfg(feature = "drumkit-zip")]
 mod zip_impl {
@@ -361,6 +361,20 @@ mod zip_impl {
         })
     }
 
+    /// Where archive entry `e` extracts to, relative to the destination;
+    /// `None` (skip it) for an unsafe name. zip's `enclosed_name` refuses
+    /// a `..` escape and normalises the rest, but (as of zip 9, unlike 2)
+    /// it also accepts an absolute name (`/x`, `\x`, `C:\x`) by dropping
+    /// its root; such an entry is skipped here instead, as it always was.
+    pub(crate) fn entry_path<R: Read>(e: &zip::read::ZipFile<'_, R>) -> Option<PathBuf> {
+        let name = e.name().ok()?;
+        let rooted = name.starts_with(['/', '\\']) || name.as_bytes().get(1) == Some(&b':');
+        if rooted {
+            return None;
+        }
+        e.enclosed_name()
+    }
+
     /// The manifest among `paths` (relative to the kit's top directory):
     /// at depth 0, else the one at depth 1. Several at depth 1 and none at
     /// depth 0 is several kits.
@@ -404,7 +418,7 @@ mod zip_impl {
             if e.is_dir() {
                 continue;
             }
-            let Some(path) = e.enclosed_name() else {
+            let Some(path) = entry_path(&e) else {
                 continue;
             };
             if is_litter(&path) {
@@ -468,6 +482,18 @@ mod zip_impl {
         Ok(bytes)
     }
 
+    /// A failed read of archive entry `i` while [`copy_stream`] extracts
+    /// it is a bad archive, not an I/O fault: zip (since 9) itself fails a
+    /// read that inflates past the declared size, before our own cap does.
+    pub(crate) fn entry_read_err(i: usize) -> impl FnOnce(LibraryError) -> LibraryError {
+        move |e| match e {
+            LibraryError::Io {
+                op: "read", source, ..
+            } => LibraryError::Zip(format!("entry {i}: {source}")),
+            e => e,
+        }
+    }
+
     fn oversize(i: usize) -> LibraryError {
         LibraryError::Zip(format!("entry {i} inflates past its declared size"))
     }
@@ -492,7 +518,8 @@ mod zip_impl {
         for (i, rel, declared) in &plan.files {
             let e = archive.by_index(*i).map_err(zip_err(*i))?;
             let mut capped = e.take(declared + 1);
-            let n = copy_stream(&mut capped, &dest.join(rel), &mut buf, job, &mut progress)?;
+            let n = copy_stream(&mut capped, &dest.join(rel), &mut buf, job, &mut progress)
+                .map_err(entry_read_err(*i))?;
             if n > *declared {
                 return Err(oversize(*i));
             }
