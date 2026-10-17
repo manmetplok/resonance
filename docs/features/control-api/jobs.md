@@ -1,6 +1,7 @@
 # Control jobs (`job.status` / `job.wait`)
 
-> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
+> Verified against master @ `2b28debd` on 2026-10-07.
+> Also verified: vocal phase 4.
 > Spec history: ba doc #265, todo #1149 (not in the repo).
 
 Some control calls take longer than one turn of the update loop: saving

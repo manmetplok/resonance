@@ -1,7 +1,9 @@
 # Insert / remove bars in the GUI
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: timeline (see `docs/features/timeline/arrangement-bars.md`)
+> Area: timeline
+> Touches: see `docs/features/timeline/arrangement-bars.md`
 > Source: ba doc #275 P2 built the edit for the control API only
 
 ## Why

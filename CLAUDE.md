@@ -7,10 +7,17 @@
 - `docs/features/<area>/` — what is **built**, as it is on master: behaviour,
   where the logic lives, surfaces (GUI / control method / MCP tool), how it is
   tested, deviations, known gaps. When you change a feature, update its doc in
-  the same commit and bump its `Verified against master @` line.
+  the same commit and bump its `Verified against master @` line. That line
+  is exactly ``> Verified against master @ `<sha>` on <YYYY-MM-DD>.``;
+  anything else verified goes on a following `> Also verified: …` line.
 - `docs/intents/<area>/` — what we **want** and have not built (or built
   partly); `docs/intents/bugs.md` for known defects. When an intent ships,
-  fold it into the feature doc and delete the intent.
+  fold it into the feature doc and delete the intent. An intent's header
+  starts `> Stage: **intent**` (add ` (blocked)` when blocked), then
+  `> Status: …`, then `> Area: <folder>` exactly (other areas it touches go
+  on a `> Touches: …` line). `bugs.md` ends with one table,
+  `| Area | Bug | Where | Source |`, its Bug cell `BUG-<n>: <symptom>`.
+  Doc file names are lowercase with hyphens (they become base keys).
 - `docs/guides/` — rules that always hold (UX, control-API conventions).
 - `docs/history/` — archived specs, reviews and plans. Never updated; code
   comments that cite a spec by name (e.g. `nam-model-library.md §5`) resolve

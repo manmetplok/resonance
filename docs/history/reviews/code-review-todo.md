@@ -106,7 +106,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
 | refactor-intent A-12b (ARCH-06) | A6-2 batch 2: PresetState (8), ModalState (7); `Resonance` 79 → 66 fields | sonnet | merged | 7c9af9de |
 | refactor-intent A-12c (ARCH-06) | A6-2 batch 3: PluginMirror (`state_cache`, `index`, `next_id`); `Resonance` 66 → 64 | sonnet | merged | 0768c633 |
-| refactor-intent A-12d (ARCH-06) | A6-2 batch 4: MasterState (`volume`, `level_l/r`, `plugins`, `fx_bypassed`); `Resonance` 64 → 60; survey `docs/history/refactor/A-12-resonance-fields.md` | sonnet | merged | 5281dd48 |
+| refactor-intent A-12d (ARCH-06) | A6-2 batch 4: MasterState (`volume`, `level_l/r`, `plugins`, `fx_bypassed`); `Resonance` 64 → 60; survey `docs/history/refactor/a-12-resonance-fields.md` | sonnet | merged | 5281dd48 |
 | refactor-intent A-12e (ARCH-06) | Dead `groove_library` deleted; MediaState (7), UiTransientState (7); `Resonance` 60 → 47 | sonnet | merged | e7a1b28a |
 | refactor-intent A-12f (ARCH-06) | DeviceState (`r.devices`: input, midi, registry, external_instruments, midi_map); `Resonance` 47 → 43 | sonnet | merged | 324c2d7a |
 | refactor-intent A-12g (ARCH-06) | `bump_revision()`; SessionMetaState (`r.session`: dirty, revision, session_id, undo); `Resonance` 43 → **40** — A-12 done-when met | sonnet | merged | 6f16c94a |
@@ -121,7 +121,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent D-2 + D-3 (ARCH-04) | App allocates send + bus ids; `next_send_id`/`next_bus_id` + `CONTROL_SEND_ID_BASE` gone; `BUS_ID_BASE` kept app-only | sonnet | merged | fdef85fd |
 | refactor-intent D-4 (ARCH-04) | App allocates every track id; engine `next_track_id` + `SUB_TRACK_ID_BASE` gone; demo seed counter bug fixed | sonnet | merged | c44abfdb |
 | refactor-intent D-5 (ARCH-04) | Mandatory reference id; engine `next_ref_id` gone, collision refused; arrangement markers were already app-only | sonnet | merged | 32a81629 |
-| refactor-intent D-6 (ARCH-04) | Design `docs/history/refactor/D-6-engine-created-ids.md`: one app clip allocator (`CLIP_ID_BASE`), standing `GrantIds` for recording/take ids, app-owned asset ids; D-7a–f; 4 open human decisions | opus | merged (design) | a215818c |
+| refactor-intent D-6 (ARCH-04) | Design `docs/history/refactor/d-6-engine-created-ids.md`: one app clip allocator (`CLIP_ID_BASE`), standing `GrantIds` for recording/take ids, app-owned asset ids; D-7a–f; 4 open human decisions | opus | merged (design) | a215818c |
 | refactor-intent D-7c (ARCH-04) | `CreateMidiClip { clip_id }` from `fresh_derived_clip_id`; engine rejects clip-id collisions across audio+MIDI; dead `ImportClip` deleted | sonnet | merged | 37b049a4 |
 | refactor-intent D-7a (ARCH-04) | App-owned asset ids (`ImportAudioToPool { files }`); `next_asset_id`/`ReserveAssetIds` gone; imports keyed by asset id (fixes same-path swap); `create_new` refuses overwrite; on-disk `asset_*.wav` seeding | sonnet | merged | 75986451 |
 | refactor-intent D-7b (ARCH-04) | One app clip allocator `EntityIds::clips` (`CLIP_ID_BASE`), never reset (undo, ClearAll, load); raised past loaded clips, take refs, on-disk WAVs; `LiveCarry` deleted | opus | merged | 03a5e11c |

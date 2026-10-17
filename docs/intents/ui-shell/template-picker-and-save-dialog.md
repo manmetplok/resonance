@@ -1,7 +1,9 @@
 # Template picker, Save-as-Template dialog and template management
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: ui-shell (startup screen, dialog) / project-core
+> Area: ui-shell
+> Touches: startup screen, dialog / project-core
 > ([project-templates.md](../../features/project-core/project-templates.md))
 > Source: `docs/intents/prototypes/project-templates-starter-sessions/index.html`; `view/startup.rs` "Start from Template… (coming soon)"; code check at `8eac71b3`.
 

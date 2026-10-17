@@ -1,7 +1,9 @@
 # "Show in Arrange" from the inspector's AUTOMATION rows
 
+> Stage: **intent**
 > Status: **idea**
-> Area: mixer (navigation into timeline)
+> Area: mixer
+> Touches: navigation into timeline
 > Source: `docs/history/specs/mixer-cleanup.md` §3.4 (listed per row; §10 records it as not built); module doc of `resonance-app/src/view/mixer/inspector/automation.rs`
 
 ## Why

@@ -43,10 +43,10 @@ in place.
 
 - [refactor-intent.md](refactor/refactor-intent.md) — architecture epics A–E and their status.
 - [arch-migration-plan.md](refactor/arch-migration-plan.md) — incremental plan for ARCH-01…ARCH-10 from the 2026-09-26 review.
-- [A-6-derived-clips.md](refactor/A-6-derived-clips.md) — moving the derived-clip map out of `UndoExtras`.
-- [A-12-resonance-fields.md](refactor/A-12-resonance-fields.md) — survey of the remaining `Resonance` fields.
-- [A-13-reconcile.md](refactor/A-13-reconcile.md) — the `Reconcile` trait: one domain order for load and undo.
-- [D-6-engine-created-ids.md](refactor/D-6-engine-created-ids.md) — ids the engine creates at times the app can't pre-decide.
+- [a-6-derived-clips.md](refactor/a-6-derived-clips.md) — moving the derived-clip map out of `UndoExtras`.
+- [a-12-resonance-fields.md](refactor/a-12-resonance-fields.md) — survey of the remaining `Resonance` fields.
+- [a-13-reconcile.md](refactor/a-13-reconcile.md) — the `Reconcile` trait: one domain order for load and undo.
+- [d-6-engine-created-ids.md](refactor/d-6-engine-created-ids.md) — ids the engine creates at times the app can't pre-decide.
 - [arch-test-grouping.md](refactor/arch-test-grouping.md) — the file lists of the grouped `resonance-audio` test binaries (ARCH-03).
 
 ## macos/ — the macOS port

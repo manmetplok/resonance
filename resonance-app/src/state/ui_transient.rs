@@ -3,7 +3,7 @@
 //! persisted and never rides the undo snapshot.
 //!
 //! Grouped together per the A-12 survey
-//! (`docs/history/refactor/A-12-resonance-fields.md`): the current tab, the tab
+//! (`docs/history/refactor/a-12-resonance-fields.md`): the current tab, the tab
 //! Performance mode was entered from, cached pick-list options, the
 //! transport-bar label cache, mixer-panel UI state, and timeline/clip
 //! interaction state, plus the report of the last arrangement bar-shift.

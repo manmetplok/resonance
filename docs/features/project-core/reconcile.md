@@ -1,9 +1,10 @@
 # Reconcile: restoring a project into app and engine
 
-> Verified against master @ `cb3b1d6a` + pronunciation persistence on 2026-10-07.
-> Spec history: `docs/history/refactor/A-13-reconcile.md` (design, §15 is the
+> Verified against master @ `cb3b1d6a` on 2026-10-07.
+> Also verified: pronunciation persistence.
+> Spec history: `docs/history/refactor/a-13-reconcile.md` (design, §15 is the
 > final state), `docs/history/refactor/arch-migration-plan.md` → "A-13j
-> landed", `docs/history/refactor/A-6-derived-clips.md`.
+> landed", `docs/history/refactor/a-6-derived-clips.md`.
 
 There is one piece of code that turns a `ProjectFile` into live app state and
 engine commands. A disk load, a template instantiation and every undo/redo go
@@ -103,8 +104,8 @@ commands), and plugin re-instantiation timing with real CLAP plugins.
   driver with two callers.
 - Stages used to mark points where inline code ran between groups; since
   A-13f nothing runs between stages, so `Stage` only documents the order.
-- Code comments still point at `docs/history/refactor/A-13-reconcile.md`; the file now
-  lives at `docs/history/refactor/A-13-reconcile.md`.
+- Code comments still point at `docs/history/refactor/a-13-reconcile.md`; the file now
+  lives at `docs/history/refactor/a-13-reconcile.md`.
 
 ## Known gaps
 

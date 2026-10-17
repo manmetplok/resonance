@@ -1,5 +1,6 @@
 # Orchestral instruments from open sample libraries (an SFZ sampler)
 
+> Stage: **intent**
 > Status: **idea**
 > Area: plugins-instruments
 > Source: conversation 2026-10-15 — research into openly licensed orchestral

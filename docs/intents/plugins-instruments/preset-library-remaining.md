@@ -1,5 +1,6 @@
 # Preset library: what round 2 left out
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: plugins-instruments
 > Source: `docs/history/specs/plugin-preset-library.md` — P4 ("Not built:

@@ -1,5 +1,6 @@
 # Visual checks for effect plugin editors
 
+> Stage: **intent**
 > Status: **idea**
 > Area: plugins-effects
 > Source: `docs/history/specs/reverb-algorithms.md` status line ("open: … the by-hand Wayland editor tests") and §4.6; the warmth-width-depth build's open item "editor visuals" (Color, Stereo). Confirmed on 2026-10-07: no plugin crate has a pixel snapshot test.

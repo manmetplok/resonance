@@ -1,7 +1,9 @@
 # macOS port: open checks and embedded editors
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: plugins-instruments (editor runtimes), with audio-engine for host
+> Area: plugins-instruments
+> Touches: editor runtimes, with audio-engine for host
 > threading
 > Source: `docs/history/macos/macos-editor-plan.md` (item 3g, §7),
 > `docs/history/macos/macos-linux-verification.md` §6,

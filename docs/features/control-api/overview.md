@@ -1,6 +1,7 @@
 # Control API: architecture
 
-> Verified against master @ `8eac71b3` + vocal-phase1 fixes (`d1b5c284`) on 2026-10-07.
+> Verified against master @ `8eac71b3` on 2026-10-07.
+> Also verified: vocal-phase1 fixes (`d1b5c284`).
 > Spec history: the original design was ba doc #265 (control protocol) and
 > #266 (MCP server), epic #200; ba is retired and those docs are not in the
 > repo. Code comments still cite them and the todo numbers (#1147–#1161).

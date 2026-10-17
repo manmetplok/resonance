@@ -1,5 +1,6 @@
 # Drums rework: the live checks and outside-the-repo follow-ups
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: plugins-instruments
 > Source: `docs/history/specs/drums-plugin-rework.md` (K3 server task, K4

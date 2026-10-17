@@ -1,6 +1,7 @@
 # Automation lanes
 
-> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
+> Verified against master @ `2b28debd` on 2026-10-07.
+> Also verified: vocal phase 4.
 > Spec history: none for the model and GUI (built under epic #14, arch doc #162; lane rows doc #256). The control API has `docs/history/specs/automation-control-api.md`, see [automation-control-api.md](./automation-control-api.md). Vocal curve rows: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §10 (slice 14).
 
 A track's volume, pan or mute, a bus's volume, pan or mute, the master

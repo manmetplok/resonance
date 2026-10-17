@@ -1,6 +1,7 @@
 # Plugin editor runtimes
 
-> Verified against master @ `6cea87c2` on 2026-10-15 (egui 0.37 / SCTK 0.21 upgrade).
+> Verified against master @ `6cea87c2` on 2026-10-15.
+> Also verified: egui 0.37 / SCTK 0.21 upgrade.
 > Spec history: `docs/history/macos/macos-editor-plan.md`,
 > `docs/history/macos/macos-linux-verification.md`.
 

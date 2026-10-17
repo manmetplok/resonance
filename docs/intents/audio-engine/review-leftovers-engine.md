@@ -1,5 +1,6 @@
 # Engine and CLAP host: review leftovers
 
+> Stage: **intent**
 > Status: **idea** (checklist)
 > Area: audio-engine
 > Source: [code review 2026-10-02](../../history/reviews/code-review-2026-10-02.md) FU-S2a, FU-S2b, FU-R2c, FU-R2d, FU-R3d, FU-H1b, FU-H1e, FU-W4d, FU-A1a6;

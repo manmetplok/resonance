@@ -1,6 +1,7 @@
 # Stem export
 
-> Verified against master @ `f9438e38` on 2026-10-13 (plus the render.stems change).
+> Verified against master @ `f9438e38` on 2026-10-13.
+> Also verified: the render.stems change.
 > Spec history: prototype `docs/intents/prototypes/multitrack-stem-and-midi-export/`;
 > "ba todo #322 / #325 / #1239 / #1242 / #1248" are cited in code.
 

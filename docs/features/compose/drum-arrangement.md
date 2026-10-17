@@ -1,6 +1,7 @@
 # Drum patterns and section drum arrangement
 
-> Verified against master @ `acac5ea3` + drum group swing and humanize (BUG-51) on 2026-10-15.
+> Verified against master @ `acac5ea3` on 2026-10-15.
+> Also verified: drum group swing and humanize (BUG-51).
 > Spec history: prototype `docs/history/prototypes/drum-pattern-arrangement-within-section/index.html` (doc #170, epic #38); `docs/history/specs/drums-plugin-rework.md` §8 (kit picker).
 
 Drums in Compose come from a project-wide **pattern bank**. A pattern is a

@@ -1,7 +1,9 @@
 # Drum pad ↔ piece ↔ MIDI note map over MCP
 
+> Stage: **intent**
 > Status: **idea**
-> Area: control-api (wire + tools); the data lives in
+> Area: control-api
+> Touches: wire + tools; the data lives in
 > [plugins-instruments](../../features/plugins-instruments/)
 > Source: feature request 2026-10-07, found while writing a prog-metal
 > drum part for SM Drums via MCP (was

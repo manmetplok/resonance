@@ -1,7 +1,9 @@
 # Make motif augmentation audible (or drop it)
 
+> Stage: **intent**
 > Status: **idea**
-> Area: compose (`resonance-music-theory`)
+> Area: compose
+> Touches: `resonance-music-theory`
 > Source: `docs/history/specs/todo.md` Tier 4 polish, "Fix Augment/InvertAugment washout" (noted in fd2581b). Still open at `8eac71b3`: `Transform::Augment` doubles `duration_ratio` (`motif_engine/build.rs`) and the realizer divides by the per-chord `total_ratio` (`motif_engine/phrase.rs`), so a uniform doubling cancels out; `plan_motif_transforms` still draws `Augment` (~7% of rolls) and `ComposedPair::InvertAugment`.
 
 ## Why

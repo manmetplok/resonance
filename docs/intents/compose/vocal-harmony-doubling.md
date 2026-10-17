@@ -1,5 +1,6 @@
 # Vocal harmony and doubling generator
 
+> Stage: **intent**
 > Status: **designed**
 > Area: compose
 > Source: prototype `docs/intents/prototypes/vocal-harmony-doubling-generator/index.html`.

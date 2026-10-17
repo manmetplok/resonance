@@ -1,5 +1,6 @@
 # Count-in setting and punch recording
 
+> Stage: **intent**
 > Status: **idea**
 > Area: hardware-io
 > Source: code reading for [recording](../../features/hardware-io/recording.md): `TransportState::precount_bars` is fixed at 2; the project's `punch_*` fields are aliases of the loop range.

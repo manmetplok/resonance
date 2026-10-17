@@ -1,5 +1,6 @@
 # Bus-to-bus routing that always sounds
 
+> Stage: **intent**
 > Status: **partly built** — slice 1 (every bus → bus send audible) shipped; the bus → bus output route has not
 > Area: mixer
 > Source: `resonance-audio/src/mixer/render/routing.rs::pull_bus_aux_sends` doc comment; found while documenting the mixer (2026-10-07)

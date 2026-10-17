@@ -1,7 +1,9 @@
 # Third-party plugin hosting: catalog UI, scan control and isolation
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: plugins-instruments (UI) with audio-engine (scan, isolation)
+> Area: plugins-instruments
+> Touches: UI with audio-engine (scan, isolation)
 > Source: `docs/intents/prototypes/third-party-plugin-hosting/` (epic #45);
 > checked against `resonance-audio/src/engine/scan.rs`,
 > `resonance-app/src/view/settings.rs`.

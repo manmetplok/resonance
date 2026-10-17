@@ -1,5 +1,6 @@
 # Multi-clip selection and marquee
 
+> Stage: **intent**
 > Status: **idea**
 > Area: timeline
 > Source: found in code on 2026-10-07 (the Arrange selection holds one clip)

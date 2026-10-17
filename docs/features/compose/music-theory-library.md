@@ -1,6 +1,7 @@
 # Music-theory library (`resonance-music-theory`)
 
-> Verified against master @ `acac5ea3` + chord spelling (BUG-72) on 2026-10-15.
+> Verified against master @ `acac5ea3` on 2026-10-15.
+> Also verified: chord spelling (BUG-72).
 > Spec history: `docs/history/specs/melody-generation-research.md`, `docs/history/specs/todo.md`.
 
 `resonance-music-theory` is the pure, headless crate behind everything

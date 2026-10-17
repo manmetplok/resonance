@@ -1,6 +1,7 @@
 # Settings
 
-> Verified against master @ `f9438e38` + the Compose section (BUG-70) on 2026-10-13.
+> Verified against master @ `f9438e38` on 2026-10-13.
+> Also verified: the Compose section (BUG-70).
 > Spec history: `docs/history/specs/command-palette.md` §8 (nav rail);
 > autosave from epic #32 / doc #171; code review FU-V3b, FU-M12a.
 

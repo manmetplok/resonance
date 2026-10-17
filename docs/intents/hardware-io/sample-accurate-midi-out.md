@@ -1,5 +1,6 @@
 # Sample-accurate hardware MIDI output
 
+> Stage: **intent**
 > Status: **idea**
 > Area: hardware-io
 > Source: `resonance-audio/src/engine/midi/outbound.rs` ("Once per engine-thread iteration (~16 ms) we look at the playhead delta"), `engine/midi/clock.rs::poll_midi_clock_send`, `poll_device_param_automation`.

@@ -1,7 +1,9 @@
 # Tempo and meter edits keep content on its bars
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: timeline (see `docs/features/timeline/tempo-and-signature-map.md`)
+> Area: timeline
+> Touches: see `docs/features/timeline/tempo-and-signature-map.md`
 > Source: ba doc #275 P1.4 (built for the bar-1 tempo only); behaviour pinned by `a_global_tempo_event_keeps_a_lane_on_its_sample` in `resonance-app/tests/control/control_automation.rs`
 
 ## Why

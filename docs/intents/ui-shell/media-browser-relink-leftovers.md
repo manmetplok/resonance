@@ -1,7 +1,9 @@
 # Media browser and relink leftovers
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: ui-shell (browser) with timeline (pool, relink) and control-api
+> Area: ui-shell
+> Touches: browser with timeline (pool, relink) and control-api
 > Source: prototype [`../prototypes/audio-sample-import-media-browser/`](../prototypes/audio-sample-import-media-browser/DESIGN.md);
 > [code review 2026-10-02](../../history/reviews/code-review-2026-10-02.md) FU-W4b, FU-W4c
 

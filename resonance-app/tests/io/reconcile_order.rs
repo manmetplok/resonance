@@ -197,7 +197,7 @@ fn a_diff_undo_sends_tempo_before_the_clips_and_only_changed_scalars() {
 }
 
 /// The table itself, pinned: a domain added, dropped or moved is a
-/// decision, recorded in `docs/history/refactor/A-13-reconcile.md`. `Globals` feeds
+/// decision, recorded in `docs/history/refactor/a-13-reconcile.md`. `Globals` feeds
 /// `Timeline` (the tempo map is rebuilt from the transport scalars) and
 /// the compose load precedes `Clips` (it resets the derived map). A diff
 /// restore's `Removals` (edges, then plugin instances and busses) precede

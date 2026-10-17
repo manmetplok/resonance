@@ -1,7 +1,9 @@
 # De-harsh cut readout
 
+> Stage: **intent**
 > Status: **idea**
-> Area: plugins-effects (mastering plugin editor), control-api (meter field)
+> Area: plugins-effects
+> Touches: mastering plugin editor, control-api (meter field)
 > Source: `docs/history/specs/deharsh-resonance-suppressor.md` §7 open question 7; confirmed open in code on 2026-10-07.
 
 ## Why

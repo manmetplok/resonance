@@ -1,7 +1,9 @@
 # Cocoa editor runtime: test and teardown leftovers
 
+> Stage: **intent**
 > Status: **idea** (checklist; needs a Mac)
-> Area: plugins-instruments (editor runtimes)
+> Area: plugins-instruments
+> Touches: editor runtimes
 > Source: [code review 2026-09-26](../../history/reviews/code-review-todo.md) FU-M8a, FU-M8c;
 > [code review 2026-10-02](../../history/reviews/code-review-2026-10-02.md) FU-A1a4
 

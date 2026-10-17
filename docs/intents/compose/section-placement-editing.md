@@ -1,5 +1,6 @@
 # Section placement editing (move, place-again target, clip ids on place)
 
+> Stage: **intent**
 > Status: **partly built** — fill on place shipped (BUG-73, see
 > [sections and placements](../../features/compose/sections-and-placements.md)).
 > Area: compose

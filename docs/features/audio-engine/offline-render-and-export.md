@@ -1,6 +1,7 @@
 # Offline render, mixdown export and bounce in place
 
-> Verified against master @ `f9438e38` on 2026-10-13 (plus the render.stems change).
+> Verified against master @ `f9438e38` on 2026-10-13.
+> Also verified: the render.stems change.
 > Spec history: "doc #196" (export pipeline, todos #650–#655) is cited in
 > code; prototype `docs/intents/prototypes/compressed-loudness-export-formats/`;
 > code-review findings ENG-06, ENG-07, ENG-08, ENG-13, MIX-02.

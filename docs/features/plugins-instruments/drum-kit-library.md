@@ -1,6 +1,7 @@
 # Drum kit library and plok.org downloads
 
-> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
+> Verified against master @ `2b28debd` on 2026-10-07.
+> Also verified: vocal phase 4.
 > Spec history: `docs/history/specs/drums-plugin-rework.md` §3–§4, slices
 > K1–K3 and K9 (merged in `0984dfc6`).
 

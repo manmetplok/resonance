@@ -1,6 +1,7 @@
 # Voice presets
 
-> Verified against master @ `ad042afb` + voice presets on 2026-10-13.
+> Verified against master @ `ad042afb` on 2026-10-13.
+> Also verified: voice presets.
 > Source: the user's decisions of 2026-10-13 (contents; built-ins = every voice scored 3+) and the 41-voice blind listen in [vocal follow-ups](../../intents/compose/vocal-followups.md) item 1.
 
 A voice preset is a singer and a delivery, put on a vocal lane in one

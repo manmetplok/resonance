@@ -1,7 +1,9 @@
 # RTKit fallback for render-pool realtime priority
 
+> Stage: **intent**
 > Status: **idea** (deferred until a machine needs it)
-> Area: audio-engine (`docs/features/audio-engine/render-pool.md`)
+> Area: audio-engine
+> Touches: `docs/features/audio-engine/render-pool.md`
 > Source: `docs/history/specs/realtime-multithreading.md` §11.4 Q1, §11.5;
 > `resonance-audio/src/render_pool/sched.rs` module doc ("RTKit over D-Bus
 > is not implemented"); confirmed on master @ `8eac71b3`.

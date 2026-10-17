@@ -1,5 +1,6 @@
 # Control API: review leftovers
 
+> Stage: **intent**
 > Status: **idea** (checklist)
 > Area: control-api
 > Source: [code review 2026-10-02](../../history/reviews/code-review-2026-10-02.md) FU-S1b, FU-S1c, FU-S1d, FU-A1b6;

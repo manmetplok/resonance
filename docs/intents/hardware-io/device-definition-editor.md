@@ -1,5 +1,6 @@
 # Device definition editor and portability
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: hardware-io
 > Source: `docs/intents/prototypes/device-presets-midi-automation/index.html` (epic #40, doc #201) compared with [device presets](../../features/hardware-io/device-presets.md).

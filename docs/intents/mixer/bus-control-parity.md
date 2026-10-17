@@ -1,5 +1,6 @@
 # Bus channel parity (pan, mute, solo, bus-sourced sends)
 
+> Stage: **intent**
 > Status: **idea**
 > Area: mixer
 > Source: gaps found while documenting the mixer (2026-10-07); ba doc #273 scoped busses to create/delete/rename/volume/chain/sidechain only

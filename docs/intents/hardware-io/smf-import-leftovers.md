@@ -1,5 +1,6 @@
 # SMF import leftovers
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: hardware-io
 > Source: `docs/history/prototypes/standard-midi-file-import/index.html` (doc #158) compared with [smf-import](../../features/hardware-io/smf-import.md); todo #511.

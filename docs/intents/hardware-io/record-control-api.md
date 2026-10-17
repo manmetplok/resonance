@@ -1,5 +1,6 @@
 # Recording over the control API
 
+> Stage: **intent**
 > Status: **idea**
 > Area: hardware-io
 > Source: `resonance-studio` skill ("The MCP can't set an audio track's input, mono or record-arm"); gap found while documenting [recording](../../features/hardware-io/recording.md).

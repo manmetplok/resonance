@@ -1,6 +1,7 @@
 # Project templates
 
-> Verified against master @ `f82be9b0` + the TIGER Mystic default on 2026-10-13.
+> Verified against master @ `f82be9b0` on 2026-10-13.
+> Also verified: the TIGER Mystic default.
 > Spec history: ba impl-plan doc #197 / design #192, todos #665/#666 (not in
 > the repo); prototype `docs/intents/prototypes/project-templates-starter-sessions/index.html`.
 

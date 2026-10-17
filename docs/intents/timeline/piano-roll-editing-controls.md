@@ -1,5 +1,6 @@
 # Piano-roll editing controls
 
+> Stage: **intent**
 > Status: **idea**
 > Area: timeline
 > Source: verifying `docs/features/timeline/midi-editor.md` on 2026-10-07; code comments "Velocity lane: not interactive for now (future: drag velocity bars)" (`view/midi_editor/input.rs`), "The piano roll has no velocity-drag yet" (`update/midi_editor.rs`).

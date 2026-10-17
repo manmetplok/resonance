@@ -1,5 +1,6 @@
 # Sidechain routing in the GUI
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: mixer
 > Source: ba todo #1312 (GUI half of #1311); design doc #157; prototype `docs/history/prototypes/external-sidechain-routing/index.html`

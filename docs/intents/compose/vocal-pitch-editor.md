@@ -1,7 +1,9 @@
 # Vocal pitch editor (graphical tuning of recorded vocals)
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: compose (editor UI); engine part is [audio-engine](../../features/audio-engine/)
+> Area: compose
+> Touches: editor UI; engine part is [audio-engine](../../features/audio-engine/)
 > Source: doc #160 (todos #352–#359) as cited in `resonance-app/src/update/vocal_tuning.rs` and `resonance-audio/src/engine/{vocal_analysis,vocal_render}.rs`.
 
 ## Why

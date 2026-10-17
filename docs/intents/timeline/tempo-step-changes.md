@@ -1,7 +1,9 @@
 # Tempo step changes
 
+> Stage: **intent**
 > Status: **idea**
-> Area: timeline (see `docs/features/timeline/tempo-and-signature-map.md`)
+> Area: timeline
+> Touches: see `docs/features/timeline/tempo-and-signature-map.md`
 > Source: found while documenting the tempo map, 2026-10-07; follows from ba todo #1382 (one tempo event per bar)
 
 ## Why

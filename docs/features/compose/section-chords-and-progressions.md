@@ -1,6 +1,7 @@
 # Section chords, scale and progression generators
 
-> Verified against master @ `acac5ea3` + chord spelling in the key (BUG-72) on 2026-10-15.
+> Verified against master @ `acac5ea3` on 2026-10-15.
+> Also verified: chord spelling in the key (BUG-72).
 > Spec history: `docs/history/specs/melody-generation-research.md`, `docs/history/specs/todo.md` (Tier 2 harmony items).
 
 Every section definition has its own **chord grid** (chords on whole

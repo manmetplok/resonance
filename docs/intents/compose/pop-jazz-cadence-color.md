@@ -1,7 +1,9 @@
 # Pop/jazz cadence colour
 
+> Stage: **intent**
 > Status: **idea**
-> Area: compose (`resonance-music-theory`)
+> Area: compose
+> Touches: `resonance-music-theory`
 > Source: `docs/history/specs/todo.md` Tier 4, "Pop/jazz cadence color" (§2C/§2E). Still open at `8eac71b3`: `CadenceGoal` (`derive/cadence.rs`) has only PAC/IAC/HC/Deceptive formulas; `SchemaKind` has no turnaround; the 12-bar blues is fixed `I I I I | IV IV I I | V IV I I`; schema variation is rotation + substitution only. The modal Markov table hints at an aeolian ♭VI→♭VII move, but there is no cadence for it.
 
 ## Why

@@ -1,7 +1,7 @@
 # Entity ids
 
 > Verified against master @ `ef215b08` on 2026-10-15.
-> Spec history: `docs/history/refactor/D-6-engine-created-ids.md` (design,
+> Spec history: `docs/history/refactor/d-6-engine-created-ids.md` (design,
 > §7a holds the human decisions), `docs/history/refactor/refactor-intent.md`
 > (Epic D), `docs/history/refactor/arch-migration-plan.md` → ARCH-04, "D-7b
 > landed", "D-7d landed".

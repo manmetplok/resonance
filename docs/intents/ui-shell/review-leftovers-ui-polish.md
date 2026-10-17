@@ -1,7 +1,9 @@
 # UI polish: review leftovers
 
+> Stage: **intent**
 > Status: **idea** (checklist)
-> Area: ui-shell (with mixer strips and Compose)
+> Area: ui-shell
+> Touches: with mixer strips and Compose
 > Source: [code review 2026-10-02](../../history/reviews/code-review-2026-10-02.md) FU-S2d, FU-U1c, FU-U1d, FU-U2b, FU-U2c, FU-U3b, FU-U3c, FU-W3b, FU-A1b5, UX-07/UX-19 remainders;
 > prototype `keyboard-shortcuts-command-palette` (⌘↵)
 

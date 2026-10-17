@@ -1,5 +1,6 @@
 # NAM A2-Lite: run slimmable models at reduced size
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: plugins-instruments
 > Source: deferred in code, `plugins/resonance-amp/src/nam/parse/container.rs`

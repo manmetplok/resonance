@@ -3,7 +3,7 @@
 > Verified against master @ `acac5ea3` on 2026-10-15.
 > Spec history: `docs/history/refactor/refactor-intent.md` (Epic A),
 > `docs/history/refactor/arch-migration-plan.md` (ARCH-01, ARCH-06 A6-4,
-> ARCH-09), `docs/history/refactor/A-13-reconcile.md`;
+> ARCH-09), `docs/history/refactor/a-13-reconcile.md`;
 > `docs/history/reviews/code-review-todo.md` (STATE-02, STATE-07, STATE-10,
 > CTL-03, VIEW-18, FU-A2a, FU-V5b).
 

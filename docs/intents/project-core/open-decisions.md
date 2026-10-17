@@ -1,7 +1,9 @@
 # Open product decisions from the reviews
 
+> Stage: **intent** (blocked)
 > Status: **blocked** (each item waits on a decision by Jorrit)
-> Area: project-core (cross-area register)
+> Area: project-core
+> Touches: cross-area register
 > Source: [code review 2026-09-26](../../history/reviews/code-review-todo.md) FU-B1, LIB-06;
 > [code review 2026-10-02](../../history/reviews/code-review-2026-10-02.md) DEP-04 / FU-X1b, FU-S1a, FU-D1b6, FU-A1b1, FU-A1b4, FU-W1e;
 > [refactor intent](../../history/refactor/refactor-intent.md) §4, A-13j

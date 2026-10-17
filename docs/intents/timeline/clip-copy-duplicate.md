@@ -1,7 +1,9 @@
 # Copy, paste and duplicate clips
 
+> Stage: **intent**
 > Status: **idea** (the ⌘D command exists, but only for section placements)
-> Area: timeline (clip copy) / ui-shell (command binding)
+> Area: timeline
+> Touches: clip copy / ui-shell (command binding)
 > Source: gap found while documenting clip editing (2026-10-07);
 > `docs/history/specs/command-palette.md` §5.3 as-built note; still true at
 > `8eac71b3`.

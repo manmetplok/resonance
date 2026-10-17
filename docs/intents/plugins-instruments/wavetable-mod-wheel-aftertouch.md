@@ -1,5 +1,6 @@
 # Wavetable synth: Mod Wheel and Aftertouch mod sources
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: plugins-instruments
 > Source: ba todos #1295 (built) and #1301 (open), noted in

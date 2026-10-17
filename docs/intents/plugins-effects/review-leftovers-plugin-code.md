@@ -1,7 +1,9 @@
 # First-party plugins: DSP and editor leftovers
 
+> Stage: **intent**
 > Status: **idea** (checklist)
-> Area: plugins-effects (also covers instrument plugins)
+> Area: plugins-effects
+> Touches: also covers instrument plugins
 > Source: [code review 2026-10-02](../../history/reviews/code-review-2026-10-02.md) FU-D1a3, FU-D1a4, FU-D1b2, FU-D1b4, FU-D1b5, FU-P2d, FU-P3a, FU-P3b, FU-P3c, FU-U3a, FU-X1a
 
 ## Why

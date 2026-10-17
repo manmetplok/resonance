@@ -1,5 +1,6 @@
 # Piano-roll note drag as one undo step
 
+> Stage: **intent**
 > Status: **idea**
 > Area: timeline
 > Source: verifying `docs/features/timeline/midi-editor.md` on 2026-10-07.

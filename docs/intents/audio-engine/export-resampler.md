@@ -1,5 +1,6 @@
 # Export resampling: one resampler, no rubato 0.16
 
+> Stage: **intent**
 > Status: **idea**
 > Area: audio-engine
 > Source: dependency review 2026-10-15. rubato 0.16 is pinned, and the latest release, 5.0, is a full API rewrite.

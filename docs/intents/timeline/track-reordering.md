@@ -1,7 +1,9 @@
 # Reorder tracks
 
+> Stage: **intent**
 > Status: **idea**
-> Area: timeline (arrange view), mirrored in the mixer
+> Area: timeline
+> Touches: arrange view, mirrored in the mixer
 > Source: found in code on 2026-10-07; the track-grouping design (DESIGN.md decision 6) assumes headers can be dragged
 
 ## Why

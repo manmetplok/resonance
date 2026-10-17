@@ -12,7 +12,7 @@ the record of where each epic started — they are not today's numbers.
 | A — one declarative project model | **Done** (A-13j @ 423ed8c1): no `UndoExtras`, one `Reconcile` driver, no catch-all undo arms, `Resonance` at 40 fields. A-14 (delta snapshots) judged not worth it. | `arch-migration-plan.md` → "A-13j landed" |
 | B — render-graph publishing | **Done** (B-6): no `RwLock` in `engine/`/`mixer/`, enforced by `engine_and_mixer_take_no_state_lock` | `engine/render_graph.rs` |
 | C — engine error taxonomy | **Done** (C-5): `EngineError`, no `Result<_, String>` in audio/common pub fns, enforced by arch-invariants | `types/error.rs` |
-| D — app-owned entity ids | **In progress**: D-1…D-5, D-6 (design), D-7a–d landed. **Open:** D-7e (take-group ids in the `GrantIds` grant) and D-7f (delete the engine's `next_clip_id` / `next_take_group_id`, `reserve_clip_id`, the `SetProjectDir` scan) | `docs/history/refactor/D-6-engine-created-ids.md`, `arch-migration-plan.md` → "D-7d landed" |
+| D — app-owned entity ids | **In progress**: D-1…D-5, D-6 (design), D-7a–d landed. **Open:** D-7e (take-group ids in the `GrantIds` grant) and D-7f (delete the engine's `next_clip_id` / `next_take_group_id`, `reserve_clip_id`, the `SetProjectDir` scan) | `docs/history/refactor/d-6-engine-created-ids.md`, `arch-migration-plan.md` → "D-7d landed" |
 | E — feature-gate `resonance-common`'s model | **Done**: `model`/`decode` features, `plugins_disable_default_features_on_resonance_common` | `resonance-common/Cargo.toml` |
 
 This is the hand-off for the remaining architecture work from the 2026-09-26

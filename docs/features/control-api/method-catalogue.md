@@ -1,6 +1,7 @@
 # Control method catalogue
 
-> Verified against master @ `f9438e38` + voice presets + `render.stems` + `vocal.refit_melody` on 2026-10-13.
+> Verified against master @ `f9438e38` on 2026-10-13.
+> Also verified: voice presets + `render.stems` + `vocal.refit_melody`.
 > Source of truth: `resonance_control::methods::capabilities()` and each
 > method constant's doc comment in `resonance-control/src/methods/*.rs`.
 

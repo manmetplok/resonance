@@ -1,7 +1,9 @@
 # Scroll the arrangement to a track
 
+> Stage: **intent**
 > Status: **idea**
-> Area: ui-shell (command palette) / timeline
+> Area: ui-shell
+> Touches: command palette / timeline
 > Source: `docs/history/specs/command-palette.md` §7.4 as-built note ("`#` selects the track but does not scroll the arrangement to it"); still true at `8eac71b3`.
 
 ## Why

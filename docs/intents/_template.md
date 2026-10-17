@@ -1,7 +1,9 @@
 # <Intent name>
 
+> Stage: **intent** (add ` (blocked)` when Status is blocked)
 > Status: **idea** | **designed** | **partly built** | **blocked**
-> Area: <features/ area it would live in once built>
+> Area: <the folder this intent is in, exactly>
+> Touches: <other areas or docs it touches (optional; drop the line if none)>
 > Source: <where this came from — review finding id, field report, prototype, conversation>
 
 ## Why

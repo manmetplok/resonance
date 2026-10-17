@@ -1,7 +1,8 @@
 # Lane generators and derived clips
 
-> Verified against master @ `acac5ea3` + fill on place (BUG-73) on 2026-10-15.
-> Spec history: `docs/history/refactor/A-6-derived-clips.md` (derived-clip map), `docs/history/specs/melody-generation-research.md` + `todo.md` (generator quality).
+> Verified against master @ `acac5ea3` on 2026-10-15.
+> Also verified: fill on place (BUG-73).
+> Spec history: `docs/history/refactor/a-6-derived-clips.md` (derived-clip map), `docs/history/specs/melody-generation-research.md` + `todo.md` (generator quality).
 
 Each `(section definition, track)` pair is a **lane**. A lane can carry a
 generator — Bass, Melody (lead), Pad or Vocal — that turns the section's

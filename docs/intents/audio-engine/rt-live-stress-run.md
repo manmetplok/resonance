@@ -1,7 +1,9 @@
 # Live stress run of the parallel render pool
 
+> Stage: **intent**
 > Status: **designed** (procedure in the spec; never run)
-> Area: audio-engine (`docs/features/audio-engine/render-pool.md`)
+> Area: audio-engine
+> Touches: `docs/features/audio-engine/render-pool.md`
 > Source: `docs/history/specs/realtime-multithreading.md` §6 and §11.5
 > ("Still open"); memory note "live 10-min run pending".
 

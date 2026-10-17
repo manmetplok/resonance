@@ -1,6 +1,7 @@
 # Automation control API (`automation.*`)
 
-> Verified against master @ `2b28debd` + vocal phase 4 on 2026-10-07.
+> Verified against master @ `2b28debd` on 2026-10-07.
+> Also verified: vocal phase 4.
 > Spec history: `docs/history/specs/automation-control-api.md` (built 2026-09-28, merged @ `4c6ef5fb`).
 
 An agent can read, write and shape parameter-automation lanes on a running

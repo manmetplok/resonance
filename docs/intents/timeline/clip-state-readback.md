@@ -1,7 +1,9 @@
 # Clip state read-back in `song.tracks`
 
+> Stage: **intent**
 > Status: **idea**
-> Area: timeline (control-api surface)
+> Area: timeline
+> Touches: control-api surface
 > Source: review follow-up FU-W2c (`docs/history/reviews/code-review-2026-10-02.md`);
 > gap found while documenting clip editing.
 > Register items covered: FU-W2c (review 2026-10-02).

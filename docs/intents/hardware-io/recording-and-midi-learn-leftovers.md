@@ -1,5 +1,6 @@
 # Recording and MIDI Learn: live checks and leftovers
 
+> Stage: **intent**
 > Status: **idea** (checklist)
 > Area: hardware-io
 > Source: [code review 2026-10-02](../../history/reviews/code-review-2026-10-02.md) FU-R1, FU-R1d, FU-R1e, FU-W3a, FU-A1b3, FU-W1c, FU-W1d, FU-W1f

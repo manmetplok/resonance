@@ -1,8 +1,7 @@
 # Vocal rendering (singing synthesis)
 
-> Verified against master @ `acac5ea3` + the per-placement render state and the
-> take laid at a new placement (BUG-73) on 2026-10-15; the rest @ `f9438e38` + the `singing` skill and the
-> chord-change vocal melody flow (BUG-70) on 2026-10-13.
+> Verified against master @ `acac5ea3` on 2026-10-15.
+> Also verified: the per-placement render state and the take laid at a new placement (BUG-73); the rest @ `f9438e38` + the `singing` skill and the chord-change vocal melody flow (BUG-70) on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §7–§10 (slices 2, 6, 9, 12–14); crate notes `resonance-svs/README.md`, `resonance-svs/NOTES.md` (partly stale, see below); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane's notes and lyrics are sung by a DiffSinger voicebank. The app

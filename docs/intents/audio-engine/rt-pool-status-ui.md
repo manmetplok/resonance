@@ -1,7 +1,9 @@
 # Show render-pool status, stutter counters and the thread setting in the app
 
+> Stage: **intent**
 > Status: **idea**
-> Area: audio-engine data, ui-shell for the view
+> Area: audio-engine
+> Touches: ui-shell for the view; audio-engine holds the data
 > Source: `docs/history/specs/realtime-multithreading.md` §11.5 ("A UI
 > surface for `AudioEvent::RenderThreads` and the per-cycle critical
 > track"); `resonance-app/src/engine_events/dispatch.rs` ("no UI surface

@@ -1,7 +1,9 @@
 # Takes in the control API
 
+> Stage: **intent**
 > Status: **idea**
-> Area: timeline (see `docs/features/timeline/takes-and-comping.md`)
+> Area: timeline
+> Touches: see `docs/features/timeline/takes-and-comping.md`
 > Source: `SetLoopRecordModeParams` doc in `resonance-control/src/methods/transport.rs` promises "take methods" that do not exist
 
 ## Why

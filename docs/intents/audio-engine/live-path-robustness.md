@@ -1,5 +1,6 @@
 # Live-path robustness: lock misses, PDC transitions, tails, stopped mix, port rescans
 
+> Stage: **intent**
 > Status: **idea**
 > Area: audio-engine
 > Source: [code review 2026-10-02](../../history/reviews/code-review-2026-10-02.md) FU-R1c, FU-R2a, FU-R3a, FU-R3b, FU-R4b, FU-R4c, FU-H1c;

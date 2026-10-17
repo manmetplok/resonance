@@ -1,5 +1,6 @@
 # Separate climaxes across simultaneous melodies
 
+> Stage: **intent**
 > Status: **idea**
 > Area: compose
 > Source: `docs/history/specs/todo.md` Tier 4, "Cross-lane climax separation" (§2A: "two simultaneous melodies must not place climaxes together"). Still open at `8eac71b3`: climax placement (`derive/climax.rs`, `section_climax_phrase`) runs inside each generator; nothing in `resonance-app` mentions climaxes.

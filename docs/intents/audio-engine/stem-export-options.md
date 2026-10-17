@@ -1,7 +1,9 @@
 # Stem export options, overwrite prompt and retry
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: audio-engine (export) with ui-shell (export dialog)
+> Area: audio-engine
+> Touches: export with ui-shell (export dialog)
 > Source: prototype [`../prototypes/multitrack-stem-and-midi-export/`](../prototypes/multitrack-stem-and-midi-export/index.html); review 2026-10-02 FU-A1a7
 
 ## Why

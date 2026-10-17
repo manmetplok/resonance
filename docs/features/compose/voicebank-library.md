@@ -1,6 +1,7 @@
 # Voicebank library (registry, plok.org install, library overlay)
 
-> Verified against master @ `ad042afb` + the `singing` skill + voice presets on 2026-10-13.
+> Verified against master @ `ad042afb` on 2026-10-13.
+> Also verified: the `singing` skill + voice presets.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4–§5 (slices 4 and 7); research [`singing-voicebank-options-2026`](../../history/research/singing-voicebank-options-2026.md).
 
 Voicebanks are content a user installs, not three banks fixed in the code.

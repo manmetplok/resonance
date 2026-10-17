@@ -1,6 +1,7 @@
 # Lyric pronunciation (G2P and dictionary)
 
-> Verified against master @ `c6cc8fd5` + vocal intelligibility on 2026-10-08.
+> Verified against master @ `c6cc8fd5` on 2026-10-08.
+> Also verified: vocal intelligibility.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §4.4, §8 (slices 5, 10, 11); prototype `docs/intents/prototypes/svs-pronunciation-control/index.html` (design #173, notes #174).
 
 Every sung syllable becomes a list of ARPAbet phonemes before it reaches

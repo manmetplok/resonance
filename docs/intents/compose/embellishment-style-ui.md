@@ -1,5 +1,6 @@
 # EmbellishmentStyle control in the melody inspector
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: compose
 > Source: `docs/history/specs/todo.md` Tier 4, "EmbellishmentStyle UI wiring" (knob added in 20d3581). Still open at `8eac71b3`: no file under `resonance-app/src` mentions `embellishment` / `EmbellishmentStyle`.

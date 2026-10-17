@@ -1,5 +1,6 @@
 # App code: refactor and review leftovers
 
+> Stage: **intent**
 > Status: **idea** (checklist)
 > Area: project-core
 > Source: [refactor intent](../../history/refactor/refactor-intent.md) / [arch migration plan](../../history/refactor/arch-migration-plan.md) (ARCH-03 A3-3, ARCH-06, A-6 §8, A-12a, A-13 §15, FU-A4a, FU-UPD05a);

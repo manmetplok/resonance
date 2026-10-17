@@ -1,8 +1,10 @@
 # Render clip warp (time-stretch) in playback and bounce
 
+> Stage: **intent**
 > Status: **partly built** (data model, UI, persistence, control API and DSP
 > exist; no render path reads them)
-> Area: audio-engine (render core), with timeline consequences
+> Area: audio-engine
+> Touches: render core, with timeline consequences
 > Source: `docs/history/reviews/code-review-2026-10-02.md` FU-W2a, FU-W2b,
 > FU-W2e; doc #166; confirmed on master @ `8eac71b3`.
 > Register items covered: FU-W2a, FU-W2b, FU-W2e (review 2026-10-02).

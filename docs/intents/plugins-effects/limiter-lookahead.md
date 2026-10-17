@@ -1,5 +1,6 @@
 # Mastering limiter: adjustable lookahead
 
+> Stage: **intent**
 > Status: **idea**
 > Area: plugins-effects
 > Source: [plugin audit](../../history/reviews/plugin-audit.md) M6

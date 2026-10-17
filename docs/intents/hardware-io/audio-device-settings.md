@@ -1,5 +1,6 @@
 # Audio device settings
 
+> Stage: **intent**
 > Status: **idea**
 > Area: hardware-io
 > Source: code reading for [audio devices and PipeWire](../../features/hardware-io/audio-devices-and-pipewire.md); memory note "engine reads quantum at startup".

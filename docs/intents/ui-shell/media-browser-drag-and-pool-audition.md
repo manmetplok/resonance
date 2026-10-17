@@ -1,7 +1,9 @@
 # Drag from the media browser to the timeline; audition pool assets
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: ui-shell (media browser) / timeline (drop)
+> Area: ui-shell
+> Touches: media browser / timeline (drop)
 > Source: design doc #175 (todo #605) and `docs/intents/prototypes/audio-sample-import-media-browser/DESIGN.md` ("drag-to-timeline is the primary placement gesture"); code check at `8eac71b3`.
 
 ## Why

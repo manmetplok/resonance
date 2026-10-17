@@ -5,7 +5,7 @@
 //! [`Resonance`](crate::Resonance).
 //!
 //! Grouped together per the A-12 survey
-//! (`docs/history/refactor/A-12-resonance-fields.md`): every field here is already
+//! (`docs/history/refactor/a-12-resonance-fields.md`): every field here is already
 //! doc-#175 media/browse state, and several of their own doc comments
 //! already say so explicitly ("same rule as collapse state", "the twin of
 //! `RelinkState`"). Only `pool` and `pool_import` persist / undo; the rest
@@ -57,7 +57,7 @@ pub struct MediaState {
     /// lives on each pool asset; this only tracks the in-flight resolve.
     /// Not undoable, not persisted. See `state::relink`.
     pub relink: state::RelinkState,
-    /// The app's own id allocators (D-6, `docs/history/refactor/D-6-engine-created-ids.md`):
+    /// The app's own id allocators (D-6, `docs/history/refactor/d-6-engine-created-ids.md`):
     /// pool assets (D-7a) — every `pool.import` / drag-drop / dialog
     /// import draws its ids from here before sending
     /// `AudioCommand::ImportAudioToPool` — and clips (D-7b), the one

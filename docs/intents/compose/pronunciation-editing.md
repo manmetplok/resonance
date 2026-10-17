@@ -1,5 +1,6 @@
 # Pronunciation editing, dictionary and persistence
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: compose
 > Source: prototype `docs/intents/prototypes/svs-pronunciation-control/index.html` (design #173, notes #174; todos #494–#500).

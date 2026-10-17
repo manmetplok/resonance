@@ -2,7 +2,7 @@
 
 > Verified against master @ `ef215b08` on 2026-10-15.
 > Spec history: `docs/history/refactor/refactor-intent.md` (epics B, C, D),
-> `docs/history/refactor/D-6-engine-created-ids.md`.
+> `docs/history/refactor/d-6-engine-created-ids.md`.
 
 The app drives the audio engine by sending it `AudioCommand`s and reading
 back `AudioEvent`s. One engine control thread owns all engine state, runs

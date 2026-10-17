@@ -1,7 +1,8 @@
 # Sections and placements
 
-> Verified against master @ `acac5ea3` + fill on place (BUG-73) on 2026-10-15.
-> Spec history: none in `docs/history/specs/`; leads in `docs/history/refactor/A-6-derived-clips.md` and `docs/history/reviews/code-review-2026-10-02.md` (VIEW-04/05/12/13/17).
+> Verified against master @ `acac5ea3` on 2026-10-15.
+> Also verified: fill on place (BUG-73).
+> Spec history: none in `docs/history/specs/`; leads in `docs/history/refactor/a-6-derived-clips.md` and `docs/history/reviews/code-review-2026-10-02.md` (VIEW-04/05/12/13/17).
 
 A song in the Compose tab is built from **section definitions** (Intro,
 Verse, Chorus …: a name, a colour, a length in bars, a chord grid, a scale,

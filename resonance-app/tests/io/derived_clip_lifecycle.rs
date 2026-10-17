@@ -1,5 +1,5 @@
 //! The compose derived-clip map and id counter across user deletes and
-//! project reopens (code review FU-A6b, FU-A6c; `docs/history/refactor/A-6-derived-clips.md` §8).
+//! project reopens (code review FU-A6b, FU-A6c; `docs/history/refactor/a-6-derived-clips.md` §8).
 //!
 //! FU-A6b: deleting a generated clip on the timeline used to leave its
 //! `(section, placement, track) → clip` entry behind. The dangling entry
@@ -21,7 +21,7 @@
 //!
 //! FU-A6d: `compose.vocal_audio.clips` (the rendered-vocal-audio-clip map,
 //! keyed the same way as `derived_clips` but out of A-6's scope — see
-//! `docs/history/refactor/A-6-derived-clips.md` §1) has the same "clip the user moved
+//! `docs/history/refactor/a-6-derived-clips.md` §1) has the same "clip the user moved
 //! outlives its placement's purge" hole `remove_bars` had for MIDI derived
 //! clips before FU-A6b, but only in `remove_bars`: a single-clip user
 //! delete (`clip.delete` / the GUI Delete key) and a whole-placement delete
@@ -583,7 +583,7 @@ fn remove_bars_drops_a_moved_vocal_audio_clips_entry() {
 /// purely positional — it claimed a clip only on a placement's start bar
 /// — so a clip restored where the user had dragged it was not reclaimed
 /// and its lane read `not_rendered` (the gap
-/// `docs/history/refactor/A-6-derived-clips.md` noted). A take now carries
+/// `docs/history/refactor/a-6-derived-clips.md` noted). A take now carries
 /// the placement it plays (`ProjectClip::vocal_take`), so wherever it
 /// sits, it goes back to its lane, and the next render replaces it.
 #[test]

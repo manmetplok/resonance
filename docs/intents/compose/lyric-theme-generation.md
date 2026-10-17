@@ -1,5 +1,6 @@
 # Theme-driven lyric generation
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: compose
 > Source: code reading 2026-10-07 — `VocalParams::{theme, pov, avoid_cliches}` are edited in the rail but unused by `generate_lyrics` (`resonance-music-theory/src/derive/vocal/lyrics.rs`).

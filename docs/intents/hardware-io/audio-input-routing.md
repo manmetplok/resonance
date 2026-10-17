@@ -1,5 +1,6 @@
 # Audio input routing beyond one device
 
+> Stage: **intent**
 > Status: **idea**
 > Area: hardware-io
 > Source: code reading of `resonance-audio/src/engine/tracks.rs::sync_input_stream` and `engine/transport.rs::open_recording_session` while documenting [audio input and monitoring](../../features/hardware-io/audio-input-and-monitoring.md).

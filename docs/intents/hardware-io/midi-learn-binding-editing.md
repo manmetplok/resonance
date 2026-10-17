@@ -1,5 +1,6 @@
 # MIDI Learn: binding editing and more targets
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: hardware-io
 > Source: code reading for [MIDI Learn](../../features/hardware-io/midi-learn.md); architecture doc #167.

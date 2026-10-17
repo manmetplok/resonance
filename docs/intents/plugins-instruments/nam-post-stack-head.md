@@ -1,7 +1,9 @@
 # NAM: load models with a top-level post-stack head
 
+> Stage: **intent**
 > Status: **idea**
-> Area: plugins-instruments (amp plugin)
+> Area: plugins-instruments
+> Touches: amp plugin
 > Source: [plugin audit](../../history/reviews/plugin-audit.md) A1
 
 ## Why

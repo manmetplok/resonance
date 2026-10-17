@@ -1,7 +1,9 @@
 # Share the phrase plan between harmony and melody
 
+> Stage: **intent**
 > Status: **idea**
-> Area: compose (`resonance-music-theory`)
+> Area: compose
+> Touches: `resonance-music-theory`
 > Source: `docs/history/specs/todo.md` Tier 4, "Harmony ↔ melody phrase-plan coordination" (§2B of `melody-generation-research.md`; deferred in f676696). Still open at `8eac71b3`: `phrase_grammar_roles` is only referenced inside `derive/motif_engine/`, never in `generator/`.
 
 ## Why

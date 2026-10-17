@@ -1,7 +1,9 @@
 # Live agent session with the mix-character effects
 
+> Stage: **intent**
 > Status: **partly built** (everything is built; the end-to-end check is not done)
-> Area: plugins-effects (with the skills in `resonance-agent-plugin/`)
+> Area: plugins-effects
+> Touches: with the skills in `resonance-agent-plugin/`
 > Source: `docs/history/specs/reverb-algorithms.md` status line and phase R7 exit ("one live agent session that mixes a project end to end using the type table"); `docs/history/specs/warmth-width-depth.md` slice W4 exit and the build's open items (live agent session). Still open on 2026-10-07: no session report exists in the repo.
 
 ## Why

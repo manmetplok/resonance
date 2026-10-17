@@ -1,7 +1,9 @@
 # Markers in the control API
 
+> Stage: **intent**
 > Status: **idea**
-> Area: timeline (see `docs/features/timeline/markers.md`)
+> Area: timeline
+> Touches: see `docs/features/timeline/markers.md`
 > Source: found while documenting markers, 2026-10-07
 
 ## Why

@@ -1,7 +1,9 @@
 # Readouts an agent can't see yet
 
+> Stage: **intent**
 > Status: **idea**
-> Area: control-api (with mixer metering and compose)
+> Area: control-api
+> Touches: with mixer metering and compose
 > Source: [plugin audit plan](../../history/reviews/plugin-audit-plan.md) ledger "per-band GR, key-connected → meter.* readout" and X5;
 > [code review 2026-09-26](../../history/reviews/code-review-todo.md) FU-M11b (rest);
 > [field report 2026-10-06](../../history/reviews/field-report-2026-10-06.md) §4 follow-up

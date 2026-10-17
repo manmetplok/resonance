@@ -1,6 +1,7 @@
 # MCP server (`resonance-mcp`)
 
-> Verified against master @ `86e5c2af` + vocal-params work on 2026-10-07.
+> Verified against master @ `86e5c2af` on 2026-10-07.
+> Also verified: vocal-params work.
 > Spec history: ba doc #266 (MCP server design), epic #200 (not in the
 > repo). Lead: `resonance-mcp/README.md`, which is partly stale (see
 > Decisions and deviations).

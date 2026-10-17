@@ -1,7 +1,9 @@
 # Freeze in the control API
 
+> Stage: **intent**
 > Status: **idea**
-> Area: timeline (see `docs/features/timeline/track-freeze-ui.md`)
+> Area: timeline
+> Touches: see `docs/features/timeline/track-freeze-ui.md`
 > Source: found while documenting freeze, 2026-10-07
 
 ## Why

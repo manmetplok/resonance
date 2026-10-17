@@ -1,7 +1,9 @@
 # Vocals: what is left after the MCP-control and quality work
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: compose (vocals) — [vocal rendering](../../features/compose/vocal-rendering.md), [voicebank library](../../features/compose/voicebank-library.md), [lyrics and melody](../../features/compose/vocal-lyrics-and-melody.md)
+> Area: compose
+> Touches: vocals — [vocal rendering](../../features/compose/vocal-rendering.md), [voicebank library](../../features/compose/voicebank-library.md), [lyrics and melody](../../features/compose/vocal-lyrics-and-melody.md)
 > Source: the leftovers of [`vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) (all 14 slices built, 2026-10-07; its §11 decision table stays there), the builders' known gaps and the 2026-10-07 code review.
 
 ## Why

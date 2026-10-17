@@ -1,5 +1,6 @@
 # Chord track editing surface
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: compose
 > Source: code reading 2026-10-07 — `ChordTrackMessage` variants with no sender (`update/chord_track.rs`); epic #33 / doc #168 view todo #442.

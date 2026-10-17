@@ -1,7 +1,9 @@
 # Settings: expose render threads, backup retention and keymap unbind
 
+> Stage: **intent**
 > Status: **idea**
-> Area: ui-shell (Settings)
+> Area: ui-shell
+> Touches: Settings
 > Source: code check at `8eac71b3`. `AppSettings` fields with no UI; the prototype's Preferences pages (`docs/history/prototypes/keyboard-shortcuts-command-palette/index.html`: Audio & MIDI, Appearance).
 
 ## Why

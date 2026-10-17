@@ -1,6 +1,7 @@
 # Control protocol and conventions
 
-> Verified against master @ `cb3b1d6a` + voicebank registry (vocal slices 4–5) on 2026-10-07.
+> Verified against master @ `cb3b1d6a` on 2026-10-07.
+> Also verified: voicebank registry (vocal slices 4–5).
 > Spec history: ba doc #265 (not in the repo). Code-review findings cited
 > below (CTL-01, CTL-03, ARCH2-06, …) are in
 > `docs/history/reviews/code-review-todo.md`.

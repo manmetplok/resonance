@@ -1,5 +1,6 @@
 # Drum groove feel: fills, step velocity, control params
 
+> Stage: **intent**
 > Status: **partly built** — swing and humanize shipped (BUG-51, see
 > [drum arrangement](../../features/compose/drum-arrangement.md)).
 > Area: compose

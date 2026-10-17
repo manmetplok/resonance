@@ -1,7 +1,9 @@
 # Finish track groups
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: timeline (with a mixer and control-api slice)
+> Area: timeline
+> Touches: with a mixer and control-api slice
 > Source: `docs/intents/prototypes/track-grouping-folder-tracks/DESIGN.md` (epic #36, doc #200); gaps found in code on 2026-10-07
 
 ## Why

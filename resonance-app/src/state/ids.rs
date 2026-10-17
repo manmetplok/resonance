@@ -164,7 +164,7 @@ pub fn allocate_unused(next: &mut u64, in_use: impl Fn(u64) -> bool) -> u64 {
 
 // ---------------------------------------------------------------------------
 // D-7a / D-7b: session-monotonic counters for the spaces the app allocates
-// from one counter (`docs/history/refactor/D-6-engine-created-ids.md` §4.1): pool
+// from one counter (`docs/history/refactor/d-6-engine-created-ids.md` §4.1): pool
 // assets (D-7a) and clips (D-7b). D-7e adds a third for take groups.
 // ---------------------------------------------------------------------------
 

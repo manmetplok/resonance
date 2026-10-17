@@ -1,7 +1,9 @@
 # Restore from a versioned backup
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: project-core (`docs/features/project-core/save-open-new.md`)
+> Area: project-core
+> Touches: `docs/features/project-core/save-open-new.md`
 > Source: backup subsystem (ba todo #462, code review STATE-12);
 > `list_backups` exists "for the restore UI" but has no caller. Checked open
 > in code on 2026-10-07.

@@ -1,7 +1,9 @@
 # MIDI controller data: record, Thru, import
 
+> Stage: **intent**
 > Status: **idea**
-> Area: hardware-io (clip storage: timeline)
+> Area: hardware-io
+> Touches: clip storage: timeline
 > Source: `resonance-audio/src/engine/midi/live.rs` ("Controllers reach the instrument on the audio thread (HOST-13); recording them and sending them Thru is not built yet"); `midi_io.rs` imports notes only.
 > Register items covered: FU-H1a (review 2026-10-02, what HOST-13 left).
 

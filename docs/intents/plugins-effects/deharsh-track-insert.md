@@ -1,5 +1,6 @@
 # De-harsh on tracks and busses
 
+> Stage: **intent**
 > Status: **idea**
 > Area: plugins-effects
 > Source: `docs/history/specs/deharsh-resonance-suppressor.md` §5.3 and §7 open question 8; `docs/history/specs/warmth-width-depth.md` §6.3 ("the suppressor core lives in `resonance-dsp` so the `eq` plugin or a track-level insert can reuse it later"). Confirmed not built on 2026-10-07.

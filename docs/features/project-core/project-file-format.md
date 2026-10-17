@@ -1,6 +1,7 @@
 # Project file format
 
-> Verified against master @ `cb3b1d6a` + pronunciation persistence on 2026-10-07.
+> Verified against master @ `cb3b1d6a` on 2026-10-07.
+> Also verified: pronunciation persistence.
 > Spec history: none as one spec; the format grew field by field. Leads:
 > `docs/history/refactor/arch-migration-plan.md` (ARCH-01 A1-2 folded every
 > undo side-car into the file), `docs/history/reviews/code-review-todo.md`

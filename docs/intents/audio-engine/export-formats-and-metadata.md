@@ -1,7 +1,9 @@
 # Expose export formats, sample rate, normalisation and metadata
 
+> Stage: **intent**
 > Status: **partly built** (engine done, no GUI or control surface)
-> Area: audio-engine (`docs/features/audio-engine/offline-render-and-export.md`)
+> Area: audio-engine
+> Touches: `docs/features/audio-engine/offline-render-and-export.md`
 > with the export dialog in project-core
 > Source: prototype `docs/intents/prototypes/compressed-loudness-export-formats/`;
 > confirmed on master @ `8eac71b3`.

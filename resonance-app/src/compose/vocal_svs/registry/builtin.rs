@@ -91,7 +91,7 @@ pub struct BuiltinBank {
 
 /// TIGER's voice modes. Its acoustic model is shared with about 36 other
 /// creators' speakers; only TIGER's own seven are offered (research note
-/// `diffsinger_english_ecosystem.md` §1).
+/// `diffsinger-english-ecosystem.md` §1).
 const TIGER_SPEAKERS: &[BuiltinSpeaker] = &[
     BuiltinSpeaker {
         id: "glam",
@@ -420,7 +420,7 @@ pub static BUILTIN_BANKS: &[BuiltinBank] = &[
         speakers: TIGER_SPEAKERS,
         default_speaker: tiger_default_speaker,
         // A male voice: A2..C#5 at the extremes (DiffSinger wiki, research
-        // note `diffsinger_english_ecosystem.md` §1); a pop line sits
+        // note `diffsinger-english-ecosystem.md` §1); a pop line sits
         // C3..A4. Every mode is the same singer. Whisper heard the audition
         // phrase equally well (90-95 %) centred anywhere from D3 to F4.
         range: (48, 69),
@@ -446,7 +446,7 @@ pub static BUILTIN_BANKS: &[BuiltinBank] = &[
         speakers: &[],
         default_speaker: no_default_speaker,
         // Alto, optimal C3..G5 (UTAU wiki, research note
-        // `diffsinger_english_ecosystem.md` §1). Her words blur as the
+        // `diffsinger-english-ecosystem.md` §1). Her words blur as the
         // line climbs: Whisper heard the audition phrase 54 / 67 / 88 / 100 %
         // centred on A4 / E4 / B3 / F#3, so a line sits D3..A#4.
         range: (50, 70),

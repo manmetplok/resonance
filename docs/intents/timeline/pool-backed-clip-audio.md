@@ -1,5 +1,6 @@
 # Pool-backed clip audio
 
+> Stage: **intent**
 > Status: **idea**
 > Area: timeline
 > Source: verifying `docs/features/timeline/audio-pool-and-import.md` on 2026-10-07 (doc #175 intent: clips reference pool assets).

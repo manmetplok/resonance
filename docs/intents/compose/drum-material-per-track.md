@@ -1,5 +1,6 @@
 # Drum material per drum track
 
+> Stage: **intent**
 > Status: **idea**
 > Area: compose
 > Source: code reading 2026-10-07 — `materialize_drum_clips_for` writes to every drum track; `generate.drums` takes a `track_id` it only validates.

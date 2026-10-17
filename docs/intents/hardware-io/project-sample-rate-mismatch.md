@@ -1,7 +1,9 @@
 # Opening a project at a different sample rate
 
+> Stage: **intent**
 > Status: **idea**
-> Area: hardware-io / project-core
+> Area: hardware-io
+> Touches: project-core
 > Source: code reading: `ProjectFile::sample_rate` is written in `update/project_io/serialize.rs` and never read; clip, loop and marker positions are stored in samples.
 
 ## Why

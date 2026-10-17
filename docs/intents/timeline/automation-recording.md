@@ -1,7 +1,9 @@
 # Automation recording (write / touch / latch)
 
+> Stage: **intent**
 > Status: **idea**
-> Area: timeline (with audio-engine for the capture path)
+> Area: timeline
+> Touches: with audio-engine for the capture path
 > Source: `docs/history/specs/automation-control-api.md` §8 "Out of scope: recording automation from live control moves"; no write mode exists in code at 8eac71b3.
 
 ## Why

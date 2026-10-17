@@ -1,9 +1,11 @@
 # Finish app-owned entity ids (D-7e, D-7f)
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: project-core (`docs/features/project-core/entity-ids.md`)
+> Area: project-core
+> Touches: `docs/features/project-core/entity-ids.md`
 > Source: Epic D in `docs/history/refactor/refactor-intent.md`; steps D-7e and
-> D-7f in `docs/history/refactor/D-6-engine-created-ids.md` §6. Checked
+> D-7f in `docs/history/refactor/d-6-engine-created-ids.md` §6. Checked
 > open in code on 2026-10-07. FU-D7d (`ClearAll` ends a live-MIDI capture)
 > shipped 2026-10-15 as BUG-66; see
 > [engine-command-loop.md](../../features/audio-engine/engine-command-loop.md).

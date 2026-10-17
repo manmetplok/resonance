@@ -1,7 +1,9 @@
 # Wire up MIDI project export
 
+> Stage: **intent**
 > Status: **partly built** (writer exists and is tested; no caller)
-> Area: audio-engine (`resonance_audio::midi_io`) + the export dialog
+> Area: audio-engine
+> Touches: `resonance_audio::midi_io` + the export dialog
 > Source: prototype `docs/intents/prototypes/multitrack-stem-and-midi-export/`;
 > `resonance-app/src/update/export.rs` module doc ("The MIDI tab has no
 > exporter on the engine side yet, so its primary action stays disabled");

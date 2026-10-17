@@ -1,8 +1,7 @@
 # Vocal lanes: lyrics and melody generation
 
-> Verified against master @ `ef215b08` + the section-scale fix (BUG-71) on
-> 2026-10-15; the rest @ `f9438e38` + the `singing` skill, voice presets and
-> the chord-change melody flow (BUG-70) on 2026-10-13.
+> Verified against master @ `ef215b08` on 2026-10-15.
+> Also verified: the section-scale fix (BUG-71); the rest @ `f9438e38` + the `singing` skill, voice presets and the chord-change melody flow (BUG-70) on 2026-10-13.
 > Spec history: [`docs/history/specs/vocal-mcp-control-and-quality.md`](../../history/specs/vocal-mcp-control-and-quality.md) §3, §6 (slices 1, 3, 8); `docs/history/specs/melody-generation-research.md` (vocal cadence/climax/srdc items); field reports `docs/history/reviews/field-report-2026-10-06.md`.
 
 A vocal lane is a `(section, vocal track)` lane with the Vocal generator.

@@ -1,7 +1,9 @@
 # MIDI clip arrangement edits over the control API
 
+> Stage: **intent**
 > Status: **idea**
-> Area: timeline (control-api surface)
+> Area: timeline
+> Touches: control-api surface
 > Source: gap found while documenting clip editing (2026-10-07).
 
 ## Why

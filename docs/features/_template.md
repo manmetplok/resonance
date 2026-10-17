@@ -1,6 +1,7 @@
 # <Feature name>
 
 > Verified against master @ `<short sha>` on <YYYY-MM-DD>.
+> Also verified: <work on top of that sha, if any (drop the line if none)>
 > Spec history: `docs/history/specs/<file>.md` (if any).
 
 <One paragraph: what the user (or an agent) can do with this, in plain words.>

@@ -1,7 +1,9 @@
 # Performance mode: finish the teleprompter prototype
 
+> Stage: **intent**
 > Status: **partly built**
-> Area: ui-shell (Performance mode)
+> Area: ui-shell
+> Touches: Performance mode
 > Source: `docs/intents/prototypes/performance-mode-teleprompter/index.html` compared with `resonance-app/src/view/performance/` at `8eac71b3`.
 
 ## Why

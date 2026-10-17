@@ -1,7 +1,7 @@
 # The `Resonance` app state
 
 > Verified against master @ `8eac71b3` on 2026-10-07.
-> Spec history: `docs/history/refactor/A-12-resonance-fields.md` (field survey),
+> Spec history: `docs/history/refactor/a-12-resonance-fields.md` (field survey),
 > `docs/history/refactor/arch-migration-plan.md` → "A-12a" … "A-12g landed",
 > `docs/history/refactor/refactor-intent.md` (Epic A).
 

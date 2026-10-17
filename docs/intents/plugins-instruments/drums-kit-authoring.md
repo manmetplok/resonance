@@ -1,5 +1,6 @@
 # Drum kit preview, folder-of-WAVs import and an editable note map
 
+> Stage: **intent**
 > Status: **designed**
 > Area: plugins-instruments
 > Source: `docs/history/specs/drums-plugin-rework.md` slice K10 (deferred,

@@ -1,5 +1,6 @@
 # Quantize toolbar remembers its settings
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: timeline
 > Source: ba todo #395 ("last-used quantize / humanize settings"); found unwired while verifying `docs/features/timeline/midi-editor.md` on 2026-10-07.

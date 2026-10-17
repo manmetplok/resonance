@@ -1,5 +1,6 @@
 # Arrange-side automation editing
 
+> Stage: **intent**
 > Status: **partly built**
 > Area: timeline
 > Source: gaps found while documenting automation lanes at 8eac71b3; the "show in Arrange" jump from mixer-cleanup.md §3.4 (noted as not built in `resonance-app/src/view/mixer/inspector/automation.rs`).
